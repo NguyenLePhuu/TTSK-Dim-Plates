@@ -1,0 +1,40 @@
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Build output
+**/[Bb]in/
+**/[Oo]bj/
+**/[Dd]ebug/
+**/[Rr]elease/
+**/x64/
+**/x86/
+
+# Restored dependencies
+**/packages/
+*.nupkg
+
+# Local application state
+theme.cfg
+shortcut.cfg
+auto_section.cfg
+*.log
+
+# Local shortcuts and OS files
+*.lnk
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE/tool caches
+.idea/
+.vscode/
+TestResults/
+*.cache
+
+# Development snapshots kept outside version control
+backup/
+**/backup/

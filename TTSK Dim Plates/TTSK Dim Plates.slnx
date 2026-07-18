@@ -1,0 +1,10 @@
+<Solution>
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+  </Configurations>
+  <Folder Name="/Solution Items/" />
+  <Project Path="TTSK Dim Plates/TTSK Dim Plates.csproj" Id="7fc46b41-a54d-40a1-911e-5787c885b8dd">
+    <Platform Solution="*|x64" Project="x64" />
+  </Project>
+</Solution>
