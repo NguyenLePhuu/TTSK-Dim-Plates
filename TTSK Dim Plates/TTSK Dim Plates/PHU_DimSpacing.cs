@@ -20,8 +20,8 @@ namespace TTSK_AutoDim_Plates
     // - Grouping/sorting uses visual side = OffsetDirection * Sign(Distance).
     // - V20: one spacing solver for ALL sides/views using the same visual-line geometry.
     // - No special RIGHT-side patch; if geometry is readable, every group is solved the same way.
-    //   Root cause: Tekla Distance is measured from the outside reference point of the dimension points.
-    //   Using center(DimensionPoints) created a small drift on right-side tiers.
+    //   Tekla Distance is measured from the first DimensionPoint to the dimension line.
+    //   Using center or an outer-most DimensionPoint changes the measured tier when feet protrude.
     public static class PHU_DimSpacingNormalize
     {
         // TEST PORT TỪ FILE DIM PLATE:
@@ -75,6 +75,11 @@ namespace TTSK_AutoDim_Plates
             public object DimSet;
             public Tekla.Structures.Drawing.View View;
             public double Distance;
+            public double OriginalDistance;
+            public double OriginalVisualLineLevel;
+            public int OriginalTierIndex;
+            public int CollectionIndex;
+            public string StableId;
             public double AbsDistance;
             public double Sign;
             public SimpleVector Offset;
@@ -85,6 +90,15 @@ namespace TTSK_AutoDim_Plates
             public string SideKey;
             public string KindKey;
             public bool IsInternal;
+        }
+
+        private class DimDistanceChange
+        {
+            public DimSetItem Item;
+            public double OriginalDistance;
+            public double NewDistance;
+            public int OriginalTierIndex;
+            public string OriginalStableId;
         }
 
         public static Result Run(double spacing, string scope)
@@ -163,14 +177,18 @@ namespace TTSK_AutoDim_Plates
                     continue;
                 }
 
-                ArrangeExistingSetGroup(list, spacing, result);
+                ArrangeExistingSetGroup(list, spacing, result, drawing);
             }
 
             try { drawing.CommitChanges(); } catch { }
             return result;
         }
 
-        private static void ArrangeExistingSetGroup(List<DimSetItem> list, double spacing, Result result)
+        private static void ArrangeExistingSetGroup(
+            List<DimSetItem> list,
+            double spacing,
+            Result result,
+            Drawing drawing)
         {
             if (list == null || list.Count <= 0)
                 return;
@@ -192,45 +210,11 @@ namespace TTSK_AutoDim_Plates
             //   Example: input 150 => first tier becomes 150, not keep old 123.
 
             SimpleVector groupAxis = GetGroupAxisFromFirstValidOffset(list);
-            bool sortedByPoints = false;
-
-            if (groupAxis.Length > 0.0001 && HasPointOrderLevel(list, groupAxis))
+            if (!TryCaptureOriginalTierOrder(list, groupAxis))
             {
-                list.Sort(delegate (DimSetItem a, DimSetItem b)
-                {
-                    double la = GetTierOrderLevelFromExistingPoints(a, groupAxis);
-                    double lb = GetTierOrderLevelFromExistingPoints(b, groupAxis);
-
-                    bool aNan = Double.IsNaN(la);
-                    bool bNan = Double.IsNaN(lb);
-                    if (aNan && bNan)
-                    {
-                        int c0 = a.AbsDistance.CompareTo(b.AbsDistance);
-                        if (c0 != 0) return c0;
-                        return RuntimeHelpersHash(a.DimSet).CompareTo(RuntimeHelpersHash(b.DimSet));
-                    }
-                    if (aNan) return 1;
-                    if (bNan) return -1;
-
-                    int c = la.CompareTo(lb);
-                    if (c != 0) return c;
-
-                    c = a.AbsDistance.CompareTo(b.AbsDistance);
-                    if (c != 0) return c;
-                    return RuntimeHelpersHash(a.DimSet).CompareTo(RuntimeHelpersHash(b.DimSet));
-                });
-                sortedByPoints = true;
-            }
-
-            if (!sortedByPoints)
-            {
-                // Safe fallback: same logic as the vertical group that already worked.
-                list.Sort(delegate (DimSetItem a, DimSetItem b)
-                {
-                    int c = a.AbsDistance.CompareTo(b.AbsDistance);
-                    if (c != 0) return c;
-                    return RuntimeHelpersHash(a.DimSet).CompareTo(RuntimeHelpersHash(b.DimSet));
-                });
+                if (result != null)
+                    result.SkippedCount += list.Count;
+                return;
             }
 
             if (list.Count <= 1)
@@ -245,20 +229,18 @@ namespace TTSK_AutoDim_Plates
                 return;
             }
 
-            // V21 ROOT RULE:
-            // One algorithm for ALL directions / ALL views:
-            //   1) Read existing visual order from points.
-            //   2) Tier 1 is NOT locked anymore. It becomes spacing.
-            //   3) Tier 2 becomes spacing*2, tier 3 becomes spacing*3...
-            //   4) Use the same visual geometry solver for every side/view.
-            double baseSign = Math.Abs(list[0].Sign) < 0.0001 ? 1.0 : list[0].Sign;
-            bool useUnifiedGeometrySpacing = CanUseUnifiedGeometrySpacing(list, groupAxis);
-            double targetBaseVisualLevel = Double.NaN;
-
-            if (useUnifiedGeometrySpacing)
+            // DIM SPACING ORDER RULE:
+            //   1) Read the existing visual order from the displayed dimension line.
+            //   2) Keep tier 1 exactly at its captured line level.
+            //   3) Place tier 2..n at one user spacing step farther outward per tier.
+            //   4) Use one visual-line solver for every side and view.
+            // Tier 1 is the captured, existing line. Only the gaps outwards from it change.
+            double targetBaseVisualLevel = list[0].OriginalVisualLineLevel;
+            if (!IsFinite(targetBaseVisualLevel))
             {
-                double tier1Distance = baseSign * spacing;
-                targetBaseVisualLevel = GetVisualLineLevelForDistance(list[0], groupAxis, tier1Distance);
+                if (result != null)
+                    result.SkippedCount += list.Count;
+                return;
             }
 
             // TEST PORT PLATE - BẢN 2:
@@ -268,40 +250,45 @@ namespace TTSK_AutoDim_Plates
             //   tier2 = tier1 + spacing
             //   tier3 = tier2 + spacing...
             // Nếu fail ở group hoặc từng item thì fallback về solver cũ.
-            double anchorBaseVisualLevel = Double.NaN;
-            bool useAnchorBase =
-                USE_ANCHOR_ABCD_AS_TIER_BASE &&
-                TryGetAnchorFirstTierVisualLevel(list, groupAxis, spacing, out anchorBaseVisualLevel);
-
+            List<DimDistanceChange> changes = new List<DimDistanceChange>();
             for (int i = 0; i < list.Count; i++)
             {
-                double targetAbs = spacing * (i + 1);
-                double itemSign = Math.Abs(list[i].Sign) < 0.0001 ? baseSign : list[i].Sign;
+                double newDistance;
+                bool solved = TrySolveDistanceForTargetVisualLevel(
+                    list[i],
+                    groupAxis,
+                    targetBaseVisualLevel + spacing * i,
+                    out newDistance);
 
-                // Fallback: keep current side/sign, but make tier 1 = spacing.
-                double newDistance = itemSign * targetAbs;
-
-                bool solvedByAnchorOk = false;
-                if (useAnchorBase && !Double.IsNaN(anchorBaseVisualLevel))
+                if (!solved || !IsFinite(newDistance))
                 {
-                    double solvedByAnchor;
-                    double targetLevel = anchorBaseVisualLevel + spacing * i;
-                    if (TrySolveDistanceForTargetVisualLevelByFirstFoot(list[i], groupAxis, targetLevel, out solvedByAnchor))
-                    {
-                        newDistance = solvedByAnchor;
-                        solvedByAnchorOk = true;
-                    }
+                    if (result != null)
+                        result.SkippedCount += list.Count;
+                    return;
                 }
 
-                if (!solvedByAnchorOk && useUnifiedGeometrySpacing && !Double.IsNaN(targetBaseVisualLevel))
+                if (Math.Abs(list[i].OriginalDistance) > 0.0001 &&
+                    Math.Abs(newDistance) > 0.0001 &&
+                    Math.Sign(list[i].OriginalDistance) != Math.Sign(newDistance))
                 {
-                    double solvedDistance;
-                    if (TrySolveDistanceForTargetVisualLevel(list[i], groupAxis, targetBaseVisualLevel + spacing * i, out solvedDistance))
-                        newDistance = solvedDistance;
+                    if (result != null)
+                        result.SkippedCount += list.Count;
+                    return;
                 }
 
-                TryApplyDistance(list[i], newDistance, result);
+                changes.Add(new DimDistanceChange
+                {
+                    Item = list[i],
+                    OriginalDistance = list[i].OriginalDistance,
+                    NewDistance = newDistance,
+                    OriginalTierIndex = list[i].OriginalTierIndex,
+                    OriginalStableId = list[i].StableId
+                });
             }
+
+            if (changes.Count != list.Count ||
+                !TryApplyGroupAtomically(changes, groupAxis, spacing, result, drawing))
+                return;
         }
 
 
@@ -361,6 +348,17 @@ namespace TTSK_AutoDim_Plates
                 if (pts == null || pts.Count < 2)
                     return false;
 
+                // A dimension may have all of its extension-foot points inside the
+                // part while its actual dimension line is outside. Only an actual
+                // line inside the content bounds may be classified as INTERNAL.
+                double dimensionLineX;
+                double dimensionLineY;
+                if (!TryGetDimensionLineReferencePoint(
+                        item,
+                        out dimensionLineX,
+                        out dimensionLineY))
+                    return false;
+
                 // Ngưỡng mới theo yêu cầu:
                 // - DIM nằm trong lòng thật sự mới xem là INTERNAL.
                 // - Nếu chân DIM nằm gần mép ngoài trong khoảng spacing người dùng nhập,
@@ -377,6 +375,10 @@ namespace TTSK_AutoDim_Plates
                 // và KHÔNG nằm gần mép trên/dưới theo nearEdgeLimit.
                 if (item.KindKey == "H")
                 {
+                    if (dimensionLineY <= info.MinY + INTERNAL_DIM_EDGE_TOL ||
+                        dimensionLineY >= info.MaxY - INTERNAL_DIM_EDGE_TOL)
+                        return false;
+
                     foreach (Point p in pts)
                     {
                         if (p == null)
@@ -396,6 +398,10 @@ namespace TTSK_AutoDim_Plates
                 // và KHÔNG nằm gần mép trái/phải theo nearEdgeLimit.
                 if (item.KindKey == "V")
                 {
+                    if (dimensionLineX <= info.MinX + INTERNAL_DIM_EDGE_TOL ||
+                        dimensionLineX >= info.MaxX - INTERNAL_DIM_EDGE_TOL)
+                        return false;
+
                     foreach (Point p in pts)
                     {
                         if (p == null)
@@ -416,6 +422,40 @@ namespace TTSK_AutoDim_Plates
             }
 
             return false;
+        }
+
+        private static bool TryGetDimensionLineReferencePoint(
+            DimSetItem item,
+            out double dimensionLineX,
+            out double dimensionLineY)
+        {
+            dimensionLineX = Double.NaN;
+            dimensionLineY = Double.NaN;
+
+            try
+            {
+                if (item == null || item.DimSet == null || !IsFinite(item.Distance))
+                    return false;
+
+                Point firstDimensionPoint = GetFirstDimensionPoint(item.DimSet);
+                if (firstDimensionPoint == null)
+                    return false;
+
+                SimpleVector rawOffset = item.Offset;
+                if (rawOffset.Length < 0.0001)
+                    return false;
+
+                rawOffset.Normalize();
+                dimensionLineX = firstDimensionPoint.X + item.Distance * rawOffset.X;
+                dimensionLineY = firstDimensionPoint.Y + item.Distance * rawOffset.Y;
+                return IsFinite(dimensionLineX) && IsFinite(dimensionLineY);
+            }
+            catch
+            {
+                dimensionLineX = Double.NaN;
+                dimensionLineY = Double.NaN;
+                return false;
+            }
         }
 
         private static void ArrangeInternalDimItem(DimSetItem item, double spacing, Result result)
@@ -469,7 +509,7 @@ namespace TTSK_AutoDim_Plates
                 }
 
                 double solvedDistance;
-                if (TrySolveDistanceForTargetVisualLevelByFirstFoot(item, axis, targetLevel, out solvedDistance))
+                if (TrySolveDistanceForTargetVisualLevel(item, axis, targetLevel, out solvedDistance))
                 {
                     TryApplyDistance(item, solvedDistance, result);
                     return;
@@ -602,50 +642,6 @@ namespace TTSK_AutoDim_Plates
             }
         }
 
-        private static bool TrySolveDistanceForTargetVisualLevelByFirstFoot(
-            DimSetItem item,
-            SimpleVector visualAxis,
-            double targetVisualLevel,
-            out double distance)
-        {
-            distance = 0.0;
-
-            try
-            {
-                if (item == null || item.DimSet == null || visualAxis.Length < 0.0001)
-                    return false;
-
-                List<Point> pts = GetDimensionPoints(item.DimSet);
-                if (pts == null || pts.Count == 0 || pts[0] == null)
-                    return false;
-
-                Point firstFoot = pts[0];
-                visualAxis.Normalize();
-
-                SimpleVector rawOffset = item.Offset;
-                if (rawOffset.Length < 0.0001)
-                    return false;
-                rawOffset.Normalize();
-
-                double dot = rawOffset.X * visualAxis.X + rawOffset.Y * visualAxis.Y;
-                if (Math.Abs(dot) < 0.0001)
-                    return false;
-
-                double firstFootLevel = firstFoot.X * visualAxis.X + firstFoot.Y * visualAxis.Y;
-                distance = (targetVisualLevel - firstFootLevel) / dot;
-
-                if (Double.IsNaN(distance) || Double.IsInfinity(distance))
-                    return false;
-
-                return Math.Abs(distance) > 1.0;
-            }
-            catch
-            {
-                distance = 0.0;
-                return false;
-            }
-        }
-
         private static SimpleVector GetGroupAxisFromFirstValidOffset(List<DimSetItem> list)
         {
             SimpleVector v = new SimpleVector();
@@ -668,37 +664,128 @@ namespace TTSK_AutoDim_Plates
             return v;
         }
 
-        private static bool HasPointOrderLevel(List<DimSetItem> list, SimpleVector axis)
+        private static bool TryGetCurrentVisualLineLevel(
+            DimSetItem item,
+            SimpleVector groupAxis,
+            out double level)
         {
-            if (list == null || axis.Length < 0.0001)
-                return false;
+            level = Double.NaN;
 
-            int ok = 0;
-            foreach (DimSetItem item in list)
+            try
             {
-                if (!Double.IsNaN(GetTierOrderLevelFromExistingPoints(item, axis)))
-                    ok++;
+                if (item == null || item.DimSet == null || groupAxis.Length < 0.0001)
+                    return false;
+
+                groupAxis.Normalize();
+                if (groupAxis.Length < 0.0001)
+                    return false;
+
+                double anchor = GetDimensionLineAnchorProjection(item, groupAxis);
+                if (!IsFinite(anchor))
+                    return false;
+
+                SimpleVector itemOffset = item.Offset;
+                if (itemOffset.Length < 0.0001)
+                    return false;
+                itemOffset.Normalize();
+
+                double dot =
+                    itemOffset.X * groupAxis.X +
+                    itemOffset.Y * groupAxis.Y;
+                if (!IsFinite(dot) || Math.Abs(dot) < 0.0001)
+                    return false;
+
+                // Capture is performed before any group writes, so Distance is the live original value here.
+                level = anchor + item.Distance * dot;
+                return IsFinite(level);
             }
-            return ok >= 2;
+            catch
+            {
+                level = Double.NaN;
+                return false;
+            }
         }
 
-        private static double GetTierOrderLevelFromExistingPoints(DimSetItem item, SimpleVector axis)
+        private static bool TryGetVisualLineLevelForDistance(
+            DimSetItem item,
+            SimpleVector groupAxis,
+            double distance,
+            out double level)
         {
-            if (item == null || item.DimSet == null || axis.Length < 0.0001)
-                return Double.NaN;
+            level = Double.NaN;
 
-            List<Point> pts = GetDimensionPoints(item.DimSet);
-            if (pts == null || pts.Count == 0)
-                return Double.NaN;
+            try
+            {
+                if (item == null || item.DimSet == null || groupAxis.Length < 0.0001 || !IsFinite(distance))
+                    return false;
 
-            double anchor = GetPointsCenterProjection(pts, axis);
-            if (Double.IsNaN(anchor))
-                return Double.NaN;
+                groupAxis.Normalize();
+                if (groupAxis.Length < 0.0001)
+                    return false;
 
-            // IMPORTANT:
-            // Use DimensionPoints + AbsDistance only to rank tiers by their existing visible side.
-            // Do not use this value to set Distance. This avoids the old double/projection error.
-            return anchor + item.AbsDistance;
+                double anchor = GetDimensionLineAnchorProjection(item, groupAxis);
+                if (!IsFinite(anchor))
+                    return false;
+
+                SimpleVector itemOffset = item.Offset;
+                if (itemOffset.Length < 0.0001)
+                    return false;
+                itemOffset.Normalize();
+
+                double dot =
+                    itemOffset.X * groupAxis.X +
+                    itemOffset.Y * groupAxis.Y;
+                if (!IsFinite(dot) || Math.Abs(dot) < 0.0001)
+                    return false;
+
+                level = anchor + distance * dot;
+                return IsFinite(level);
+            }
+            catch
+            {
+                level = Double.NaN;
+                return false;
+            }
+        }
+
+        private static bool TryCaptureOriginalTierOrder(
+            List<DimSetItem> list,
+            SimpleVector groupAxis)
+        {
+            if (list == null || list.Count == 0 || groupAxis.Length < 0.0001)
+                return false;
+
+            SimpleVector axis = groupAxis;
+            axis.Normalize();
+            if (axis.Length < 0.0001)
+                return false;
+
+            foreach (DimSetItem item in list)
+            {
+                double level;
+                if (!TryGetCurrentVisualLineLevel(item, axis, out level))
+                    return false;
+
+                item.OriginalVisualLineLevel = level;
+            }
+
+            list.Sort(delegate (DimSetItem a, DimSetItem b)
+            {
+                double delta = a.OriginalVisualLineLevel - b.OriginalVisualLineLevel;
+                if (Math.Abs(delta) > 0.01)
+                    return delta < 0.0 ? -1 : 1;
+
+                int c = StringComparer.Ordinal.Compare(a.StableId ?? string.Empty, b.StableId ?? string.Empty);
+                if (c != 0)
+                    return c;
+
+                return a.CollectionIndex.CompareTo(b.CollectionIndex);
+            });
+
+            for (int i = 0; i < list.Count; i++)
+                list[i].OriginalTierIndex = i;
+
+            return true;
         }
 
         private static void TryApplyDistance(DimSetItem item, double newDistance, Result result)
@@ -719,6 +806,235 @@ namespace TTSK_AutoDim_Plates
             catch
             {
                 result.FailedCount++;
+            }
+        }
+
+        private static bool TryApplyGroupAtomically(
+            List<DimDistanceChange> changes,
+            SimpleVector groupAxis,
+            double spacing,
+            Result result,
+            Drawing drawing)
+        {
+            if (changes == null || changes.Count == 0 || drawing == null)
+            {
+                if (result != null)
+                    result.FailedCount++;
+                return false;
+            }
+
+            try
+            {
+                foreach (DimDistanceChange change in changes)
+                {
+                    if (change == null || change.Item == null || change.Item.DimSet == null ||
+                        !IsFinite(change.OriginalDistance) || !IsFinite(change.NewDistance))
+                        throw new Exception("Invalid dimension change.");
+                }
+
+                // Set every value first. No Modify is allowed until the whole group is valid.
+                foreach (DimDistanceChange change in changes)
+                {
+                    if (!SetDistanceValue(change.Item.DimSet, change.NewDistance))
+                        throw new Exception("Cannot set dimension distance.");
+                }
+
+                foreach (DimDistanceChange change in changes)
+                {
+                    if (!TryInvokeNoArgSuccessful(change.Item.DimSet, "Modify"))
+                        throw new Exception("Dimension Modify failed.");
+                }
+
+                if (!TryCommitDrawing(drawing))
+                    throw new Exception("Dimension commit failed.");
+
+                if (!VerifyGroupApply(changes, groupAxis, spacing))
+                    throw new Exception("Dimension group verification failed.");
+
+                foreach (DimDistanceChange change in changes)
+                {
+                    double actualDistance;
+                    if (TryGetDistanceValue(change.Item.DimSet, out actualDistance) && IsFinite(actualDistance))
+                    {
+                        change.Item.Distance = actualDistance;
+                        change.Item.AbsDistance = Math.Abs(actualDistance);
+                        change.Item.Sign = actualDistance < 0.0 ? -1.0 : 1.0;
+
+                        SimpleVector currentVisualOffset;
+                        if (TryGetVisualOffsetForDistance(change.Item, actualDistance, out currentVisualOffset))
+                            change.Item.VisualOffset = currentVisualOffset;
+                    }
+                }
+
+                if (result != null)
+                    result.ChangedCount += changes.Count;
+                return true;
+            }
+            catch
+            {
+                RestoreGroupDistances(changes, drawing);
+                if (result != null)
+                    result.FailedCount++;
+                return false;
+            }
+        }
+
+        private static bool VerifyGroupApply(
+            List<DimDistanceChange> changes,
+            SimpleVector groupAxis,
+            double spacing)
+        {
+            if (changes == null || changes.Count == 0 || spacing <= 0.0)
+                return false;
+
+            double previousLevel = Double.NaN;
+            for (int i = 0; i < changes.Count; i++)
+            {
+                DimDistanceChange change = changes[i];
+                if (change == null || change.Item == null || change.Item.DimSet == null)
+                    return false;
+
+                if (change.OriginalTierIndex != i ||
+                    !String.Equals(change.Item.StableId, change.OriginalStableId, StringComparison.Ordinal))
+                    return false;
+
+                double currentDistance;
+                if (!TryGetDistanceValue(change.Item.DimSet, out currentDistance) || !IsFinite(currentDistance))
+                    return false;
+
+                if (Math.Abs(currentDistance - change.NewDistance) > 0.01)
+                    return false;
+
+                if (Math.Abs(change.OriginalDistance) > 0.0001 &&
+                    Math.Abs(currentDistance) > 0.0001 &&
+                    Math.Sign(change.OriginalDistance) != Math.Sign(currentDistance))
+                    return false;
+
+                SimpleVector currentVisualOffset;
+                if (!TryGetVisualOffsetForDistance(change.Item, currentDistance, out currentVisualOffset))
+                    return false;
+
+                SimpleVector originalVisualOffset = change.Item.VisualOffset;
+                if (originalVisualOffset.Length < 0.0001)
+                    return false;
+                originalVisualOffset.Normalize();
+                double sideDot =
+                    originalVisualOffset.X * currentVisualOffset.X +
+                    originalVisualOffset.Y * currentVisualOffset.Y;
+                if (!IsFinite(sideDot) || sideDot < 0.999)
+                    return false;
+
+                double currentLevel;
+                if (!TryGetVisualLineLevelForDistance(change.Item, groupAxis, currentDistance, out currentLevel))
+                    return false;
+
+                if (!Double.IsNaN(previousLevel))
+                {
+                    double delta = currentLevel - previousLevel;
+                    if (!IsFinite(delta) || delta <= 0.0 || Math.Abs(delta - spacing) > 0.5)
+                        return false;
+                }
+
+                previousLevel = currentLevel;
+            }
+
+            return true;
+        }
+
+        private static void RestoreGroupDistances(List<DimDistanceChange> changes, Drawing drawing)
+        {
+            if (changes == null)
+                return;
+
+            bool anySet = false;
+            foreach (DimDistanceChange change in changes)
+            {
+                if (change == null || change.Item == null || change.Item.DimSet == null)
+                    continue;
+
+                try
+                {
+                    if (SetDistanceValue(change.Item.DimSet, change.OriginalDistance))
+                        anySet = true;
+                }
+                catch { }
+            }
+
+            if (anySet)
+            {
+                foreach (DimDistanceChange change in changes)
+                {
+                    if (change == null || change.Item == null || change.Item.DimSet == null)
+                        continue;
+
+                    try { TryInvokeNoArgSuccessful(change.Item.DimSet, "Modify"); } catch { }
+                }
+
+                TryCommitDrawing(drawing);
+            }
+
+            foreach (DimDistanceChange change in changes)
+            {
+                if (change == null || change.Item == null)
+                    continue;
+
+                change.Item.Distance = change.OriginalDistance;
+                change.Item.AbsDistance = Math.Abs(change.OriginalDistance);
+                change.Item.Sign = change.OriginalDistance < 0.0 ? -1.0 : 1.0;
+            }
+        }
+
+        private static bool TryGetVisualOffsetForDistance(
+            DimSetItem item,
+            double distance,
+            out SimpleVector visualOffset)
+        {
+            visualOffset = new SimpleVector();
+            if (item == null || item.Offset.Length < 0.0001 || !IsFinite(distance))
+                return false;
+
+            visualOffset = item.Offset;
+            visualOffset.Normalize();
+            double sign = distance < 0.0 ? -1.0 : 1.0;
+            visualOffset.X *= sign;
+            visualOffset.Y *= sign;
+            visualOffset.Normalize();
+            return visualOffset.Length > 0.0001;
+        }
+
+        private static bool TryInvokeNoArgSuccessful(object obj, string methodName)
+        {
+            if (obj == null || string.IsNullOrWhiteSpace(methodName))
+                return false;
+
+            try
+            {
+                MethodInfo method = obj.GetType().GetMethod(
+                    methodName,
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                if (method == null || method.GetParameters().Length != 0)
+                    return false;
+
+                object value = method.Invoke(obj, null);
+                if (value is bool)
+                    return (bool)value;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool TryCommitDrawing(Drawing drawing)
+        {
+            try
+            {
+                return drawing != null && drawing.CommitChanges();
+            }
+            catch
+            {
+                return false;
             }
         }
 
@@ -750,8 +1066,12 @@ namespace TTSK_AutoDim_Plates
             if (item == null || item.DimSet == null || visualAxis.Length < 0.0001)
                 return false;
 
-            double anchor = GetSideAnchorProjection(item, visualAxis);
-            if (Double.IsNaN(anchor))
+            visualAxis.Normalize();
+            if (visualAxis.Length < 0.0001 || !IsFinite(targetVisualLevel))
+                return false;
+
+            double anchor = GetDimensionLineAnchorProjection(item, visualAxis);
+            if (!IsFinite(anchor))
                 return false;
 
             SimpleVector rawOffset = item.Offset;
@@ -760,11 +1080,11 @@ namespace TTSK_AutoDim_Plates
             rawOffset.Normalize();
 
             double dot = rawOffset.X * visualAxis.X + rawOffset.Y * visualAxis.Y;
-            if (Math.Abs(dot) < 0.0001)
+            if (!IsFinite(dot) || Math.Abs(dot) < 0.0001)
                 return false;
 
             distance = (targetVisualLevel - anchor) / dot;
-            return true;
+            return IsFinite(distance);
         }
 
         private static SimpleVector GetGroupOutDirection(List<DimSetItem> list)
@@ -816,7 +1136,7 @@ namespace TTSK_AutoDim_Plates
             if (item == null || item.DimSet == null || outUnit.Length < 0.0001)
                 return Double.NaN;
 
-            double anchor = GetSideAnchorProjection(item, outUnit);
+            double anchor = GetDimensionLineAnchorProjection(item, outUnit);
             if (Double.IsNaN(anchor))
                 return Double.NaN;
 
@@ -837,7 +1157,7 @@ namespace TTSK_AutoDim_Plates
             if (item == null || item.DimSet == null || outUnit.Length < 0.0001)
                 return Double.NaN;
 
-            double anchor = GetSideAnchorProjection(item, outUnit);
+            double anchor = GetDimensionLineAnchorProjection(item, outUnit);
             if (Double.IsNaN(anchor))
                 return Double.NaN;
 
@@ -854,30 +1174,71 @@ namespace TTSK_AutoDim_Plates
         }
 
 
-        private static double GetSideAnchorProjection(DimSetItem item, SimpleVector outUnit)
+        private static double GetDimensionLineAnchorProjection(DimSetItem item, SimpleVector outUnit)
         {
             if (item == null || item.DimSet == null || outUnit.Length < 0.0001)
                 return Double.NaN;
 
-            List<Point> pts = GetDimensionPoints(item.DimSet);
-            if (pts == null || pts.Count == 0)
+            Point firstDimensionPoint = GetFirstDimensionPoint(item.DimSet);
+            if (firstDimensionPoint == null)
                 return Double.NaN;
 
             outUnit.Normalize();
 
-            // UNIFIED ANCHOR:
-            // Use the same anchor rule for every side: the outer-most dimension point
-            // in the current visual offset direction. This keeps one algorithm for
-            // LEFT/RIGHT/TOP/BOTTOM/SLOPE and removes the old per-side correction.
-            double best = Double.NegativeInfinity;
-            foreach (Point p in pts)
-            {
-                double v = p.X * outUnit.X + p.Y * outUnit.Y;
-                if (v > best)
-                    best = v;
-            }
+            // Tekla defines StraightDimensionSet.Distance from DimensionPoints[0].
+            // This indexed point is the set's actual distance reference, whereas the
+            // outer-most point may be a protruding foot and must not determine tier order.
+            double anchor =
+                firstDimensionPoint.X * outUnit.X +
+                firstDimensionPoint.Y * outUnit.Y;
+            return IsFinite(anchor) ? anchor : Double.NaN;
+        }
 
-            return Double.IsNegativeInfinity(best) ? Double.NaN : best;
+        private static Point GetFirstDimensionPoint(object dimSet)
+        {
+            object raw = GetPropertyOrFieldValue(dimSet, "DimensionPoints");
+            if (raw == null)
+                return null;
+
+            try
+            {
+                IList indexedPoints = raw as IList;
+                if (indexedPoints != null && indexedPoints.Count > 0)
+                    return indexedPoints[0] as Point;
+            }
+            catch { }
+
+            try
+            {
+                Type type = raw.GetType();
+                foreach (PropertyInfo property in type.GetProperties(
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+                {
+                    ParameterInfo[] parameters = property.GetIndexParameters();
+                    if (parameters.Length != 1)
+                        continue;
+
+                    object index = Convert.ChangeType(0, parameters[0].ParameterType);
+                    Point point = property.GetValue(raw, new object[] { index }) as Point;
+                    if (point != null)
+                        return point;
+                }
+            }
+            catch { }
+
+            try
+            {
+                IEnumerable enumerable = raw as IEnumerable;
+                if (enumerable != null)
+                {
+                    IEnumerator enumerator = enumerable.GetEnumerator();
+                    if (enumerator != null && enumerator.MoveNext())
+                        return enumerator.Current as Point;
+                }
+            }
+            catch { }
+
+            return null;
         }
 
         private static double GetAnchorProjection(DimSetItem item, SimpleVector offUnit)
@@ -1082,12 +1443,14 @@ namespace TTSK_AutoDim_Plates
                 try
                 {
                     DrawingObjectEnumerator e = view.GetAllObjects(straightSetType);
+                    int collectionIndex = 0;
                     while (e.MoveNext())
                     {
                         object dimSet = e.Current;
+                        int currentCollectionIndex = collectionIndex++;
                         if (dimSet == null) continue;
 
-                        DimSetItem item = BuildDimSetItem(dimSet, view);
+                        DimSetItem item = BuildDimSetItem(dimSet, view, currentCollectionIndex);
                         if (item != null)
                             items.Add(item);
                     }
@@ -1098,7 +1461,10 @@ namespace TTSK_AutoDim_Plates
             return items;
         }
 
-        private static DimSetItem BuildDimSetItem(object dimSet, Tekla.Structures.Drawing.View view)
+        private static DimSetItem BuildDimSetItem(
+            object dimSet,
+            Tekla.Structures.Drawing.View view,
+            int collectionIndex)
         {
             double distance;
             if (!TryGetDistanceValue(dimSet, out distance))
@@ -1130,6 +1496,11 @@ namespace TTSK_AutoDim_Plates
             item.DimSet = dimSet;
             item.View = view;
             item.Distance = distance;
+            item.OriginalDistance = distance;
+            item.OriginalVisualLineLevel = Double.NaN;
+            item.OriginalTierIndex = -1;
+            item.CollectionIndex = collectionIndex;
+            item.StableId = GetStableDimSetId(dimSet, view, collectionIndex);
             item.AbsDistance = Math.Abs(distance);
             item.Sign = sign;
             item.Offset = offset;             // raw Tekla direction, used only when setting Distance
@@ -1372,11 +1743,61 @@ namespace TTSK_AutoDim_Plates
             return viewKey + "_VH_" + RuntimeHelpersHash(view).ToString();
         }
 
+        private static string GetStableDimSetId(
+            object dimSet,
+            Tekla.Structures.Drawing.View view,
+            int collectionIndex)
+        {
+            try
+            {
+                object identifier = GetPropertyOrFieldValue(dimSet, "Identifier");
+                object id = GetPropertyOrFieldValue(identifier, "ID");
+                if (id != null)
+                {
+                    string idText = Convert.ToString(id, System.Globalization.CultureInfo.InvariantCulture);
+                    if (!string.IsNullOrWhiteSpace(idText))
+                        return "ID:" + idText;
+                }
+            }
+            catch { }
+
+            string stableViewKey = GetStableTierViewKey(view);
+            return stableViewKey + "_COL_" + collectionIndex.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        private static string GetStableTierViewKey(Tekla.Structures.Drawing.View view)
+        {
+            string viewKey = "VIEW";
+
+            try
+            {
+                object typeObj = view == null ? null : GetPropertyOrFieldValue(view, "ViewType");
+                if (typeObj != null && !string.IsNullOrWhiteSpace(typeObj.ToString()))
+                    viewKey = typeObj.ToString();
+            }
+            catch { }
+
+            try
+            {
+                object nameObj = view == null ? null : GetPropertyOrFieldValue(view, "Name");
+                if (nameObj != null && !string.IsNullOrWhiteSpace(nameObj.ToString()))
+                    viewKey += "_" + nameObj.ToString();
+            }
+            catch { }
+
+            return viewKey;
+        }
+
         private static double Normalize360(double angle)
         {
             while (angle < 0.0) angle += 360.0;
             while (angle >= 360.0) angle -= 360.0;
             return angle;
+        }
+
+        private static bool IsFinite(double value)
+        {
+            return !Double.IsNaN(value) && !Double.IsInfinity(value);
         }
 
         private static double RoundAngle(double angle, double step, double max)
