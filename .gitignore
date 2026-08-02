@@ -38,3 +38,9 @@ TestResults/
 # Development snapshots kept outside version control
 backup/
 **/backup/
+
+# Local Codex artifacts and one-off launchers
+.codex-artifacts/
+.codex-backups/
+launcher/
+/TTSK Dim Plates.exe

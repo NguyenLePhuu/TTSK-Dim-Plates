@@ -1,4 +1,4 @@
-﻿#pragma warning disable 1633 // Unrecognized #pragma directive
+#pragma warning disable 1633 // Unrecognized #pragma directive
 #pragma reference "Tekla.Macros.Akit"
 #pragma reference "Tekla.Macros.Runtime"
 #pragma reference "Tekla.Structures.Drawing"
@@ -19,24 +19,6 @@ namespace UserMacros
                 ? "()_Geo_Standard_Part"
                 : "()_Geo_Standard";
 
-            LoadGeometryStandard(
-                akit,
-                isSinglePartDrawing,
-                standardName);
-        }
-
-        private static void LoadGeometryStandard(
-            Tekla.Macros.Akit.IAkitScriptHost akit,
-            bool isSinglePartDrawing,
-            string standardName)
-        {
-            // The Akit commands below target view_dial. On the first run of a
-            // Tekla session, and again after Section properties have changed
-            // Tekla's dialog state, it may not exist. This preparation is part
-            // of the common load method so EVERY Geometry Standard load must
-            // open View Properties immediately before loading the standard.
-            OpenViewPropertiesBeforeGeometryStandardLoad(akit);
-
             // Single part macro recorder had this step before Edit settings.
             // Assembly macro recorder did not have it, so only run it for SinglePartDrawing.
             if (isSinglePartDrawing)
@@ -56,16 +38,6 @@ namespace UserMacros
             akit.PushButton("view_modify", "view_dial");
             akit.PushButton("view_apply", "view_dial");
             akit.PushButton("view_ok", "view_dial");
-        }
-
-        private static void OpenViewPropertiesBeforeGeometryStandardLoad(
-            Tekla.Macros.Akit.IAkitScriptHost akit)
-        {
-            akit.Callback(
-                "acmd_display_attr_dialogview_dial",
-                "",
-                "main_frame");
-            System.Threading.Thread.Sleep(50);
         }
 
         private static bool IsSinglePartDrawing()

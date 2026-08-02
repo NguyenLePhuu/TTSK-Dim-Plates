@@ -4,6 +4,18 @@ TTSK Auto Dimension is a Windows desktop tool that automates plate-drawing dimen
 
 The application was developed by the **TTSK VN BIM Team** as a C# WinForms integration with the Tekla Open API.
 
+## Quick start: download and run
+
+The repository includes a ready-to-run Windows package in the `portable` folder, so you do not need Visual Studio for normal use.
+
+1. Download the repository as a ZIP from [TTSK-Dim-Plates on GitHub](https://github.com/NguyenLePhuu/TTSK-Dim-Plates) and extract it.
+2. Make sure **Tekla Structures 2025 SP7** is installed and activated.
+3. Start Tekla Structures, open the required model/drawing, then open `portable/TTSK Dim Plates.exe`.
+
+The portable package includes this application's executable, NuGet dependencies, dictionary data, and artwork. It intentionally does not redistribute Tekla Structures product binaries; the application loads those assemblies from the local Tekla installation. If Tekla is installed in a non-standard location, set `TeklaBinPath` to its `bin` folder before starting the application.
+
+> The application cannot dimension drawings without a running, licensed Tekla Structures session and a suitable model/drawing.
+
 ## Key features
 
 - Process the active Tekla drawing or a batch of selected drawings.

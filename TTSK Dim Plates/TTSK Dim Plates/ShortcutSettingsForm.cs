@@ -394,6 +394,7 @@ namespace TTSK_AutoDim_Plates
 
             ShortcutFlatButton edit = new ShortcutFlatButton();
             edit.Text = "Edit";
+            edit.UseNeutralStyle = true;
             edit.Location = new Point(572, 12);
             edit.Size = new Size(82, 36);
             edit.Click += delegate { ToggleEdit(def.ActionId); };
@@ -757,10 +758,12 @@ namespace TTSK_AutoDim_Plates
                 return Color.FromArgb(96, 165, 250);
             if (string.Equals(actionId, ShortcutManager.ActionNeighborGrid, StringComparison.OrdinalIgnoreCase))
                 return Color.FromArgb(34, 197, 94);
+            if (string.Equals(actionId, ShortcutManager.ActionArrangeView, StringComparison.OrdinalIgnoreCase))
+                return Color.FromArgb(124, 58, 237);
             if (string.Equals(actionId, ShortcutManager.ActionAutoSection, StringComparison.OrdinalIgnoreCase))
-                return _accentColor;
+                return Color.FromArgb(217, 119, 6);
             if (string.Equals(actionId, ShortcutManager.ActionSlot01, StringComparison.OrdinalIgnoreCase))
-                return Color.FromArgb(37, 99, 235);
+                return Color.FromArgb(13, 148, 136);
             if (string.Equals(actionId, ShortcutManager.ActionSlot02, StringComparison.OrdinalIgnoreCase))
                 return Color.FromArgb(14, 165, 233);
             if (string.Equals(actionId, ShortcutManager.ActionSlot03, StringComparison.OrdinalIgnoreCase))
@@ -836,26 +839,46 @@ namespace TTSK_AutoDim_Plates
                 button.BackColor = _darkMode ? _formBack : Color.White;
                 button.BackColorValue = button.IsPrimary
                     ? _accentColor
-                    : (_darkMode ? Color.FromArgb(18, 18, 18) : Color.White);
-                button.BorderColor = button.IsPrimary ? _accentColor : _accentColor;
+                    : (button.UseNeutralStyle
+                        ? (_darkMode ? Color.FromArgb(18, 24, 38) : Color.White)
+                        : (_darkMode ? Color.FromArgb(18, 18, 18) : Color.White));
+                button.BorderColor = button.IsPrimary
+                    ? _accentColor
+                    : (button.UseNeutralStyle
+                        ? (_darkMode ? Color.FromArgb(71, 85, 105) : Color.FromArgb(203, 213, 225))
+                        : _accentColor);
                 button.TextColor = button.IsPrimary
                     ? Color.White
-                    : _accentColor;
+                    : (button.UseNeutralStyle
+                        ? (_darkMode ? Color.FromArgb(226, 232, 240) : Color.FromArgb(51, 65, 85))
+                        : _accentColor);
                 button.HoverBackColor = button.IsPrimary
                     ? (_darkMode ? Color.FromArgb(238, 139, 50) : Color.FromArgb(29, 78, 216))
-                    : (_darkMode ? Color.FromArgb(37, 26, 18) : _accentSoftColor);
+                    : (button.UseNeutralStyle
+                        ? (_darkMode ? Color.FromArgb(30, 41, 59) : Color.FromArgb(241, 245, 249))
+                        : (_darkMode ? Color.FromArgb(37, 26, 18) : _accentSoftColor));
                 button.Invalidate();
             }
 
             ShortcutKeyBox keyBox = control as ShortcutKeyBox;
             if (keyBox != null)
             {
-                keyBox.BackColor = _darkMode ? _cardBack : Color.White;
-                keyBox.BackColorValue = _darkMode ? Color.FromArgb(18, 18, 18) : Color.White;
-                keyBox.BorderColor = _darkMode ? _accentColor : _accentColor;
-                keyBox.TextColor = _accentColor;
-                keyBox.ListeningBackColor = _darkMode ? Color.FromArgb(37, 26, 18) : _accentSoftColor;
-                keyBox.ListeningBorderColor = _accentColor;
+                keyBox.BackColor = _darkMode ? _cardBack : Color.FromArgb(248, 250, 252);
+                keyBox.BackColorValue = _darkMode
+                    ? Color.FromArgb(15, 23, 42)
+                    : Color.FromArgb(248, 250, 252);
+                keyBox.BorderColor = _darkMode
+                    ? Color.FromArgb(71, 85, 105)
+                    : Color.FromArgb(203, 213, 225);
+                keyBox.TextColor = _darkMode
+                    ? Color.FromArgb(226, 232, 240)
+                    : Color.FromArgb(51, 65, 85);
+                keyBox.ListeningBackColor = _darkMode
+                    ? Color.FromArgb(30, 58, 95)
+                    : Color.FromArgb(239, 246, 255);
+                keyBox.ListeningBorderColor = _darkMode
+                    ? Color.FromArgb(96, 165, 250)
+                    : Color.FromArgb(37, 99, 235);
                 keyBox.Invalidate();
             }
 
@@ -1078,6 +1101,7 @@ namespace TTSK_AutoDim_Plates
             private bool _keyboardPressed;
 
             public bool IsPrimary { get; set; }
+            public bool UseNeutralStyle { get; set; }
             public Color BackColorValue { get; set; }
             public Color HoverBackColor { get; set; }
             public Color BorderColor { get; set; }

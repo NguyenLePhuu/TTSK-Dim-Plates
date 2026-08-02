@@ -57,6 +57,21 @@ public static class PHU_OpenGridView
     // Fit View sẽ restore đúng RestrictionBox ban đầu này.
     private static readonly Dictionary<string, AABB> FIT_ORIGINAL_RESTRICTION_BOXES = new Dictionary<string, AABB>();
 
+    // Session prerequisite for Fit.  A view is Fit-ready only after the
+    // current Open Grid pass has completed ProcessView successfully and both
+    // original snapshots are present for the same Drawing + View pair.
+    private static readonly HashSet<string> OPEN_GRID_READY_VIEW_KEYS =
+        new HashSet<string>(StringComparer.Ordinal);
+
+    private static string OPEN_GRID_READY_DRAWING_KEY = "";
+
+    private const string FIT_PREREQUISITE_MESSAGE =
+        "FIT chưa được thực thi. Hãy chạy OPEN GRID trước khi FIT.";
+
+    private const double FIT_GRID_TOP_FRONT_GAP = 20.0;
+    private const double FIT_GRID_ORIGIN_TOLERANCE = 0.01;
+    private const double FIT_GRID_GAP_TOLERANCE = 0.5;
+
     // =================================================
 
     public class Result
@@ -64,6 +79,11 @@ public static class PHU_OpenGridView
         public int ViewCount;
         public int SuccessCount;
         public int FailedCount;
+        public int GridAxesFoundCount;
+        public int GridAxesExpectedCount;
+        public int GridAxisPartialViewCount;
+        public int GridAxisNoGridViewCount;
+        public string SelectedGridAxes;
         public string Message;
 
         public string ToDisplayText()
@@ -98,6 +118,70 @@ public static class PHU_OpenGridView
         public double VisualMaxY;
     }
 
+    private class NearestGridSelection
+    {
+        public GridSeg Vertical;
+        public bool VerticalIsLeft;
+        public GridSeg Bottom;
+        public GridSeg Top;
+
+        public int Count
+        {
+            get
+            {
+                int count = 0;
+                if (Vertical != null) count++;
+                if (Bottom != null) count++;
+                if (Top != null) count++;
+                return count;
+            }
+        }
+    }
+
+    public class FitGridOriginArrangeResult
+    {
+        public bool Success;
+        public bool Applied;
+        public string Message;
+    }
+
+    // Ứng viên cho chế độ giữ đúng một trục.  Class này chỉ giữ dữ liệu đọc
+    // được và khoảng cách tới content; tuyệt đối không thay đổi View.
+    private class SingleAxisCandidates
+    {
+        public GridSeg LeftVertical;
+        public double LeftVerticalDistance = double.PositiveInfinity;
+
+        public GridSeg RightVertical;
+        public double RightVerticalDistance = double.PositiveInfinity;
+
+        public GridSeg BottomHorizontal;
+        public double BottomHorizontalDistance = double.PositiveInfinity;
+
+        public GridSeg TopHorizontal;
+        public double TopHorizontalDistance = double.PositiveInfinity;
+
+        public bool HasBothVerticalSides
+        {
+            get { return LeftVertical != null && RightVertical != null; }
+        }
+
+        public bool HasBothHorizontalSides
+        {
+            get { return BottomHorizontal != null && TopHorizontal != null; }
+        }
+
+        public bool HasAnyVertical
+        {
+            get { return LeftVertical != null || RightVertical != null; }
+        }
+
+        public bool HasAnyHorizontal
+        {
+            get { return BottomHorizontal != null || TopHorizontal != null; }
+        }
+    }
+
     public static Result Run()
     {
         Result result = new Result();
@@ -123,6 +207,7 @@ public static class PHU_OpenGridView
                 return result;
             }
 
+            EnsureOpenGridSessionForDrawing(drawing);
             List<View> views = GetTargetViews(dh, drawing);
             if (views.Count == 0)
             {
@@ -134,20 +219,31 @@ public static class PHU_OpenGridView
 
             result.ViewCount = views.Count;
 
-            // Lưu layout ban đầu trước khi Open Grid làm khung xanh thay đổi kích thước/vị trí.
-            // Không dùng vị trí sau Open Grid làm chuẩn cho Fit View.
-            CaptureFitOriginalSheetBoxes(views);
-
             foreach (View v in views)
             {
+                // A re-run for the same View starts a fresh prerequisite
+                // snapshot.  A failed View must never retain an older ready
+                // marker or stale snapshot.
+                InvalidateOpenGridReady(drawing, v, true);
+                CaptureFitOriginalSheetBoxes(new List<View> { v });
+
                 try
                 {
                     bool ok = ProcessView(v, drawing);
-                    if (ok) result.SuccessCount++;
-                    else result.FailedCount++;
+                    if (ok)
+                    {
+                        MarkOpenGridReady(drawing, v);
+                        result.SuccessCount++;
+                    }
+                    else
+                    {
+                        InvalidateOpenGridReady(drawing, v, true);
+                        result.FailedCount++;
+                    }
                 }
                 catch (Exception exView)
                 {
+                    InvalidateOpenGridReady(drawing, v, true);
                     result.FailedCount++;
                 }
             }
@@ -163,7 +259,13 @@ public static class PHU_OpenGridView
             try { drawing.CommitChanges(); }
             catch (Exception exCommit) {; }
 
-            result.Message = "Done.";
+            if (result.SuccessCount > 0 && result.FailedCount == 0)
+                result.Message = "Done.";
+            else if (result.SuccessCount > 0)
+                result.Message = "Open Grid partial: " +
+                    result.SuccessCount + "/" + result.ViewCount + " View.";
+            else
+                result.Message = "Open Grid failed.";
 
             return result;
         }
@@ -849,6 +951,82 @@ public static class PHU_OpenGridView
         }
     }
 
+    public static bool CanRunFitForCurrentTargets(out string message)
+    {
+        message = FIT_PREREQUISITE_MESSAGE;
+
+        try
+        {
+            DrawingHandler dh = new DrawingHandler();
+            if (!dh.GetConnectionStatus())
+                return false;
+
+            Drawing drawing = dh.GetActiveDrawing();
+            if (drawing == null)
+                return false;
+
+            EnsureOpenGridSessionForDrawing(drawing);
+
+            List<View> views = GetTargetViews(dh, drawing);
+            if (views == null || views.Count == 0)
+                return false;
+
+            return ValidateFitTargets(drawing, views, out message);
+        }
+        catch
+        {
+            message = FIT_PREREQUISITE_MESSAGE;
+            return false;
+        }
+    }
+
+    private static bool ValidateFitTargets(
+        Drawing drawing,
+        List<View> views,
+        out string message)
+    {
+        message = FIT_PREREQUISITE_MESSAGE;
+
+        if (drawing == null || views == null || views.Count == 0)
+            return false;
+
+        EnsureOpenGridSessionForDrawing(drawing);
+
+        List<string> missingViews = new List<string>();
+
+        foreach (View view in views)
+        {
+            string readyKey = GetOpenGridReadyViewKey(drawing, view);
+            string snapshotKey = GetSessionViewKey(view);
+
+            bool ready = !string.IsNullOrEmpty(readyKey) &&
+                OPEN_GRID_READY_VIEW_KEYS.Contains(readyKey);
+            bool hasSheetSnapshot = !string.IsNullOrEmpty(snapshotKey) &&
+                FIT_ORIGINAL_SHEET_BOXES.ContainsKey(snapshotKey);
+            bool hasRestrictionSnapshot = !string.IsNullOrEmpty(snapshotKey) &&
+                FIT_ORIGINAL_RESTRICTION_BOXES.ContainsKey(snapshotKey);
+
+            if (!ready || !hasSheetSnapshot || !hasRestrictionSnapshot)
+            {
+                string name = SafeViewName(view);
+                if (string.IsNullOrEmpty(name))
+                    name = "View";
+                missingViews.Add(name);
+            }
+        }
+
+        if (missingViews.Count == 0)
+        {
+            message = "";
+            return true;
+        }
+
+        message = FIT_PREREQUISITE_MESSAGE;
+        message += "\nView chưa Open Grid: " +
+            string.Join(", ", missingViews.ToArray());
+        return false;
+    }
+
     private static List<View> GetTargetViews(DrawingHandler dh, Drawing drawing)
     {
         List<View> selectedViews = GetSelectedViews(dh);
@@ -1185,6 +1363,139 @@ public static class PHU_OpenGridView
         }
     }
 
+    private static string GetDrawingStableKey(Drawing drawing)
+    {
+        try
+        {
+            if (drawing == null)
+                return "";
+
+            object identifier = GetProp(drawing, "Identifier");
+            object id = GetProp(identifier, "ID");
+            if (id != null)
+                return "DRAWING_ID:" + id.ToString();
+
+            // Identifier.ID is available in normal Tekla sessions.  The
+            // reference hash is only a session-local fallback; unlike a View
+            // name it cannot alias two Drawing objects in this process.
+            return "DRAWING_REF:" +
+                System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(drawing).ToString(
+                    System.Globalization.CultureInfo.InvariantCulture);
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
+    private static string GetOpenGridReadyViewKey(Drawing drawing, View view)
+    {
+        try
+        {
+            string drawingKey = GetDrawingStableKey(drawing);
+            if (string.IsNullOrEmpty(drawingKey) || view == null)
+                return "";
+
+            string viewKey = GetViewStableKey(view);
+            if (string.IsNullOrEmpty(viewKey))
+            {
+                viewKey = "VIEW_REF:" +
+                    System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(view).ToString(
+                        System.Globalization.CultureInfo.InvariantCulture);
+            }
+
+            return drawingKey + "::" + viewKey;
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
+    private static string GetSessionViewKey(View view)
+    {
+        if (string.IsNullOrEmpty(OPEN_GRID_READY_DRAWING_KEY) || view == null)
+            return "";
+
+        string viewKey = GetViewStableKey(view);
+        if (string.IsNullOrEmpty(viewKey))
+        {
+            try
+            {
+                viewKey = "VIEW_REF:" +
+                    System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(view).ToString(
+                        System.Globalization.CultureInfo.InvariantCulture);
+            }
+            catch
+            {
+                viewKey = "";
+            }
+        }
+
+        return string.IsNullOrEmpty(viewKey)
+            ? ""
+            : OPEN_GRID_READY_DRAWING_KEY + "::" + viewKey;
+    }
+
+    private static void EnsureOpenGridSessionForDrawing(Drawing drawing)
+    {
+        string drawingKey = GetDrawingStableKey(drawing);
+
+        if (string.IsNullOrEmpty(drawingKey))
+        {
+            OPEN_GRID_READY_VIEW_KEYS.Clear();
+            FIT_ORIGINAL_SHEET_BOXES.Clear();
+            FIT_ORIGINAL_RESTRICTION_BOXES.Clear();
+            OPEN_GRID_READY_DRAWING_KEY = "";
+            return;
+        }
+
+        if (!string.Equals(
+                OPEN_GRID_READY_DRAWING_KEY,
+                drawingKey,
+                StringComparison.Ordinal))
+        {
+            OPEN_GRID_READY_VIEW_KEYS.Clear();
+            FIT_ORIGINAL_SHEET_BOXES.Clear();
+            FIT_ORIGINAL_RESTRICTION_BOXES.Clear();
+            OPEN_GRID_READY_DRAWING_KEY = drawingKey;
+        }
+    }
+
+    private static void MarkOpenGridReady(Drawing drawing, View view)
+    {
+        string readyKey = GetOpenGridReadyViewKey(drawing, view);
+        string snapshotKey = GetSessionViewKey(view);
+        if (string.IsNullOrEmpty(readyKey) || string.IsNullOrEmpty(snapshotKey))
+            return;
+
+        if (FIT_ORIGINAL_SHEET_BOXES.ContainsKey(snapshotKey) &&
+            FIT_ORIGINAL_RESTRICTION_BOXES.ContainsKey(snapshotKey))
+        {
+            OPEN_GRID_READY_VIEW_KEYS.Add(readyKey);
+        }
+    }
+
+    private static void InvalidateOpenGridReady(
+        Drawing drawing,
+        View view,
+        bool removeSnapshots)
+    {
+        string readyKey = GetOpenGridReadyViewKey(drawing, view);
+        if (!string.IsNullOrEmpty(readyKey))
+            OPEN_GRID_READY_VIEW_KEYS.Remove(readyKey);
+
+        if (!removeSnapshots)
+            return;
+
+        string snapshotKey = GetSessionViewKey(view);
+        if (string.IsNullOrEmpty(snapshotKey))
+            return;
+
+        FIT_ORIGINAL_SHEET_BOXES.Remove(snapshotKey);
+        FIT_ORIGINAL_RESTRICTION_BOXES.Remove(snapshotKey);
+    }
+
     private static void CaptureFitOriginalSheetBoxes(List<View> views)
     {
         try
@@ -1197,7 +1508,7 @@ public static class PHU_OpenGridView
                 if (v == null)
                     continue;
 
-                string key = GetViewStableKey(v);
+                string key = GetSessionViewKey(v);
                 if (string.IsNullOrEmpty(key))
                     continue;
 
@@ -1221,7 +1532,7 @@ public static class PHU_OpenGridView
 
         try
         {
-            string key = GetViewStableKey(view);
+            string key = GetSessionViewKey(view);
             if (string.IsNullOrEmpty(key))
                 return false;
 
@@ -1240,7 +1551,7 @@ public static class PHU_OpenGridView
 
         try
         {
-            string key = GetViewStableKey(view);
+            string key = GetSessionViewKey(view);
             if (string.IsNullOrEmpty(key))
                 return false;
 
@@ -1412,6 +1723,237 @@ public static class PHU_OpenGridView
         }
     }
 
+    public static FitGridOriginArrangeResult ArrangeTopFrontByOriginAfterGridFit()
+    {
+        FitGridOriginArrangeResult result = new FitGridOriginArrangeResult();
+        Drawing drawing = null;
+        View frontView = null;
+        Point originalFrontOrigin = null;
+        bool frontOriginChanged = false;
+
+        try
+        {
+            DrawingHandler dh = new DrawingHandler();
+            if (!dh.GetConnectionStatus())
+            {
+                result.Success = false;
+                result.Applied = false;
+                result.Message = "Sắp xếp Origin thất bại, Origin cũ của Front đã được khôi phục.";
+                return result;
+            }
+
+            drawing = dh.GetActiveDrawing();
+            if (drawing == null)
+            {
+                result.Success = false;
+                result.Applied = false;
+                result.Message = "Sắp xếp Origin thất bại, Origin cũ của Front đã được khôi phục.";
+                return result;
+            }
+
+            List<View> targetViews = GetTargetViews(dh, drawing);
+            List<View> topViews = new List<View>();
+            List<View> frontViews = new List<View>();
+
+            foreach (View view in targetViews)
+            {
+                if (ViewTypeMatches(view, "TopView", "Top"))
+                    topViews.Add(view);
+
+                if (ViewTypeMatches(view, "FrontView", "Front"))
+                    frontViews.Add(view);
+            }
+
+            if (topViews.Count == 0 || frontViews.Count == 0)
+            {
+                result.Success = true;
+                result.Applied = false;
+                result.Message = "Không đủ cặp Top/Front, bỏ qua sắp xếp.";
+                return result;
+            }
+
+            if (topViews.Count > 1 || frontViews.Count > 1)
+            {
+                result.Success = false;
+                result.Applied = false;
+                result.Message = "Có nhiều Top hoặc Front View, không thể xác định cặp duy nhất.";
+                return result;
+            }
+
+            View topView = topViews[0];
+            frontView = frontViews[0];
+
+            drawing.CommitChanges();
+
+            Point topOrigin = topView.Origin;
+            Point frontOrigin = frontView.Origin;
+            if (topOrigin == null || frontOrigin == null)
+            {
+                result.Success = false;
+                result.Applied = false;
+                result.Message = "Sắp xếp Origin thất bại, Origin cũ của Front đã được khôi phục.";
+                return result;
+            }
+
+            Point originalTopOrigin = new Point(topOrigin.X, topOrigin.Y, topOrigin.Z);
+            originalFrontOrigin = new Point(frontOrigin.X, frontOrigin.Y, frontOrigin.Z);
+
+            ViewSheetBox topBox;
+            ViewSheetBox frontBox;
+            if (!TryGetViewSheetBox(topView, out topBox) ||
+                !TryGetViewSheetBox(frontView, out frontBox))
+            {
+                result.Success = false;
+                result.Applied = false;
+                result.Message = "Sắp xếp Origin thất bại, Origin cũ của Front đã được khôi phục.";
+                return result;
+            }
+
+            double topBottomOffset =
+                originalTopOrigin.Y - topBox.MinY;
+            double frontTopOffset =
+                frontBox.MaxY - originalFrontOrigin.Y;
+
+            double desiredFrontOriginX = originalTopOrigin.X;
+            double desiredFrontOriginY =
+                originalTopOrigin.Y -
+                topBottomOffset -
+                FIT_GRID_TOP_FRONT_GAP -
+                frontTopOffset;
+
+            Point desiredFrontOrigin = new Point(
+                desiredFrontOriginX,
+                desiredFrontOriginY,
+                originalFrontOrigin.Z);
+
+            double currentGap = topBox.MinY - frontBox.MaxY;
+            bool originXAlreadyCorrect =
+                Math.Abs(originalFrontOrigin.X - originalTopOrigin.X) <=
+                FIT_GRID_ORIGIN_TOLERANCE;
+            bool gapAlreadyCorrect =
+                Math.Abs(currentGap - FIT_GRID_TOP_FRONT_GAP) <=
+                FIT_GRID_GAP_TOLERANCE;
+            bool orderAlreadyCorrect = frontBox.MaxY < topBox.MinY;
+
+            if (originXAlreadyCorrect && gapAlreadyCorrect && orderAlreadyCorrect)
+            {
+                result.Success = true;
+                result.Applied = true;
+                result.Message = "Top/Front đã đúng vị trí theo Origin, Gap = 20.";
+                return result;
+            }
+
+            if (!TrySetViewOrigin(frontView, desiredFrontOrigin))
+            {
+                result.Success = false;
+                result.Applied = false;
+                result.Message = "Sắp xếp Origin thất bại, Origin cũ của Front đã được khôi phục.";
+                return result;
+            }
+
+            frontOriginChanged = true;
+            SafeModify(frontView, "arrange top front by origin");
+            drawing.CommitChanges();
+
+            Point verifiedTopOrigin = topView.Origin;
+            Point verifiedFrontOrigin = frontView.Origin;
+            ViewSheetBox verifiedTopBox = null;
+            ViewSheetBox verifiedFrontBox = null;
+
+            bool verifiedBoxes =
+                verifiedTopOrigin != null &&
+                verifiedFrontOrigin != null &&
+                TryGetViewSheetBox(topView, out verifiedTopBox) &&
+                TryGetViewSheetBox(frontView, out verifiedFrontBox);
+
+            bool originXCorrect = false;
+            bool gapCorrect = false;
+            bool orderCorrect = false;
+            bool topOriginUnchanged = false;
+            bool frontZUnchanged = false;
+
+            if (verifiedBoxes)
+            {
+                double actualGap = verifiedTopBox.MinY - verifiedFrontBox.MaxY;
+                originXCorrect =
+                    Math.Abs(verifiedFrontOrigin.X - verifiedTopOrigin.X) <=
+                    FIT_GRID_ORIGIN_TOLERANCE;
+                gapCorrect =
+                    Math.Abs(actualGap - FIT_GRID_TOP_FRONT_GAP) <=
+                    FIT_GRID_GAP_TOLERANCE;
+                orderCorrect = verifiedFrontBox.MaxY < verifiedTopBox.MinY;
+                topOriginUnchanged =
+                    Math.Abs(verifiedTopOrigin.X - originalTopOrigin.X) <=
+                    FIT_GRID_ORIGIN_TOLERANCE &&
+                    Math.Abs(verifiedTopOrigin.Y - originalTopOrigin.Y) <=
+                    FIT_GRID_ORIGIN_TOLERANCE &&
+                    Math.Abs(verifiedTopOrigin.Z - originalTopOrigin.Z) <=
+                    FIT_GRID_ORIGIN_TOLERANCE;
+                frontZUnchanged =
+                    Math.Abs(verifiedFrontOrigin.Z - originalFrontOrigin.Z) <=
+                    FIT_GRID_ORIGIN_TOLERANCE;
+            }
+
+            if (verifiedBoxes && originXCorrect && gapCorrect && orderCorrect &&
+                topOriginUnchanged && frontZUnchanged)
+            {
+                result.Success = true;
+                result.Applied = true;
+                result.Message = "Top/Front đã được căn theo Origin, Gap = 20.";
+                return result;
+            }
+
+            RestoreFrontOriginAfterArrangeFailure(
+                drawing,
+                frontView,
+                originalFrontOrigin);
+            frontOriginChanged = false;
+
+            result.Success = false;
+            result.Applied = false;
+            result.Message = "Sắp xếp Origin thất bại, Origin cũ của Front đã được khôi phục.";
+            return result;
+        }
+        catch
+        {
+            if (frontOriginChanged)
+            {
+                RestoreFrontOriginAfterArrangeFailure(
+                    drawing,
+                    frontView,
+                    originalFrontOrigin);
+            }
+
+            result.Success = false;
+            result.Applied = false;
+            result.Message = "Sắp xếp Origin thất bại, Origin cũ của Front đã được khôi phục.";
+            return result;
+        }
+    }
+
+    private static void RestoreFrontOriginAfterArrangeFailure(
+        Drawing drawing,
+        View frontView,
+        Point originalFrontOrigin)
+    {
+        try
+        {
+            if (frontView == null || originalFrontOrigin == null)
+                return;
+
+            if (!TrySetViewOrigin(frontView, originalFrontOrigin))
+                return;
+
+            SafeModify(frontView, "restore front origin after arrange failure");
+
+            if (drawing != null)
+                drawing.CommitChanges();
+        }
+        catch
+        {
+        }
+    }
+
 
 
     // =================================================
@@ -1459,7 +2001,16 @@ public static class PHU_OpenGridView
                 return result;
             }
 
+            EnsureOpenGridSessionForDrawing(drawing);
             result.ViewCount = views.Count;
+
+            string prerequisiteMessage;
+            if (!ValidateFitTargets(drawing, views, out prerequisiteMessage))
+            {
+                result.FailedCount = Math.Max(1, views.Count);
+                result.Message = FIT_PREREQUISITE_MESSAGE;
+                return result;
+            }
 
             foreach (View v in views)
             {
@@ -1507,6 +2058,1275 @@ public static class PHU_OpenGridView
             result.FailedCount++;
             result.Message = "Fatal error: " + ex.Message;
             return result;
+        }
+    }
+
+    public static Result RunFitKeepNearestGridAxes(int nearestGridCount, double padding)
+    {
+        Result result = new Result();
+        int expectedGridCount = Math.Max(1, Math.Min(3, nearestGridCount));
+        result.GridAxesExpectedCount = expectedGridCount;
+        result.GridAxesFoundCount = expectedGridCount;
+
+        try
+        {
+            DrawingHandler dh = new DrawingHandler();
+            if (!dh.GetConnectionStatus())
+            {
+                result.FailedCount++;
+                result.GridAxesFoundCount = 0;
+                result.Message = "DrawingHandler chưa kết nối.";
+                return result;
+            }
+
+            Drawing drawing = dh.GetActiveDrawing();
+            if (drawing == null)
+            {
+                result.FailedCount++;
+                result.GridAxesFoundCount = 0;
+                result.Message = "Không có active drawing.";
+                return result;
+            }
+
+            EnsureOpenGridSessionForDrawing(drawing);
+            List<View> views = GetTargetViews(dh, drawing);
+            if (views.Count == 0)
+            {
+                result.FailedCount++;
+                result.GridAxesFoundCount = 0;
+                result.Message = "Không tìm thấy View để xử lý.";
+                return result;
+            }
+
+            result.ViewCount = views.Count;
+
+            string prerequisiteMessage;
+            if (!ValidateFitTargets(drawing, views, out prerequisiteMessage))
+            {
+                result.FailedCount = Math.Max(1, views.Count);
+                result.GridAxesFoundCount = 0;
+                result.Message = FIT_PREREQUISITE_MESSAGE;
+                return result;
+            }
+
+            Tekla.Structures.Model.Model model = null;
+            try
+            {
+                model = new Tekla.Structures.Model.Model();
+                if (!model.GetConnectionStatus())
+                    model = null;
+            }
+            catch
+            {
+                model = null;
+            }
+
+            List<string> selectedDetails = new List<string>();
+
+            foreach (View view in views)
+            {
+                AABB originalRestrictionBox;
+                if (!TryGetFitOriginalRestrictionBox(view, out originalRestrictionBox))
+                {
+                    result.FailedCount++;
+                    result.GridAxesFoundCount = 0;
+                    continue;
+                }
+
+                AABB entryRestrictionBox;
+                TryGetRestrictionBoxClone(view, out entryRestrictionBox);
+
+                try
+                {
+                    NearestGridSelection selection;
+                    bool applied = FitViewKeepNearestGridAxes(
+                        view,
+                        drawing,
+                        model,
+                        originalRestrictionBox,
+                        expectedGridCount,
+                        padding,
+                        out selection);
+
+                    int found = selection == null ? 0 : selection.Count;
+                    if (found < result.GridAxesFoundCount)
+                        result.GridAxesFoundCount = found;
+
+                    if (found == 0)
+                    {
+                        result.GridAxisNoGridViewCount++;
+                        continue;
+                    }
+
+                    if (!applied)
+                    {
+                        result.FailedCount++;
+                        continue;
+                    }
+
+                    result.SuccessCount++;
+                    if (found < expectedGridCount)
+                        result.GridAxisPartialViewCount++;
+
+                    selectedDetails.Add(
+                        DescribeNearestGridSelection(view, selection));
+                }
+                catch
+                {
+                    RestoreRestrictionBoxWithoutMoving(
+                        view,
+                        entryRestrictionBox ?? originalRestrictionBox);
+                    result.FailedCount++;
+                    result.GridAxesFoundCount = 0;
+                }
+            }
+
+            try { drawing.CommitChanges(); }
+            catch { }
+
+            result.SelectedGridAxes = string.Join(" | ", selectedDetails.ToArray());
+
+            if (result.GridAxisNoGridViewCount == result.ViewCount)
+            {
+                result.Message = expectedGridCount == 1
+                    ? "Không tìm thấy grid phù hợp với hướng của View để chạy chế độ giữ 1 trục."
+                    : "Không tìm thấy grid để chạy chế độ Có trục.";
+            }
+            else if (result.FailedCount > 0)
+            {
+                result.Message = "Fit có trục lỗi, view đã được restore.";
+            }
+            else if (result.GridAxesFoundCount < expectedGridCount)
+            {
+                result.Message = "Chỉ tìm thấy " + result.GridAxesFoundCount + "/" + expectedGridCount + " grid gần main part.";
+            }
+            else
+            {
+                result.Message = "Fit Grid applied.";
+            }
+
+            if (!string.IsNullOrEmpty(result.SelectedGridAxes))
+                result.Message += "\nGrid đã chọn: " + result.SelectedGridAxes;
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            result.FailedCount++;
+            result.GridAxesFoundCount = 0;
+            result.Message = "Fatal error: " + ex.Message;
+            return result;
+        }
+    }
+
+    public static Result RestoreFitKeepGridRestrictionBoxes()
+    {
+        Result result = new Result();
+
+        try
+        {
+            DrawingHandler dh = new DrawingHandler();
+            Drawing drawing = dh.GetActiveDrawing();
+            if (!dh.GetConnectionStatus() || drawing == null)
+            {
+                result.FailedCount++;
+                result.Message = "Không thể restore view.";
+                return result;
+            }
+
+            EnsureOpenGridSessionForDrawing(drawing);
+
+            List<View> views = GetTargetViews(dh, drawing);
+            result.ViewCount = views.Count;
+
+            foreach (View view in views)
+            {
+                AABB originalRestrictionBox;
+                if (TryGetFitOriginalRestrictionBox(view, out originalRestrictionBox))
+                {
+                    RestoreRestrictionBoxWithoutMoving(view, originalRestrictionBox);
+                    result.SuccessCount++;
+                }
+                else
+                {
+                    result.FailedCount++;
+                }
+            }
+
+            try { drawing.CommitChanges(); }
+            catch { }
+
+            result.Message = result.FailedCount == 0
+                ? "View đã được restore."
+                : "Có view không restore được.";
+            return result;
+        }
+        catch (Exception ex)
+        {
+            result.FailedCount++;
+            result.Message = "Restore view lỗi: " + ex.Message;
+            return result;
+        }
+    }
+
+    private static bool FitViewKeepNearestGridAxes(
+        View view,
+        Drawing drawing,
+        Tekla.Structures.Model.Model model,
+        AABB originalRestrictionBox,
+        int expectedGridCount,
+        double padding,
+        out NearestGridSelection selection)
+    {
+        selection = new NearestGridSelection();
+
+        if (view == null ||
+            originalRestrictionBox == null ||
+            originalRestrictionBox.MinPoint == null ||
+            originalRestrictionBox.MaxPoint == null)
+        {
+            return false;
+        }
+
+        double originalMinX = Math.Min(originalRestrictionBox.MinPoint.X, originalRestrictionBox.MaxPoint.X);
+        double originalMaxX = Math.Max(originalRestrictionBox.MinPoint.X, originalRestrictionBox.MaxPoint.X);
+        double originalMinY = Math.Min(originalRestrictionBox.MinPoint.Y, originalRestrictionBox.MaxPoint.Y);
+        double originalMaxY = Math.Max(originalRestrictionBox.MinPoint.Y, originalRestrictionBox.MaxPoint.Y);
+        double originalMinZ = Math.Min(originalRestrictionBox.MinPoint.Z, originalRestrictionBox.MaxPoint.Z);
+        double originalMaxZ = Math.Max(originalRestrictionBox.MinPoint.Z, originalRestrictionBox.MaxPoint.Z);
+
+        double contentMinX = originalMinX;
+        double contentMaxX = originalMaxX;
+        double contentMinY = originalMinY;
+        double contentMaxY = originalMaxY;
+
+        TryGetModelContentBounds(
+            view,
+            model,
+            padding,
+            ref contentMinX,
+            ref contentMaxX,
+            ref contentMinY,
+            ref contentMaxY);
+
+        List<GridSeg> segments = ReadGridSegments(view);
+
+        if (expectedGridCount == 1)
+        {
+            // Chế độ một trục phải đọc đủ hai phía có thể so sánh trước khi
+            // quyết định. Nhánh này tách riêng để không làm thay đổi flow
+            // selection/progressive cũ của chế độ 2 và 3 trục.
+            SingleAxisCandidates candidates = FindSingleAxisCandidates(
+                segments,
+                originalMinX,
+                originalMaxX,
+                originalMinY,
+                originalMaxY,
+                contentMinX,
+                contentMaxX,
+                contentMinY,
+                contentMaxY);
+
+            ProgressiveReadSingleAxisCandidates(
+                view,
+                drawing,
+                originalMinX,
+                originalMaxX,
+                originalMinY,
+                originalMaxY,
+                originalMinZ,
+                originalMaxZ,
+                contentMinX,
+                contentMaxX,
+                contentMinY,
+                contentMaxY,
+                ref candidates);
+
+            selection = SelectSingleNearestGridAxis(view, candidates);
+        }
+        else
+        {
+            selection = SelectNearestGridAxes(
+                segments,
+                originalMinX,
+                originalMaxX,
+                originalMinY,
+                originalMaxY,
+                contentMinX,
+                contentMaxX,
+                contentMinY,
+                contentMaxY,
+                expectedGridCount);
+
+            if (selection.Count < expectedGridCount)
+            {
+                ProgressiveReadNearestGridAxes(
+                    view,
+                    drawing,
+                    originalMinX,
+                    originalMaxX,
+                    originalMinY,
+                    originalMaxY,
+                    originalMinZ,
+                    originalMaxZ,
+                    contentMinX,
+                    contentMaxX,
+                    contentMinY,
+                    contentMaxY,
+                    originalMinX,
+                    originalMaxX,
+                    originalMinY,
+                    originalMaxY,
+                    expectedGridCount,
+                    ref selection);
+            }
+        }
+
+        if (selection == null || selection.Count == 0)
+        {
+            RestoreRestrictionBoxWithoutMoving(view, originalRestrictionBox);
+            return false;
+        }
+
+        double finalMinX = Math.Min(originalMinX, contentMinX);
+        double finalMaxX = Math.Max(originalMaxX, contentMaxX);
+        double finalMinY = Math.Min(originalMinY, contentMinY);
+        double finalMaxY = Math.Max(originalMaxY, contentMaxY);
+
+        if (selection.Vertical != null)
+        {
+            if (selection.VerticalIsLeft)
+                finalMinX = selection.Vertical.ConstX;
+            else
+                finalMaxX = selection.Vertical.ConstX;
+        }
+
+        if (selection.Bottom != null)
+            finalMinY = selection.Bottom.ConstY;
+
+        if (selection.Top != null)
+            finalMaxY = selection.Top.ConstY;
+
+        Point finalMin = new Point(finalMinX, finalMinY, originalMinZ);
+        Point finalMax = new Point(finalMaxX, finalMaxY, originalMaxZ);
+
+        if (!IsFinite(finalMinX) ||
+            !IsFinite(finalMaxX) ||
+            !IsFinite(finalMinY) ||
+            !IsFinite(finalMaxY) ||
+            finalMaxX <= finalMinX + 1.0 ||
+            finalMaxY <= finalMinY + 1.0)
+        {
+            RestoreRestrictionBoxWithoutMoving(view, originalRestrictionBox);
+            return false;
+        }
+
+        try
+        {
+            AABB finalBox = new AABB(finalMin, finalMax);
+            if (!TryApplyRestrictionBox(view, finalBox))
+            {
+                RestoreRestrictionBoxWithoutMoving(view, originalRestrictionBox);
+                return false;
+            }
+
+            try
+            {
+                if (drawing != null)
+                    drawing.CommitChanges();
+            }
+            catch
+            {
+                RestoreRestrictionBoxWithoutMoving(view, originalRestrictionBox);
+                return false;
+            }
+
+            if (!RestrictionBoxMatches(view, finalBox) ||
+                !SelectedGridAxesRemainVisible(view, selection))
+            {
+                RestoreRestrictionBoxWithoutMoving(view, originalRestrictionBox);
+                try
+                {
+                    if (drawing != null)
+                        drawing.CommitChanges();
+                }
+                catch { }
+
+                return false;
+            }
+
+            return true;
+        }
+        catch
+        {
+            RestoreRestrictionBoxWithoutMoving(view, originalRestrictionBox);
+            return false;
+        }
+    }
+
+    private static SingleAxisCandidates FindSingleAxisCandidates(
+        List<GridSeg> segments,
+        double referenceMinX,
+        double referenceMaxX,
+        double referenceMinY,
+        double referenceMaxY,
+        double contentMinX,
+        double contentMaxX,
+        double contentMinY,
+        double contentMaxY)
+    {
+        SingleAxisCandidates candidates = new SingleAxisCandidates();
+
+        if (segments == null)
+            return candidates;
+
+        foreach (GridSeg grid in segments)
+        {
+            if (grid == null)
+                continue;
+
+            if (grid.IsVertical)
+            {
+                if (grid.ConstX <= referenceMinX + LINE_AXIS_TOLERANCE &&
+                    grid.ConstX <= contentMinX + LINE_AXIS_TOLERANCE)
+                {
+                    double distance = Math.Max(0.0, contentMinX - grid.ConstX);
+                    if (IsBetterGridCandidate(
+                        grid,
+                        distance,
+                        candidates.LeftVertical,
+                        candidates.LeftVerticalDistance))
+                    {
+                        candidates.LeftVertical = grid;
+                        candidates.LeftVerticalDistance = distance;
+                    }
+                }
+
+                if (grid.ConstX >= referenceMaxX - LINE_AXIS_TOLERANCE &&
+                    grid.ConstX >= contentMaxX - LINE_AXIS_TOLERANCE)
+                {
+                    double distance = Math.Max(0.0, grid.ConstX - contentMaxX);
+                    if (IsBetterGridCandidate(
+                        grid,
+                        distance,
+                        candidates.RightVertical,
+                        candidates.RightVerticalDistance))
+                    {
+                        candidates.RightVertical = grid;
+                        candidates.RightVerticalDistance = distance;
+                    }
+                }
+            }
+
+            if (grid.IsHorizontal)
+            {
+                if (grid.ConstY <= referenceMinY + LINE_AXIS_TOLERANCE &&
+                    grid.ConstY <= contentMinY + LINE_AXIS_TOLERANCE)
+                {
+                    double distance = Math.Max(0.0, contentMinY - grid.ConstY);
+                    if (IsBetterGridCandidate(
+                        grid,
+                        distance,
+                        candidates.BottomHorizontal,
+                        candidates.BottomHorizontalDistance))
+                    {
+                        candidates.BottomHorizontal = grid;
+                        candidates.BottomHorizontalDistance = distance;
+                    }
+                }
+
+                if (grid.ConstY >= referenceMaxY - LINE_AXIS_TOLERANCE &&
+                    grid.ConstY >= contentMaxY - LINE_AXIS_TOLERANCE)
+                {
+                    double distance = Math.Max(0.0, grid.ConstY - contentMaxY);
+                    if (IsBetterGridCandidate(
+                        grid,
+                        distance,
+                        candidates.TopHorizontal,
+                        candidates.TopHorizontalDistance))
+                    {
+                        candidates.TopHorizontal = grid;
+                        candidates.TopHorizontalDistance = distance;
+                    }
+                }
+            }
+        }
+
+        return candidates;
+    }
+
+    private static void MergeSingleAxisCandidates(
+        SingleAxisCandidates target,
+        SingleAxisCandidates incoming)
+    {
+        if (target == null || incoming == null)
+            return;
+
+        if (IsBetterGridCandidate(
+            incoming.LeftVertical,
+            incoming.LeftVerticalDistance,
+            target.LeftVertical,
+            target.LeftVerticalDistance))
+        {
+            target.LeftVertical = incoming.LeftVertical;
+            target.LeftVerticalDistance = incoming.LeftVerticalDistance;
+        }
+
+        if (IsBetterGridCandidate(
+            incoming.RightVertical,
+            incoming.RightVerticalDistance,
+            target.RightVertical,
+            target.RightVerticalDistance))
+        {
+            target.RightVertical = incoming.RightVertical;
+            target.RightVerticalDistance = incoming.RightVerticalDistance;
+        }
+
+        if (IsBetterGridCandidate(
+            incoming.BottomHorizontal,
+            incoming.BottomHorizontalDistance,
+            target.BottomHorizontal,
+            target.BottomHorizontalDistance))
+        {
+            target.BottomHorizontal = incoming.BottomHorizontal;
+            target.BottomHorizontalDistance = incoming.BottomHorizontalDistance;
+        }
+
+        if (IsBetterGridCandidate(
+            incoming.TopHorizontal,
+            incoming.TopHorizontalDistance,
+            target.TopHorizontal,
+            target.TopHorizontalDistance))
+        {
+            target.TopHorizontal = incoming.TopHorizontal;
+            target.TopHorizontalDistance = incoming.TopHorizontalDistance;
+        }
+    }
+
+    private static bool IsSingleAxisComparisonComplete(
+        View view,
+        SingleAxisCandidates candidates)
+    {
+        if (view == null || candidates == null)
+            return false;
+
+        bool topOrBottom =
+            ViewTypeMatches(view, "TopView", "Top") ||
+            ViewTypeMatches(view, "BottomView", "Bottom");
+
+        if (topOrBottom)
+            return candidates.HasBothVerticalSides;
+
+        bool frontOrBack =
+            ViewTypeMatches(view, "FrontView", "Front") ||
+            ViewTypeMatches(view, "BackView", "Back");
+
+        if (frontOrBack)
+            return candidates.HasBothHorizontalSides;
+
+        // Section/unknown views use the four-candidate fallback.  Reading all
+        // expansion steps is deliberate so a later candidate cannot be missed.
+        return false;
+    }
+
+    private static void ProgressiveReadSingleAxisCandidates(
+        View view,
+        Drawing drawing,
+        double originalMinX,
+        double originalMaxX,
+        double originalMinY,
+        double originalMaxY,
+        double originalMinZ,
+        double originalMaxZ,
+        double contentMinX,
+        double contentMaxX,
+        double contentMinY,
+        double contentMaxY,
+        ref SingleAxisCandidates bestCandidates)
+    {
+        if (view == null)
+            return;
+
+        if (bestCandidates == null)
+            bestCandidates = new SingleAxisCandidates();
+
+        if (IsSingleAxisComparisonComplete(view, bestCandidates))
+            return;
+
+        double baseMinX = Math.Min(originalMinX, contentMinX);
+        double baseMaxX = Math.Max(originalMaxX, contentMaxX);
+        double baseMinY = Math.Min(originalMinY, contentMinY);
+        double baseMaxY = Math.Max(originalMaxY, contentMaxY);
+
+        for (int i = 0; i < TEMP_EXPAND_STEPS.Length; i++)
+        {
+            double step = TEMP_EXPAND_STEPS[i];
+
+            view.RestrictionBox = new AABB(
+                new Point(baseMinX - step, baseMinY - step, originalMinZ),
+                new Point(baseMaxX + step, baseMaxY + step, originalMaxZ));
+            SafeModify(view, "fit keep one grid expand " + R(step));
+
+            try
+            {
+                if (drawing != null)
+                    drawing.CommitChanges();
+            }
+            catch { }
+
+            SingleAxisCandidates current = FindSingleAxisCandidates(
+                ReadGridSegments(view),
+                originalMinX,
+                originalMaxX,
+                originalMinY,
+                originalMaxY,
+                contentMinX,
+                contentMaxX,
+                contentMinY,
+                contentMaxY);
+
+            MergeSingleAxisCandidates(bestCandidates, current);
+
+            // For known automatic views, both sides are required before the
+            // nearest one is selected.  A single side never ends the search.
+            if (IsSingleAxisComparisonComplete(view, bestCandidates))
+                return;
+        }
+    }
+
+    private static NearestGridSelection SelectSingleNearestGridAxis(
+        View view,
+        SingleAxisCandidates candidates)
+    {
+        NearestGridSelection selected = new NearestGridSelection();
+
+        if (view == null || candidates == null)
+            return selected;
+
+        bool topOrBottom =
+            ViewTypeMatches(view, "TopView", "Top") ||
+            ViewTypeMatches(view, "BottomView", "Bottom");
+
+        if (topOrBottom)
+        {
+            GridSeg bestVertical = null;
+            double bestDistance = double.PositiveInfinity;
+            bool isLeft = false;
+
+            if (IsBetterGridCandidate(
+                candidates.LeftVertical,
+                candidates.LeftVerticalDistance,
+                bestVertical,
+                bestDistance))
+            {
+                bestVertical = candidates.LeftVertical;
+                bestDistance = candidates.LeftVerticalDistance;
+                isLeft = true;
+            }
+
+            if (IsBetterGridCandidate(
+                candidates.RightVertical,
+                candidates.RightVerticalDistance,
+                bestVertical,
+                bestDistance))
+            {
+                bestVertical = candidates.RightVertical;
+                bestDistance = candidates.RightVerticalDistance;
+                isLeft = false;
+            }
+
+            selected.Vertical = bestVertical;
+            selected.VerticalIsLeft = isLeft;
+            return selected;
+        }
+
+        bool frontOrBack =
+            ViewTypeMatches(view, "FrontView", "Front") ||
+            ViewTypeMatches(view, "BackView", "Back");
+
+        if (frontOrBack)
+        {
+            GridSeg bestHorizontal = null;
+            double bestDistance = double.PositiveInfinity;
+            bool isBottom = false;
+
+            if (IsBetterGridCandidate(
+                candidates.BottomHorizontal,
+                candidates.BottomHorizontalDistance,
+                bestHorizontal,
+                bestDistance))
+            {
+                bestHorizontal = candidates.BottomHorizontal;
+                bestDistance = candidates.BottomHorizontalDistance;
+                isBottom = true;
+            }
+
+            if (IsBetterGridCandidate(
+                candidates.TopHorizontal,
+                candidates.TopHorizontalDistance,
+                bestHorizontal,
+                bestDistance))
+            {
+                bestHorizontal = candidates.TopHorizontal;
+                bestDistance = candidates.TopHorizontalDistance;
+                isBottom = false;
+            }
+
+            if (isBottom)
+                selected.Bottom = bestHorizontal;
+            else
+                selected.Top = bestHorizontal;
+
+            return selected;
+        }
+
+        // Section/unknown fallback: pick the nearest valid candidate among
+        // all four directions, while still returning exactly one axis.
+        GridSeg best = null;
+        double bestAnyDistance = double.PositiveInfinity;
+        int bestKind = 0;
+
+        if (IsBetterGridCandidate(
+            candidates.LeftVertical,
+            candidates.LeftVerticalDistance,
+            best,
+            bestAnyDistance))
+        {
+            best = candidates.LeftVertical;
+            bestAnyDistance = candidates.LeftVerticalDistance;
+            bestKind = 1;
+        }
+
+        if (IsBetterGridCandidate(
+            candidates.RightVertical,
+            candidates.RightVerticalDistance,
+            best,
+            bestAnyDistance))
+        {
+            best = candidates.RightVertical;
+            bestAnyDistance = candidates.RightVerticalDistance;
+            bestKind = 2;
+        }
+
+        if (IsBetterGridCandidate(
+            candidates.BottomHorizontal,
+            candidates.BottomHorizontalDistance,
+            best,
+            bestAnyDistance))
+        {
+            best = candidates.BottomHorizontal;
+            bestAnyDistance = candidates.BottomHorizontalDistance;
+            bestKind = 3;
+        }
+
+        if (IsBetterGridCandidate(
+            candidates.TopHorizontal,
+            candidates.TopHorizontalDistance,
+            best,
+            bestAnyDistance))
+        {
+            best = candidates.TopHorizontal;
+            bestAnyDistance = candidates.TopHorizontalDistance;
+            bestKind = 4;
+        }
+
+        if (bestKind == 1 || bestKind == 2)
+        {
+            selected.Vertical = best;
+            selected.VerticalIsLeft = bestKind == 1;
+        }
+        else if (bestKind == 3)
+        {
+            selected.Bottom = best;
+        }
+        else if (bestKind == 4)
+        {
+            selected.Top = best;
+        }
+
+        return selected;
+    }
+
+    private static void ProgressiveReadNearestGridAxes(
+        View view,
+        Drawing drawing,
+        double originalMinX,
+        double originalMaxX,
+        double originalMinY,
+        double originalMaxY,
+        double originalMinZ,
+        double originalMaxZ,
+        double contentMinX,
+        double contentMaxX,
+        double contentMinY,
+        double contentMaxY,
+        double rankMinX,
+        double rankMaxX,
+        double rankMinY,
+        double rankMaxY,
+        int expectedGridCount,
+        ref NearestGridSelection bestSelection)
+    {
+        for (int i = 0; i < TEMP_EXPAND_STEPS.Length; i++)
+        {
+            double step = TEMP_EXPAND_STEPS[i];
+            double baseMinX = Math.Min(originalMinX, contentMinX);
+            double baseMaxX = Math.Max(originalMaxX, contentMaxX);
+            double baseMinY = Math.Min(originalMinY, contentMinY);
+            double baseMaxY = Math.Max(originalMaxY, contentMaxY);
+
+            view.RestrictionBox = new AABB(
+                new Point(baseMinX - step, baseMinY - step, originalMinZ),
+                new Point(baseMaxX + step, baseMaxY + step, originalMaxZ));
+            SafeModify(view, "fit keep grid expand " + R(step));
+
+            try
+            {
+                if (drawing != null)
+                    drawing.CommitChanges();
+            }
+            catch { }
+
+            NearestGridSelection current = SelectNearestGridAxes(
+                ReadGridSegments(view),
+                rankMinX,
+                rankMaxX,
+                rankMinY,
+                rankMaxY,
+                contentMinX,
+                contentMaxX,
+                contentMinY,
+                contentMaxY,
+                expectedGridCount);
+
+            if (current.Count > bestSelection.Count)
+                bestSelection = current;
+
+            if (bestSelection.Count >= expectedGridCount)
+                return;
+        }
+    }
+
+    private static NearestGridSelection SelectNearestGridAxes(
+        List<GridSeg> segments,
+        double referenceMinX,
+        double referenceMaxX,
+        double referenceMinY,
+        double referenceMaxY,
+        double contentMinX,
+        double contentMaxX,
+        double contentMinY,
+        double contentMaxY,
+        int expectedGridCount)
+    {
+        NearestGridSelection selected = new NearestGridSelection();
+        double bestVerticalDistance = double.PositiveInfinity;
+        double bestBottomDistance = double.PositiveInfinity;
+        double bestTopDistance = double.PositiveInfinity;
+
+        if (segments == null)
+            return selected;
+
+        foreach (GridSeg grid in segments)
+        {
+            if (grid == null)
+                continue;
+
+            if (grid.IsVertical)
+            {
+                bool isLeft;
+                double distance;
+
+                if (grid.ConstX <= referenceMinX + LINE_AXIS_TOLERANCE &&
+                    grid.ConstX <= contentMinX + LINE_AXIS_TOLERANCE)
+                {
+                    isLeft = true;
+                    distance = Math.Max(0.0, referenceMinX - grid.ConstX);
+                }
+                else if (grid.ConstX >= referenceMaxX - LINE_AXIS_TOLERANCE &&
+                         grid.ConstX >= contentMaxX - LINE_AXIS_TOLERANCE)
+                {
+                    isLeft = false;
+                    distance = Math.Max(0.0, grid.ConstX - referenceMaxX);
+                }
+                else
+                {
+                    distance = double.PositiveInfinity;
+                    isLeft = false;
+                }
+
+                if (IsBetterGridCandidate(
+                    grid,
+                    distance,
+                    selected.Vertical,
+                    bestVerticalDistance))
+                {
+                    selected.Vertical = grid;
+                    selected.VerticalIsLeft = isLeft;
+                    bestVerticalDistance = distance;
+                }
+            }
+
+            if (grid.IsHorizontal &&
+                grid.ConstY <= referenceMinY + LINE_AXIS_TOLERANCE &&
+                grid.ConstY <= contentMinY + LINE_AXIS_TOLERANCE)
+            {
+                double distance = Math.Max(0.0, referenceMinY - grid.ConstY);
+                if (IsBetterGridCandidate(
+                    grid,
+                    distance,
+                    selected.Bottom,
+                    bestBottomDistance))
+                {
+                    selected.Bottom = grid;
+                    bestBottomDistance = distance;
+                }
+            }
+
+            if (grid.IsHorizontal &&
+                grid.ConstY >= referenceMaxY - LINE_AXIS_TOLERANCE &&
+                grid.ConstY >= contentMaxY - LINE_AXIS_TOLERANCE)
+            {
+                double distance = Math.Max(0.0, grid.ConstY - referenceMaxY);
+                if (IsBetterGridCandidate(
+                    grid,
+                    distance,
+                    selected.Top,
+                    bestTopDistance))
+                {
+                    selected.Top = grid;
+                    bestTopDistance = distance;
+                }
+            }
+        }
+
+        if (expectedGridCount == 2 &&
+            selected.Bottom != null &&
+            selected.Top != null)
+        {
+            if (bestBottomDistance <= bestTopDistance)
+                selected.Top = null;
+            else
+                selected.Bottom = null;
+        }
+
+        return selected;
+    }
+
+    private static bool IsBetterGridCandidate(
+        GridSeg candidate,
+        double candidateDistance,
+        GridSeg current,
+        double currentDistance)
+    {
+        if (candidate == null || !IsFinite(candidateDistance))
+            return false;
+
+        if (current == null)
+            return true;
+
+        if (candidateDistance < currentDistance - 0.001)
+            return true;
+
+        if (Math.Abs(candidateDistance - currentDistance) > 0.001)
+            return false;
+
+        int labelCompare = string.Compare(
+            candidate.Label ?? "",
+            current.Label ?? "",
+            StringComparison.OrdinalIgnoreCase);
+
+        if (labelCompare != 0)
+            return labelCompare < 0;
+
+        if (candidate.IsVertical)
+            return candidate.ConstX < current.ConstX;
+
+        return candidate.ConstY < current.ConstY;
+    }
+
+    private static bool TryGetModelContentBounds(
+        View view,
+        Tekla.Structures.Model.Model model,
+        double padding,
+        ref double minX,
+        ref double maxX,
+        ref double minY,
+        ref double maxY)
+    {
+        if (view == null || model == null)
+            return false;
+
+        bool found = false;
+        double solidMinX = double.PositiveInfinity;
+        double solidMaxX = double.NegativeInfinity;
+        double solidMinY = double.PositiveInfinity;
+        double solidMaxY = double.NegativeInfinity;
+        Tekla.Structures.Model.TransformationPlane oldPlane = null;
+
+        try
+        {
+            oldPlane = model.GetWorkPlaneHandler().GetCurrentTransformationPlane();
+            model.GetWorkPlaneHandler().SetCurrentTransformationPlane(
+                new Tekla.Structures.Model.TransformationPlane(view.DisplayCoordinateSystem));
+
+            DrawingObjectEnumerator objects =
+                view.GetAllObjects(typeof(Tekla.Structures.Drawing.Part));
+
+            while (objects != null && objects.MoveNext())
+            {
+                Tekla.Structures.Drawing.Part drawingPart =
+                    objects.Current as Tekla.Structures.Drawing.Part;
+                if (drawingPart == null)
+                    continue;
+
+                Tekla.Structures.Model.Part modelPart = null;
+                try
+                {
+                    modelPart = model.SelectModelObject(
+                        drawingPart.ModelIdentifier) as Tekla.Structures.Model.Part;
+                }
+                catch
+                {
+                    modelPart = null;
+                }
+
+                if (modelPart == null)
+                    continue;
+
+                Tekla.Structures.Model.Solid solid = null;
+                try { solid = modelPart.GetSolid(); }
+                catch { solid = null; }
+
+                if (solid == null ||
+                    solid.MinimumPoint == null ||
+                    solid.MaximumPoint == null)
+                {
+                    continue;
+                }
+
+                double x1 = Math.Min(solid.MinimumPoint.X, solid.MaximumPoint.X);
+                double x2 = Math.Max(solid.MinimumPoint.X, solid.MaximumPoint.X);
+                double y1 = Math.Min(solid.MinimumPoint.Y, solid.MaximumPoint.Y);
+                double y2 = Math.Max(solid.MinimumPoint.Y, solid.MaximumPoint.Y);
+
+                if (!IsFinite(x1) ||
+                    !IsFinite(x2) ||
+                    !IsFinite(y1) ||
+                    !IsFinite(y2))
+                {
+                    continue;
+                }
+
+                solidMinX = Math.Min(solidMinX, x1);
+                solidMaxX = Math.Max(solidMaxX, x2);
+                solidMinY = Math.Min(solidMinY, y1);
+                solidMaxY = Math.Max(solidMaxY, y2);
+                found = true;
+            }
+        }
+        catch
+        {
+            found = false;
+        }
+        finally
+        {
+            try
+            {
+                if (oldPlane != null)
+                    model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane);
+            }
+            catch { }
+        }
+
+        if (!found)
+            return false;
+
+        double safePadding = Math.Max(0.0, padding);
+        minX = solidMinX - safePadding;
+        maxX = solidMaxX + safePadding;
+        minY = solidMinY - safePadding;
+        maxY = solidMaxY + safePadding;
+        return true;
+    }
+
+    private static string DescribeNearestGridSelection(
+        View view,
+        NearestGridSelection selection)
+    {
+        if (selection == null)
+            return "";
+
+        List<string> axes = new List<string>();
+
+        if (selection.Vertical != null)
+        {
+            axes.Add(
+                (selection.VerticalIsLeft ? "V-Left " : "V-Right ") +
+                GridDisplayName(selection.Vertical) +
+                "@" + R(selection.Vertical.ConstX));
+        }
+
+        if (selection.Bottom != null)
+            axes.Add("H-Bottom " + GridDisplayName(selection.Bottom) + "@" + R(selection.Bottom.ConstY));
+
+        if (selection.Top != null)
+            axes.Add("H-Top " + GridDisplayName(selection.Top) + "@" + R(selection.Top.ConstY));
+
+        string viewName = SafeViewName(view);
+        if (string.IsNullOrEmpty(viewName))
+            viewName = GetViewStableKey(view);
+
+        return viewName + ": " + string.Join(", ", axes.ToArray());
+    }
+
+    private static string GridDisplayName(GridSeg grid)
+    {
+        if (grid == null || string.IsNullOrEmpty(grid.Label))
+            return "(no label)";
+
+        return grid.Label;
+    }
+
+    private static bool TryApplyRestrictionBox(View view, AABB box)
+    {
+        try
+        {
+            if (view == null ||
+                box == null ||
+                box.MinPoint == null ||
+                box.MaxPoint == null)
+            {
+                return false;
+            }
+
+            view.RestrictionBox = box;
+            return view.Modify();
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool RestrictionBoxMatches(View view, AABB expected)
+    {
+        try
+        {
+            if (view == null ||
+                expected == null ||
+                expected.MinPoint == null ||
+                expected.MaxPoint == null)
+            {
+                return false;
+            }
+
+            AABB actual = view.RestrictionBox;
+            if (actual == null ||
+                actual.MinPoint == null ||
+                actual.MaxPoint == null)
+            {
+                return false;
+            }
+
+            const double tolerance = 0.5;
+            return Math.Abs(actual.MinPoint.X - expected.MinPoint.X) <= tolerance &&
+                   Math.Abs(actual.MinPoint.Y - expected.MinPoint.Y) <= tolerance &&
+                   Math.Abs(actual.MaxPoint.X - expected.MaxPoint.X) <= tolerance &&
+                   Math.Abs(actual.MaxPoint.Y - expected.MaxPoint.Y) <= tolerance;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool SelectedGridAxesRemainVisible(
+        View view,
+        NearestGridSelection selection)
+    {
+        if (view == null || selection == null)
+            return false;
+
+        List<GridSeg> visibleSegments = ReadGridSegments(view);
+        if (selection.Vertical != null &&
+            !ContainsEquivalentGrid(visibleSegments, selection.Vertical))
+        {
+            return false;
+        }
+
+        if (selection.Bottom != null &&
+            !ContainsEquivalentGrid(visibleSegments, selection.Bottom))
+        {
+            return false;
+        }
+
+        if (selection.Top != null &&
+            !ContainsEquivalentGrid(visibleSegments, selection.Top))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool ContainsEquivalentGrid(
+        List<GridSeg> segments,
+        GridSeg expected)
+    {
+        if (segments == null || expected == null)
+            return false;
+
+        foreach (GridSeg current in segments)
+        {
+            if (current == null)
+                continue;
+
+            if (expected.IsVertical &&
+                current.IsVertical &&
+                Math.Abs(current.ConstX - expected.ConstX) <= LINE_AXIS_TOLERANCE)
+            {
+                return true;
+            }
+
+            if (expected.IsHorizontal &&
+                current.IsHorizontal &&
+                Math.Abs(current.ConstY - expected.ConstY) <= LINE_AXIS_TOLERANCE)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static void RestoreRestrictionBoxWithoutMoving(
+        View view,
+        AABB originalRestrictionBox)
+    {
+        try
+        {
+            if (view == null ||
+                originalRestrictionBox == null ||
+                originalRestrictionBox.MinPoint == null ||
+                originalRestrictionBox.MaxPoint == null)
+            {
+                return;
+            }
+
+            AABB restoreBox = new AABB(
+                new Point(
+                    originalRestrictionBox.MinPoint.X,
+                    originalRestrictionBox.MinPoint.Y,
+                    originalRestrictionBox.MinPoint.Z),
+                new Point(
+                    originalRestrictionBox.MaxPoint.X,
+                    originalRestrictionBox.MaxPoint.Y,
+                    originalRestrictionBox.MaxPoint.Z));
+            TryApplyRestrictionBox(view, restoreBox);
+        }
+        catch
+        {
         }
     }
 

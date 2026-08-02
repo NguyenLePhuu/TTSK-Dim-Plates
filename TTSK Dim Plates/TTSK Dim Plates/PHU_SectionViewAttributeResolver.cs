@@ -25,6 +25,7 @@ namespace Tekla.Technology.Akit.UserScript
         public string RawDrawingViews = "";
         public string Error = "";
         public string LiveDialogError = "";
+        public bool LiveDialogStateSafe = true;
         public readonly List<string> ActiveViewAttributeNames =
             new List<string>();
         public readonly List<string> MatchingPropertyFiles =
@@ -39,6 +40,7 @@ namespace Tekla.Technology.Akit.UserScript
     // PHU_LoadStandardService changes the drawing/view attributes.
     public static class SectionViewAttributeResolver
     {
+        private static readonly object LiveDialogSyncRoot = new object();
         private const string DrawingViewsKey = "dv.aDrawingViews";
         private const string SectionViewTypeCode = "7";
         private const string SinglePartDrawingPropertiesDialogId =
@@ -199,11 +201,24 @@ namespace Tekla.Technology.Akit.UserScript
             // without invoking its deselect/Modify/Apply/OK commands.
             List<string> viewAttributeFiles =
                 CollectAttributeFiles(".vi", modelPath);
-            if (TryResolveFromLiveDrawingPropertiesDialog(
+            bool liveDialogResolved = TryResolveFromLiveDrawingPropertiesDialog(
                 result,
                 viewAttributeFiles,
-                isAssembly))
+                isAssembly);
+            if (liveDialogResolved)
             {
+                return result;
+            }
+
+            if (!result.LiveDialogStateSafe)
+            {
+                if (string.IsNullOrWhiteSpace(result.Error))
+                {
+                    result.Error =
+                        "Drawing Properties cleanup was not confirmed; " +
+                        "Section and Dim were stopped to protect the Tekla session.";
+                }
+
                 return result;
             }
 
@@ -362,6 +377,20 @@ namespace Tekla.Technology.Akit.UserScript
             List<string> viewAttributeFiles,
             bool isAssemblyDrawing)
         {
+            lock (LiveDialogSyncRoot)
+            {
+                return TryResolveFromLiveDrawingPropertiesDialogLocked(
+                    result,
+                    viewAttributeFiles,
+                    isAssemblyDrawing);
+            }
+        }
+
+        private static bool TryResolveFromLiveDrawingPropertiesDialogLocked(
+            SectionViewAttributeResolution result,
+            List<string> viewAttributeFiles,
+            bool isAssemblyDrawing)
+        {
             if (viewAttributeFiles == null ||
                 viewAttributeFiles.Count == 0)
             {
@@ -378,6 +407,13 @@ namespace Tekla.Technology.Akit.UserScript
                 return false;
             }
 
+            Thread dialogThread = null;
+            bool dialogThreadStarted = false;
+            IntPtr dialogHandle = IntPtr.Zero;
+            IntPtr viewPropertiesDialogHandle = IntPtr.Zero;
+
+            try
+            {
             List<NativeWindowInfo> beforeWindows =
                 GetVisibleNativeWindows(teklaProcess.Id);
             HashSet<long> beforeHandles = new HashSet<long>();
@@ -385,7 +421,7 @@ namespace Tekla.Technology.Akit.UserScript
                 beforeHandles.Add(beforeWindows[i].Handle.ToInt64());
 
             string invokeError = "";
-            Thread dialogThread = new Thread(delegate()
+            dialogThread = new Thread(delegate()
             {
                 try
                 {
@@ -407,8 +443,8 @@ namespace Tekla.Technology.Akit.UserScript
             {
             }
             dialogThread.Start();
+            dialogThreadStarted = true;
 
-            IntPtr dialogHandle = IntPtr.Zero;
             for (int attempt = 0; attempt < 60; attempt++)
             {
                 Thread.Sleep(100);
@@ -432,7 +468,7 @@ namespace Tekla.Technology.Akit.UserScript
                     }
 
                     int score = ScoreNativeDialogWindow(window);
-                    if (score <= bestScore)
+                    if (score <= 0 || score <= bestScore)
                         continue;
 
                     bestScore = score;
@@ -459,7 +495,6 @@ namespace Tekla.Technology.Akit.UserScript
                 return false;
             }
 
-            IntPtr viewPropertiesDialogHandle = IntPtr.Zero;
             try
             {
                 string targetError;
@@ -556,20 +591,65 @@ namespace Tekla.Technology.Akit.UserScript
                     real.Message;
                 return false;
             }
+            }
             finally
             {
-                CloseNativeWindowAndWait(
+                bool viewPropertiesClosed = CloseNativeWindowAndWait(
                     viewPropertiesDialogHandle,
-                    1000);
-                CloseNativeWindowAndWait(
+                    3000);
+                bool drawingPropertiesClosed = CloseNativeWindowAndWait(
                     dialogHandle,
-                    1000);
-                try
+                    3000);
+
+                if (!viewPropertiesClosed &&
+                    (viewPropertiesDialogHandle == IntPtr.Zero ||
+                     !IsWindow(viewPropertiesDialogHandle)))
                 {
-                    dialogThread.Join(1000);
+                    viewPropertiesClosed = true;
                 }
-                catch
+
+                if (!drawingPropertiesClosed &&
+                    (dialogHandle == IntPtr.Zero ||
+                     !IsWindow(dialogHandle)))
                 {
+                    drawingPropertiesClosed = true;
+                }
+
+                bool dialogThreadStopped = true;
+
+                if (dialogThreadStarted && dialogThread != null)
+                {
+                    try
+                    {
+                        dialogThreadStopped = dialogThread.Join(5000);
+                    }
+                    catch
+                    {
+                        dialogThreadStopped = false;
+                    }
+                }
+
+                if (!viewPropertiesClosed ||
+                    !drawingPropertiesClosed ||
+                    !dialogThreadStopped)
+                {
+                    result.LiveDialogStateSafe = false;
+                    result.Success = false;
+                    result.AttributeName = "";
+
+                    string cleanupDetails =
+                        "ViewPropertiesClosed=" + viewPropertiesClosed +
+                        ", DrawingPropertiesClosed=" + drawingPropertiesClosed +
+                        ", DialogThreadStopped=" + dialogThreadStopped + ".";
+
+                    result.LiveDialogError = string.IsNullOrWhiteSpace(
+                            result.LiveDialogError)
+                        ? cleanupDetails
+                        : result.LiveDialogError + " | " + cleanupDetails;
+                    result.Error =
+                        "Unsafe Drawing Properties cleanup. " +
+                        cleanupDetails +
+                        " Section and Dim were stopped.";
                 }
             }
         }
@@ -1167,7 +1247,7 @@ namespace Tekla.Technology.Akit.UserScript
                     }
 
                     int score = ScoreNativeDialogWindow(window);
-                    if (score <= bestScore)
+                    if (score <= 0 || score <= bestScore)
                         continue;
 
                     bestScore = score;
@@ -1300,20 +1380,26 @@ namespace Tekla.Technology.Akit.UserScript
             return result;
         }
 
-        private static void CloseNativeWindowAndWait(
+        private static bool CloseNativeWindowAndWait(
             IntPtr nativeWindowHandle,
             int timeoutMilliseconds)
         {
             try
             {
                 if (nativeWindowHandle == IntPtr.Zero)
-                    return;
+                    return true;
 
-                PostMessage(
+                if (!IsWindow(nativeWindowHandle))
+                    return true;
+
+                bool closePosted = PostMessage(
                     nativeWindowHandle,
                     WmClose,
                     IntPtr.Zero,
                     IntPtr.Zero);
+
+                if (!closePosted && IsWindow(nativeWindowHandle))
+                    return false;
 
                 int elapsedMilliseconds = 0;
                 while (IsWindow(nativeWindowHandle) &&
@@ -1322,9 +1408,12 @@ namespace Tekla.Technology.Akit.UserScript
                     Thread.Sleep(50);
                     elapsedMilliseconds += 50;
                 }
+
+                return !IsWindow(nativeWindowHandle);
             }
             catch
             {
+                return false;
             }
         }
 

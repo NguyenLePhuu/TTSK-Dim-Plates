@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.IO;
 using System.Text;
 using System.Windows.Forms;
@@ -69,7 +70,7 @@ namespace TTSK_AutoDim_Plates
             _grid.RowHeadersVisible = false;
             _grid.RowTemplate.Height = 58;
             _grid.RowTemplate.MinimumHeight = 58;
-            _grid.ScrollBars = ScrollBars.Vertical;
+            _grid.ScrollBars = ScrollBars.None;
             _grid.SelectionMode = DataGridViewSelectionMode.CellSelect;
             _grid.CellContentClick += Grid_CellContentClick;
             _grid.CellPainting += Grid_CellPainting;
@@ -212,6 +213,7 @@ namespace TTSK_AutoDim_Plates
             BackColor = panelBack;
             _grid.BackgroundColor = rowBack;
             _grid.GridColor = border;
+            _grid.DarkMode = darkMode;
             _grid.SoftOuterBorderColor = border;
 
             _grid.ColumnHeadersDefaultCellStyle.BackColor = headerBack;
@@ -337,7 +339,10 @@ namespace TTSK_AutoDim_Plates
                 return;
             }
 
-            e.PaintBackground(e.CellBounds, false);
+            e.Paint(
+                e.ClipBounds,
+                DataGridViewPaintParts.Background |
+                DataGridViewPaintParts.Border);
 
             Padding padding = e.CellStyle.Padding;
             Rectangle buttonBounds = new Rectangle(
@@ -424,6 +429,7 @@ namespace TTSK_AutoDim_Plates
 
         private sealed class DictionaryGrid : DataGridView
         {
+            public bool DarkMode { get; set; }
             public Color SoftOuterBorderColor { get; set; }
 
             public DictionaryGrid()
@@ -433,6 +439,42 @@ namespace TTSK_AutoDim_Plates
                 SetStyle(ControlStyles.OptimizedDoubleBuffer, true);
                 SetStyle(ControlStyles.AllPaintingInWmPaint, true);
                 SetStyle(ControlStyles.ResizeRedraw, true);
+            }
+
+            protected override void OnMouseWheel(MouseEventArgs e)
+            {
+                try
+                {
+                    int visibleRows = Math.Max(1, DisplayedRowCount(false));
+                    int maxFirst = Math.Max(0, RowCount - visibleRows);
+
+                    int current = 0;
+                    try
+                    {
+                        current = FirstDisplayedScrollingRowIndex;
+                    }
+                    catch
+                    {
+                        current = 0;
+                    }
+
+                    int step = e.Delta < 0 ? 3 : -3;
+                    int next = current + step;
+
+                    if (next < 0)
+                        next = 0;
+
+                    if (next > maxFirst)
+                        next = maxFirst;
+
+                    if (RowCount > 0)
+                        FirstDisplayedScrollingRowIndex = next;
+                }
+                catch
+                {
+                }
+
+                Invalidate();
             }
 
             protected override void OnPaint(PaintEventArgs e)
@@ -451,6 +493,108 @@ namespace TTSK_AutoDim_Plates
                         Width - 1,
                         Height - 1);
                 }
+
+                try
+                {
+                    if (RowCount <= DisplayedRowCount(false))
+                        return;
+
+                    int scrollWidth = 12;
+                    Rectangle track = new Rectangle(
+                        Width - scrollWidth - 2,
+                        0,
+                        scrollWidth + 2,
+                        Height);
+
+                    Color trackColor = DarkMode
+                        ? Color.FromArgb(18, 18, 18)
+                        : Color.FromArgb(241, 245, 249);
+                    Color thumbColor = DarkMode
+                        ? Color.FromArgb(95, 82, 70)
+                        : Color.FromArgb(148, 163, 184);
+
+                    using (SolidBrush trackBrush = new SolidBrush(trackColor))
+                    {
+                        e.Graphics.FillRectangle(trackBrush, track);
+                    }
+
+                    int visibleRows = Math.Max(1, DisplayedRowCount(false));
+                    int totalRows = Math.Max(1, RowCount);
+                    int thumbHeight = Math.Max(
+                        34,
+                        (int)(Height * (visibleRows / (double)totalRows)));
+
+                    int first = 0;
+                    try
+                    {
+                        first = FirstDisplayedScrollingRowIndex;
+                    }
+                    catch
+                    {
+                        first = 0;
+                    }
+
+                    int maxFirst = Math.Max(1, totalRows - visibleRows);
+                    int available = Math.Max(1, Height - thumbHeight - 8);
+                    int thumbY = 4 + (int)(available * (first / (double)maxFirst));
+
+                    Rectangle thumb = new Rectangle(
+                        Width - scrollWidth + 1,
+                        thumbY,
+                        7,
+                        thumbHeight);
+
+                    e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+
+                    using (GraphicsPath path = RoundedRectF(
+                        new RectangleF(thumb.X, thumb.Y, thumb.Width, thumb.Height),
+                        5f))
+                    using (SolidBrush thumbBrush = new SolidBrush(thumbColor))
+                    {
+                        e.Graphics.FillPath(thumbBrush, path);
+                    }
+                }
+                catch
+                {
+                }
+            }
+
+            protected override void OnScroll(ScrollEventArgs e)
+            {
+                base.OnScroll(e);
+                Invalidate();
+            }
+
+            protected override void OnRowsAdded(DataGridViewRowsAddedEventArgs e)
+            {
+                base.OnRowsAdded(e);
+                Invalidate();
+            }
+
+            protected override void OnRowsRemoved(DataGridViewRowsRemovedEventArgs e)
+            {
+                base.OnRowsRemoved(e);
+                Invalidate();
+            }
+
+            private static GraphicsPath RoundedRectF(RectangleF bounds, float radius)
+            {
+                float diameter = radius * 2f;
+                GraphicsPath path = new GraphicsPath();
+
+                if (radius <= 0)
+                {
+                    path.AddRectangle(bounds);
+                    return path;
+                }
+
+                path.AddArc(bounds.Left, bounds.Top, diameter, diameter, 180, 90);
+                path.AddArc(bounds.Right - diameter, bounds.Top, diameter, diameter, 270, 90);
+                path.AddArc(bounds.Right - diameter, bounds.Bottom - diameter, diameter, diameter, 0, 90);
+                path.AddArc(bounds.Left, bounds.Bottom - diameter, diameter, diameter, 90, 90);
+                path.CloseFigure();
+
+                return path;
             }
         }
     }

@@ -16,6 +16,7 @@ namespace TTSK_AutoDim_Plates
         public const string ActionOpenGrid = "OpenGrid";
         public const string ActionFitView = "FitView";
         public const string ActionNeighborGrid = "NeighborGrid";
+        public const string ActionArrangeView = "ArrangeView";
         public const string ActionAutoSection = "AutoSection";
         public const string ActionSlot01 = "Slot01";
         public const string ActionSlot02 = "Slot02";
@@ -130,6 +131,7 @@ namespace TTSK_AutoDim_Plates
 
                 string[] lines = File.ReadAllLines(_filePath, Encoding.UTF8);
                 bool hasBatchCreateSetting = false;
+                bool hasArrangeViewSetting = false;
                 bool migratedDefaults = false;
 
                 foreach (string rawLine in lines)
@@ -151,6 +153,9 @@ namespace TTSK_AutoDim_Plates
                     if (string.Equals(actionId, ActionBatchCreate, StringComparison.OrdinalIgnoreCase))
                         hasBatchCreateSetting = true;
 
+                    if (string.Equals(actionId, ActionArrangeView, StringComparison.OrdinalIgnoreCase))
+                        hasArrangeViewSetting = true;
+
                     if (!IsKnownAction(actionId))
                         continue;
 
@@ -166,6 +171,15 @@ namespace TTSK_AutoDim_Plates
                     _shortcuts[ActionCreateDrawing] = Keys.D;
                     _shortcuts[ActionBatchCreate] = Keys.Control | Keys.D;
                     Save();
+                }
+
+                if (!hasArrangeViewSetting)
+                {
+                    if (NormalizeShortcut(GetShortcut(ActionAutoSection)) == Keys.A)
+                        _shortcuts[ActionAutoSection] = Keys.None;
+
+                    _shortcuts[ActionArrangeView] = Keys.A;
+                    migratedDefaults = true;
                 }
 
                 if (NormalizeShortcut(GetShortcut(ActionOpenGrid)) == Keys.Shift)
@@ -338,7 +352,8 @@ namespace TTSK_AutoDim_Plates
             list.Add(new ShortcutActionDefinition(ActionOpenGrid, "Open Grid", "Open grid view by picked frame", "G", Keys.Q));
             list.Add(new ShortcutActionDefinition(ActionFitView, "Fit View", "Fit active drawing view", "F", Keys.W));
             list.Add(new ShortcutActionDefinition(ActionNeighborGrid, "Neighboring Grid", "Open grid + create neighboring grid marks", "E", Keys.E));
-            list.Add(new ShortcutActionDefinition(ActionAutoSection, "Auto Section", "Tự động tạo mặt cắt (Section)", "A", Keys.A));
+            list.Add(new ShortcutActionDefinition(ActionArrangeView, "Arrange View", "Arrange drawing views", "A", Keys.A));
+            list.Add(new ShortcutActionDefinition(ActionAutoSection, "Auto Section", "Tự động tạo mặt cắt (Section)", "—", Keys.None));
             list.Add(new ShortcutActionDefinition(ActionSlot01, "Slot01 (Function 1)", "Selected Main Part", "1", Keys.D1));
             list.Add(new ShortcutActionDefinition(ActionSlot02, "Slot02 (Function 2)", "AutoDim function 2", "2", Keys.D2));
             list.Add(new ShortcutActionDefinition(ActionSlot03, "Slot03 (Function 3)", "AutoDim function 3", "3", Keys.D3));

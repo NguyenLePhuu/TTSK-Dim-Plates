@@ -26,5 +26,20 @@ namespace TTSK_Dim_Plates.Properties
                 return defaultInstance;
             }
         }
+
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("")]
+        public string ManualScaleDenominator
+        {
+            get
+            {
+                return ((string)(this["ManualScaleDenominator"]));
+            }
+            set
+            {
+                this["ManualScaleDenominator"] = value;
+            }
+        }
     }
 }

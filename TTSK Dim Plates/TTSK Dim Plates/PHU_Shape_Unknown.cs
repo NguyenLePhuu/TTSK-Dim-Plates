@@ -27,7 +27,20 @@ namespace Tekla.Technology.Akit.UserScript
     public static class ShapeUnknownScript
     {
         private const double MIN_DIMENSION_LENGTH = 1.0;
-        private const double DIMENSION_OFFSET = 150.0;
+
+        // DIM TIER SPACING BY DRAWING SCALE:
+        // Shape Unknown hiện chỉ dùng Tier 0 cho DIM tổng, nhưng giữ Base/Step
+        // cùng chuẩn các Shape để không còn phụ thuộc chiều dài thanh.
+        private const double DIM_TIER_SCALE_5_BASE = 50.0;
+        private const double DIM_TIER_SCALE_5_STEP = 50.0;
+        private const double DIM_TIER_SCALE_10_BASE = 100.0;
+        private const double DIM_TIER_SCALE_10_STEP = 100.0;
+        private const double DIM_TIER_SCALE_15_BASE = 150.0;
+        private const double DIM_TIER_SCALE_15_STEP = 150.0;
+        private const double DIM_TIER_SCALE_20_BASE = 200.0;
+        private const double DIM_TIER_SCALE_20_STEP = 200.0;
+        private const double DIM_TIER_SCALE_30_BASE = 300.0;
+        private const double DIM_TIER_SCALE_30_STEP = 300.0;
         private const double POINT_UNIQUE_TOLERANCE = 0.01;
         private const int MAX_ENUMERATOR_ITEMS = 20000;
         private const double VIEW_PADDING = 20.0;
@@ -42,6 +55,8 @@ namespace Tekla.Technology.Akit.UserScript
         private const double CENTER_TOP_BLOCK_HEIGHT_RATIO = 0.08;
         private const double CENTER_BLOCK_EXTRA_GAP = 5.0;
         private static double LastAppliedAutoScale = 0.0;
+        private static double CurrentDimTierBase = DIM_TIER_SCALE_15_BASE;
+        private static double CurrentDimTierStep = DIM_TIER_SCALE_15_STEP;
 
         private sealed class ViewDimensionPlan
         {
@@ -78,6 +93,8 @@ namespace Tekla.Technology.Akit.UserScript
             List<StraightDimensionSet> createdDimensions =
                 new List<StraightDimensionSet>();
             LastAppliedAutoScale = 0.0;
+            CurrentDimTierBase = DIM_TIER_SCALE_15_BASE;
+            CurrentDimTierStep = DIM_TIER_SCALE_15_STEP;
 
             try
             {
@@ -212,7 +229,8 @@ namespace Tekla.Technology.Akit.UserScript
 
                 CommitAndWait(drawing, 250);
 
-                if (isSinglePartDrawing)
+                if (TTSK_AutoDim_Plates.ManualDrawingScaleOverride.HasOverride ||
+                    isSinglePartDrawing)
                 {
                     ApplyAutoScaleByPartLength(
                         drawing,
@@ -222,6 +240,9 @@ namespace Tekla.Technology.Akit.UserScript
                         partViews);
                     CommitAndWait(drawing, 500);
                 }
+
+                VerifyManualScaleAppliedUnknown(partViews);
+                InitializeCurrentDimTierSpacing(topView);
 
                 StraightDimensionSetHandler handler =
                     new StraightDimensionSetHandler();
@@ -234,7 +255,7 @@ namespace Tekla.Technology.Akit.UserScript
                         plan.LeftPoint,
                         plan.RightPoint,
                         new Vector(0, 1, 0),
-                        DIMENSION_OFFSET);
+                        GetSteelDimOffsetByTier(0));
 
                     if (horizontal == null)
                     {
@@ -247,10 +268,10 @@ namespace Tekla.Technology.Akit.UserScript
                     StraightDimensionSet vertical = CreateDimension(
                         handler,
                         plan.View,
-                        plan.BottomPoint,
                         plan.TopPoint,
+                        plan.BottomPoint,
                         new Vector(-1, 0, 0),
-                        DIMENSION_OFFSET);
+                        GetSteelDimOffsetByTier(0));
 
                     if (vertical == null)
                     {
@@ -485,6 +506,103 @@ namespace Tekla.Technology.Akit.UserScript
                     }
                 }
             }
+        }
+
+        private static void VerifyManualScaleAppliedUnknown(List<View> views)
+        {
+            double manualScale;
+            if (!TTSK_AutoDim_Plates.ManualDrawingScaleOverride.TryGet(
+                    out manualScale))
+                return;
+
+            bool viewFound = false;
+            if (views != null)
+            {
+                foreach (View view in views)
+                {
+                    if (view == null)
+                        continue;
+
+                    viewFound = true;
+                    double actualScale = TryGetViewScaleUnknown(view);
+                    if (actualScale <= 0.0 ||
+                        Math.Abs(actualScale - manualScale) > 0.001)
+                    {
+                        throw new InvalidOperationException(
+                            "Không áp dụng được manual scale cho toàn bộ target view.");
+                    }
+                }
+            }
+
+            if (!viewFound)
+                throw new InvalidOperationException("Không tìm thấy target view để áp dụng manual scale.");
+        }
+
+        private static void InitializeCurrentDimTierSpacing(View referenceView)
+        {
+            CurrentDimTierBase = DIM_TIER_SCALE_15_BASE;
+            CurrentDimTierStep = DIM_TIER_SCALE_15_STEP;
+
+            try
+            {
+                double rawScale = TryGetViewScaleUnknown(referenceView);
+
+                if (double.IsNaN(rawScale) ||
+                    double.IsInfinity(rawScale) ||
+                    rawScale <= 0.0)
+                    return;
+
+                int scale = Convert.ToInt32(Math.Round(rawScale));
+
+                switch (scale)
+                {
+                    case 5:
+                        CurrentDimTierBase = DIM_TIER_SCALE_5_BASE;
+                        CurrentDimTierStep = DIM_TIER_SCALE_5_STEP;
+                        break;
+
+                    case 10:
+                        CurrentDimTierBase = DIM_TIER_SCALE_10_BASE;
+                        CurrentDimTierStep = DIM_TIER_SCALE_10_STEP;
+                        break;
+
+                    case 15:
+                        CurrentDimTierBase = DIM_TIER_SCALE_15_BASE;
+                        CurrentDimTierStep = DIM_TIER_SCALE_15_STEP;
+                        break;
+
+                    case 20:
+                        CurrentDimTierBase = DIM_TIER_SCALE_20_BASE;
+                        CurrentDimTierStep = DIM_TIER_SCALE_20_STEP;
+                        break;
+
+                    case 30:
+                        CurrentDimTierBase = DIM_TIER_SCALE_30_BASE;
+                        CurrentDimTierStep = DIM_TIER_SCALE_30_STEP;
+                        break;
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        private static double GetSteelDimOffsetByTier(int tier)
+        {
+            int safeTier = Math.Max(0, tier);
+            double offset =
+                CurrentDimTierBase +
+                safeTier * CurrentDimTierStep;
+
+            if (double.IsNaN(offset) ||
+                double.IsInfinity(offset) ||
+                offset <= 0.0)
+            {
+                return DIM_TIER_SCALE_15_BASE +
+                       safeTier * DIM_TIER_SCALE_15_STEP;
+            }
+
+            return offset;
         }
 
         private static StraightDimensionSet CreateDimension(
@@ -1154,6 +1272,18 @@ namespace Tekla.Technology.Akit.UserScript
                     referenceView == null || views == null)
                     return;
 
+                double scale;
+                if (TTSK_AutoDim_Plates.ManualDrawingScaleOverride.TryGet(
+                        out scale))
+                {
+                    LastAppliedAutoScale = scale;
+
+                    foreach (View view in views)
+                        SetViewScaleUnknown(view, scale);
+
+                    return;
+                }
+
                 double sheetWidth;
                 double sheetHeight;
                 if (!TryGetDrawingSheetSizeUnknown(drawing, out sheetWidth, out sheetHeight))
@@ -1163,7 +1293,7 @@ namespace Tekla.Technology.Akit.UserScript
                 if (beamLength <= 1.0)
                     return;
 
-                double scale = GetAutoViewScaleByPartLengthUnknown(
+                scale = GetAutoViewScaleByPartLengthUnknown(
                     beamLength,
                     sheetWidth,
                     sheetHeight);
@@ -1551,7 +1681,7 @@ namespace Tekla.Technology.Akit.UserScript
                 double targetSheetLeft = baseOrigin.X + basePlan.MinX / scale;
                 double currentSheetLeft = targetOrigin.X + targetPlan.MinX / scale;
                 double targetSheetTop = baseOrigin.Y + basePlan.MinY / scale -
-                                        (DIMENSION_OFFSET * 2.0) / scale;
+                                        (GetSteelDimOffsetByTier(0) * 2.0) / scale;
                 double currentSheetTop = targetOrigin.Y + targetPlan.MaxY / scale;
 
                 TryMoveViewUnknown(

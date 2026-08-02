@@ -36,12 +36,23 @@ namespace TTSK_AutoDim_Plates
         private SafeRoundedButton btnRun;
         private SafeRoundedButton btnClear;
         private SafeRoundedButton btnDictionary;
+        private SafeRoundedButton btnPrint;
+        private Panel printMergeDropDownHost;
+        private SafeRoundedButton btnMergeDropDown;
+        private SafeRoundedButton btnMergeFileDropDown;
+        private System.Windows.Forms.Timer printMenuCloseTimer;
         private Label lblCount;
         private Label lblStatus;
         private DataGridView dgvDrawings;
         private ThemeSwitch themeSwitch;
+        private PinTopMostButton pinTopMostButton;
+        private ToolTip pinTopMostToolTip;
         private AutoSectionSwitch autoSectionSwitch;
         private ToolTip autoSectionToolTip;
+        private Label lblManualScalePrefix;
+        private RoundedPanel manualScaleInputHost;
+        private TextBox txtManualScaleDenominator;
+        private ToolTip manualScaleToolTip;
         private bool _darkMode = false;
         private ShortcutManager _shortcutManager;
         private string _lastRepeatableShortcutActionId;
@@ -49,6 +60,7 @@ namespace TTSK_AutoDim_Plates
         private bool _modifierShortcutCancelled;
         private bool _tabShortcutCandidate;
         private bool _tabShortcutCancelled;
+        private readonly HashSet<Keys> _pressedShortcutKeys = new HashSet<Keys>();
 
         // ===== PHU SLIDE TOOLS PANEL =====
         private const int MainBaseWidth = 966;
@@ -76,17 +88,21 @@ namespace TTSK_AutoDim_Plates
         private JapaneseDictionaryPanel japaneseDictionaryPanel;
         private Label slideHandleLabel;
         private Label slideTitleLabel;
+        private FitViewModeSwitch fitViewModeSwitch;
+        private Label fitGridAxisCountLabel;
+        private GridAxisCountBox fitGridAxisCountBox;
+        private SafeRoundedButton fitViewButton;
         private Label dimResultLabel;
         private Label lineResultLabel;
         private Label gridResultLabel;
         private Label arrangeResultLabel;
         private Label autoDimResultLabel;
-        private NumericUpDown nudDimSpacing;
-        private NumericUpDown nudLineDistance;
-        private NumericUpDown nudNeighborGridX;
-        private NumericUpDown nudNeighborGridY;
-        private NumericUpDown nudArrangeGap;
-        private ComboBox cboDimScope;
+        private BorderNumericUpDown nudDimSpacing;
+        private BorderNumericUpDown nudLineDistance;
+        private BorderNumericUpDown nudNeighborGridX;
+        private BorderNumericUpDown nudNeighborGridY;
+        private BorderNumericUpDown nudArrangeGap;
+        private BorderComboBox cboDimScope;
         private Panel arrangeMainHorizontalBox;
         private Panel arrangeMainVerticalBox;
         private Panel arrangeSectionHorizontalBox;
@@ -101,6 +117,8 @@ namespace TTSK_AutoDim_Plates
         private bool arrangeVerticalBottomUp = false;
         private bool arrangeMainHorizontal = true;
         private bool arrangeSectionHorizontal = true;
+        private bool fitKeepGridAxes = false;
+        private int fitGridAxisCount = 3;
         private bool slideToolsOpen = false;
         private bool slideDimOpen = false;
         private bool slideLineOpen = false;
@@ -112,6 +130,7 @@ namespace TTSK_AutoDim_Plates
         private System.Windows.Forms.Timer slideTimer;
         private int slideTargetWidth = MainBaseWidth + SlideHandleWidth;
         private const int SlideAnimationStep = 18;
+        private const int GridDetailPanelHeight = 166;
 
         private readonly Color Blue = Color.FromArgb(30, 58, 138);
         private readonly Color BrightBlue = Color.FromArgb(37, 99, 235);
@@ -273,8 +292,26 @@ namespace TTSK_AutoDim_Plates
             ver.Size = new System.Drawing.Size(70, 38);
             header.Controls.Add(ver);
 
+            pinTopMostButton = new PinTopMostButton();
+            pinTopMostButton.Name = "pinTopMostButton";
+            pinTopMostButton.Location = new Point(784, 34);
+            pinTopMostButton.Size = new System.Drawing.Size(38, 38);
+            pinTopMostButton.PinnedChanged += delegate
+            {
+                TopMost = pinTopMostButton.Pinned;
+                UpdatePinTopMostToolTip();
+            };
+            header.Controls.Add(pinTopMostButton);
+
+            pinTopMostToolTip = new ToolTip();
+            pinTopMostToolTip.InitialDelay = 200;
+            pinTopMostToolTip.ReshowDelay = 100;
+            pinTopMostToolTip.AutoPopDelay = 6000;
+            pinTopMostToolTip.ShowAlways = true;
+            UpdatePinTopMostToolTip();
+
             themeSwitch = new ThemeSwitch();
-            themeSwitch.Location = new Point(748, 37);
+            themeSwitch.Location = new Point(694, 37);
             themeSwitch.Size = new System.Drawing.Size(74, 32);
             themeSwitch.CheckedChanged += delegate
             {
@@ -453,11 +490,12 @@ namespace TTSK_AutoDim_Plates
             lblStatus.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
             lblStatus.ForeColor = Color.FromArgb(22, 163, 74);
             lblStatus.Location = new Point(20, 6);
-            lblStatus.Size = new System.Drawing.Size(630, 20);
+            lblStatus.Size = new System.Drawing.Size(400, 20);
             status.Controls.Add(lblStatus);
 
+            // Keep the switch and manual scale group evenly spaced from the action buttons.
             autoSectionSwitch = new AutoSectionSwitch();
-            autoSectionSwitch.Location = new Point(662, 4);
+            autoSectionSwitch.Location = new Point(452, 4);
             autoSectionSwitch.Size = new System.Drawing.Size(48, 22);
             autoSectionSwitch.Checked = _autoSectionEnabled;
             autoSectionSwitch.CheckedChanged += delegate
@@ -474,22 +512,142 @@ namespace TTSK_AutoDim_Plates
             autoSectionToolTip.ShowAlways = true;
             autoSectionToolTip.SetToolTip(
                 autoSectionSwitch,
-                "Auto Section (A): tu dong tao mat cat ON/OFF");
+                "Auto Section: tu dong tao mat cat ON/OFF");
             status.Controls.Add(autoSectionSwitch);
 
+            lblManualScalePrefix = new Label();
+            lblManualScalePrefix.Text = "1:";
+            lblManualScalePrefix.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+            lblManualScalePrefix.TextAlign = ContentAlignment.MiddleRight;
+            lblManualScalePrefix.Location = new Point(510, 4);
+            lblManualScalePrefix.Size = new System.Drawing.Size(22, 22);
+            status.Controls.Add(lblManualScalePrefix);
+
+            manualScaleInputHost = new RoundedPanel();
+            manualScaleInputHost.BorderRadius = 8;
+            manualScaleInputHost.Location = new Point(536, 3);
+            manualScaleInputHost.Size = new System.Drawing.Size(52, 24);
+            manualScaleInputHost.Cursor = Cursors.IBeam;
+            manualScaleInputHost.Click += delegate
+            {
+                if (txtManualScaleDenominator != null &&
+                    txtManualScaleDenominator.Enabled)
+                    txtManualScaleDenominator.Focus();
+            };
+            status.Controls.Add(manualScaleInputHost);
+
+            txtManualScaleDenominator = new TextBox();
+            txtManualScaleDenominator.Text = string.Empty;
+            txtManualScaleDenominator.Font = new Font("Segoe UI", 9F);
+            txtManualScaleDenominator.TextAlign = HorizontalAlignment.Center;
+            txtManualScaleDenominator.BorderStyle = BorderStyle.None;
+            txtManualScaleDenominator.Location = new Point(5, 4);
+            txtManualScaleDenominator.Size = new System.Drawing.Size(42, 17);
+            txtManualScaleDenominator.MaxLength = 2;
+            manualScaleInputHost.Controls.Add(txtManualScaleDenominator);
+
+            manualScaleToolTip = new ToolTip();
+            manualScaleToolTip.InitialDelay = 0;
+            manualScaleToolTip.ReshowDelay = 0;
+            manualScaleToolTip.AutoPopDelay = 8000;
+            manualScaleToolTip.ShowAlways = true;
+            string manualScaleTip =
+                "Để trống: dùng Auto Scale hiện tại.\r\n" +
+                "Nhập mẫu số, ví dụ 20 tương ứng tỷ lệ 1:20.\r\n" +
+                "Chỉ giữ trong phiên hiện tại; mở lại TTSK sẽ trở về Auto Scale.\r\n" +
+                "Chỉ áp dụng cho Active Drawing khi chạy CREATE DRAWING.";
+            manualScaleToolTip.SetToolTip(lblManualScalePrefix, manualScaleTip);
+            manualScaleToolTip.SetToolTip(manualScaleInputHost, manualScaleTip);
+            manualScaleToolTip.SetToolTip(txtManualScaleDenominator, manualScaleTip);
+
+            const int statusActionButtonStartX = 599;
+            const int statusActionButtonWidth = 95;
+            const int statusActionButtonGap = 10;
+
+            btnPrint = new SafeRoundedButton();
+            btnPrint.Text = "Print";
+            btnPrint.Font = new Font("Segoe UI", 8.5F, FontStyle.Bold);
+            btnPrint.Location = new Point(statusActionButtonStartX, 2);
+            btnPrint.Size = new System.Drawing.Size(statusActionButtonWidth, 25);
+            btnPrint.Click += btnPrint_Click;
+            btnPrint.MouseHover += delegate { ShowPrintMenu(); };
+            btnPrint.MouseEnter += delegate { CancelPrintMenuClose(); };
+            btnPrint.MouseLeave += delegate { SchedulePrintMenuClose(); };
+            status.Controls.Add(btnPrint);
+
+            printMergeDropDownHost = new Panel();
+            printMergeDropDownHost.Size = new System.Drawing.Size(
+                btnPrint.Width,
+                btnPrint.Height * 2);
+            printMergeDropDownHost.Padding = Padding.Empty;
+            printMergeDropDownHost.Margin = Padding.Empty;
+            printMergeDropDownHost.BackColor = status.BackColor;
+            printMergeDropDownHost.Visible = false;
+            printMergeDropDownHost.MouseEnter += delegate { CancelPrintMenuClose(); };
+            printMergeDropDownHost.MouseLeave += delegate { SchedulePrintMenuClose(); };
+            Controls.Add(printMergeDropDownHost);
+
+            btnMergeDropDown = new SafeRoundedButton();
+            btnMergeDropDown.Text = "Merge";
+            btnMergeDropDown.Location = new Point(0, 0);
+            btnMergeDropDown.Size = btnPrint.Size;
+            btnMergeDropDown.Margin = Padding.Empty;
+            btnMergeDropDown.TabStop = false;
+            btnMergeDropDown.Click += btnMerge_Click;
+            btnMergeDropDown.MouseEnter += delegate { CancelPrintMenuClose(); };
+            btnMergeDropDown.MouseLeave += delegate { SchedulePrintMenuClose(); };
+            printMergeDropDownHost.Controls.Add(btnMergeDropDown);
+
+            btnMergeFileDropDown = new SafeRoundedButton();
+            btnMergeFileDropDown.Text = "Merge File";
+            btnMergeFileDropDown.Location = new Point(0, btnPrint.Height);
+            btnMergeFileDropDown.Size = btnPrint.Size;
+            btnMergeFileDropDown.Margin = Padding.Empty;
+            btnMergeFileDropDown.TabStop = false;
+            btnMergeFileDropDown.Click += btnMergeFile_Click;
+            btnMergeFileDropDown.MouseEnter += delegate { CancelPrintMenuClose(); };
+            btnMergeFileDropDown.MouseLeave += delegate { SchedulePrintMenuClose(); };
+            printMergeDropDownHost.Controls.Add(btnMergeFileDropDown);
+
+            printMenuCloseTimer = new System.Windows.Forms.Timer();
+            printMenuCloseTimer.Interval = 180;
+            printMenuCloseTimer.Tick += delegate
+            {
+                if (printMenuCloseTimer != null)
+                    printMenuCloseTimer.Stop();
+
+                if (!IsCursorInsideControl(btnPrint) &&
+                    !IsCursorInsideControl(printMergeDropDownHost))
+                {
+                    HidePrintMenu();
+                }
+            };
+
+            Deactivate += delegate { HidePrintMenu(); };
             btnDictionary = new SafeRoundedButton();
             btnDictionary.Text = "Dict";
             btnDictionary.Font = new Font("Segoe UI", 8.5F, FontStyle.Bold);
-            btnDictionary.Location = new Point(720, 2);
-            btnDictionary.Size = new System.Drawing.Size(95, 25);
+            btnDictionary.Location = new Point(
+                statusActionButtonStartX +
+                statusActionButtonWidth +
+                statusActionButtonGap,
+                2);
+            btnDictionary.Size = new System.Drawing.Size(
+                statusActionButtonWidth,
+                25);
             btnDictionary.Click += delegate { ToggleDictionaryPanel(); };
             status.Controls.Add(btnDictionary);
 
             btnClear = new SafeRoundedButton();
             btnClear.Text = "Clear Log";
             btnClear.Font = new Font("Segoe UI", 8.5F);
-            btnClear.Location = new Point(825, 2);
-            btnClear.Size = new System.Drawing.Size(95, 25);
+            btnClear.Location = new Point(
+                statusActionButtonStartX +
+                ((statusActionButtonWidth + statusActionButtonGap) * 2),
+                2);
+            btnClear.Size = new System.Drawing.Size(
+                statusActionButtonWidth,
+                25);
             btnClear.Click += delegate
             {
                 _resumeIndex = 0;
@@ -677,7 +835,7 @@ namespace TTSK_AutoDim_Plates
 
             slideGridPanel = new RoundedPanel();
             slideGridPanel.Location = new Point(18, 188);
-            slideGridPanel.Size = new System.Drawing.Size(SlideToolsWidth - 36, 155);
+            slideGridPanel.Size = new System.Drawing.Size(SlideToolsWidth - 36, GridDetailPanelHeight);
             ((RoundedPanel)slideGridPanel).BorderRadius = 12;
             slideGridPanel.Visible = false;
             slideToolsPanel.Controls.Add(slideGridPanel);
@@ -1327,7 +1485,9 @@ namespace TTSK_AutoDim_Plates
                     string actionId;
                     if (_shortcutManager.TryFindAction(normalized, out actionId))
                     {
-                        RunShortcutAction(actionId);
+                        if (TryBeginShortcutKey(normalized))
+                            RunShortcutAction(actionId);
+
                         return true;
                     }
                 }
@@ -1338,6 +1498,8 @@ namespace TTSK_AutoDim_Plates
 
         protected override void OnKeyUp(KeyEventArgs e)
         {
+            ReleaseShortcutKey(e.KeyCode & Keys.KeyCode);
+
             if (_tabShortcutCandidate && e.KeyCode == Keys.Tab)
             {
                 bool cancelled = _tabShortcutCancelled;
@@ -1372,6 +1534,12 @@ namespace TTSK_AutoDim_Plates
             }
 
             base.OnKeyUp(e);
+        }
+
+        protected override void OnDeactivate(EventArgs e)
+        {
+            _pressedShortcutKeys.Clear();
+            base.OnDeactivate(e);
         }
 
         protected override void OnKeyDown(KeyEventArgs e)
@@ -1417,7 +1585,11 @@ namespace TTSK_AutoDim_Plates
 
             while (focus != null)
             {
-                if (focus is TextBoxBase || focus is NumericUpDown || focus is ComboBox)
+                if (focus is TextBoxBase ||
+                    focus is NumericUpDown ||
+                    focus is BorderNumericUpDown ||
+                    focus is BorderComboBox ||
+                    focus is ComboBox)
                     return true;
 
                 focus = focus.Parent;
@@ -1435,7 +1607,10 @@ namespace TTSK_AutoDim_Plates
 
             while (focus != null)
             {
-                if (focus is TextBoxBase || focus is NumericUpDown)
+                if (focus is TextBoxBase ||
+                    focus is NumericUpDown ||
+                    focus is BorderNumericUpDown ||
+                    focus is BorderComboBox)
                     return true;
 
                 ComboBox combo = focus as ComboBox;
@@ -1453,6 +1628,13 @@ namespace TTSK_AutoDim_Plates
             if (container == null)
                 return null;
 
+            // Drawing Tools inputs can be nested inside ordinary Panel controls,
+            // which do not expose ActiveControl.  Walk the actual focus tree so
+            // digit shortcuts are not consumed while a value box is being edited.
+            Control focused = FindFocusedDescendant(container);
+            if (focused != null)
+                return focused;
+
             Control control = container.ActiveControl;
             ContainerControl childContainer = control as ContainerControl;
 
@@ -1463,6 +1645,53 @@ namespace TTSK_AutoDim_Plates
             }
 
             return control;
+        }
+
+        private Control FindFocusedDescendant(Control parent)
+        {
+            if (parent == null)
+                return null;
+
+            foreach (Control child in parent.Controls)
+            {
+                if (child.Focused)
+                    return child;
+
+                if (child.ContainsFocus)
+                {
+                    Control nested = FindFocusedDescendant(child);
+                    if (nested != null)
+                        return nested;
+                }
+            }
+
+            if (parent.Focused)
+                return parent;
+
+            return null;
+        }
+
+        private bool TryBeginShortcutKey(Keys keyData)
+        {
+            Keys normalized = ShortcutManager.NormalizeShortcut(keyData);
+            return normalized != Keys.None && _pressedShortcutKeys.Add(normalized);
+        }
+
+        private void ReleaseShortcutKey(Keys keyCode)
+        {
+            if (keyCode == Keys.None || _pressedShortcutKeys.Count == 0)
+                return;
+
+            List<Keys> released = new List<Keys>();
+
+            foreach (Keys pressed in _pressedShortcutKeys)
+            {
+                if ((pressed & Keys.KeyCode) == keyCode)
+                    released.Add(pressed);
+            }
+
+            foreach (Keys pressed in released)
+                _pressedShortcutKeys.Remove(pressed);
         }
 
         private void RunShortcutAction(string actionId)
@@ -1533,6 +1762,12 @@ namespace TTSK_AutoDim_Plates
             if (string.Equals(actionId, ShortcutManager.ActionNeighborGrid, StringComparison.OrdinalIgnoreCase))
             {
                 RunNeighborGridMarkOffsets();
+                return;
+            }
+
+            if (string.Equals(actionId, ShortcutManager.ActionArrangeView, StringComparison.OrdinalIgnoreCase))
+            {
+                RunArrangeView();
                 return;
             }
 
@@ -1761,9 +1996,43 @@ namespace TTSK_AutoDim_Plates
             Label note = new Label();
             note.Text = "Mở khung view chạm trục trên / dưới / trái / phải";
             note.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
-            note.Location = new Point(innerMargin, 52);
-            note.Size = new System.Drawing.Size(innerWidth, 34);
+            note.Location = new Point(innerMargin, 44);
+            note.Size = new System.Drawing.Size(innerWidth, 24);
             slideGridPanel.Controls.Add(note);
+
+            int modeGroupWidth = 200;
+            int modeGroupX = innerMargin + ((innerWidth - modeGroupWidth) / 2);
+
+            fitViewModeSwitch = new FitViewModeSwitch();
+            fitViewModeSwitch.Location = new Point(modeGroupX, 70);
+            fitViewModeSwitch.Size = new System.Drawing.Size(112, 26);
+            fitViewModeSwitch.Checked = false;
+            fitViewModeSwitch.CheckedChanged += delegate
+            {
+                fitKeepGridAxes = fitViewModeSwitch.Checked;
+                if (fitGridAxisCountBox != null)
+                    fitGridAxisCountBox.Enabled = fitKeepGridAxes;
+            };
+            slideGridPanel.Controls.Add(fitViewModeSwitch);
+
+            fitGridAxisCountLabel = new Label();
+            fitGridAxisCountLabel.Text = "Trục";
+            fitGridAxisCountLabel.Font = new Font("Segoe UI", 8.5F);
+            fitGridAxisCountLabel.TextAlign = ContentAlignment.MiddleRight;
+            fitGridAxisCountLabel.Location = new Point(modeGroupX + 120, 70);
+            fitGridAxisCountLabel.Size = new System.Drawing.Size(32, 26);
+            slideGridPanel.Controls.Add(fitGridAxisCountLabel);
+
+            fitGridAxisCountBox = new GridAxisCountBox();
+            fitGridAxisCountBox.Location = new Point(modeGroupX + 158, 70);
+            fitGridAxisCountBox.Size = new System.Drawing.Size(42, 26);
+            fitGridAxisCountBox.Value = 3;
+            fitGridAxisCountBox.Enabled = false;
+            fitGridAxisCountBox.ValueChanged += delegate
+            {
+                fitGridAxisCount = fitGridAxisCountBox.Value;
+            };
+            slideGridPanel.Controls.Add(fitGridAxisCountBox);
 
             int buttonGap = 10;
             int buttonWidth = (innerWidth - buttonGap) / 2;
@@ -1771,18 +2040,18 @@ namespace TTSK_AutoDim_Plates
             SafeRoundedButton apply = new SafeRoundedButton();
             apply.Text = "✓  OPEN GRID";
             apply.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
-            apply.Location = new Point(innerMargin, 96);
+            apply.Location = new Point(innerMargin, 112);
             apply.Size = new System.Drawing.Size(buttonWidth, 38);
             apply.Click += delegate { RunOpenGridView(); };
             slideGridPanel.Controls.Add(apply);
 
-            SafeRoundedButton fit = new SafeRoundedButton();
-            fit.Text = "✓  FIT VIEW";
-            fit.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
-            fit.Location = new Point(innerMargin + buttonWidth + buttonGap, 96);
-            fit.Size = new System.Drawing.Size(innerWidth - buttonWidth - buttonGap, 38);
-            fit.Click += delegate { RunFitView(); };
-            slideGridPanel.Controls.Add(fit);
+            fitViewButton = new SafeRoundedButton();
+            fitViewButton.Text = "✓  FIT VIEW";
+            fitViewButton.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
+            fitViewButton.Location = new Point(innerMargin + buttonWidth + buttonGap, 112);
+            fitViewButton.Size = new System.Drawing.Size(innerWidth - buttonWidth - buttonGap, 38);
+            fitViewButton.Click += delegate { RunFitView(); };
+            slideGridPanel.Controls.Add(fitViewButton);
 
             gridResultLabel = new Label();
             gridResultLabel.Visible = false;
@@ -1845,7 +2114,7 @@ namespace TTSK_AutoDim_Plates
             offsetBox.Controls.Add(neighborLabel);
 
             nudNeighborGridX = new BorderNumericUpDown();
-            nudNeighborGridX.DecimalPlaces = 3;
+            nudNeighborGridX.DecimalPlaces = 1;
             nudNeighborGridX.Minimum = -100000;
             nudNeighborGridX.Maximum = 100000;
             nudNeighborGridX.Value = 30;
@@ -1856,7 +2125,7 @@ namespace TTSK_AutoDim_Plates
             offsetBox.Controls.Add(nudNeighborGridX);
 
             nudNeighborGridY = new BorderNumericUpDown();
-            nudNeighborGridY.DecimalPlaces = 3;
+            nudNeighborGridY.DecimalPlaces = 1;
             nudNeighborGridY.Minimum = -100000;
             nudNeighborGridY.Maximum = 100000;
             nudNeighborGridY.Value = 0;
@@ -2577,7 +2846,7 @@ namespace TTSK_AutoDim_Plates
                 y += toolH + gap;
 
                 if (slideGridPanel != null) slideGridPanel.Location = new Point(x, y);
-                y += 155 + gap;
+                y += GridDetailPanelHeight + gap;
 
                 if (slideMarkOffsetsPanel != null) slideMarkOffsetsPanel.Location = new Point(x, y);
             }
@@ -2602,7 +2871,7 @@ namespace TTSK_AutoDim_Plates
                 if (slideLinePanel != null) slideLinePanel.Location = new Point(x, firstY + toolH + gap);
                 if (slideDimPanel != null) slideDimPanel.Location = new Point(x, firstY + toolH + gap);
                 if (slideGridPanel != null) slideGridPanel.Location = new Point(x, firstY + toolH + gap);
-                if (slideMarkOffsetsPanel != null) slideMarkOffsetsPanel.Location = new Point(x, firstY + toolH + gap + 155 + gap);
+                if (slideMarkOffsetsPanel != null) slideMarkOffsetsPanel.Location = new Point(x, firstY + toolH + gap + GridDetailPanelHeight + gap);
             }
 
             if (slideAutoDimTool != null) slideAutoDimTool.BringToFront();
@@ -2954,6 +3223,36 @@ namespace TTSK_AutoDim_Plates
 
                 PHU_OpenGridView.Result result = PHU_OpenGridView.Run();
 
+                if (result == null || result.SuccessCount == 0)
+                {
+                    if (gridResultLabel != null)
+                    {
+                        gridResultLabel.Text = result == null
+                            ? "Không có kết quả."
+                            : result.ToDisplayText();
+                        gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
+                    }
+
+                    lblStatus.Text = "✗  Open grid view lỗi";
+                    lblStatus.ForeColor = Color.Firebrick;
+                    return;
+                }
+
+                if (result.FailedCount > 0)
+                {
+                    if (gridResultLabel != null)
+                    {
+                        gridResultLabel.Text = result.ToDisplayText();
+                        gridResultLabel.ForeColor = Color.FromArgb(217, 119, 6);
+                    }
+
+                    lblStatus.Text =
+                        "⚠  Open Grid chỉ hoàn thành " +
+                        result.SuccessCount + "/" + result.ViewCount + " View.";
+                    lblStatus.ForeColor = Color.FromArgb(217, 119, 6);
+                    return;
+                }
+
                 if (gridResultLabel != null)
                 {
                     gridResultLabel.Text = result == null ? "Không có kết quả." : result.ToDisplayText();
@@ -2978,9 +3277,39 @@ namespace TTSK_AutoDim_Plates
             }
         }
 
+        private bool TryEnsureFitPrerequisite()
+        {
+            string prerequisiteMessage;
+            if (PHU_OpenGridView.CanRunFitForCurrentTargets(out prerequisiteMessage))
+                return true;
+
+            if (string.IsNullOrEmpty(prerequisiteMessage))
+                prerequisiteMessage = "FIT chưa được thực thi. Hãy chạy OPEN GRID trước khi FIT.";
+
+            if (gridResultLabel != null)
+            {
+                gridResultLabel.Text = prerequisiteMessage;
+                gridResultLabel.ForeColor = Color.FromArgb(217, 119, 6);
+            }
+
+            if (lblStatus != null)
+            {
+                lblStatus.Text = "⚠  Hãy chạy OPEN GRID trước khi FIT.";
+                lblStatus.ForeColor = Color.FromArgb(217, 119, 6);
+                lblStatus.AccessibleDescription = "";
+            }
+
+            return false;
+        }
 
         private void RunFitView()
         {
+            if (fitKeepGridAxes)
+            {
+                RunFitViewKeepGridAxes();
+                return;
+            }
+
             try
             {
                 string selectionError;
@@ -2997,6 +3326,9 @@ namespace TTSK_AutoDim_Plates
                     return;
                 }
 
+                if (!TryEnsureFitPrerequisite())
+                    return;
+
                 string macroError;
                 if (!TryRunGridVisibilityMacro("FIT", out macroError))
                 {
@@ -3012,6 +3344,21 @@ namespace TTSK_AutoDim_Plates
                 }
 
                 PHU_OpenGridView.Result result = PHU_OpenGridView.RunFitPadding20();
+
+                if (result == null || result.FailedCount > 0)
+                {
+                    if (gridResultLabel != null)
+                    {
+                        gridResultLabel.Text = result == null
+                            ? "Không có kết quả."
+                            : result.Message;
+                        gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
+                    }
+
+                    lblStatus.Text = "✗  Fit view lỗi";
+                    lblStatus.ForeColor = Color.Firebrick;
+                    return;
+                }
 
                 string fitCompleteMacroError;
                 if (!TryRunGridVisibilityMacro("FIT_COMPLETE", out fitCompleteMacroError))
@@ -3037,7 +3384,7 @@ namespace TTSK_AutoDim_Plates
 
                 lblStatus.Text = result != null && result.FailedCount > 0
                     ? "✗  Fit view lỗi"
-                    : "✓  Fit view applied";
+                    : "✓  Fit None Grid applied";
 
                 lblStatus.ForeColor = result != null && result.FailedCount > 0
                     ? Color.Firebrick
@@ -3056,6 +3403,201 @@ namespace TTSK_AutoDim_Plates
             }
         }
 
+        private void RunFitViewKeepGridAxes()
+        {
+            try
+            {
+                string selectionError;
+                if (!PHU_OpenGridView.PrepareTargetViewSelectionForMacro(out selectionError))
+                {
+                    if (gridResultLabel != null)
+                    {
+                        gridResultLabel.Text = selectionError;
+                        gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
+                    }
+
+                    lblStatus.Text = "✗  Không chọn được view";
+                    lblStatus.ForeColor = Color.Firebrick;
+                    return;
+                }
+
+                if (!TryEnsureFitPrerequisite())
+                    return;
+
+                string macroError;
+                if (!TryRunGridVisibilityMacro("FIT_KEEP_GRID", out macroError))
+                {
+                    if (gridResultLabel != null)
+                    {
+                        gridResultLabel.Text = macroError;
+                        gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
+                    }
+
+                    lblStatus.Text = "✗  Fit có trục lỗi, view đã được restore";
+                    lblStatus.ForeColor = Color.Firebrick;
+                    return;
+                }
+
+                PHU_OpenGridView.Result result =
+                    PHU_OpenGridView.RunFitKeepNearestGridAxes(
+                        fitGridAxisCount,
+                        20.0);
+
+                if (result == null || result.FailedCount > 0)
+                {
+                    PHU_OpenGridView.RestoreFitKeepGridRestrictionBoxes();
+
+                    if (gridResultLabel != null)
+                    {
+                        gridResultLabel.Text = result == null
+                            ? "Không có kết quả."
+                            : result.Message;
+                        gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
+                    }
+
+                    lblStatus.Text = "✗  Fit có trục lỗi, view đã được restore";
+                    lblStatus.ForeColor = Color.Firebrick;
+                    return;
+                }
+
+                if (lblStatus != null)
+                    lblStatus.AccessibleDescription =
+                        result == null ? "" : result.SelectedGridAxes;
+
+                string verifyMacroError;
+                if (!TryRunGridVisibilityMacro("FIT_KEEP_GRID", out verifyMacroError))
+                {
+                    PHU_OpenGridView.RestoreFitKeepGridRestrictionBoxes();
+
+                    if (gridResultLabel != null)
+                    {
+                        gridResultLabel.Text = verifyMacroError;
+                        gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
+                    }
+
+                    lblStatus.Text = "✗  Fit có trục lỗi, view đã được restore";
+                    lblStatus.ForeColor = Color.Firebrick;
+                    return;
+                }
+
+                string fitCompleteMacroError;
+                if (!TryRunGridVisibilityMacro("FIT_GRID_COMPLETE", out fitCompleteMacroError))
+                {
+                    if (gridResultLabel != null)
+                    {
+                        gridResultLabel.Text =
+                            "Fit Grid đã chạy nhưng chưa bật được Neighbor: " +
+                            fitCompleteMacroError;
+                        gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
+                    }
+
+                    lblStatus.Text = "✗  Fit Grid xong nhưng chưa bật được Neighbor";
+                    lblStatus.ForeColor = Color.Firebrick;
+                    return;
+                }
+
+                PHU_OpenGridView.FitGridOriginArrangeResult arrangeResult = null;
+                bool canArrangeTopFront =
+                    result != null &&
+                    result.FailedCount == 0 &&
+                    result.SuccessCount == result.ViewCount &&
+                    result.GridAxisNoGridViewCount == 0;
+
+                if (canArrangeTopFront)
+                {
+                    arrangeResult =
+                        PHU_OpenGridView.ArrangeTopFrontByOriginAfterGridFit();
+                }
+
+                if (gridResultLabel != null)
+                {
+                    gridResultLabel.Text = result == null
+                        ? "Không có kết quả."
+                        : result.Message;
+
+                    if (arrangeResult != null &&
+                        !string.IsNullOrEmpty(arrangeResult.Message))
+                    {
+                        gridResultLabel.Text += "\n" + arrangeResult.Message;
+                    }
+
+                    gridResultLabel.ForeColor = arrangeResult != null &&
+                                                !arrangeResult.Success
+                        ? Color.FromArgb(217, 119, 6)
+                        : result != null &&
+                          result.FailedCount == 0 &&
+                          result.GridAxisNoGridViewCount == 0 &&
+                          result.GridAxesFoundCount >= result.GridAxesExpectedCount
+                            ? Color.FromArgb(22, 163, 74)
+                            : result != null && result.FailedCount == 0
+                                ? Color.FromArgb(217, 119, 6)
+                                : Color.FromArgb(220, 38, 38);
+                }
+
+                if (result == null || result.FailedCount > 0)
+                {
+                    PHU_OpenGridView.RestoreFitKeepGridRestrictionBoxes();
+                    lblStatus.Text = "✗  Fit có trục lỗi, view đã được restore";
+                    lblStatus.ForeColor = Color.Firebrick;
+                    return;
+                }
+
+                if (arrangeResult != null && !arrangeResult.Success)
+                {
+                    bool multipleTopOrFront =
+                        !string.IsNullOrEmpty(arrangeResult.Message) &&
+                        arrangeResult.Message.StartsWith(
+                            "Có nhiều", StringComparison.OrdinalIgnoreCase);
+
+                    lblStatus.Text = multipleTopOrFront
+                        ? "⚠  Fit Grid hoàn tất nhưng không xác định được cặp Top/Front"
+                        : "⚠  Fit Grid hoàn tất nhưng sắp xếp Origin thất bại";
+                    lblStatus.ForeColor = Color.FromArgb(217, 119, 6);
+                    return;
+                }
+
+                if (result.GridAxisNoGridViewCount == result.ViewCount)
+                {
+                    lblStatus.Text = result.GridAxesExpectedCount == 1 &&
+                                      !string.IsNullOrEmpty(result.Message)
+                        ? "⚠  " + result.Message
+                        : "⚠  Không tìm thấy grid để chạy chế độ Có trục.";
+                    lblStatus.ForeColor = Color.FromArgb(217, 119, 6);
+                    return;
+                }
+
+                if (result.GridAxesFoundCount < result.GridAxesExpectedCount)
+                {
+                    lblStatus.Text =
+                        "⚠  Fit có trục: chỉ tìm thấy " +
+                        result.GridAxesFoundCount +
+                        "/" +
+                        result.GridAxesExpectedCount +
+                        " grid gần main part.";
+                    lblStatus.ForeColor = Color.FromArgb(217, 119, 6);
+                    return;
+                }
+
+                lblStatus.Text = arrangeResult != null && arrangeResult.Applied
+                    ? "✓  Fit Grid applied | Top/Front aligned by Origin"
+                    : "✓  Fit Grid applied";
+                lblStatus.ForeColor = Color.FromArgb(22, 163, 74);
+            }
+            catch (Exception ex)
+            {
+                PHU_OpenGridView.RestoreFitKeepGridRestrictionBoxes();
+
+                if (gridResultLabel != null)
+                {
+                    gridResultLabel.Text = ex.Message;
+                    gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
+                }
+
+                lblStatus.Text = "✗  Fit có trục lỗi, view đã được restore";
+                lblStatus.ForeColor = Color.Firebrick;
+            }
+        }
+
         private bool TryRunGridVisibilityMacro(string command, out string error)
         {
             error = string.Empty;
@@ -3068,6 +3610,8 @@ namespace TTSK_AutoDim_Plates
 
             if (!string.Equals(command, "OPEN", StringComparison.OrdinalIgnoreCase) &&
                 !string.Equals(command, "FIT", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(command, "FIT_KEEP_GRID", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(command, "FIT_GRID_COMPLETE", StringComparison.OrdinalIgnoreCase) &&
                 !string.Equals(command, "FIT_COMPLETE", StringComparison.OrdinalIgnoreCase) &&
                 !string.Equals(command, "MARK_OFFSET", StringComparison.OrdinalIgnoreCase))
             {
@@ -3402,6 +3946,18 @@ namespace TTSK_AutoDim_Plates
             StyleSlidePanelRecursive(slideMarkOffsetsPanel, panelBg, panelBg2, text, muted, border, accent);
             StyleSlidePanelRecursive(slideArrangePanel, panelBg, panelBg2, text, muted, border, accent);
             StyleSlidePanelRecursive(slideAutoDimPanel, panelBg, panelBg2, text, muted, border, accent);
+            if (fitViewModeSwitch != null)
+            {
+                fitViewModeSwitch.DarkMode = _darkMode;
+                fitViewModeSwitch.AccentColor = accent;
+                fitViewModeSwitch.Invalidate();
+            }
+            if (fitGridAxisCountBox != null)
+            {
+                fitGridAxisCountBox.DarkMode = _darkMode;
+                fitGridAxisCountBox.AccentColor = accent;
+                fitGridAxisCountBox.Invalidate();
+            }
             if (japaneseDictionaryPanel != null)
                 japaneseDictionaryPanel.ApplyTheme(_darkMode);
             ApplyArrangeOptionStyles();
@@ -3431,57 +3987,48 @@ namespace TTSK_AutoDim_Plates
                 else
                     l.ForeColor = muted;
             }
+            else if (root is BorderComboBox)
+            {
+                BorderComboBox bcb = root as BorderComboBox;
+                bcb.BackColor = panelBg2;
+                bcb.ForeColor = _darkMode
+                    ? Color.FromArgb(245, 186, 126)
+                    : Color.FromArgb(30, 58, 138);
+                bcb.CustomBorderColor = accent;
+                bcb.ButtonBackColor = panelBg2;
+                bcb.ButtonBorderColor = accent;
+                bcb.ArrowColor = bcb.ForeColor;
+                bcb.RefreshCustomButton();
+            }
             else if (root is ComboBox)
             {
                 ComboBox cb = root as ComboBox;
                 cb.BackColor = panelBg2;
-                cb.ForeColor = _darkMode ? Color.White : text;
+                cb.ForeColor = _darkMode
+                    ? Color.FromArgb(245, 186, 126)
+                    : Color.FromArgb(30, 58, 138);
                 cb.FlatStyle = FlatStyle.Flat;
 
-                BorderComboBox bcb = cb as BorderComboBox;
-                if (bcb != null)
-                {
-                    bcb.CustomBorderColor = _darkMode
-                        ? Color.FromArgb(94, 70, 50)
-                        : Color.FromArgb(203, 213, 225);
-
-                    bcb.ButtonBackColor = panelBg2;
-
-                    bcb.ButtonBorderColor = _darkMode
-                        ? Color.FromArgb(94, 70, 50)
-                        : Color.FromArgb(203, 213, 225);
-
-                    bcb.ArrowColor = _darkMode
-                        ? Color.FromArgb(224, 156, 96)
-                        : Color.FromArgb(30, 58, 138);
-
-                    bcb.RefreshCustomButton();
-                }
+            }
+            else if (root is BorderNumericUpDown)
+            {
+                BorderNumericUpDown bnud = root as BorderNumericUpDown;
+                bnud.BackColor = panelBg2;
+                bnud.ForeColor = _darkMode
+                    ? Color.FromArgb(245, 186, 126)
+                    : Color.FromArgb(30, 58, 138);
+                bnud.CustomBorderColor = accent;
+                bnud.ButtonBackColor = panelBg2;
+                bnud.ButtonBorderColor = accent;
+                bnud.ArrowColor = bnud.ForeColor;
+                bnud.RefreshCustomButton();
             }
             else if (root is NumericUpDown || root is TextBox)
             {
                 root.BackColor = panelBg2;
-                root.ForeColor = text;
-
-                BorderNumericUpDown bnud = root as BorderNumericUpDown;
-                if (bnud != null)
-                {
-                    bnud.CustomBorderColor = _darkMode
-                        ? Color.FromArgb(94, 70, 50)
-                        : Color.FromArgb(203, 213, 225);
-
-                    bnud.ButtonBackColor = panelBg2;
-
-                    bnud.ButtonBorderColor = _darkMode
-                        ? Color.FromArgb(94, 70, 50)
-                        : Color.FromArgb(203, 213, 225);
-
-                    bnud.ArrowColor = _darkMode
-                        ? Color.FromArgb(224, 156, 96)
-                        : Color.FromArgb(30, 58, 138);
-
-                    bnud.RefreshCustomButton();
-                }
+                root.ForeColor = _darkMode
+                    ? Color.FromArgb(245, 186, 126)
+                    : Color.FromArgb(30, 58, 138);
             }
             else if (root is SafeRoundedButton)
             {
@@ -3581,13 +4128,74 @@ namespace TTSK_AutoDim_Plates
             if (btnLoad != null)
                 btnLoad.Enabled = !_isBatchRunning && rbBatch != null && rbBatch.Checked;
 
+            bool activeMode = rbActive != null && rbActive.Checked;
+            if (txtManualScaleDenominator != null)
+            {
+                SetManualScaleInputEnabled(activeMode && !_isBatchRunning);
+            }
+
             if (btnModeActive != null && btnModeBatch != null)
             {
-                ApplyModeCardStyle(btnModeActive, rbActive != null && rbActive.Checked);
+                ApplyModeCardStyle(btnModeActive, activeMode);
                 ApplyModeCardStyle(btnModeBatch, rbBatch != null && rbBatch.Checked);
             }
 
             ApplyAutoSectionSwitchUi();
+        }
+
+        private void SetManualScaleInputEnabled(bool enabled)
+        {
+            if (manualScaleInputHost != null)
+                manualScaleInputHost.Enabled = enabled;
+
+            if (txtManualScaleDenominator != null)
+                txtManualScaleDenominator.Enabled = enabled;
+
+            ApplyManualScaleInputTheme();
+        }
+
+        private void ApplyManualScaleInputTheme()
+        {
+            if (manualScaleInputHost == null ||
+                txtManualScaleDenominator == null)
+                return;
+
+            bool enabled = txtManualScaleDenominator.Enabled;
+            Color backColor;
+            Color borderColor;
+            Color textColor;
+
+            if (_darkMode)
+            {
+                backColor = enabled
+                    ? Color.FromArgb(30, 24, 20)
+                    : Color.FromArgb(18, 18, 18);
+                borderColor = enabled
+                    ? Color.FromArgb(201, 122, 64)
+                    : Color.FromArgb(73, 56, 43);
+                textColor = enabled
+                    ? Color.FromArgb(226, 232, 240)
+                    : Color.FromArgb(92, 82, 72);
+            }
+            else
+            {
+                backColor = enabled
+                    ? Color.White
+                    : Color.FromArgb(245, 247, 250);
+                borderColor = enabled
+                    ? Color.FromArgb(147, 197, 253)
+                    : Color.FromArgb(203, 213, 225);
+                textColor = enabled
+                    ? Color.FromArgb(15, 23, 42)
+                    : Color.FromArgb(148, 163, 184);
+            }
+
+            manualScaleInputHost.BackColor = backColor;
+            manualScaleInputHost.BorderColor = borderColor;
+            txtManualScaleDenominator.BackColor = backColor;
+            txtManualScaleDenominator.ForeColor = textColor;
+            manualScaleInputHost.Invalidate();
+            txtManualScaleDenominator.Invalidate();
         }
 
         private Panel MakeModeButton(string title, string desc, int x, int y, int w, int h)
@@ -3724,6 +4332,10 @@ namespace TTSK_AutoDim_Plates
                     themeSwitch.Checked = false;
             }
 
+            if (pinTopMostButton != null)
+                pinTopMostButton.DarkMode = _darkMode;
+
+            ApplyPrintMenuTheme();
             ApplyWindowTitleBarTheme();
             UpdateModeUi();
             ApplySlideTheme();
@@ -3732,6 +4344,18 @@ namespace TTSK_AutoDim_Plates
             RefreshAutoDimSlotImages(slideAutoDimPanel);
             ApplyAutoSectionSwitchUi();
             Invalidate(true);
+        }
+
+        private void UpdatePinTopMostToolTip()
+        {
+            if (pinTopMostToolTip == null || pinTopMostButton == null)
+                return;
+
+            pinTopMostToolTip.SetToolTip(
+                pinTopMostButton,
+                pinTopMostButton.Pinned
+                    ? "Bỏ ghim cửa sổ TTSK"
+                    : "Ghim TTSK luôn hiển thị trên các cửa sổ khác");
         }
 
         private void ApplyDarkThemeToControl(Control root)
@@ -3769,6 +4393,12 @@ namespace TTSK_AutoDim_Plates
                 root.BackColor = (root.Location.Y >= 598 && root.Width >= 900)
                     ? Color.FromArgb(18, 18, 18)
                     : panelBg2;
+            }
+            else if (root is TextBox)
+            {
+                TextBox textBox = root as TextBox;
+                textBox.BackColor = Color.FromArgb(30, 30, 30);
+                textBox.ForeColor = textColor;
             }
             else if (root is Label)
             {
@@ -3831,6 +4461,12 @@ namespace TTSK_AutoDim_Plates
                 root.BackColor = (root.Location.Y >= 598 && root.Width >= 900)
                     ? Blue
                     : Color.White;
+            }
+            else if (root is TextBox)
+            {
+                TextBox textBox = root as TextBox;
+                textBox.BackColor = Color.White;
+                textBox.ForeColor = Color.FromArgb(15, 23, 42);
             }
             else if (root is Label)
             {
@@ -3982,6 +4618,7 @@ namespace TTSK_AutoDim_Plates
 
             StyleDarkSmallButton(btnLoad);
             StyleDarkSmallButton(btnCheckScale);
+            StyleDarkSmallButton(btnPrint);
             StyleDarkSmallButton(btnDictionary);
             StyleDarkSmallButton(btnClear);
         }
@@ -3998,6 +4635,7 @@ namespace TTSK_AutoDim_Plates
 
             StyleLightSmallButton(btnLoad);
             StyleLightSmallButton(btnCheckScale);
+            StyleLightSmallButton(btnPrint);
             StyleLightSmallButton(btnDictionary);
             StyleLightSmallButton(btnClear);
         }
@@ -4082,6 +4720,615 @@ namespace TTSK_AutoDim_Plates
                 SetMainStatus(
                     "Load Selected Drawings lỗi: " + ex.Message,
                     MainStatusKind.Error);
+            }
+        }
+
+        private void ShowPrintMenu()
+        {
+            if (btnPrint == null ||
+                printMergeDropDownHost == null ||
+                btnMergeDropDown == null ||
+                btnMergeFileDropDown == null ||
+                !btnPrint.Enabled)
+            {
+                return;
+            }
+
+            CancelPrintMenuClose();
+            ApplyPrintMenuTheme();
+
+            Point screenLocation = btnPrint.PointToScreen(
+                new Point(0, btnPrint.Height));
+
+            printMergeDropDownHost.Location = PointToClient(screenLocation);
+            printMergeDropDownHost.Visible = true;
+            SetPrintMenuConnectedEdges(true);
+            printMergeDropDownHost.BringToFront();
+        }
+
+        private void HidePrintMenu()
+        {
+            CancelPrintMenuClose();
+
+            if (printMergeDropDownHost != null)
+                printMergeDropDownHost.Visible = false;
+
+            SetPrintMenuConnectedEdges(false);
+        }
+
+        private void SchedulePrintMenuClose()
+        {
+            if (printMenuCloseTimer == null ||
+                printMergeDropDownHost == null ||
+                !printMergeDropDownHost.Visible)
+            {
+                return;
+            }
+
+            printMenuCloseTimer.Stop();
+            printMenuCloseTimer.Start();
+        }
+
+        private void CancelPrintMenuClose()
+        {
+            if (printMenuCloseTimer != null)
+                printMenuCloseTimer.Stop();
+        }
+
+        private static bool IsCursorInsideControl(Control control)
+        {
+            if (control == null || !control.Visible)
+                return false;
+
+            try
+            {
+                Point clientPoint = control.PointToClient(Cursor.Position);
+                return control.ClientRectangle.Contains(clientPoint);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private void ApplyPrintMenuTheme()
+        {
+            if (btnPrint == null ||
+                printMergeDropDownHost == null ||
+                btnMergeDropDown == null ||
+                btnMergeFileDropDown == null)
+            {
+                return;
+            }
+
+            printMergeDropDownHost.Size = new System.Drawing.Size(
+                btnPrint.Width,
+                btnPrint.Height * 2);
+
+            btnMergeDropDown.Location = new Point(0, 0);
+            btnMergeFileDropDown.Location = new Point(0, btnPrint.Height);
+
+            CopyPrintButtonProperties(btnMergeDropDown);
+            CopyPrintButtonProperties(btnMergeFileDropDown);
+
+            // The three commands form one continuous vertical button group.
+            printMergeDropDownHost.BackColor = btnPrint.FillColor;
+            btnMergeDropDown.BackColor = btnPrint.FillColor;
+            btnMergeFileDropDown.BackColor = btnPrint.FillColor;
+
+            btnMergeDropDown.ConnectedTop = true;
+            btnMergeDropDown.ConnectedBottom = true;
+            btnMergeFileDropDown.ConnectedTop = true;
+            btnMergeFileDropDown.ConnectedBottom = false;
+            SetPrintMenuConnectedEdges(printMergeDropDownHost.Visible);
+
+            btnMergeDropDown.Invalidate();
+            btnMergeFileDropDown.Invalidate();
+            printMergeDropDownHost.Invalidate();
+        }
+
+        private void CopyPrintButtonProperties(SafeRoundedButton target)
+        {
+            if (btnPrint == null || target == null)
+                return;
+
+            target.Size = btnPrint.Size;
+            target.Font = btnPrint.Font;
+            target.FillColor = btnPrint.FillColor;
+            target.BorderColor = btnPrint.BorderColor;
+            target.HoverBorderColor = btnPrint.HoverBorderColor;
+            target.TextColor = btnPrint.TextColor;
+            target.BorderRadius = btnPrint.BorderRadius;
+            target.Cursor = btnPrint.Cursor;
+            target.RightToLeft = btnPrint.RightToLeft;
+        }
+
+        private void SetPrintMenuConnectedEdges(bool menuVisible)
+        {
+            if (btnPrint == null ||
+                btnMergeDropDown == null ||
+                btnMergeFileDropDown == null)
+            {
+                return;
+            }
+
+            btnPrint.ConnectedTop = false;
+            btnPrint.ConnectedBottom = menuVisible;
+            btnPrint.FlushOuterEdge = menuVisible;
+            btnMergeDropDown.ConnectedTop = true;
+            btnMergeDropDown.ConnectedBottom = true;
+            btnMergeDropDown.FlushOuterEdge = true;
+            btnMergeFileDropDown.ConnectedTop = true;
+            btnMergeFileDropDown.ConnectedBottom = false;
+            btnMergeFileDropDown.FlushOuterEdge = true;
+
+            btnPrint.Invalidate();
+            btnMergeDropDown.Invalidate();
+            btnMergeFileDropDown.Invalidate();
+        }
+
+        private static void ApplyRoundedControlRegion(
+            Control control,
+            float radius)
+        {
+            if (control == null || control.Width <= 0 || control.Height <= 0)
+                return;
+
+            RectangleF bounds = new RectangleF(
+                0f,
+                0f,
+                Math.Max(1f, control.Width - 1f),
+                Math.Max(1f, control.Height - 1f));
+
+            using (GraphicsPath path = RoundedRectF(bounds, radius))
+            {
+                Region oldRegion = control.Region;
+                control.Region = new Region(path);
+
+                if (oldRegion != null)
+                    oldRegion.Dispose();
+            }
+        }
+
+        private void btnPrint_Click(object sender, EventArgs e)
+        {
+            RunPdfCommand(false);
+        }
+
+        private void btnMerge_Click(object sender, EventArgs e)
+        {
+            RunPdfCommand(true);
+        }
+
+        private void btnMergeFile_Click(object sender, EventArgs e)
+        {
+            RunExternalPdfMergeCommand();
+        }
+
+        private void RunExternalPdfMergeCommand()
+        {
+            try
+            {
+                HidePrintMenu();
+
+                if (_isBatchRunning)
+                {
+                    SetMainStatus(
+                        "Không thể Merge File khi Batch Create đang chạy.",
+                        MainStatusKind.Warning);
+                    return;
+                }
+
+                if (btnPrint != null)
+                    btnPrint.Enabled = false;
+
+                if (btnMergeDropDown != null)
+                    btnMergeDropDown.Enabled = false;
+
+                if (btnMergeFileDropDown != null)
+                    btnMergeFileDropDown.Enabled = false;
+
+                SetMainStatus(
+                    "Chọn các file PDF bên ngoài cần gộp...",
+                    MainStatusKind.Information);
+                Application.DoEvents();
+
+                ExternalPdfMergeResult result =
+                    ExternalPdfFileMerger.MergeSelectedFiles(this);
+
+                if (result.Cancelled)
+                {
+                    SetMainStatus(
+                        "Đã hủy Merge File.",
+                        MainStatusKind.Information);
+                    return;
+                }
+
+                if (!result.Success)
+                {
+                    MainStatusKind statusKind = result.PartialSuccess
+                        ? MainStatusKind.Warning
+                        : MainStatusKind.Error;
+
+                    SetMainStatus(result.Message, statusKind);
+
+                    string errorDetails = result.Message;
+
+                    if (!string.IsNullOrWhiteSpace(result.OutputFilePath))
+                    {
+                        errorDetails +=
+                            "\r\n\r\nPDF tổng:\r\n" +
+                            result.OutputFilePath;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(result.CleanupDetails))
+                    {
+                        errorDetails +=
+                            "\r\n\r\nChi tiết xóa file nguồn:\r\n" +
+                            result.CleanupDetails;
+                    }
+
+                    MessageBox.Show(
+                        this,
+                        errorDetails,
+                        result.PartialSuccess
+                            ? "TTSK Merge File - PARTIAL"
+                            : "TTSK Merge File - ERROR",
+                        MessageBoxButtons.OK,
+                        result.PartialSuccess
+                            ? MessageBoxIcon.Warning
+                            : MessageBoxIcon.Error);
+                    return;
+                }
+
+                SetMainStatus(
+                    "Đã tạo PDF tổng: " +
+                    System.IO.Path.GetFileName(result.OutputFilePath) +
+                    " | Đã xóa " + result.DeletedSourceFileCount +
+                    " PDF nguồn đã chọn.",
+                    MainStatusKind.Success);
+            }
+            catch (Exception ex)
+            {
+                SetMainStatus(
+                    "Merge File lỗi: " + ex.Message,
+                    MainStatusKind.Error);
+
+                MessageBox.Show(
+                    this,
+                    "Merge File lỗi:\r\n\r\n" + ex,
+                    "TTSK Merge File - ERROR",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
+            finally
+            {
+                if (btnPrint != null)
+                    btnPrint.Enabled = true;
+
+                if (btnMergeDropDown != null)
+                    btnMergeDropDown.Enabled = true;
+
+                if (btnMergeFileDropDown != null)
+                    btnMergeFileDropDown.Enabled = true;
+
+                UpdateModeUi();
+            }
+        }
+
+        private void RunPdfCommand(bool mergeAndDeleteChildren)
+        {
+            string commandName = mergeAndDeleteChildren ? "Merge" : "Print";
+
+            try
+            {
+                HidePrintMenu();
+
+                if (_isBatchRunning)
+                {
+                    SetMainStatus(
+                        "Không thể " + commandName + " khi Batch Create đang chạy.",
+                        MainStatusKind.Warning);
+                    return;
+                }
+
+                if (btnPrint != null)
+                    btnPrint.Enabled = false;
+
+                if (btnMergeDropDown != null)
+                    btnMergeDropDown.Enabled = false;
+
+                if (btnMergeFileDropDown != null)
+                    btnMergeFileDropDown.Enabled = false;
+
+                // Print và Merge luôn dùng selection hiện tại trong Document Manager.
+                // Tự chuyển sang BATCH rồi gọi lại nguyên logic Load Selected hiện có.
+                if (rbBatch != null)
+                    rbBatch.Checked = true;
+
+                if (rbActive != null)
+                    rbActive.Checked = false;
+
+                UpdateModeUi();
+                Application.DoEvents();
+
+                SetMainStatus(
+                    "Đang đọc drawing được chọn trong Document Manager...",
+                    MainStatusKind.Information);
+
+                btnLoad_Click(btnLoad, EventArgs.Empty);
+                Application.DoEvents();
+
+                if (_selectedDrawings.Count == 0)
+                {
+                    string noDrawingMessage =
+                        "Không tìm thấy drawing đang được chọn trong Document Manager.\r\n\r\n" +
+                        "Hãy chọn ít nhất một drawing trong Document Manager rồi bấm " +
+                        commandName + " lại.";
+
+                    SetMainStatus(
+                        "Không có drawing được chọn trong Document Manager.",
+                        MainStatusKind.Warning);
+
+                    MessageBox.Show(
+                        this,
+                        noDrawingMessage,
+                        "TTSK " + commandName + " PDF",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                    return;
+                }
+
+                List<DrawingPdfPrintJob> printJobs =
+                    new List<DrawingPdfPrintJob>();
+
+                for (int i = 0; i < _selectedDrawings.Count; i++)
+                {
+                    Drawing drawing = _selectedDrawings[i];
+                    if (drawing == null)
+                        continue;
+
+                    printJobs.Add(new DrawingPdfPrintJob
+                    {
+                        Drawing = drawing,
+                        Mark = SafeDrawingMark(drawing),
+                        Revision = SafeDrawingRevision(drawing),
+                        DrawnBy = DrawingPdfPrinter.GetDrawingDrawnBy(drawing)
+                    });
+
+                    SetGridStatusAndResult(
+                        i,
+                        mergeAndDeleteChildren ? "MERGING" : "PRINTING",
+                        Color.FromArgb(59, 130, 246),
+                        "WAITING",
+                        Color.FromArgb(59, 130, 246));
+                }
+
+                if (printJobs.Count == 0)
+                {
+                    SetMainStatus(
+                        "Danh sách drawing không có phần tử hợp lệ để " + commandName + ".",
+                        MainStatusKind.Warning);
+                    return;
+                }
+
+                if (mergeAndDeleteChildren)
+                {
+                    SetMainStatus(
+                        "Đang xuất " + printJobs.Count +
+                        " PDF con, gộp thành PDF tổng và xóa PDF con của phiên này...",
+                        MainStatusKind.Information);
+                }
+                else
+                {
+                    SetMainStatus(
+                        "Đang xuất " + printJobs.Count +
+                        " drawing thành các file PDF riêng...",
+                        MainStatusKind.Information);
+                }
+
+                Application.DoEvents();
+
+                DrawingPdfPrintResult result = mergeAndDeleteChildren
+                    ? DrawingPdfPrinter.PrintAndMergePdfs(
+                        printJobs,
+                        this)
+                    : DrawingPdfPrinter.PrintToSeparatePdfs(
+                        printJobs,
+                        this);
+
+                if (result.Cancelled)
+                {
+                    for (int i = 0; i < _selectedDrawings.Count; i++)
+                    {
+                        SetGridStatusAndResult(
+                            i,
+                            "READY",
+                            Color.FromArgb(22, 163, 74),
+                            "CANCELLED",
+                            Color.FromArgb(201, 122, 64));
+                    }
+
+                    SetMainStatus(
+                        "Đã hủy lệnh " + commandName + ".",
+                        MainStatusKind.Information);
+                    return;
+                }
+
+                if (result.ItemResults != null)
+                {
+                    foreach (DrawingPdfItemResult item in result.ItemResults)
+                    {
+                        if (item == null)
+                            continue;
+
+                        if (item.Success)
+                        {
+                            string statusText = "PDF OK";
+                            string resultText = "SAVED";
+
+                            if (mergeAndDeleteChildren &&
+                                result.MergeSuccess &&
+                                item.ChildFileDeleted)
+                            {
+                                statusText = "MERGED";
+                                resultText = "CLEANED";
+                            }
+
+                            SetGridStatusAndResult(
+                                item.Index,
+                                statusText,
+                                Color.FromArgb(22, 163, 74),
+                                resultText,
+                                Color.FromArgb(22, 163, 74));
+                        }
+                        else
+                        {
+                            SetGridStatusAndResult(
+                                item.Index,
+                                "PRINT FAIL",
+                                Color.FromArgb(220, 38, 38),
+                                "ERROR",
+                                Color.FromArgb(220, 38, 38));
+                        }
+                    }
+                }
+
+                if (!result.Success)
+                {
+                    MainStatusKind statusKind = result.PartialSuccess
+                        ? MainStatusKind.Warning
+                        : MainStatusKind.Error;
+
+                    SetMainStatus(result.Message, statusKind);
+
+                    string errorDetails = result.Message;
+
+                    if (!string.IsNullOrWhiteSpace(result.OutputDirectory))
+                    {
+                        errorDetails +=
+                            "\r\n\r\nThư mục PDF:\r\n" +
+                            result.OutputDirectory;
+                    }
+
+                    if (result.ItemResults != null)
+                    {
+                        int shownFailures = 0;
+
+                        foreach (DrawingPdfItemResult item in result.ItemResults)
+                        {
+                            if (item == null || item.Success)
+                                continue;
+
+                            errorDetails +=
+                                "\r\n\r\nLỗi drawing " +
+                                (item.Index + 1) + " - " + item.Mark +
+                                ":\r\n" + item.Message;
+
+                            shownFailures++;
+                            if (shownFailures >= 5)
+                                break;
+                        }
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(result.LogFilePath))
+                        errorDetails += "\r\n\r\nTekla print log:\r\n" + result.LogFilePath;
+
+                    if (mergeAndDeleteChildren && result.MergeAttempted)
+                    {
+                        errorDetails +=
+                            "\r\n\r\nKết quả gộp PDF:\r\n" +
+                            (string.IsNullOrWhiteSpace(result.MergeMessage)
+                                ? (result.MergeSuccess ? "Thành công" : "Không thành công")
+                                : result.MergeMessage);
+                    }
+
+                    if (mergeAndDeleteChildren &&
+                        !string.IsNullOrWhiteSpace(result.MergedFilePath))
+                    {
+                        errorDetails +=
+                            "\r\n\r\nPDF tổng:\r\n" +
+                            result.MergedFilePath;
+                    }
+
+                    if (mergeAndDeleteChildren && result.CleanupAttempted)
+                    {
+                        errorDetails +=
+                            "\r\n\r\nKết quả xóa PDF con:\r\n" +
+                            result.CleanupMessage;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(result.DiagnosticFilePath))
+                        errorDetails += "\r\n\r\nFile chẩn đoán:\r\n" + result.DiagnosticFilePath;
+
+                    MessageBox.Show(
+                        this,
+                        errorDetails,
+                        result.PartialSuccess
+                            ? "TTSK " + commandName + " PDF - PARTIAL"
+                            : "TTSK " + commandName + " PDF - ERROR",
+                        MessageBoxButtons.OK,
+                        result.PartialSuccess
+                            ? MessageBoxIcon.Warning
+                            : MessageBoxIcon.Error);
+                    return;
+                }
+
+                if (mergeAndDeleteChildren)
+                {
+                    SetMainStatus(
+                        "Đã tạo PDF tổng: " +
+                        System.IO.Path.GetFileName(result.MergedFilePath) +
+                        " | Đã xóa " + result.DeletedChildFileCount +
+                        " PDF con của phiên này.",
+                        MainStatusKind.Success);
+                }
+                else
+                {
+                    SetMainStatus(
+                        "Đã tạo " + result.SuccessfulDrawingCount +
+                        " file PDF riêng tại: " + result.OutputDirectory,
+                        MainStatusKind.Success);
+                }
+
+                // Không hiện popup thành công. Kết quả được hiển thị trên status bar
+                // và thư mục đầu ra được mở tự động bởi DrawingPdfPrinter.
+            }
+            catch (Exception ex)
+            {
+                for (int i = 0; i < _selectedDrawings.Count; i++)
+                {
+                    SetGridStatusAndResult(
+                        i,
+                        "PRINT FAIL",
+                        Color.FromArgb(220, 38, 38),
+                        "ERROR",
+                        Color.FromArgb(220, 38, 38));
+                }
+
+                SetMainStatus(
+                    commandName + " PDF lỗi: " + ex.Message,
+                    MainStatusKind.Error);
+
+                MessageBox.Show(
+                    this,
+                    commandName + " PDF lỗi:\r\n\r\n" + ex,
+                    "TTSK " + commandName + " PDF - ERROR",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
+            finally
+            {
+                if (btnPrint != null)
+                    btnPrint.Enabled = true;
+
+                if (btnMergeDropDown != null)
+                    btnMergeDropDown.Enabled = true;
+
+                if (btnMergeFileDropDown != null)
+                    btnMergeFileDropDown.Enabled = true;
+
+                UpdateModeUi();
             }
         }
 
@@ -5338,12 +6585,37 @@ namespace TTSK_AutoDim_Plates
 
             if (rbActive.Checked)
             {
+                double? manualScale;
+                if (!ManualDrawingScaleOverride.TryParseInput(
+                        txtManualScaleDenominator != null
+                            ? txtManualScaleDenominator.Text
+                            : string.Empty,
+                        out manualScale))
+                {
+                    MessageBox.Show(
+                        this,
+                        "Tỷ lệ không hợp lệ. Hãy nhập Tỉ lệ theo tiêu chuẩn",
+                        "TTSK AutoDim",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+
+                    if (txtManualScaleDenominator != null)
+                    {
+                        txtManualScaleDenominator.Focus();
+                        txtManualScaleDenominator.SelectAll();
+                    }
+
+                    return;
+                }
+
                 btnRun.Enabled = false;
                 btnLoad.Enabled = false;
+                if (txtManualScaleDenominator != null)
+                    SetManualScaleInputEnabled(false);
 
                 try
                 {
-                    RunActiveDrawing();
+                    RunActiveDrawing(manualScale);
                 }
                 finally
                 {
@@ -5449,6 +6721,14 @@ namespace TTSK_AutoDim_Plates
                     "LastRunSucceeded",
                     BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
 
+                if (successProperty == null ||
+                    successProperty.PropertyType != typeof(bool))
+                {
+                    message =
+                        "Load Geometry Standard khong tra trang thai xac nhan.";
+                    return false;
+                }
+
                 if (successProperty != null && successProperty.PropertyType == typeof(bool))
                 {
                     object successValue = successProperty.GetValue(null, null);
@@ -5479,19 +6759,6 @@ namespace TTSK_AutoDim_Plates
             AutoDimExecutionResult execution = new AutoDimExecutionResult();
             AutoDimPartType partType = DetectActiveDrawingAutoDimPartType();
 
-            if (partType == AutoDimPartType.Unknown)
-            {
-                MessageBox.Show(
-                    "Không tự nhận diện được loại bản vẽ. Hiện hỗ trợ Plate, I/H, C, L, thép hộp.",
-                    "TTSK AutoDim Auto Detect",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning);
-                execution.SectionMessage =
-                    "Khong xac dinh duoc ModelPart can AutoDim.";
-                execution.CanSaveDrawing = false;
-                return execution;
-            }
-
             int selectedShapeAssemblyPartId =
                 CaptureSelectedShapeAssemblyPartId(partType);
 
@@ -5512,7 +6779,22 @@ namespace TTSK_AutoDim_Plates
                     "Không khôi phục được part thép hình đã chọn sau khi Load Standard.");
             }
 
-            if (partType == AutoDimPartType.ShapeIH && !runAutoSection)
+            if (partType == AutoDimPartType.Unknown)
+            {
+                MessageBox.Show(
+                    "Không tự nhận diện được loại bản vẽ. Hiện hỗ trợ Plate, I/H, C, L, thép hộp.",
+                    "TTSK AutoDim Auto Detect",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                execution.SectionMessage =
+                    "Khong xac dinh duoc ModelPart can AutoDim.";
+                execution.CanSaveDrawing = false;
+                return execution;
+            }
+
+            if ((partType == AutoDimPartType.ShapeIH ||
+                 partType == AutoDimPartType.ShapeC) &&
+                !runAutoSection)
                 execution.SectionStatus = AutoSectionStatus.Disabled;
 
             if (runAutoSection)
@@ -5525,12 +6807,23 @@ namespace TTSK_AutoDim_Plates
                     drawing,
                     model,
                     selectedShapeAssemblyPartId);
+                bool useLegacyAutoSectionPrecheck =
+                    partType == AutoDimPartType.ShapeIH ||
+                    (partType == AutoDimPartType.ShapeC &&
+                     IsBracketShapeProfile(part));
 
                 Tekla.Technology.Akit.UserScript.HShapeAutoSectionPrecheckResult precheck =
-                    Tekla.Technology.Akit.UserScript.ShapeScript.PrepareAutoSectionPrecheck(
-                        drawing,
-                        model,
-                        part);
+                    useLegacyAutoSectionPrecheck
+                        ? Tekla.Technology.Akit.UserScript.ShapeScript
+                            .PrepareAutoSectionPrecheck(
+                                drawing,
+                                model,
+                                part)
+                        : Tekla.Technology.Akit.UserScript.ShapeCScript
+                            .PrepareAutoSectionPrecheck(
+                                drawing,
+                                model,
+                                part);
 
                 execution.OriginalHoleResult = precheck != null
                     ? precheck.HoleResult
@@ -5679,52 +6972,87 @@ namespace TTSK_AutoDim_Plates
                     break;
 
                 case AutoDimPartType.ShapeC:
-                    RunOptionalShapeScriptByClassName(
-                        "ShapeCScript",
-                        "Đã nhận diện profile thép C, nhưng thuật toán thép C chưa được build.");
+                    {
+                        if (autoSectionDimPassRequired)
+                        {
+                            Tekla.Technology.Akit.UserScript.ShapeCScript
+                                .PrepareAutoSectionDimPass(
+                                    autoSectionSingleLayout,
+                                    selectedShapeAssemblyPartId);
+                        }
+
+                        string shapeError;
+                        if (!RunOptionalShapeScriptByClassName(
+                                "ShapeCScript",
+                                "Đã nhận diện profile thép C, nhưng thuật toán thép C chưa được build.",
+                                out shapeError))
+                        {
+                            execution.SectionMessage = shapeError;
+                            execution.CanSaveDrawing = false;
+                            return execution;
+                        }
+                    }
                     break;
 
                 case AutoDimPartType.ShapeL:
-                    RunOptionalShapeScriptByClassName(
-                        "ShapeLScript",
-                        "Đã nhận diện profile thép L, nhưng thuật toán thép L chưa được build.");
+                    {
+                        string shapeError;
+                        if (!RunOptionalShapeScriptByClassName(
+                                "ShapeLScript",
+                                "Đã nhận diện profile thép L, nhưng thuật toán thép L chưa được build.",
+                                out shapeError))
+                        {
+                            execution.SectionMessage = shapeError;
+                            execution.CanSaveDrawing = false;
+                            return execution;
+                        }
+                    }
                     break;
 
                 case AutoDimPartType.ShapeBox:
-                    RunOptionalShapeScriptByClassName(
-                        "ShapeBoxScript",
-                        "Đã nhận diện profile thép hộp, nhưng thuật toán thép hộp chưa được build.");
+                    {
+                        string shapeError;
+                        if (!RunOptionalShapeScriptByClassName(
+                                "ShapeBoxScript",
+                                "Đã nhận diện profile thép hộp, nhưng thuật toán thép hộp chưa được build.",
+                                out shapeError))
+                        {
+                            execution.SectionMessage = shapeError;
+                            execution.CanSaveDrawing = false;
+                            return execution;
+                        }
+                    }
                     break;
 
                 case AutoDimPartType.ShapeUnknown:
-                {
-                    DrawingHandler unknownDrawingHandler = new DrawingHandler();
-                    Drawing unknownDrawing = unknownDrawingHandler.GetActiveDrawing();
-                    Model unknownModel = new Model();
-                    Tekla.Structures.Model.Part unknownPart =
-                        ResolveAutoSectionModelPart(
-                            unknownDrawing,
-                            unknownModel,
-                            selectedShapeAssemblyPartId);
-
-                    Tekla.Technology.Akit.UserScript.ShapeUnknownRunResult unknownResult =
-                        Tekla.Technology.Akit.UserScript.ShapeUnknownScript.RunSafe(
-                            unknownDrawing,
-                            unknownModel,
-                            unknownPart);
-
-                    if (unknownResult == null || !unknownResult.Success)
                     {
-                        execution.SectionMessage = unknownResult != null
-                            ? unknownResult.Message
-                            : "Shape Unknown khong tra ket qua.";
-                        execution.CanSaveDrawing = false;
-                        return execution;
-                    }
+                        DrawingHandler unknownDrawingHandler = new DrawingHandler();
+                        Drawing unknownDrawing = unknownDrawingHandler.GetActiveDrawing();
+                        Model unknownModel = new Model();
+                        Tekla.Structures.Model.Part unknownPart =
+                            ResolveAutoSectionModelPart(
+                                unknownDrawing,
+                                unknownModel,
+                                selectedShapeAssemblyPartId);
 
-                    execution.SectionMessage = unknownResult.Message;
-                    break;
-                }
+                        Tekla.Technology.Akit.UserScript.ShapeUnknownRunResult unknownResult =
+                            Tekla.Technology.Akit.UserScript.ShapeUnknownScript.RunSafe(
+                                unknownDrawing,
+                                unknownModel,
+                                unknownPart);
+
+                        if (unknownResult == null || !unknownResult.Success)
+                        {
+                            execution.SectionMessage = unknownResult != null
+                                ? unknownResult.Message
+                                : "Shape Unknown khong tra ket qua.";
+                            execution.CanSaveDrawing = false;
+                            return execution;
+                        }
+
+                        execution.SectionMessage = unknownResult.Message;
+                        break;
+                    }
             }
 
             if (!runAutoSection)
@@ -5739,7 +7067,24 @@ namespace TTSK_AutoDim_Plates
                 ? _batchAutoSectionEnabledSnapshot.Value
                 : _autoSectionEnabled;
 
-            return enabled && partType == AutoDimPartType.ShapeIH;
+            return enabled &&
+                (partType == AutoDimPartType.ShapeIH ||
+                 partType == AutoDimPartType.ShapeC);
+        }
+
+        private bool IsBracketShapeProfile(
+            Tekla.Structures.Model.Part part)
+        {
+            try
+            {
+                string profile = NormalizeProfileText(
+                    GetShapeProfileText(part));
+                return profile.StartsWith("[");
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private Tekla.Structures.Model.Part ResolveAutoSectionModelPart(
@@ -5794,14 +7139,17 @@ namespace TTSK_AutoDim_Plates
 
                 case Tekla.Technology.Akit.UserScript.AutoSectionWorkerStatus.PreflightFailed:
                     execution.SectionStatus = AutoSectionStatus.PreflightFailed;
+                    execution.CanSaveDrawing = false;
                     break;
 
                 case Tekla.Technology.Akit.UserScript.AutoSectionWorkerStatus.CreateFailed:
                     execution.SectionStatus = AutoSectionStatus.CreateFailed;
+                    execution.CanSaveDrawing = false;
                     break;
 
                 case Tekla.Technology.Akit.UserScript.AutoSectionWorkerStatus.RolledBack:
                     execution.SectionStatus = AutoSectionStatus.RolledBack;
+                    execution.CanSaveDrawing = false;
                     break;
 
                 case Tekla.Technology.Akit.UserScript.AutoSectionWorkerStatus.UnsafeRollbackFailed:
@@ -6292,7 +7640,9 @@ namespace TTSK_AutoDim_Plates
                 PropertyInfo prop =
                     drawingObject.GetType().GetProperty(
                         propertyName,
-                        BindingFlags.Public | BindingFlags.Instance);
+                        BindingFlags.Public |
+                        BindingFlags.NonPublic |
+                        BindingFlags.Instance);
 
                 if (prop == null || !prop.CanRead)
                     return null;
@@ -6593,10 +7943,13 @@ namespace TTSK_AutoDim_Plates
             return p;
         }
 
-        private void RunOptionalShapeScriptByClassName(
+        private bool RunOptionalShapeScriptByClassName(
             string className,
-            string notReadyMessage)
+            string notReadyMessage,
+            out string error)
         {
+            error = string.Empty;
+
             try
             {
                 string fullName = "Tekla.Technology.Akit.UserScript." + className;
@@ -6614,8 +7967,9 @@ namespace TTSK_AutoDim_Plates
 
                 if (scriptType == null)
                 {
+                    error = notReadyMessage;
                     SetMainStatus(notReadyMessage, MainStatusKind.Warning);
-                    return;
+                    return false;
                 }
 
                 MethodInfo runMethod = scriptType.GetMethod(
@@ -6624,8 +7978,9 @@ namespace TTSK_AutoDim_Plates
 
                 if (runMethod == null)
                 {
+                    error = notReadyMessage;
                     SetMainStatus(notReadyMessage, MainStatusKind.Warning);
-                    return;
+                    return false;
                 }
 
                 ParameterInfo[] parameters = runMethod.GetParameters();
@@ -6633,17 +7988,25 @@ namespace TTSK_AutoDim_Plates
                     runMethod.Invoke(null, new object[] { null });
                 else
                     runMethod.Invoke(null, null);
+
+                return true;
             }
             catch (Exception ex)
             {
+                Exception real = ex.InnerException != null
+                    ? ex.InnerException
+                    : ex;
+                error = "Không chạy được thuật toán Shape tương ứng: " +
+                    real.Message;
                 SetMainStatus(
-                    "Không chạy được thuật toán Shape tương ứng: " + ex.Message,
+                    error,
                     MainStatusKind.Error);
+                return false;
             }
         }
 
 
-        private void RunActiveDrawing()
+        private void RunActiveDrawing(double? manualScale)
         {
             try
             {
@@ -6685,7 +8048,11 @@ namespace TTSK_AutoDim_Plates
 
                 // Chỉ chạy AutoDim 1 lần cho mỗi lần bấm CREATE DRAWING.
                 // Bản cũ gọi RunCurrentAutoDimScript() 2 lần nên Tekla tạo/dim drawing lặp lại.
-                AutoDimExecutionResult execution = RunCurrentAutoDimScript();
+                AutoDimExecutionResult execution;
+                using (ManualDrawingScaleOverride.BeginRun(manualScale))
+                {
+                    execution = RunCurrentAutoDimScript();
+                }
 
                 int holeResult = GetTopBottomHoleCheckResult();
                 ApplyActiveAutoDimExecutionStatus(execution);
@@ -6791,6 +8158,8 @@ namespace TTSK_AutoDim_Plates
 
         private void RunBatchDrawings()
         {
+            ManualDrawingScaleOverride.Clear();
+
             if (_selectedDrawings.Count == 0)
             {
                 MessageBox.Show("Chưa load drawing. Hãy chọn drawing trong Document Manager rồi bấm Load Selected Drawings.", "TTSK AutoDim");
@@ -7041,6 +8410,7 @@ namespace TTSK_AutoDim_Plates
             }
             finally
             {
+                ManualDrawingScaleOverride.Clear();
                 _isBatchRunning = false;
                 _stopRequested = false;
 
@@ -7867,6 +9237,9 @@ namespace TTSK_AutoDim_Plates
             public Color HoverBorderColor { get; set; }
             public Color TextColor { get; set; }
             public int BorderRadius { get; set; }
+            public bool ConnectedTop { get; set; }
+            public bool ConnectedBottom { get; set; }
+            public bool FlushOuterEdge { get; set; }
 
             public SafeRoundedButton()
             {
@@ -8004,8 +9377,22 @@ namespace TTSK_AutoDim_Plates
                         : HoverBorderColor;
                 }
 
-                RectangleF rect = new RectangleF(1f, 1f, Width - 3f, Height - 3f);
-                using (GraphicsPath path = RoundedRectF(rect, BorderRadius))
+                float left = FlushOuterEdge ? 0.5f : 1f;
+                float right = FlushOuterEdge ? Width - 0.5f : Width - 2f;
+                float top = ConnectedTop ? 0f : (FlushOuterEdge ? 0.5f : 1f);
+                float bottom = ConnectedBottom
+                    ? Height
+                    : (FlushOuterEdge ? Height - 0.5f : Height - 2f);
+                RectangleF rect = new RectangleF(
+                    left,
+                    top,
+                    Math.Max(1f, right - left),
+                    Math.Max(1f, bottom - top));
+
+                using (GraphicsPath path = CreateButtonPath(
+                    rect,
+                    !ConnectedTop,
+                    !ConnectedBottom))
                 {
                     using (SolidBrush brush = new SolidBrush(fill))
                         e.Graphics.FillPath(brush, path);
@@ -8033,6 +9420,295 @@ namespace TTSK_AutoDim_Plates
                 int g = (int)Math.Round(a.G + (b.G - a.G) * amount);
                 int bl = (int)Math.Round(a.B + (b.B - a.B) * amount);
                 return Color.FromArgb(r, g, bl);
+            }
+
+            private GraphicsPath CreateButtonPath(
+                RectangleF bounds,
+                bool roundTop,
+                bool roundBottom)
+            {
+                if (roundTop && roundBottom)
+                    return RoundedRectF(bounds, BorderRadius);
+
+                GraphicsPath path = new GraphicsPath();
+
+                if (!roundTop && !roundBottom)
+                {
+                    path.AddRectangle(bounds);
+                    return path;
+                }
+
+                float radius = Math.Min(
+                    Math.Max(0f, BorderRadius),
+                    Math.Min(bounds.Width, bounds.Height) / 2f);
+                float diameter = radius * 2f;
+
+                if (radius <= 0f)
+                {
+                    path.AddRectangle(bounds);
+                    return path;
+                }
+
+                path.StartFigure();
+
+                if (roundTop)
+                {
+                    path.AddLine(bounds.Left, bounds.Bottom, bounds.Left, bounds.Top + radius);
+                    path.AddArc(bounds.Left, bounds.Top, diameter, diameter, 180f, 90f);
+                    path.AddLine(bounds.Left + radius, bounds.Top, bounds.Right - radius, bounds.Top);
+                    path.AddArc(bounds.Right - diameter, bounds.Top, diameter, diameter, 270f, 90f);
+                    path.AddLine(bounds.Right, bounds.Top + radius, bounds.Right, bounds.Bottom);
+                    path.AddLine(bounds.Right, bounds.Bottom, bounds.Left, bounds.Bottom);
+                }
+                else
+                {
+                    path.AddLine(bounds.Left, bounds.Top, bounds.Right, bounds.Top);
+                    path.AddLine(bounds.Right, bounds.Top, bounds.Right, bounds.Bottom - radius);
+                    path.AddArc(bounds.Right - diameter, bounds.Bottom - diameter, diameter, diameter, 0f, 90f);
+                    path.AddLine(bounds.Right - radius, bounds.Bottom, bounds.Left + radius, bounds.Bottom);
+                    path.AddArc(bounds.Left, bounds.Bottom - diameter, diameter, diameter, 90f, 90f);
+                    path.AddLine(bounds.Left, bounds.Bottom - radius, bounds.Left, bounds.Top);
+                }
+
+                path.CloseFigure();
+                return path;
+            }
+        }
+
+
+        private class PinTopMostButton : Control
+        {
+            private bool _hovered;
+            private bool _pressed;
+            private bool _keyboardPressed;
+            private bool _pinned;
+            private bool _darkMode;
+
+            public event EventHandler PinnedChanged;
+
+            public bool Pinned
+            {
+                get { return _pinned; }
+                set
+                {
+                    if (_pinned == value)
+                        return;
+
+                    _pinned = value;
+                    AccessibleName = _pinned
+                        ? "Bỏ ghim cửa sổ TTSK"
+                        : "Ghim cửa sổ TTSK luôn ở trên";
+                    Invalidate();
+
+                    EventHandler handler = PinnedChanged;
+                    if (handler != null)
+                        handler(this, EventArgs.Empty);
+                }
+            }
+
+            public bool DarkMode
+            {
+                get { return _darkMode; }
+                set
+                {
+                    if (_darkMode == value)
+                        return;
+
+                    _darkMode = value;
+                    Invalidate();
+                }
+            }
+
+            public PinTopMostButton()
+            {
+                DoubleBuffered = true;
+                SetStyle(ControlStyles.UserPaint, true);
+                SetStyle(ControlStyles.AllPaintingInWmPaint, true);
+                SetStyle(ControlStyles.OptimizedDoubleBuffer, true);
+                SetStyle(ControlStyles.ResizeRedraw, true);
+                SetStyle(ControlStyles.Selectable, true);
+                TabStop = true;
+                Cursor = Cursors.Hand;
+                AccessibleRole = AccessibleRole.CheckButton;
+                AccessibleName = "Ghim cửa sổ TTSK luôn ở trên";
+            }
+
+            public void PerformClick()
+            {
+                if (Enabled)
+                    OnClick(EventArgs.Empty);
+            }
+
+            protected override void OnPaintBackground(PaintEventArgs e)
+            {
+                Color background = Parent != null ? Parent.BackColor : BackColor;
+                using (SolidBrush brush = new SolidBrush(background))
+                    e.Graphics.FillRectangle(brush, ClientRectangle);
+            }
+
+            protected override void OnMouseEnter(EventArgs e)
+            {
+                _hovered = true;
+                Invalidate();
+                base.OnMouseEnter(e);
+            }
+
+            protected override void OnMouseLeave(EventArgs e)
+            {
+                _hovered = false;
+                _pressed = false;
+                Invalidate();
+                base.OnMouseLeave(e);
+            }
+
+            protected override void OnMouseDown(MouseEventArgs e)
+            {
+                if (e.Button == MouseButtons.Left && Enabled)
+                {
+                    Focus();
+                    _pressed = true;
+                    Capture = true;
+                    Invalidate();
+                }
+
+                base.OnMouseDown(e);
+            }
+
+            protected override void OnMouseUp(MouseEventArgs e)
+            {
+                if (e.Button == MouseButtons.Left)
+                {
+                    _pressed = false;
+                    Capture = false;
+                    Invalidate();
+                }
+
+                base.OnMouseUp(e);
+            }
+
+            protected override void OnKeyDown(KeyEventArgs e)
+            {
+                if (Enabled && (e.KeyCode == Keys.Space || e.KeyCode == Keys.Enter))
+                {
+                    _keyboardPressed = true;
+                    Invalidate();
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                }
+
+                base.OnKeyDown(e);
+            }
+
+            protected override void OnKeyUp(KeyEventArgs e)
+            {
+                if (_keyboardPressed &&
+                    (e.KeyCode == Keys.Space || e.KeyCode == Keys.Enter))
+                {
+                    _keyboardPressed = false;
+                    Invalidate();
+                    PerformClick();
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                }
+
+                base.OnKeyUp(e);
+            }
+
+            protected override void OnClick(EventArgs e)
+            {
+                if (Enabled)
+                    Pinned = !Pinned;
+
+                base.OnClick(e);
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                base.OnPaint(e);
+
+                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                e.Graphics.PixelOffsetMode = PixelOffsetMode.Half;
+                e.Graphics.CompositingQuality = CompositingQuality.HighQuality;
+
+                bool activePress = _pressed || _keyboardPressed;
+                Color fill;
+                Color border;
+                Color icon;
+
+                if (_darkMode)
+                {
+                    fill = _pinned
+                        ? Color.FromArgb(201, 122, 64)
+                        : (_hovered
+                            ? Color.FromArgb(47, 38, 32)
+                            : Color.FromArgb(30, 30, 30));
+                    border = _pinned || _hovered
+                        ? Color.FromArgb(224, 156, 96)
+                        : Color.FromArgb(73, 56, 43);
+                    icon = _pinned
+                        ? Color.FromArgb(20, 16, 14)
+                        : Color.FromArgb(203, 213, 225);
+                }
+                else
+                {
+                    fill = _pinned
+                        ? Color.FromArgb(235, 242, 255)
+                        : Color.White;
+                    border = _pinned || _hovered
+                        ? Color.FromArgb(37, 99, 235)
+                        : Color.FromArgb(147, 197, 253);
+                    icon = _pinned
+                        ? Color.FromArgb(30, 58, 138)
+                        : Color.FromArgb(71, 85, 105);
+                }
+
+                if (activePress)
+                    fill = ControlPaint.Dark(fill, 0.06f);
+
+                RectangleF buttonBounds = new RectangleF(
+                    0.8f,
+                    0.8f,
+                    Math.Max(1f, Width - 1.6f),
+                    Math.Max(1f, Height - 1.6f));
+                float radius = Math.Min(
+                    10.5f,
+                    Math.Min(buttonBounds.Width, buttonBounds.Height) / 2f);
+
+                using (GraphicsPath buttonPath = RoundedRectF(buttonBounds, radius))
+                using (SolidBrush fillBrush = new SolidBrush(fill))
+                using (Pen borderPen = new Pen(border, 1.2f))
+                {
+                    e.Graphics.FillPath(fillBrush, buttonPath);
+                    e.Graphics.DrawPath(borderPen, buttonPath);
+                }
+
+                float cx = ClientRectangle.Left + ClientRectangle.Width / 2f;
+                float cy = ClientRectangle.Top + ClientRectangle.Height / 2f - 0.5f;
+
+                using (GraphicsPath pinHead = new GraphicsPath())
+                {
+                    pinHead.AddPolygon(new[]
+                    {
+                        new PointF(cx - 5.5f, cy - 8.0f),
+                        new PointF(cx + 5.5f, cy - 8.0f),
+                        new PointF(cx + 3.6f, cy - 4.4f),
+                        new PointF(cx + 3.6f, cy + 0.2f),
+                        new PointF(cx + 6.2f, cy + 2.8f),
+                        new PointF(cx - 6.2f, cy + 2.8f),
+                        new PointF(cx - 3.6f, cy + 0.2f),
+                        new PointF(cx - 3.6f, cy - 4.4f)
+                    });
+
+                    using (SolidBrush iconBrush = new SolidBrush(icon))
+                        e.Graphics.FillPath(iconBrush, pinHead);
+                }
+
+                using (Pen stemPen = new Pen(icon, 1.8f))
+                {
+                    stemPen.StartCap = LineCap.Round;
+                    stemPen.EndCap = LineCap.Round;
+                    e.Graphics.DrawLine(stemPen, cx, cy + 2.5f, cx, cy + 9.5f);
+                }
             }
         }
 
@@ -8175,6 +9851,289 @@ namespace TTSK_AutoDim_Plates
             }
         }
 
+
+        private class GridAxisCountBox : BorderNumericUpDown
+        {
+            private bool _darkMode;
+            private Color _accentColor;
+
+            public bool DarkMode
+            {
+                get { return _darkMode; }
+                set
+                {
+                    _darkMode = value;
+                    ApplyThemeColors();
+                }
+            }
+
+            public Color AccentColor
+            {
+                get { return _accentColor; }
+                set
+                {
+                    _accentColor = value;
+                    ApplyThemeColors();
+                }
+            }
+
+            public new int Value
+            {
+                get { return (int)base.Value; }
+                set
+                {
+                    int next = Math.Max(1, Math.Min(3, value));
+                    base.Value = next;
+                }
+            }
+
+            public GridAxisCountBox()
+            {
+                DecimalPlaces = 0;
+                Minimum = 1;
+                Maximum = 3;
+                Increment = 1;
+                Value = 3;
+                Size = new System.Drawing.Size(42, 26);
+                AccessibleName = "Số grid giữ lại, từ 1 đến 3";
+                AccessibleRole = AccessibleRole.SpinButton;
+                _accentColor = Color.FromArgb(37, 99, 235);
+                ApplyThemeColors();
+            }
+
+            protected override void OnKeyPress(KeyPressEventArgs e)
+            {
+                if (!Enabled)
+                {
+                    base.OnKeyPress(e);
+                    return;
+                }
+
+                // This control intentionally accepts only the three supported modes;
+                // do not let the generic numeric editor show an intermediate value.
+                if (e.KeyChar == '1' || e.KeyChar == '2' || e.KeyChar == '3')
+                    Value = e.KeyChar - '0';
+
+                e.Handled = true;
+            }
+
+            protected override bool IsInputKey(Keys keyData)
+            {
+                Keys key = keyData & Keys.KeyCode;
+                if (key == Keys.Left || key == Keys.Right)
+                    return true;
+
+                return base.IsInputKey(keyData);
+            }
+
+            protected override void OnKeyDown(KeyEventArgs e)
+            {
+                if (Enabled &&
+                    (e.KeyCode == Keys.Left || e.KeyCode == Keys.Right))
+                {
+                    int next = e.KeyCode == Keys.Right
+                        ? Math.Min(3, Value + 1)
+                        : Math.Max(1, Value - 1);
+                    Value = next;
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                }
+                else
+                {
+                    base.OnKeyDown(e);
+                    return;
+                }
+
+                base.OnKeyDown(e);
+            }
+
+            private void ApplyThemeColors()
+            {
+                Color panel = _darkMode
+                    ? Color.FromArgb(30, 24, 20)
+                    : Color.White;
+                Color border = _accentColor.IsEmpty
+                    ? (_darkMode
+                        ? Color.FromArgb(201, 122, 64)
+                        : Color.FromArgb(37, 99, 235))
+                    : _accentColor;
+                Color text = _darkMode
+                    ? Color.FromArgb(245, 186, 126)
+                    : Color.FromArgb(30, 58, 138);
+
+                BackColor = panel;
+                ForeColor = text;
+                CustomBorderColor = border;
+                ButtonBackColor = panel;
+                ButtonBorderColor = border;
+                ArrowColor = text;
+                RefreshCustomButton();
+            }
+        }
+
+        private class FitViewModeSwitch : Control
+        {
+            private bool _checked;
+
+            public event EventHandler CheckedChanged;
+            public bool DarkMode { get; set; }
+            public Color AccentColor { get; set; }
+
+            public bool Checked
+            {
+                get { return _checked; }
+                set
+                {
+                    if (_checked == value)
+                        return;
+
+                    _checked = value;
+                    Invalidate();
+
+                    if (CheckedChanged != null)
+                        CheckedChanged(this, EventArgs.Empty);
+                }
+            }
+
+            public FitViewModeSwitch()
+            {
+                SetStyle(ControlStyles.UserPaint, true);
+                SetStyle(ControlStyles.AllPaintingInWmPaint, true);
+                SetStyle(ControlStyles.OptimizedDoubleBuffer, true);
+                SetStyle(ControlStyles.ResizeRedraw, true);
+                SetStyle(ControlStyles.SupportsTransparentBackColor, true);
+                SetStyle(ControlStyles.Selectable, true);
+
+                DoubleBuffered = true;
+                Cursor = Cursors.Hand;
+                TabStop = true;
+                Size = new System.Drawing.Size(146, 28);
+                DarkMode = false;
+                AccentColor = Color.FromArgb(37, 99, 235);
+                BackColor = Color.Transparent;
+                AccessibleName = "FIT mode: None or Grid";
+                AccessibleRole = AccessibleRole.CheckButton;
+            }
+
+            protected override void OnMouseDown(MouseEventArgs e)
+            {
+                if (Enabled)
+                    Checked = e.X >= Width / 2;
+
+                Focus();
+                base.OnMouseDown(e);
+            }
+
+            protected override void OnKeyDown(KeyEventArgs e)
+            {
+                if (Enabled &&
+                    (e.KeyCode == Keys.Space ||
+                     e.KeyCode == Keys.Left ||
+                     e.KeyCode == Keys.Right))
+                {
+                    if (e.KeyCode == Keys.Left)
+                        Checked = false;
+                    else if (e.KeyCode == Keys.Right)
+                        Checked = true;
+                    else
+                        Checked = !Checked;
+
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                }
+
+                base.OnKeyDown(e);
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                base.OnPaint(e);
+
+                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                e.Graphics.PixelOffsetMode = PixelOffsetMode.Half;
+                e.Graphics.CompositingQuality = CompositingQuality.HighQuality;
+
+                RectangleF track = new RectangleF(
+                    1.5f,
+                    1.5f,
+                    Math.Max(1f, Width - 3f),
+                    Math.Max(1f, Height - 3f));
+
+                Color trackBack = DarkMode
+                    ? Color.FromArgb(30, 24, 20)
+                    : Color.FromArgb(239, 246, 255);
+                Color border = Enabled
+                    ? AccentColor
+                    : (DarkMode
+                        ? Color.FromArgb(73, 56, 43)
+                        : Color.FromArgb(203, 213, 225));
+                Color selectedBack = Enabled
+                    ? AccentColor
+                    : (DarkMode
+                        ? Color.FromArgb(92, 82, 72)
+                        : Color.FromArgb(148, 163, 184));
+                Color normalText = Enabled
+                    ? (DarkMode
+                        ? Color.FromArgb(245, 186, 126)
+                        : Color.FromArgb(30, 58, 138))
+                    : (DarkMode
+                        ? Color.FromArgb(92, 82, 72)
+                        : Color.FromArgb(148, 163, 184));
+                Color selectedText = DarkMode
+                    ? Color.FromArgb(20, 16, 14)
+                    : Color.White;
+
+                using (GraphicsPath path = RoundedRectF(track, track.Height / 2f))
+                using (SolidBrush brush = new SolidBrush(trackBack))
+                using (Pen pen = new Pen(border, Focused ? 1.8f : 1.3f))
+                {
+                    e.Graphics.FillPath(brush, path);
+                    e.Graphics.DrawPath(pen, path);
+                }
+
+                float halfWidth = track.Width / 2f;
+                RectangleF selected = _checked
+                    ? new RectangleF(
+                        track.X + halfWidth + 1f,
+                        track.Y + 2f,
+                        halfWidth - 3f,
+                        track.Height - 4f)
+                    : new RectangleF(
+                        track.X + 2f,
+                        track.Y + 2f,
+                        halfWidth - 3f,
+                        track.Height - 4f);
+
+                using (GraphicsPath selectedPath =
+                    RoundedRectF(selected, selected.Height / 2f))
+                using (SolidBrush brush = new SolidBrush(selectedBack))
+                {
+                    e.Graphics.FillPath(brush, selectedPath);
+                }
+
+                RectangleF noneRect = new RectangleF(2f, 0f, Width / 2f - 2f, Height);
+                RectangleF gridRect = new RectangleF(Width / 2f, 0f, Width / 2f - 2f, Height);
+
+                using (Font font = new Font("Segoe UI", 8.5F, FontStyle.Bold))
+                using (StringFormat format = new StringFormat())
+                {
+                    format.Alignment = StringAlignment.Center;
+                    format.LineAlignment = StringAlignment.Center;
+
+                    using (SolidBrush brush =
+                        new SolidBrush(_checked ? normalText : selectedText))
+                    {
+                        e.Graphics.DrawString("None", font, brush, noneRect, format);
+                    }
+
+                    using (SolidBrush brush =
+                        new SolidBrush(_checked ? selectedText : normalText))
+                    {
+                        e.Graphics.DrawString("Grid", font, brush, gridRect, format);
+                    }
+                }
+            }
+        }
 
         private class Slot04TargetSwitch : Control
         {
@@ -8739,127 +10698,454 @@ namespace TTSK_AutoDim_Plates
         }
 
 
-        private class BorderNumericUpDown : NumericUpDown
+        private class BorderNumericUpDown : Control
         {
             public Color CustomBorderColor { get; set; }
             public Color ButtonBackColor { get; set; }
             public Color ButtonBorderColor { get; set; }
             public Color ArrowColor { get; set; }
 
-            private SpinnerOverlay _spinnerOverlay;
+            private decimal _value;
+            private decimal _minimum;
+            private decimal _maximum = 100M;
+            private decimal _increment = 1M;
+            private int _decimalPlaces;
+            private string _editText = "";
+            private bool _replaceOnNextInput = true;
+
+            public event EventHandler ValueChanged;
+
+            public decimal Value
+            {
+                get { return _value; }
+                set
+                {
+                    decimal next = value;
+                    if (next < _minimum) next = _minimum;
+                    if (next > _maximum) next = _maximum;
+                    next = decimal.Round(next, _decimalPlaces);
+
+                    if (_value == next)
+                    {
+                        _editText = FormatValue(_value);
+                        Invalidate();
+                        return;
+                    }
+
+                    _value = next;
+                    _editText = FormatValue(_value);
+                    Invalidate();
+
+                    if (ValueChanged != null)
+                        ValueChanged(this, EventArgs.Empty);
+                }
+            }
+
+            public decimal Minimum
+            {
+                get { return _minimum; }
+                set
+                {
+                    _minimum = value;
+                    if (_maximum < _minimum)
+                        _maximum = _minimum;
+                    Value = _value;
+                }
+            }
+
+            public decimal Maximum
+            {
+                get { return _maximum; }
+                set
+                {
+                    _maximum = value;
+                    if (_minimum > _maximum)
+                        _minimum = _maximum;
+                    Value = _value;
+                }
+            }
+
+            public decimal Increment
+            {
+                get { return _increment; }
+                set { _increment = value <= 0M ? 1M : value; }
+            }
+
+            public int DecimalPlaces
+            {
+                get { return _decimalPlaces; }
+                set
+                {
+                    _decimalPlaces = Math.Max(0, Math.Min(6, value));
+                    _value = decimal.Round(_value, _decimalPlaces);
+                    _editText = FormatValue(_value);
+                    Invalidate();
+                }
+            }
+
+            public HorizontalAlignment TextAlign { get; set; }
 
             public BorderNumericUpDown()
             {
+                SetStyle(ControlStyles.UserPaint, true);
+                SetStyle(ControlStyles.AllPaintingInWmPaint, true);
+                SetStyle(ControlStyles.OptimizedDoubleBuffer, true);
+                SetStyle(ControlStyles.ResizeRedraw, true);
+                SetStyle(ControlStyles.SupportsTransparentBackColor, true);
+                SetStyle(ControlStyles.Selectable, true);
+
+                DoubleBuffered = true;
                 CustomBorderColor = Color.FromArgb(203, 213, 225);
                 ButtonBackColor = Color.FromArgb(248, 250, 252);
                 ButtonBorderColor = Color.FromArgb(203, 213, 225);
                 ArrowColor = Color.FromArgb(30, 58, 138);
-                BorderStyle = BorderStyle.FixedSingle;
+                BackColor = Color.White;
+                ForeColor = Color.FromArgb(30, 58, 138);
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+                TextAlign = HorizontalAlignment.Center;
+                Cursor = Cursors.IBeam;
+                TabStop = true;
+                Size = new System.Drawing.Size(100, 28);
+                AccessibleRole = AccessibleRole.SpinButton;
+                _editText = FormatValue(_value);
             }
 
-            protected override void OnCreateControl()
+            protected override void OnPaintBackground(PaintEventArgs e)
             {
-                base.OnCreateControl();
-                EnsureSpinnerOverlay();
+                Color parentColor = Parent == null ? BackColor : Parent.BackColor;
+                using (SolidBrush brush = new SolidBrush(parentColor))
+                    e.Graphics.FillRectangle(brush, ClientRectangle);
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                base.OnPaint(e);
+
+                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                e.Graphics.PixelOffsetMode = PixelOffsetMode.Half;
+                e.Graphics.CompositingQuality = CompositingQuality.HighQuality;
+
+                RectangleF box = new RectangleF(
+                    1.0f,
+                    1.0f,
+                    Math.Max(1f, Width - 2f),
+                    Math.Max(1f, Height - 2f));
+
+                Color fill = Enabled
+                    ? BackColor
+                    : MixColor(BackColor, Color.Gray, 0.20);
+                Color border = Enabled
+                    ? CustomBorderColor
+                    : MixColor(CustomBorderColor, Color.Gray, 0.35);
+                Color textColor = Enabled
+                    ? ForeColor
+                    : Color.FromArgb(148, 163, 184);
+
+                float radius = Math.Min(7f, Math.Min(box.Width, box.Height) * 0.5f);
+                using (GraphicsPath path = RoundedRectF(box, radius))
+                using (SolidBrush fillBrush = new SolidBrush(fill))
+                {
+                    // The same path is used for the complete fill and all subsequent
+                    // drawing.  The outer border is deliberately the final operation.
+                    e.Graphics.FillPath(fillBrush, path);
+
+                    const int arrowAreaWidth = 20;
+                    float arrowLeft = Width - arrowAreaWidth - 1f;
+
+                    using (Pen separator = new Pen(Color.FromArgb(110, border), 1f))
+                        e.Graphics.DrawLine(
+                            separator,
+                            arrowLeft,
+                            6f,
+                            arrowLeft,
+                            Height - 6f);
+
+                    float arrowCenterX = arrowLeft + arrowAreaWidth * 0.5f;
+                    PointF[] upArrow =
+                    {
+                        new PointF(arrowCenterX - 3.8f, 10f),
+                        new PointF(arrowCenterX + 3.8f, 10f),
+                        new PointF(arrowCenterX, 5.5f)
+                    };
+                    PointF[] downArrow =
+                    {
+                        new PointF(arrowCenterX - 3.8f, Height - 10f),
+                        new PointF(arrowCenterX + 3.8f, Height - 10f),
+                        new PointF(arrowCenterX, Height - 5.5f)
+                    };
+
+                    using (SolidBrush arrowBrush = new SolidBrush(textColor))
+                    {
+                        e.Graphics.FillPolygon(arrowBrush, upArrow);
+                        e.Graphics.FillPolygon(arrowBrush, downArrow);
+                    }
+
+                    RectangleF valueRect = new RectangleF(
+                        6f,
+                        0f,
+                        Math.Max(1f, arrowLeft - 10f),
+                        Height);
+
+                    using (SolidBrush textBrush = new SolidBrush(textColor))
+                    using (StringFormat format = new StringFormat())
+                    {
+                        format.LineAlignment = StringAlignment.Center;
+                        format.FormatFlags = StringFormatFlags.NoWrap;
+                        format.Trimming = StringTrimming.EllipsisCharacter;
+                        format.Alignment = TextAlign == HorizontalAlignment.Left
+                            ? StringAlignment.Near
+                            : TextAlign == HorizontalAlignment.Right
+                                ? StringAlignment.Far
+                                : StringAlignment.Center;
+
+                        string displayText = Focused && !string.IsNullOrEmpty(_editText)
+                            ? _editText
+                            : FormatValue(_value);
+
+                        e.Graphics.DrawString(displayText, Font, textBrush, valueRect, format);
+                    }
+
+                    using (Pen borderPen = new Pen(border, Focused ? 1.8f : 1.4f))
+                    {
+                        borderPen.LineJoin = LineJoin.Round;
+                        e.Graphics.DrawPath(borderPen, path);
+                    }
+                }
+            }
+
+            protected override void OnEnter(EventArgs e)
+            {
+                base.OnEnter(e);
+                _editText = FormatValue(_value);
+                _replaceOnNextInput = true;
+                Invalidate();
+            }
+
+            protected override void OnLeave(EventArgs e)
+            {
+                CommitEditText();
+                _replaceOnNextInput = true;
+                base.OnLeave(e);
+                Invalidate();
+            }
+
+            protected override void OnMouseDown(MouseEventArgs e)
+            {
+                if (Enabled)
+                {
+                    Focus();
+                    if (e.X >= Width - 21)
+                        StepValue(e.Y < Height / 2);
+
+                    _replaceOnNextInput = true;
+                }
+
+                base.OnMouseDown(e);
+            }
+
+            protected override void OnMouseMove(MouseEventArgs e)
+            {
+                Cursor = !Enabled
+                    ? Cursors.Default
+                    : e.X >= Width - 21
+                        ? Cursors.Hand
+                        : Cursors.IBeam;
+                base.OnMouseMove(e);
+            }
+
+            protected override void OnMouseLeave(EventArgs e)
+            {
+                Cursor = Enabled ? Cursors.IBeam : Cursors.Default;
+                base.OnMouseLeave(e);
+            }
+
+            protected override void OnMouseWheel(MouseEventArgs e)
+            {
+                if (Enabled && e.Delta != 0)
+                {
+                    StepValue(e.Delta > 0);
+                    _replaceOnNextInput = true;
+                }
+
+                base.OnMouseWheel(e);
+            }
+
+            protected override bool IsInputKey(Keys keyData)
+            {
+                Keys key = keyData & Keys.KeyCode;
+                if (key == Keys.Up || key == Keys.Down)
+                    return true;
+
+                return base.IsInputKey(keyData);
+            }
+
+            protected override void OnKeyDown(KeyEventArgs e)
+            {
+                if (!Enabled)
+                {
+                    base.OnKeyDown(e);
+                    return;
+                }
+
+                if (e.KeyCode == Keys.Up || e.KeyCode == Keys.Down)
+                {
+                    StepValue(e.KeyCode == Keys.Up);
+                    _replaceOnNextInput = true;
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                }
+                else if (e.KeyCode == Keys.Back || e.KeyCode == Keys.Delete)
+                {
+                    if (_replaceOnNextInput)
+                        _editText = "";
+                    else if (_editText.Length > 0)
+                        _editText = _editText.Substring(0, _editText.Length - 1);
+
+                    _replaceOnNextInput = false;
+                    Invalidate();
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                }
+                else if (e.KeyCode == Keys.Enter)
+                {
+                    CommitEditText();
+                    _replaceOnNextInput = true;
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                }
+                else if (e.KeyCode == Keys.Escape)
+                {
+                    _editText = FormatValue(_value);
+                    _replaceOnNextInput = true;
+                    Invalidate();
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                }
+
+                base.OnKeyDown(e);
+            }
+
+            protected override void OnKeyPress(KeyPressEventArgs e)
+            {
+                if (!Enabled)
+                {
+                    base.OnKeyPress(e);
+                    return;
+                }
+
+                string decimalSeparator =
+                    System.Globalization.CultureInfo.CurrentCulture.NumberFormat.NumberDecimalSeparator;
+                bool isDigit = char.IsDigit(e.KeyChar);
+                bool isDecimal =
+                    _decimalPlaces > 0 &&
+                    (e.KeyChar == '.' ||
+                     e.KeyChar == ',' ||
+                     e.KeyChar.ToString() == decimalSeparator);
+                bool isMinus = e.KeyChar == '-' && _minimum < 0M;
+
+                if (isDigit || isDecimal || isMinus)
+                {
+                    string input = isDecimal ? decimalSeparator : e.KeyChar.ToString();
+
+                    if (_replaceOnNextInput)
+                    {
+                        _editText = isDecimal ? "0" + decimalSeparator : input;
+                        _replaceOnNextInput = false;
+                    }
+                    else if (isDecimal)
+                    {
+                        if (!_editText.Contains(decimalSeparator))
+                            _editText += decimalSeparator;
+                    }
+                    else if (isMinus)
+                    {
+                        if (!_editText.StartsWith("-", StringComparison.Ordinal))
+                            _editText = "-" + _editText;
+                    }
+                    else
+                    {
+                        int separatorIndex = _editText.IndexOf(
+                            decimalSeparator,
+                            StringComparison.Ordinal);
+                        int decimalDigitCount = separatorIndex < 0
+                            ? 0
+                            : _editText.Length -
+                              separatorIndex -
+                              decimalSeparator.Length;
+
+                        if (separatorIndex < 0 ||
+                            decimalDigitCount < _decimalPlaces)
+                            _editText += input;
+                    }
+
+                    Invalidate();
+                    e.Handled = true;
+                    return;
+                }
+
+                base.OnKeyPress(e);
             }
 
             protected override void OnResize(EventArgs e)
             {
                 base.OnResize(e);
-                LayoutSpinnerOverlay();
                 Invalidate();
             }
 
             protected override void OnEnabledChanged(EventArgs e)
             {
                 base.OnEnabledChanged(e);
-                if (_spinnerOverlay != null)
-                    _spinnerOverlay.Enabled = Enabled;
+                Cursor = Enabled ? Cursors.IBeam : Cursors.Default;
                 Invalidate();
-            }
-
-            protected override void WndProc(ref Message m)
-            {
-                base.WndProc(ref m);
-
-                const int WM_PAINT = 0x000F;
-                const int WM_NCPAINT = 0x0085;
-                const int WM_PRINTCLIENT = 0x0318;
-
-                if (m.Msg == WM_PAINT || m.Msg == WM_NCPAINT || m.Msg == WM_PRINTCLIENT)
-                {
-                    PaintCustomOutline();
-                    EnsureSpinnerOverlay();
-                    LayoutSpinnerOverlay();
-                }
             }
 
             public void RefreshCustomButton()
             {
-                EnsureSpinnerOverlay();
-                LayoutSpinnerOverlay();
-                PaintCustomOutline();
+                Invalidate();
             }
 
-            private void EnsureSpinnerOverlay()
+            private string FormatValue(decimal value)
             {
-                if (!IsHandleCreated)
-                    return;
-
-                if (_spinnerOverlay == null || _spinnerOverlay.IsDisposed)
-                {
-                    _spinnerOverlay = new SpinnerOverlay(this);
-                    Controls.Add(_spinnerOverlay);
-                }
-
-                _spinnerOverlay.Enabled = Enabled;
-                _spinnerOverlay.BringToFront();
-                _spinnerOverlay.Invalidate();
+                return value.ToString(
+                    "F" + _decimalPlaces,
+                    System.Globalization.CultureInfo.CurrentCulture);
             }
 
-            private void LayoutSpinnerOverlay()
+            private void CommitEditText()
             {
-                if (_spinnerOverlay == null || _spinnerOverlay.IsDisposed)
-                    return;
+                decimal parsed;
+                string text = (_editText ?? "").Trim();
+                bool parsedOk = decimal.TryParse(
+                    text,
+                    System.Globalization.NumberStyles.Number,
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    out parsed);
 
-                int buttonWidth = Math.Max(18, SystemInformation.VerticalScrollBarWidth + 1);
-                _spinnerOverlay.Bounds = new System.Drawing.Rectangle(
-                    Width - buttonWidth - 1,
-                    1,
-                    buttonWidth,
-                    Math.Max(1, Height - 2));
-                _spinnerOverlay.BringToFront();
-            }
-
-            private void PaintCustomOutline()
-            {
-                try
+                if (!parsedOk)
                 {
-                    using (Graphics g = Graphics.FromHwnd(Handle))
-                    {
-                        g.SmoothingMode = SmoothingMode.None;
+                    string normalized = text.Replace(',', '.');
+                    parsedOk = decimal.TryParse(
+                        normalized,
+                        System.Globalization.NumberStyles.Number,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out parsed);
+                }
 
-                        using (Pen borderPen = new Pen(CustomBorderColor, 1f))
-                            g.DrawRectangle(borderPen, 0, 0, Width - 1, Height - 1);
-                    }
-                }
-                catch
-                {
-                }
+                if (parsedOk)
+                    Value = parsed;
+
+                _editText = FormatValue(_value);
+                Invalidate();
             }
 
             private void StepValue(bool up)
             {
-                try
-                {
-                    decimal next = up ? Value + Increment : Value - Increment;
-                    if (next > Maximum) next = Maximum;
-                    if (next < Minimum) next = Minimum;
-                    Value = next;
-                }
-                catch
-                {
-                }
+                CommitEditText();
+
+                decimal next = up ? Value + Increment : Value - Increment;
+                if (next > Maximum) next = Maximum;
+                if (next < Minimum) next = Minimum;
+                Value = next;
             }
 
             private static Color MixColor(Color a, Color b, double amount)
@@ -8877,141 +11163,215 @@ namespace TTSK_AutoDim_Plates
                 return Color.FromArgb(r, g, bl);
             }
 
-            private class SpinnerOverlay : Control
-            {
-                private readonly BorderNumericUpDown _owner;
-
-                public SpinnerOverlay(BorderNumericUpDown owner)
-                {
-                    _owner = owner;
-                    Cursor = Cursors.Hand;
-                    SetStyle(ControlStyles.UserPaint, true);
-                    SetStyle(ControlStyles.AllPaintingInWmPaint, true);
-                    SetStyle(ControlStyles.OptimizedDoubleBuffer, true);
-                    SetStyle(ControlStyles.ResizeRedraw, true);
-                }
-
-                protected override void OnMouseDown(MouseEventArgs e)
-                {
-                    base.OnMouseDown(e);
-                    if (_owner == null || !_owner.Enabled)
-                        return;
-
-                    _owner.Focus();
-                    _owner.StepValue(e.Y < Height / 2);
-                    Invalidate();
-                }
-
-                protected override void OnPaint(PaintEventArgs e)
-                {
-                    base.OnPaint(e);
-
-                    Color back = _owner.Enabled
-                        ? _owner.ButtonBackColor
-                        : MixColor(_owner.ButtonBackColor, Color.Gray, 0.25);
-
-                    Color border = _owner.Enabled
-                        ? _owner.ButtonBorderColor
-                        : MixColor(_owner.ButtonBorderColor, Color.Gray, 0.25);
-
-                    Color arrow = _owner.Enabled
-                        ? _owner.ArrowColor
-                        : Color.FromArgb(148, 163, 184);
-
-                    using (SolidBrush brush = new SolidBrush(back))
-                        e.Graphics.FillRectangle(brush, ClientRectangle);
-
-                    using (Pen pen = new Pen(border, 1f))
-                    {
-                        e.Graphics.DrawLine(pen, 0, 0, 0, Height - 1);
-                        e.Graphics.DrawLine(pen, 0, Height / 2, Width - 1, Height / 2);
-                        e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
-                    }
-
-                    // Chia nút spinner thành 2 ô bằng nhau để phần trên/dưới không bị lệch.
-                    int separatorY = Height / 2;
-                    int cx = Width / 2;
-                    int topCy = separatorY / 2;
-                    int bottomCy = separatorY + ((Height - separatorY) / 2);
-                    int arrowHalfWidth = 4;
-                    int arrowHalfHeight = 3;
-
-                    Point[] upArrow = new Point[]
-                    {
-                        new Point(cx - arrowHalfWidth, topCy + arrowHalfHeight / 2),
-                        new Point(cx + arrowHalfWidth, topCy + arrowHalfHeight / 2),
-                        new Point(cx, topCy - arrowHalfHeight)
-                    };
-
-                    Point[] downArrow = new Point[]
-                    {
-                        new Point(cx - arrowHalfWidth, bottomCy - arrowHalfHeight / 2),
-                        new Point(cx + arrowHalfWidth, bottomCy - arrowHalfHeight / 2),
-                        new Point(cx, bottomCy + arrowHalfHeight)
-                    };
-
-                    using (SolidBrush arrowBrush = new SolidBrush(arrow))
-                    {
-                        e.Graphics.FillPolygon(arrowBrush, upArrow);
-                        e.Graphics.FillPolygon(arrowBrush, downArrow);
-                    }
-                }
-            }
         }
 
 
-        private class BorderComboBox : ComboBox
+        private class BorderComboBox : Control
         {
             public Color CustomBorderColor { get; set; }
             public Color ButtonBackColor { get; set; }
             public Color ButtonBorderColor { get; set; }
             public Color ArrowColor { get; set; }
 
+            private readonly List<object> _items = new List<object>();
+            private int _selectedIndex = -1;
+            private ContextMenuStrip _dropDownMenu;
+            private bool _dropDownOpening;
+
+            public event EventHandler SelectedIndexChanged;
+
+            public List<object> Items
+            {
+                get { return _items; }
+            }
+
+            public int SelectedIndex
+            {
+                get { return _selectedIndex; }
+                set
+                {
+                    int next = value;
+                    if (next < -1) next = -1;
+                    if (next >= _items.Count) next = _items.Count - 1;
+                    if (_selectedIndex == next)
+                        return;
+
+                    _selectedIndex = next;
+                    Text = _selectedIndex >= 0
+                        ? Convert.ToString(_items[_selectedIndex])
+                        : "";
+                    Invalidate();
+
+                    if (SelectedIndexChanged != null)
+                        SelectedIndexChanged(this, EventArgs.Empty);
+                }
+            }
+
+            public ComboBoxStyle DropDownStyle { get; set; }
+
             public BorderComboBox()
             {
+                SetStyle(ControlStyles.UserPaint, true);
+                SetStyle(ControlStyles.AllPaintingInWmPaint, true);
+                SetStyle(ControlStyles.OptimizedDoubleBuffer, true);
+                SetStyle(ControlStyles.ResizeRedraw, true);
+                SetStyle(ControlStyles.SupportsTransparentBackColor, true);
+                SetStyle(ControlStyles.Selectable, true);
+
+                DoubleBuffered = true;
                 CustomBorderColor = Color.FromArgb(203, 213, 225);
                 ButtonBackColor = Color.FromArgb(248, 250, 252);
                 ButtonBorderColor = Color.FromArgb(203, 213, 225);
                 ArrowColor = Color.FromArgb(30, 58, 138);
-                FlatStyle = FlatStyle.Flat;
-                IntegralHeight = false;
-                DrawMode = DrawMode.OwnerDrawFixed;
+                BackColor = Color.White;
+                ForeColor = Color.FromArgb(30, 58, 138);
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold);
                 DropDownStyle = ComboBoxStyle.DropDownList;
+                Cursor = Cursors.Hand;
+                TabStop = true;
+                Size = new System.Drawing.Size(100, 28);
+                AccessibleRole = AccessibleRole.ComboBox;
             }
 
-            protected override void OnDrawItem(DrawItemEventArgs e)
+            protected override void OnPaintBackground(PaintEventArgs e)
             {
-                e.DrawBackground();
+                Color parentColor = Parent == null ? BackColor : Parent.BackColor;
+                using (SolidBrush brush = new SolidBrush(parentColor))
+                    e.Graphics.FillRectangle(brush, ClientRectangle);
+            }
 
-                if (e.Index >= 0 && e.Index < Items.Count)
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                base.OnPaint(e);
+
+                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                e.Graphics.PixelOffsetMode = PixelOffsetMode.Half;
+                e.Graphics.CompositingQuality = CompositingQuality.HighQuality;
+
+                RectangleF box = new RectangleF(
+                    1.0f,
+                    1.0f,
+                    Math.Max(1f, Width - 2f),
+                    Math.Max(1f, Height - 2f));
+
+                Color fill = Enabled
+                    ? BackColor
+                    : MixColor(BackColor, Color.Gray, 0.20);
+                Color border = Enabled
+                    ? CustomBorderColor
+                    : MixColor(CustomBorderColor, Color.Gray, 0.35);
+                Color textColor = Enabled
+                    ? ForeColor
+                    : Color.FromArgb(148, 163, 184);
+
+                float radius = Math.Min(7f, Math.Min(box.Width, box.Height) * 0.5f);
+                using (GraphicsPath path = RoundedRectF(box, radius))
+                using (SolidBrush fillBrush = new SolidBrush(fill))
                 {
-                    using (SolidBrush brush = new SolidBrush(ForeColor))
-                    using (StringFormat sf = new StringFormat())
+                    // Keep all inner painting inside the same rounded-control pass;
+                    // redraw the outer border last so corners cannot be covered.
+                    e.Graphics.FillPath(fillBrush, path);
+
+                    const int arrowAreaWidth = 20;
+                    float arrowLeft = Width - arrowAreaWidth - 1f;
+
+                    using (Pen separator = new Pen(Color.FromArgb(110, border), 1f))
+                        e.Graphics.DrawLine(
+                            separator,
+                            arrowLeft,
+                            6f,
+                            arrowLeft,
+                            Height - 6f);
+
+                    RectangleF textRect = new RectangleF(
+                        8f,
+                        0f,
+                        Math.Max(1f, arrowLeft - 12f),
+                        Height);
+
+                    using (SolidBrush textBrush = new SolidBrush(textColor))
+                    using (StringFormat format = new StringFormat())
                     {
-                        sf.LineAlignment = StringAlignment.Center;
-                        sf.Alignment = StringAlignment.Near;
-                        System.Drawing.Rectangle textRect = new System.Drawing.Rectangle(
-                            e.Bounds.Left + 4,
-                            e.Bounds.Top,
-                            e.Bounds.Width - 8,
-                            e.Bounds.Height);
-                        e.Graphics.DrawString(Items[e.Index].ToString(), Font, brush, textRect, sf);
+                        format.Alignment = StringAlignment.Near;
+                        format.LineAlignment = StringAlignment.Center;
+                        format.FormatFlags = StringFormatFlags.NoWrap;
+                        format.Trimming = StringTrimming.EllipsisCharacter;
+                        e.Graphics.DrawString(Text ?? "", Font, textBrush, textRect, format);
+                    }
+
+                    float arrowCenterX = arrowLeft + arrowAreaWidth * 0.5f;
+                    float arrowCenterY = Height * 0.5f + 1f;
+                    PointF[] arrow =
+                    {
+                        new PointF(arrowCenterX - 3.5f, arrowCenterY - 2f),
+                        new PointF(arrowCenterX + 3.5f, arrowCenterY - 2f),
+                        new PointF(arrowCenterX, arrowCenterY + 3f)
+                    };
+
+                    using (SolidBrush arrowBrush = new SolidBrush(
+                        Enabled ? ArrowColor : Color.FromArgb(148, 163, 184)))
+                        e.Graphics.FillPolygon(arrowBrush, arrow);
+
+                    using (Pen borderPen = new Pen(border, Focused ? 1.8f : 1.4f))
+                    {
+                        borderPen.LineJoin = LineJoin.Round;
+                        e.Graphics.DrawPath(borderPen, path);
                     }
                 }
-
-                e.DrawFocusRectangle();
             }
 
-            protected override void WndProc(ref Message m)
+            protected override bool IsInputKey(Keys keyData)
             {
-                base.WndProc(ref m);
+                Keys key = keyData & Keys.KeyCode;
+                if (key == Keys.Up || key == Keys.Down)
+                    return true;
 
-                const int WM_PAINT = 0x000F;
-                const int WM_NCPAINT = 0x0085;
-                const int WM_PRINTCLIENT = 0x0318;
+                return base.IsInputKey(keyData);
+            }
 
-                if (m.Msg == WM_PAINT || m.Msg == WM_NCPAINT || m.Msg == WM_PRINTCLIENT)
-                    PaintCustomOutline();
+            protected override void OnMouseDown(MouseEventArgs e)
+            {
+                base.OnMouseDown(e);
+                if (!Enabled)
+                    return;
+
+                Focus();
+            }
+
+            protected override void OnMouseUp(MouseEventArgs e)
+            {
+                base.OnMouseUp(e);
+                if (Enabled && e.Button == MouseButtons.Left)
+                    ShowDropDown();
+            }
+
+            protected override void OnKeyDown(KeyEventArgs e)
+            {
+                if (Enabled &&
+                    (e.KeyCode == Keys.Up || e.KeyCode == Keys.Down) &&
+                    _items.Count > 0)
+                {
+                    int next = _selectedIndex;
+                    if (e.KeyCode == Keys.Up)
+                        next = Math.Max(0, next - 1);
+                    else
+                        next = Math.Min(_items.Count - 1, next + 1);
+
+                    SelectedIndex = next;
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                }
+                else if (Enabled &&
+                         (e.KeyCode == Keys.Enter ||
+                          e.KeyCode == Keys.Space ||
+                          e.KeyCode == Keys.F4))
+                {
+                    ShowDropDown();
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                }
+
+                base.OnKeyDown(e);
             }
 
             protected override void OnResize(EventArgs e)
@@ -9026,53 +11386,120 @@ namespace TTSK_AutoDim_Plates
                 Invalidate();
             }
 
-            public void RefreshCustomButton()
+            protected override void OnEnter(EventArgs e)
             {
-                PaintCustomOutline();
+                base.OnEnter(e);
                 Invalidate();
             }
 
-            private void PaintCustomOutline()
+            protected override void OnLeave(EventArgs e)
             {
+                base.OnLeave(e);
+                Invalidate();
+            }
+
+            public void RefreshCustomButton()
+            {
+                Invalidate();
+            }
+
+            private void ShowDropDown()
+            {
+                if (_dropDownOpening ||
+                    _items.Count == 0 ||
+                    IsDisposed ||
+                    Disposing ||
+                    !IsHandleCreated)
+                    return;
+
+                EnsureDropDownMenu();
+                if (_dropDownMenu == null || _dropDownMenu.IsDisposed)
+                    return;
+
+                if (_dropDownMenu.Visible)
+                {
+                    _dropDownMenu.Close();
+                    return;
+                }
+
+                _dropDownOpening = true;
                 try
                 {
-                    using (Graphics g = Graphics.FromHwnd(Handle))
+                    _dropDownMenu.Show(this, new Point(0, Height + 1));
+                }
+                finally
+                {
+                    _dropDownOpening = false;
+                }
+            }
+
+            private void EnsureDropDownMenu()
+            {
+                if (_dropDownMenu == null || _dropDownMenu.IsDisposed)
+                {
+                    _dropDownMenu = new ContextMenuStrip();
+                    _dropDownMenu.ShowImageMargin = false;
+                    _dropDownMenu.ShowCheckMargin = false;
+                    _dropDownMenu.AutoSize = false;
+                    _dropDownMenu.Padding = new Padding(2);
+                    _dropDownMenu.Closed += delegate
                     {
-                        g.SmoothingMode = SmoothingMode.None;
+                        if (!IsDisposed)
+                            Invalidate();
+                    };
 
-                        int buttonWidth = Math.Max(22, SystemInformation.HorizontalScrollBarArrowWidth + 2);
-                        System.Drawing.Rectangle buttonRect = new System.Drawing.Rectangle(
-                            Width - buttonWidth - 1,
-                            1,
-                            buttonWidth,
-                            Height - 2);
-
-                        using (SolidBrush buttonBrush = new SolidBrush(ButtonBackColor))
-                            g.FillRectangle(buttonBrush, buttonRect);
-
-                        using (Pen borderPen = new Pen(CustomBorderColor, 1f))
+                    for (int i = 0; i < _items.Count; i++)
+                    {
+                        int index = i;
+                        ToolStripMenuItem item = new ToolStripMenuItem(
+                            Convert.ToString(_items[i]));
+                        item.AutoSize = false;
+                        item.Height = 28;
+                        item.Click += delegate
                         {
-                            g.DrawRectangle(borderPen, 0, 0, Width - 1, Height - 1);
-                            g.DrawLine(borderPen, buttonRect.Left, 1, buttonRect.Left, Height - 2);
-                        }
-
-                        int cx = buttonRect.Left + buttonRect.Width / 2;
-                        int cy = Height / 2 + 1;
-
-                        Point[] arrow = new Point[]
-                        {
-                            new Point(cx - 4, cy - 2),
-                            new Point(cx + 4, cy - 2),
-                            new Point(cx, cy + 3)
+                            SelectedIndex = index;
                         };
-
-                        using (SolidBrush arrowBrush = new SolidBrush(Enabled ? ArrowColor : Color.FromArgb(148, 163, 184)))
-                            g.FillPolygon(arrowBrush, arrow);
+                        _dropDownMenu.Items.Add(item);
                     }
                 }
-                catch
+
+                _dropDownMenu.Width = Width;
+                _dropDownMenu.Height = _dropDownMenu.Items.Count * 28 + 6;
+                _dropDownMenu.BackColor = BackColor;
+                _dropDownMenu.ForeColor = ForeColor;
+                _dropDownMenu.Font = Font;
+
+                foreach (ToolStripItem item in _dropDownMenu.Items)
                 {
+                    item.AutoSize = false;
+                    item.Width = Math.Max(1, Width - 6);
+                    item.Height = 28;
+                    item.BackColor = BackColor;
+                    item.ForeColor = ForeColor;
+                    item.Font = Font;
                 }
+            }
+
+            protected override void Dispose(bool disposing)
+            {
+                if (disposing && _dropDownMenu != null)
+                {
+                    _dropDownMenu.Dispose();
+                    _dropDownMenu = null;
+                }
+
+                base.Dispose(disposing);
+            }
+
+            private static Color MixColor(Color a, Color b, double amount)
+            {
+                if (amount < 0.0) amount = 0.0;
+                if (amount > 1.0) amount = 1.0;
+
+                return Color.FromArgb(
+                    (int)Math.Round(a.R + (b.R - a.R) * amount),
+                    (int)Math.Round(a.G + (b.G - a.G) * amount),
+                    (int)Math.Round(a.B + (b.B - a.B) * amount));
             }
         }
 

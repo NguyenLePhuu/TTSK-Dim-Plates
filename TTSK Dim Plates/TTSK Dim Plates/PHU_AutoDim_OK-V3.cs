@@ -37,6 +37,8 @@ namespace Tekla.Technology.Akit.UserScript
         // Tất cả dim thường dùng khoảng cách cố định 100mm tính từ mép tấm.
         // Không bù trừ theo chân dim.
         private const double NORMAL_NO_CHAMFER_DIM_OFFSET = 100.0;
+        private static double CurrentDimTierUnit =
+            NORMAL_NO_CHAMFER_DIM_OFFSET;
 
         private const double TOP_LENGTH_DIM_OFFSET = NORMAL_NO_CHAMFER_DIM_OFFSET;
         private const double TOP_THICKNESS_DIM_OFFSET = NORMAL_NO_CHAMFER_DIM_OFFSET;
@@ -175,6 +177,8 @@ namespace Tekla.Technology.Akit.UserScript
         #region 01 - MAIN RUN FLOW
         public static void Run(Tekla.Technology.Akit.IScript akit)
         {
+            CurrentDimTierUnit = NORMAL_NO_CHAMFER_DIM_OFFSET;
+
             DrawingHandler dh = new DrawingHandler();
             Drawing drawing = dh.GetActiveDrawing();
 
@@ -243,6 +247,8 @@ namespace Tekla.Technology.Akit.UserScript
 
                 SafeCommitAndWait(drawing, 350);
             }
+
+            InitializeCurrentDimTierSpacing(processedViews);
 
             // BƯỚC 4: Tạo DIM + move mark.
             // LƯU Ý: Không tự set RestrictionBox thủ công nữa để tránh văng khung tím/cut area.
@@ -555,14 +561,14 @@ namespace Tekla.Technology.Akit.UserScript
                     lengthDim.Add(new Point(min.X, max.Y, 0));
                     lengthDim.Add(new Point(max.X, max.Y, 0));
 
-                    if (handler.CreateDimensionSet(view, lengthDim, new Vector(0, 1, 0), TOP_LENGTH_DIM_OFFSET) != null)
+                    if (handler.CreateDimensionSet(view, lengthDim, new Vector(0, 1, 0), CurrentDimTierUnit) != null)
                         count++;
 
                     PointList thickDim = new PointList();
                     thickDim.Add(new Point(min.X, min.Y, 0));
                     thickDim.Add(new Point(min.X, max.Y, 0));
 
-                    if (handler.CreateDimensionSet(view, thickDim, new Vector(-1, 0, 0), TOP_THICKNESS_DIM_OFFSET) != null)
+                    if (handler.CreateDimensionSet(view, thickDim, new Vector(-1, 0, 0), CurrentDimTierUnit) != null)
                         count++;
 
                     double thinRadiusThickness =
@@ -1379,9 +1385,48 @@ namespace Tekla.Technology.Akit.UserScript
             // Tầng 1 = 100, tầng 2 = 200, tầng 3 = 300...
             // Hàm này chỉ quản lý khoảng cách tầng, không bù chamfer/notch/bounding box.
             if (tier <= 1)
-                return NORMAL_NO_CHAMFER_DIM_OFFSET;
+                return CurrentDimTierUnit;
 
-            return NORMAL_NO_CHAMFER_DIM_OFFSET * tier;
+            return CurrentDimTierUnit * tier;
+        }
+
+        private static void InitializeCurrentDimTierSpacing(List<View> views)
+        {
+            CurrentDimTierUnit = NORMAL_NO_CHAMFER_DIM_OFFSET;
+
+            double manualScale;
+            if (!TTSK_AutoDim_Plates.ManualDrawingScaleOverride.TryGet(
+                    out manualScale))
+                return;
+
+            bool actualScaleFound = false;
+            if (views != null)
+            {
+                foreach (View view in views)
+                {
+                    if (view == null)
+                        continue;
+
+                    double actualScale = GetViewScaleNumberForTitle3(view);
+                    if (actualScale <= 0.0)
+                        continue;
+
+                    actualScaleFound = true;
+                    if (Math.Abs(actualScale - manualScale) > 0.001)
+                    {
+                        throw new InvalidOperationException(
+                            "Không áp dụng được manual scale cho toàn bộ target view.");
+                    }
+                }
+            }
+
+            if (!actualScaleFound)
+            {
+                throw new InvalidOperationException(
+                    "Không đọc lại được manual scale sau CommitChanges.");
+            }
+
+            CurrentDimTierUnit = manualScale * 10.0;
         }
 
         private static List<List<Point>> SplitHoleGroupsByX(List<Point> holes)
@@ -5808,6 +5853,14 @@ namespace Tekla.Technology.Akit.UserScript
             {
                 if (model == null || drawing == null || part == null || view == null)
                     return;
+
+                double manualScale;
+                if (TTSK_AutoDim_Plates.ManualDrawingScaleOverride.TryGet(
+                        out manualScale))
+                {
+                    SetViewScale(view, manualScale);
+                    return;
+                }
 
                 double sheetWidth;
                 double sheetHeight;

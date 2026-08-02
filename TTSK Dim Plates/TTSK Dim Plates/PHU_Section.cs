@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
 using System.Threading;
@@ -41,9 +42,31 @@ namespace Tekla.Technology.Akit.UserScript
         private const double TOL = 1.0;
         private const double SECTION_B_EXTRA_DEPTH = 5.0;
         private const double SECTION_C_EXTRA_START = 3.0;
+        private const double SECTION_NOTCH_MIN_SIZE = 15.0;
+        private const double SECTION_NOTCH_MAX_SIZE = 250.0;
+        private const double SECTION_NOTCH_POINT_MERGE_TOL = 0.5;
+        private const int SECTION_NOTCH_MAX_GEOMETRY_ITEMS = 20000;
         private const double DEFAULT_SECTION_GAP = 55.0;
         private const bool SECTION_LINE_LEFT_TO_RIGHT = false;
         private const string SECTION_MARK_ATTRIBUTE_NAME = "GEO_SECTION";
+
+        public static bool EnableGeometryDiagnostics { get; set; }
+        public static string LastGeometryDiagnostic { get; private set; } = "";
+
+        private enum AutoSectionProfileKind
+        {
+            Unsupported,
+            ShapeIH,
+            ShapeCBracket,
+            ShapeCOrdinary
+        }
+
+        private enum COpeningSide
+        {
+            Unknown,
+            Left,
+            Right
+        }
 
         private struct SectionGeometry
         {
@@ -55,6 +78,60 @@ namespace Tekla.Technology.Akit.UserScript
             public Point CEnd;
             public double CDepthUp;
             public double CDepthDown;
+        }
+
+        private sealed class CFlangeGeometry
+        {
+            public double OuterTopY;
+            public double OuterBottomY;
+            public double InnerTopY;
+            public double InnerBottomY;
+            public COpeningSide OpeningSide = COpeningSide.Unknown;
+        }
+
+        private struct ProjectedInterval
+        {
+            public double Min;
+            public double Max;
+        }
+
+        private enum FrontNotchDetectionStatus
+        {
+            NotChecked,
+            NoNotch,
+            Found,
+            Failed
+        }
+
+        private sealed class FrontNotchGeometry
+        {
+            public FrontNotchDetectionStatus Status =
+                FrontNotchDetectionStatus.NotChecked;
+
+            public bool HasTopLeft;
+            public bool HasTopRight;
+            public bool HasBottomLeft;
+            public bool HasBottomRight;
+
+            public Point TopLeftOuter;
+            public Point TopLeftInner;
+            public Point TopRightOuter;
+            public Point TopRightInner;
+            public Point BottomLeftOuter;
+            public Point BottomLeftInner;
+            public Point BottomRightOuter;
+            public Point BottomRightInner;
+
+            public bool HasAnyTopNotch;
+            public bool HasAnyBottomNotch;
+            public double LowestTopNotchY;
+            public double HighestBottomNotchY;
+        }
+
+        private struct ProjectedFrontSegment
+        {
+            public Point Start;
+            public Point End;
         }
 
         private sealed class SectionAttributeSet
@@ -483,6 +560,26 @@ namespace Tekla.Technology.Akit.UserScript
             geometry = new SectionGeometry();
             message = "";
             TransformationPlane oldPlane = null;
+            ResetGeometryDiagnostic();
+
+            string profileText;
+            string normalizedProfile;
+            AutoSectionProfileKind profileKind;
+
+            if (!TryClassifyAutoSectionProfile(
+                part,
+                out profileText,
+                out normalizedProfile,
+                out profileKind,
+                out message))
+            {
+                AddGeometryDiagnostic("Profile classification failed: " + message);
+                return false;
+            }
+
+            AddGeometryDiagnostic("Profile=" + profileText);
+            AddGeometryDiagnostic("NormalizedProfile=" + normalizedProfile);
+            AddGeometryDiagnostic("ProfileKind=" + profileKind);
 
             try
             {
@@ -512,25 +609,152 @@ namespace Tekla.Technology.Akit.UserScript
                     return false;
                 }
 
-                double flangeThickness = GetFlangeThickness(part);
-                if (flangeThickness <= 0.0)
+                AddGeometryDiagnostic(
+                    "FrontExtents=" +
+                    FormatDiagnosticNumber(minX) + "," +
+                    FormatDiagnosticNumber(minY) + " -> " +
+                    FormatDiagnosticNumber(maxX) + "," +
+                    FormatDiagnosticNumber(maxY));
+
+                double legacyFlangeThickness = 0.0;
+                if (profileKind != AutoSectionProfileKind.ShapeCOrdinary)
                 {
-                    message = "Khong doc duoc do day canh cua profile I/H.";
-                    return false;
+                    // Preserve the established H/I and "[" read/check order.
+                    legacyFlangeThickness = GetFlangeThickness(part);
+                    if (legacyFlangeThickness <= 0.0)
+                    {
+                        message =
+                            profileKind == AutoSectionProfileKind.ShapeCBracket
+                                ? "Khong doc duoc do day canh cua profile Shape [."
+                                : "Khong doc duoc do day canh cua profile I/H.";
+                        AddGeometryDiagnostic(message);
+                        return false;
+                    }
+
+                    AddGeometryDiagnostic(
+                        "LegacyFlangeThickness=" +
+                        FormatDiagnosticNumber(legacyFlangeThickness));
                 }
 
-                double bCutY = maxY;
-                double cCutY = minY + flangeThickness + SECTION_C_EXTRA_START;
-                double bDepth = flangeThickness + SECTION_B_EXTRA_DEPTH;
-                double cDepth = cCutY - minY;
+                FrontNotchGeometry notchGeometry;
+                FrontNotchDetectionStatus notchStatus =
+                    TryGetFrontNotchGeometry(
+                        solid,
+                        minX,
+                        maxX,
+                        minY,
+                        maxY,
+                        out notchGeometry);
 
-                if (!IsFinite(bDepth) || !IsFinite(cDepth) ||
-                    bDepth <= TOL || cDepth <= TOL ||
-                    bDepth >= maxY - minY || cDepth >= maxY - minY)
+                AddGeometryDiagnostic("NotchStatus=" + notchStatus);
+
+                double bCutY;
+                double cCutY;
+                double bDepth;
+                double cDepth;
+
+                if (profileKind == AutoSectionProfileKind.ShapeCOrdinary)
                 {
-                    message = "Depth Section B/C tinh tu do day canh khong hop le.";
-                    return false;
+                    if (notchStatus == FrontNotchDetectionStatus.Failed ||
+                        notchStatus == FrontNotchDetectionStatus.NotChecked)
+                    {
+                        message =
+                            "Khong validate duoc notch cua Shape C thong thuong; " +
+                            "dung o Preflight.";
+                        AddGeometryDiagnostic(message);
+                        return false;
+                    }
+
+                    List<Point> projectedPoints;
+                    List<ProjectedFrontSegment> projectedSegments;
+                    if (!TryCollectProjectedFrontSolidGeometry(
+                        solid,
+                        out projectedPoints,
+                        out projectedSegments))
+                    {
+                        message =
+                            "Khong doc duoc canh Solid that cua Shape C trong FrontView.";
+                        AddGeometryDiagnostic(message);
+                        return false;
+                    }
+
+                    AddGeometryDiagnostic(
+                        "ProjectedGeometry points=" +
+                        projectedPoints.Count +
+                        " segments=" +
+                        projectedSegments.Count);
+
+                    CFlangeGeometry flangeGeometry;
+                    if (!TryResolveOrdinaryCFlangeGeometry(
+                        projectedSegments,
+                        minX,
+                        maxX,
+                        minY,
+                        maxY,
+                        out flangeGeometry,
+                        out message))
+                    {
+                        AddGeometryDiagnostic(message);
+                        return false;
+                    }
+
+                    AddGeometryDiagnostic(
+                        "COpeningSide=" + flangeGeometry.OpeningSide);
+                    AddGeometryDiagnostic(
+                        "CFlangeEdges outerTop=" +
+                        FormatDiagnosticNumber(flangeGeometry.OuterTopY) +
+                        " innerTop=" +
+                        FormatDiagnosticNumber(flangeGeometry.InnerTopY) +
+                        " innerBottom=" +
+                        FormatDiagnosticNumber(flangeGeometry.InnerBottomY) +
+                        " outerBottom=" +
+                        FormatDiagnosticNumber(flangeGeometry.OuterBottomY));
+
+                    if (!TryResolveOrdinaryCSectionDepthFromNotches(
+                        minY,
+                        maxY,
+                        flangeGeometry,
+                        notchStatus,
+                        notchGeometry,
+                        out bCutY,
+                        out bDepth,
+                        out cCutY,
+                        out cDepth,
+                        out message))
+                    {
+                        AddGeometryDiagnostic(message);
+                        return false;
+                    }
                 }
+                else
+                {
+                    if (!TryResolveSectionDepthFromNotches(
+                        minY,
+                        maxY,
+                        legacyFlangeThickness,
+                        notchStatus,
+                        notchGeometry,
+                        out bCutY,
+                        out bDepth,
+                        out cCutY,
+                        out cDepth,
+                        out message))
+                    {
+                        AddGeometryDiagnostic(message);
+                        return false;
+                    }
+                }
+
+                AddGeometryDiagnostic(
+                    "FinalSection B(cutY=" +
+                    FormatDiagnosticNumber(bCutY) +
+                    ",depth=" +
+                    FormatDiagnosticNumber(bDepth) +
+                    ") C(cutY=" +
+                    FormatDiagnosticNumber(cCutY) +
+                    ",depth=" +
+                    FormatDiagnosticNumber(cDepth) +
+                    ")");
 
                 Point bLeft = new Point(minX, bCutY, 0.0);
                 Point bRight = new Point(maxX, bCutY, 0.0);
@@ -562,6 +786,7 @@ namespace Tekla.Technology.Akit.UserScript
             catch (Exception ex)
             {
                 message = "Tinh geometry Section loi: " + ex.Message;
+                AddGeometryDiagnostic(message);
                 return false;
             }
             finally
@@ -575,6 +800,1498 @@ namespace Tekla.Technology.Akit.UserScript
                 {
                 }
             }
+        }
+
+        private static void ResetGeometryDiagnostic()
+        {
+            LastGeometryDiagnostic = "";
+        }
+
+        private static void AddGeometryDiagnostic(string text)
+        {
+            if (String.IsNullOrWhiteSpace(text))
+                return;
+
+            if (String.IsNullOrEmpty(LastGeometryDiagnostic))
+                LastGeometryDiagnostic = text;
+            else
+                LastGeometryDiagnostic += Environment.NewLine + text;
+
+            if (EnableGeometryDiagnostics)
+                Trace.WriteLine("[TTSK AutoSection] " + text);
+        }
+
+        private static string FormatDiagnosticNumber(double value)
+        {
+            return value.ToString("0.###", CultureInfo.InvariantCulture);
+        }
+
+        private static bool TryClassifyAutoSectionProfile(
+            ModelPart part,
+            out string profileText,
+            out string normalizedProfile,
+            out AutoSectionProfileKind kind,
+            out string message)
+        {
+            profileText = "";
+            normalizedProfile = "";
+            kind = AutoSectionProfileKind.Unsupported;
+            message = "";
+
+            if (part == null)
+            {
+                message = "Khong co ModelPart de nhan dien profile Auto Section.";
+                return false;
+            }
+
+            profileText = GetAutoSectionProfileText(part);
+            normalizedProfile = NormalizeAutoSectionProfileText(profileText);
+
+            if (String.IsNullOrEmpty(normalizedProfile))
+            {
+                message =
+                    "Khong doc duoc PROFILE hoac Profile.ProfileString de Auto Section.";
+                return false;
+            }
+
+            if (normalizedProfile.StartsWith("BH") ||
+                normalizedProfile.StartsWith("RH") ||
+                normalizedProfile.StartsWith("HM") ||
+                normalizedProfile.StartsWith("HN") ||
+                normalizedProfile.StartsWith("HW") ||
+                normalizedProfile.StartsWith("H") ||
+                normalizedProfile.StartsWith("I"))
+            {
+                kind = AutoSectionProfileKind.ShapeIH;
+                return true;
+            }
+
+            if (normalizedProfile.StartsWith("["))
+            {
+                kind = AutoSectionProfileKind.ShapeCBracket;
+                return true;
+            }
+
+            if (normalizedProfile.StartsWith("CH") ||
+                normalizedProfile.StartsWith("CHANNEL") ||
+                normalizedProfile.StartsWith("C"))
+            {
+                kind = AutoSectionProfileKind.ShapeCOrdinary;
+                return true;
+            }
+
+            message =
+                "Profile khong thuoc I/H, Shape [ hoac Shape C duoc Auto Section ho tro: " +
+                profileText;
+            return false;
+        }
+
+        private static string GetAutoSectionProfileText(ModelPart part)
+        {
+            try
+            {
+                string profile = "";
+                if (part != null &&
+                    part.GetReportProperty("PROFILE", ref profile) &&
+                    !String.IsNullOrWhiteSpace(profile))
+                    return profile.Trim();
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                if (part == null)
+                    return "";
+
+                PropertyInfo profileProperty = part.GetType().GetProperty(
+                    "Profile",
+                    BindingFlags.Public |
+                    BindingFlags.NonPublic |
+                    BindingFlags.Instance);
+
+                object profileObject = profileProperty != null &&
+                    profileProperty.CanRead
+                        ? profileProperty.GetValue(part, null)
+                        : null;
+
+                if (profileObject == null)
+                    return "";
+
+                PropertyInfo profileStringProperty =
+                    profileObject.GetType().GetProperty(
+                        "ProfileString",
+                        BindingFlags.Public |
+                        BindingFlags.NonPublic |
+                        BindingFlags.Instance);
+
+                object value = profileStringProperty != null &&
+                    profileStringProperty.CanRead
+                        ? profileStringProperty.GetValue(profileObject, null)
+                        : null;
+
+                return value != null ? value.ToString().Trim() : "";
+            }
+            catch
+            {
+                return "";
+            }
+        }
+
+        private static string NormalizeAutoSectionProfileText(string profile)
+        {
+            if (profile == null)
+                return "";
+
+            string normalized = profile.Trim().ToUpperInvariant();
+            normalized = normalized.Replace(" ", "");
+            normalized = normalized.Replace("-", "");
+            normalized = normalized.Replace("_", "");
+            normalized = normalized.Replace("*", "X");
+            return normalized;
+        }
+
+        private static bool TryResolveOrdinaryCFlangeGeometry(
+            List<ProjectedFrontSegment> segments,
+            double minX,
+            double maxX,
+            double minY,
+            double maxY,
+            out CFlangeGeometry geometry,
+            out string message)
+        {
+            geometry = null;
+            message = "";
+
+            try
+            {
+                if (segments == null || segments.Count < 4)
+                {
+                    message =
+                        "Shape C khong co du canh Solid that de tim hai mep trong.";
+                    return false;
+                }
+
+                double width = maxX - minX;
+                double height = maxY - minY;
+                double edgeTol = Math.Max(2.0, TOL + 1.0);
+
+                if (!IsFinite(width) || !IsFinite(height) ||
+                    width <= edgeTol || height <= edgeTol)
+                {
+                    message =
+                        "Extents Shape C khong hop le de phan tich mep canh.";
+                    return false;
+                }
+
+                List<double> horizontalLevels = new List<double>();
+
+                foreach (ProjectedFrontSegment segment in segments)
+                {
+                    if (segment.Start == null || segment.End == null)
+                        continue;
+
+                    double dx = Math.Abs(segment.End.X - segment.Start.X);
+                    double dy = Math.Abs(segment.End.Y - segment.Start.Y);
+
+                    if (dx <= edgeTol || dy > edgeTol)
+                        continue;
+
+                    double y = (segment.Start.Y + segment.End.Y) * 0.5;
+                    if (y <= minY + edgeTol || y >= maxY - edgeTol)
+                        continue;
+
+                    AddUniqueCoordinate(horizontalLevels, y, edgeTol);
+                }
+
+                double innerTopY;
+                double innerBottomY;
+                double topCoverage;
+                double bottomCoverage;
+
+                if (!TrySelectCFlangeInnerLevel(
+                    horizontalLevels,
+                    segments,
+                    minX,
+                    maxX,
+                    minY,
+                    maxY,
+                    true,
+                    edgeTol,
+                    out innerTopY,
+                    out topCoverage))
+                {
+                    message =
+                        "Khong tim duoc mep trong phia duoi cua canh tren Shape C.";
+                    return false;
+                }
+
+                if (!TrySelectCFlangeInnerLevel(
+                    horizontalLevels,
+                    segments,
+                    minX,
+                    maxX,
+                    minY,
+                    maxY,
+                    false,
+                    edgeTol,
+                    out innerBottomY,
+                    out bottomCoverage))
+                {
+                    message =
+                        "Khong tim duoc mep trong phia tren cua canh duoi Shape C.";
+                    return false;
+                }
+
+                double topFlangeDepth = maxY - innerTopY;
+                double bottomFlangeDepth = innerBottomY - minY;
+
+                if (!IsFinite(topFlangeDepth) ||
+                    !IsFinite(bottomFlangeDepth) ||
+                    topFlangeDepth <= TOL ||
+                    bottomFlangeDepth <= TOL ||
+                    topFlangeDepth >= height * 0.45 ||
+                    bottomFlangeDepth >= height * 0.45 ||
+                    innerTopY <= innerBottomY + edgeTol)
+                {
+                    message =
+                        "Hai mep trong Shape C khong tao thanh hai canh tren/duoi hop le.";
+                    return false;
+                }
+
+                double minimumCoverage = Math.Max(5.0, width * 0.15);
+                if (topCoverage < minimumCoverage ||
+                    bottomCoverage < minimumCoverage)
+                {
+                    message =
+                        "Do dai canh that tai hai mep trong Shape C khong du de validate.";
+                    return false;
+                }
+
+                geometry = new CFlangeGeometry();
+                geometry.OuterTopY = maxY;
+                geometry.OuterBottomY = minY;
+                geometry.InnerTopY = innerTopY;
+                geometry.InnerBottomY = innerBottomY;
+
+                COpeningSide openingSide;
+                if (!TryResolveOrdinaryCOpeningTopology(
+                    segments,
+                    minX,
+                    maxX,
+                    minY,
+                    maxY,
+                    edgeTol,
+                    out openingSide,
+                    out message))
+                {
+                    geometry = null;
+                    return false;
+                }
+
+                geometry.OpeningSide = openingSide;
+
+                AddGeometryDiagnostic(
+                    "CFlangeCoverage top=" +
+                    FormatDiagnosticNumber(topCoverage) +
+                    " bottom=" +
+                    FormatDiagnosticNumber(bottomCoverage));
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                message = "Phan tich mep canh Shape C loi: " + ex.Message;
+                return false;
+            }
+        }
+
+        private static void AddUniqueCoordinate(
+            List<double> values,
+            double value,
+            double tolerance)
+        {
+            if (values == null || !IsFinite(value))
+                return;
+
+            for (int i = 0; i < values.Count; i++)
+            {
+                if (Math.Abs(values[i] - value) <= tolerance)
+                {
+                    values[i] = (values[i] + value) * 0.5;
+                    return;
+                }
+            }
+
+            values.Add(value);
+        }
+
+        private static bool TrySelectCFlangeInnerLevel(
+            List<double> levels,
+            List<ProjectedFrontSegment> segments,
+            double minX,
+            double maxX,
+            double minY,
+            double maxY,
+            bool topSide,
+            double tolerance,
+            out double selectedY,
+            out double selectedCoverage)
+        {
+            selectedY = 0.0;
+            selectedCoverage = 0.0;
+
+            if (levels == null || levels.Count == 0)
+                return false;
+
+            double middleY = (minY + maxY) * 0.5;
+            double bestCoverage = 0.0;
+
+            foreach (double y in levels)
+            {
+                if ((topSide && y <= middleY + tolerance) ||
+                    (!topSide && y >= middleY - tolerance))
+                    continue;
+
+                double coverage = GetHorizontalCoverageAtY(
+                    segments,
+                    y,
+                    minX,
+                    maxX,
+                    tolerance);
+
+                if (coverage > bestCoverage)
+                    bestCoverage = coverage;
+            }
+
+            if (bestCoverage <= TOL)
+                return false;
+
+            double minimumCoverage = Math.Max(
+                Math.Max(5.0, (maxX - minX) * 0.15),
+                bestCoverage * 0.70);
+            bool found = false;
+
+            foreach (double y in levels)
+            {
+                if ((topSide && y <= middleY + tolerance) ||
+                    (!topSide && y >= middleY - tolerance))
+                    continue;
+
+                double coverage = GetHorizontalCoverageAtY(
+                    segments,
+                    y,
+                    minX,
+                    maxX,
+                    tolerance);
+
+                if (coverage < minimumCoverage)
+                    continue;
+
+                if (!found ||
+                    (topSide && y > selectedY) ||
+                    (!topSide && y < selectedY))
+                {
+                    selectedY = y;
+                    selectedCoverage = coverage;
+                    found = true;
+                }
+            }
+
+            return found;
+        }
+
+        private static double GetHorizontalCoverageAtY(
+            List<ProjectedFrontSegment> segments,
+            double targetY,
+            double minX,
+            double maxX,
+            double tolerance)
+        {
+            List<ProjectedInterval> intervals = new List<ProjectedInterval>();
+
+            if (segments == null)
+                return 0.0;
+
+            foreach (ProjectedFrontSegment segment in segments)
+            {
+                if (segment.Start == null || segment.End == null)
+                    continue;
+
+                double dx = Math.Abs(segment.End.X - segment.Start.X);
+                double dy = Math.Abs(segment.End.Y - segment.Start.Y);
+                double y = (segment.Start.Y + segment.End.Y) * 0.5;
+
+                if (dx <= tolerance ||
+                    dy > tolerance ||
+                    Math.Abs(y - targetY) > tolerance)
+                    continue;
+
+                ProjectedInterval interval = new ProjectedInterval();
+                interval.Min = Math.Max(
+                    minX,
+                    Math.Min(segment.Start.X, segment.End.X));
+                interval.Max = Math.Min(
+                    maxX,
+                    Math.Max(segment.Start.X, segment.End.X));
+
+                if (interval.Max - interval.Min > TOL)
+                    intervals.Add(interval);
+            }
+
+            return GetMergedIntervalCoverage(intervals, tolerance);
+        }
+
+        private static double GetVerticalCoverageAtX(
+            List<ProjectedFrontSegment> segments,
+            double targetX,
+            double minY,
+            double maxY,
+            double tolerance)
+        {
+            List<ProjectedInterval> intervals = new List<ProjectedInterval>();
+
+            if (segments == null)
+                return 0.0;
+
+            foreach (ProjectedFrontSegment segment in segments)
+            {
+                if (segment.Start == null || segment.End == null)
+                    continue;
+
+                double dx = Math.Abs(segment.End.X - segment.Start.X);
+                double dy = Math.Abs(segment.End.Y - segment.Start.Y);
+                double x = (segment.Start.X + segment.End.X) * 0.5;
+
+                if (dy <= tolerance ||
+                    dx > tolerance ||
+                    Math.Abs(x - targetX) > tolerance)
+                    continue;
+
+                ProjectedInterval interval = new ProjectedInterval();
+                interval.Min = Math.Max(
+                    minY,
+                    Math.Min(segment.Start.Y, segment.End.Y));
+                interval.Max = Math.Min(
+                    maxY,
+                    Math.Max(segment.Start.Y, segment.End.Y));
+
+                if (interval.Max - interval.Min > TOL)
+                    intervals.Add(interval);
+            }
+
+            return GetMergedIntervalCoverage(intervals, tolerance);
+        }
+
+        private static double GetMergedIntervalCoverage(
+            List<ProjectedInterval> intervals,
+            double tolerance)
+        {
+            if (intervals == null || intervals.Count == 0)
+                return 0.0;
+
+            intervals.Sort(delegate (
+                ProjectedInterval first,
+                ProjectedInterval second)
+            {
+                return first.Min.CompareTo(second.Min);
+            });
+
+            double coverage = 0.0;
+            double currentMin = intervals[0].Min;
+            double currentMax = intervals[0].Max;
+
+            for (int i = 1; i < intervals.Count; i++)
+            {
+                ProjectedInterval interval = intervals[i];
+                if (interval.Min <= currentMax + tolerance)
+                {
+                    currentMax = Math.Max(currentMax, interval.Max);
+                }
+                else
+                {
+                    coverage += Math.Max(0.0, currentMax - currentMin);
+                    currentMin = interval.Min;
+                    currentMax = interval.Max;
+                }
+            }
+
+            coverage += Math.Max(0.0, currentMax - currentMin);
+            return coverage;
+        }
+
+        private static bool TryResolveOrdinaryCOpeningTopology(
+            List<ProjectedFrontSegment> segments,
+            double minX,
+            double maxX,
+            double minY,
+            double maxY,
+            double edgeTolerance,
+            out COpeningSide openingSide,
+            out string message)
+        {
+            openingSide = COpeningSide.Unknown;
+            message = "";
+
+            double sideTolerance = Math.Max(
+                edgeTolerance,
+                (maxX - minX) * 0.03);
+            double leftCoverage = GetVerticalCoverageAtX(
+                segments,
+                minX,
+                minY,
+                maxY,
+                sideTolerance);
+            double rightCoverage = GetVerticalCoverageAtX(
+                segments,
+                maxX,
+                minY,
+                maxY,
+                sideTolerance);
+            double minimumDifference = Math.Max(
+                2.0,
+                (maxY - minY) * 0.05);
+
+            AddGeometryDiagnostic(
+                "CVerticalCoverage left=" +
+                FormatDiagnosticNumber(leftCoverage) +
+                " right=" +
+                FormatDiagnosticNumber(rightCoverage));
+
+            if (leftCoverage + minimumDifference < rightCoverage)
+                openingSide = COpeningSide.Left;
+            else if (rightCoverage + minimumDifference < leftCoverage)
+                openingSide = COpeningSide.Right;
+            else
+                openingSide = COpeningSide.Unknown;
+
+            double partHeight = maxY - minY;
+            double middleY = (minY + maxY) * 0.5;
+            double leftLowerCoverage = GetVerticalCoverageAtX(
+                segments,
+                minX,
+                minY,
+                middleY,
+                sideTolerance);
+            double leftUpperCoverage = GetVerticalCoverageAtX(
+                segments,
+                minX,
+                middleY,
+                maxY,
+                sideTolerance);
+            double rightLowerCoverage = GetVerticalCoverageAtX(
+                segments,
+                maxX,
+                minY,
+                middleY,
+                sideTolerance);
+            double rightUpperCoverage = GetVerticalCoverageAtX(
+                segments,
+                maxX,
+                middleY,
+                maxY,
+                sideTolerance);
+
+            AddGeometryDiagnostic(
+                "CSplitCoverage left(lower=" +
+                FormatDiagnosticNumber(leftLowerCoverage) +
+                ",upper=" +
+                FormatDiagnosticNumber(leftUpperCoverage) +
+                ") right(lower=" +
+                FormatDiagnosticNumber(rightLowerCoverage) +
+                ",upper=" +
+                FormatDiagnosticNumber(rightUpperCoverage) +
+                ")");
+
+            if (Math.Max(leftCoverage, rightCoverage) >= partHeight * 0.75)
+            {
+                message =
+                    "Hinh hoc C co canh dung lien tuc gan het chieu cao; " +
+                    "khong du chac chan de xu ly nhu C thong thuong thay vi Shape [.";
+                return false;
+            }
+
+            double minimumHalfCoverage = Math.Max(2.0, partHeight * 0.01);
+            bool hasLeftSplit =
+                leftLowerCoverage >= minimumHalfCoverage &&
+                leftUpperCoverage >= minimumHalfCoverage;
+            bool hasRightSplit =
+                rightLowerCoverage >= minimumHalfCoverage &&
+                rightUpperCoverage >= minimumHalfCoverage;
+
+            if (!hasLeftSplit && !hasRightSplit)
+            {
+                message =
+                    "Hinh hoc C khong co du hai doan canh dung tren/duoi " +
+                    "de xac nhan C thong thuong.";
+                return false;
+            }
+
+            return true;
+        }
+
+        private static FrontNotchDetectionStatus TryGetFrontNotchGeometry(
+            Solid solid,
+            double minX,
+            double maxX,
+            double minY,
+            double maxY,
+            out FrontNotchGeometry geometry)
+        {
+            geometry = new FrontNotchGeometry();
+
+            try
+            {
+                List<Point> points;
+                List<ProjectedFrontSegment> segments;
+
+                if (!TryCollectProjectedFrontSolidGeometry(
+                    solid,
+                    out points,
+                    out segments))
+                {
+                    geometry.Status = FrontNotchDetectionStatus.Failed;
+                    return geometry.Status;
+                }
+
+                geometry.Status = TryDetectFrontCornerNotches(
+                    points,
+                    segments,
+                    minX,
+                    maxX,
+                    minY,
+                    maxY,
+                    geometry);
+
+                return geometry.Status;
+            }
+            catch
+            {
+                geometry.Status = FrontNotchDetectionStatus.Failed;
+                return geometry.Status;
+            }
+        }
+
+        private static bool TryCollectProjectedFrontSolidGeometry(
+            Solid solid,
+            out List<Point> points,
+            out List<ProjectedFrontSegment> segments)
+        {
+            points = new List<Point>();
+            segments = new List<ProjectedFrontSegment>();
+
+            if (solid == null)
+                return false;
+
+            int geometryItemCount = 0;
+
+            try
+            {
+                Tekla.Structures.Solid.FaceEnumerator faces =
+                    solid.GetFaceEnumerator();
+
+                while (faces != null && faces.MoveNext())
+                {
+                    geometryItemCount++;
+                    if (geometryItemCount > SECTION_NOTCH_MAX_GEOMETRY_ITEMS)
+                        return false;
+
+                    Tekla.Structures.Solid.Face face = faces.Current;
+                    if (face == null)
+                        continue;
+
+                    Tekla.Structures.Solid.LoopEnumerator loops =
+                        face.GetLoopEnumerator();
+
+                    while (loops != null && loops.MoveNext())
+                    {
+                        geometryItemCount++;
+                        if (geometryItemCount > SECTION_NOTCH_MAX_GEOMETRY_ITEMS)
+                            return false;
+
+                        Tekla.Structures.Solid.Loop loop = loops.Current;
+                        if (loop == null)
+                            continue;
+
+                        Tekla.Structures.Solid.VertexEnumerator vertices =
+                            loop.GetVertexEnumerator();
+
+                        while (vertices != null && vertices.MoveNext())
+                        {
+                            geometryItemCount++;
+                            if (geometryItemCount > SECTION_NOTCH_MAX_GEOMETRY_ITEMS)
+                                return false;
+
+                            if (!TryAddUniqueProjectedPoint(
+                                points,
+                                vertices.Current))
+                                return false;
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                points.Clear();
+            }
+
+            try
+            {
+                Tekla.Structures.Solid.EdgeEnumerator edges =
+                    solid.GetEdgeEnumerator();
+
+                while (edges != null && edges.MoveNext())
+                {
+                    geometryItemCount++;
+                    if (geometryItemCount > SECTION_NOTCH_MAX_GEOMETRY_ITEMS)
+                        return false;
+
+                    Tekla.Structures.Solid.Edge edge =
+                        edges.Current as Tekla.Structures.Solid.Edge;
+
+                    if (edge == null ||
+                        edge.StartPoint == null ||
+                        edge.EndPoint == null)
+                        continue;
+
+                    Point start = new Point(
+                        edge.StartPoint.X,
+                        edge.StartPoint.Y,
+                        0.0);
+                    Point end = new Point(
+                        edge.EndPoint.X,
+                        edge.EndPoint.Y,
+                        0.0);
+
+                    if (!TryAddUniqueProjectedPoint(points, start) ||
+                        !TryAddUniqueProjectedPoint(points, end) ||
+                        !TryAddUniqueProjectedSegment(segments, start, end))
+                        return false;
+                }
+            }
+            catch
+            {
+                return false;
+            }
+
+            return points.Count >= 4 && segments.Count >= 4;
+        }
+
+        private static bool TryAddUniqueProjectedPoint(
+            List<Point> points,
+            Point point)
+        {
+            if (points == null)
+                return false;
+
+            if (point == null ||
+                !IsFinite(point.X) ||
+                !IsFinite(point.Y))
+                return true;
+
+            foreach (Point current in points)
+            {
+                if (AreProjectedPointsNear(
+                    current,
+                    point,
+                    SECTION_NOTCH_POINT_MERGE_TOL))
+                    return true;
+            }
+
+            if (points.Count >= SECTION_NOTCH_MAX_GEOMETRY_ITEMS)
+                return false;
+
+            points.Add(new Point(point.X, point.Y, 0.0));
+            return true;
+        }
+
+        private static bool TryAddUniqueProjectedSegment(
+            List<ProjectedFrontSegment> segments,
+            Point start,
+            Point end)
+        {
+            if (segments == null || start == null || end == null)
+                return false;
+
+            if (!IsFinite(start.X) || !IsFinite(start.Y) ||
+                !IsFinite(end.X) || !IsFinite(end.Y))
+                return true;
+
+            if (AreProjectedPointsNear(
+                start,
+                end,
+                SECTION_NOTCH_POINT_MERGE_TOL))
+                return true;
+
+            foreach (ProjectedFrontSegment current in segments)
+            {
+                bool sameDirection =
+                    AreProjectedPointsNear(
+                        current.Start,
+                        start,
+                        SECTION_NOTCH_POINT_MERGE_TOL) &&
+                    AreProjectedPointsNear(
+                        current.End,
+                        end,
+                        SECTION_NOTCH_POINT_MERGE_TOL);
+
+                bool oppositeDirection =
+                    AreProjectedPointsNear(
+                        current.Start,
+                        end,
+                        SECTION_NOTCH_POINT_MERGE_TOL) &&
+                    AreProjectedPointsNear(
+                        current.End,
+                        start,
+                        SECTION_NOTCH_POINT_MERGE_TOL);
+
+                if (sameDirection || oppositeDirection)
+                    return true;
+            }
+
+            if (segments.Count >= SECTION_NOTCH_MAX_GEOMETRY_ITEMS)
+                return false;
+
+            ProjectedFrontSegment segment = new ProjectedFrontSegment();
+            segment.Start = new Point(start.X, start.Y, 0.0);
+            segment.End = new Point(end.X, end.Y, 0.0);
+            segments.Add(segment);
+            return true;
+        }
+
+        private static bool AreProjectedPointsNear(
+            Point first,
+            Point second,
+            double tolerance)
+        {
+            return first != null &&
+                   second != null &&
+                   Math.Abs(first.X - second.X) <= tolerance &&
+                   Math.Abs(first.Y - second.Y) <= tolerance;
+        }
+
+        private static FrontNotchDetectionStatus TryDetectFrontCornerNotches(
+            List<Point> points,
+            List<ProjectedFrontSegment> segments,
+            double minX,
+            double maxX,
+            double minY,
+            double maxY,
+            FrontNotchGeometry geometry)
+        {
+            try
+            {
+                if (geometry == null ||
+                    points == null ||
+                    segments == null ||
+                    points.Count < 4 ||
+                    segments.Count < 4)
+                    return FrontNotchDetectionStatus.Failed;
+
+                geometry.HasTopLeft = TryDetectOneFrontCornerNotch(
+                    points,
+                    segments,
+                    minX,
+                    maxX,
+                    minY,
+                    maxY,
+                    true,
+                    true,
+                    out geometry.TopLeftOuter,
+                    out geometry.TopLeftInner);
+
+                geometry.HasTopRight = TryDetectOneFrontCornerNotch(
+                    points,
+                    segments,
+                    minX,
+                    maxX,
+                    minY,
+                    maxY,
+                    false,
+                    true,
+                    out geometry.TopRightOuter,
+                    out geometry.TopRightInner);
+
+                geometry.HasBottomLeft = TryDetectOneFrontCornerNotch(
+                    points,
+                    segments,
+                    minX,
+                    maxX,
+                    minY,
+                    maxY,
+                    true,
+                    false,
+                    out geometry.BottomLeftOuter,
+                    out geometry.BottomLeftInner);
+
+                geometry.HasBottomRight = TryDetectOneFrontCornerNotch(
+                    points,
+                    segments,
+                    minX,
+                    maxX,
+                    minY,
+                    maxY,
+                    false,
+                    false,
+                    out geometry.BottomRightOuter,
+                    out geometry.BottomRightInner);
+
+                geometry.HasAnyTopNotch =
+                    geometry.HasTopLeft || geometry.HasTopRight;
+                geometry.HasAnyBottomNotch =
+                    geometry.HasBottomLeft || geometry.HasBottomRight;
+
+                geometry.LowestTopNotchY = double.MaxValue;
+                if (geometry.HasTopLeft)
+                {
+                    geometry.LowestTopNotchY = Math.Min(
+                        geometry.LowestTopNotchY,
+                        geometry.TopLeftOuter.Y);
+                }
+                if (geometry.HasTopRight)
+                {
+                    geometry.LowestTopNotchY = Math.Min(
+                        geometry.LowestTopNotchY,
+                        geometry.TopRightOuter.Y);
+                }
+
+                geometry.HighestBottomNotchY = double.MinValue;
+                if (geometry.HasBottomLeft)
+                {
+                    geometry.HighestBottomNotchY = Math.Max(
+                        geometry.HighestBottomNotchY,
+                        geometry.BottomLeftOuter.Y);
+                }
+                if (geometry.HasBottomRight)
+                {
+                    geometry.HighestBottomNotchY = Math.Max(
+                        geometry.HighestBottomNotchY,
+                        geometry.BottomRightOuter.Y);
+                }
+
+                return geometry.HasAnyTopNotch ||
+                       geometry.HasAnyBottomNotch
+                    ? FrontNotchDetectionStatus.Found
+                    : FrontNotchDetectionStatus.NoNotch;
+            }
+            catch
+            {
+                return FrontNotchDetectionStatus.Failed;
+            }
+        }
+
+        private static bool TryDetectOneFrontCornerNotch(
+            List<Point> points,
+            List<ProjectedFrontSegment> segments,
+            double minX,
+            double maxX,
+            double minY,
+            double maxY,
+            bool leftSide,
+            bool topSide,
+            out Point outer,
+            out Point inner)
+        {
+            outer = null;
+            inner = null;
+
+            double edgeTol = Math.Max(2.0, TOL + 1.0);
+
+            foreach (Point point in points)
+            {
+                if (point == null)
+                    continue;
+
+                bool onSideEdge = leftSide
+                    ? Math.Abs(point.X - minX) <= edgeTol
+                    : Math.Abs(point.X - maxX) <= edgeTol;
+
+                bool inVerticalCornerBand = topSide
+                    ? point.Y < maxY - edgeTol &&
+                      point.Y >= maxY - SECTION_NOTCH_MAX_SIZE
+                    : point.Y > minY + edgeTol &&
+                      point.Y <= minY + SECTION_NOTCH_MAX_SIZE;
+
+                if (onSideEdge && inVerticalCornerBand)
+                {
+                    if (outer == null ||
+                        (topSide && point.Y > outer.Y) ||
+                        (!topSide && point.Y < outer.Y))
+                    {
+                        outer = new Point(point.X, point.Y, 0.0);
+                    }
+                }
+
+                bool onHorizontalEdge = topSide
+                    ? Math.Abs(point.Y - maxY) <= edgeTol
+                    : Math.Abs(point.Y - minY) <= edgeTol;
+
+                bool inHorizontalCornerBand = leftSide
+                    ? point.X > minX + edgeTol &&
+                      point.X <= minX + SECTION_NOTCH_MAX_SIZE
+                    : point.X < maxX - edgeTol &&
+                      point.X >= maxX - SECTION_NOTCH_MAX_SIZE;
+
+                if (onHorizontalEdge && inHorizontalCornerBand)
+                {
+                    if (inner == null ||
+                        (leftSide && point.X > inner.X) ||
+                        (!leftSide && point.X < inner.X))
+                    {
+                        inner = new Point(point.X, point.Y, 0.0);
+                    }
+                }
+            }
+
+            if (outer == null || inner == null)
+                return false;
+
+            if ((leftSide && inner.X >= maxX - edgeTol) ||
+                (!leftSide && inner.X <= minX + edgeTol))
+                return false;
+
+            double width = leftSide
+                ? Math.Abs(inner.X - minX)
+                : Math.Abs(maxX - inner.X);
+            double depth = topSide
+                ? Math.Abs(maxY - outer.Y)
+                : Math.Abs(outer.Y - minY);
+
+            if (width < SECTION_NOTCH_MIN_SIZE ||
+                depth < SECTION_NOTCH_MIN_SIZE ||
+                width > SECTION_NOTCH_MAX_SIZE ||
+                depth > SECTION_NOTCH_MAX_SIZE)
+                return false;
+
+            if (!HasAxisAlignedNotchEvidence(
+                segments,
+                outer,
+                inner,
+                edgeTol))
+                return false;
+
+            return true;
+        }
+
+        private static bool HasAxisAlignedNotchEvidence(
+            List<ProjectedFrontSegment> segments,
+            Point outer,
+            Point inner,
+            double edgeTol)
+        {
+            bool hasHorizontalLeg = false;
+            bool hasVerticalLeg = false;
+            bool hasDirectDiagonal = false;
+
+            double minCornerX = Math.Min(outer.X, inner.X) - edgeTol;
+            double maxCornerX = Math.Max(outer.X, inner.X) + edgeTol;
+            double minCornerY = Math.Min(outer.Y, inner.Y) - edgeTol;
+            double maxCornerY = Math.Max(outer.Y, inner.Y) + edgeTol;
+
+            foreach (ProjectedFrontSegment segment in segments)
+            {
+                Point start = segment.Start;
+                Point end = segment.End;
+                if (start == null || end == null)
+                    continue;
+
+                double dx = Math.Abs(end.X - start.X);
+                double dy = Math.Abs(end.Y - start.Y);
+
+                bool joinsOuterAndInner =
+                    (AreProjectedPointsNear(start, outer, edgeTol) &&
+                     AreProjectedPointsNear(end, inner, edgeTol)) ||
+                    (AreProjectedPointsNear(start, inner, edgeTol) &&
+                     AreProjectedPointsNear(end, outer, edgeTol));
+
+                if (joinsOuterAndInner && dx > edgeTol && dy > edgeTol)
+                    hasDirectDiagonal = true;
+
+                double segmentMinX = Math.Min(start.X, end.X);
+                double segmentMaxX = Math.Max(start.X, end.X);
+                double segmentMinY = Math.Min(start.Y, end.Y);
+                double segmentMaxY = Math.Max(start.Y, end.Y);
+
+                if (dx > SECTION_NOTCH_POINT_MERGE_TOL &&
+                    dy <= edgeTol &&
+                    Math.Abs((start.Y + end.Y) * 0.5 - outer.Y) <= edgeTol &&
+                    segmentMaxX >= minCornerX &&
+                    segmentMinX <= maxCornerX)
+                {
+                    hasHorizontalLeg = true;
+                }
+
+                if (dy > SECTION_NOTCH_POINT_MERGE_TOL &&
+                    dx <= edgeTol &&
+                    Math.Abs((start.X + end.X) * 0.5 - inner.X) <= edgeTol &&
+                    segmentMaxY >= minCornerY &&
+                    segmentMinY <= maxCornerY)
+                {
+                    hasVerticalLeg = true;
+                }
+            }
+
+            return hasHorizontalLeg &&
+                   hasVerticalLeg &&
+                   !hasDirectDiagonal;
+        }
+
+        private static bool TryResolveSectionDepthFromNotches(
+            double minY,
+            double maxY,
+            double flangeThickness,
+            FrontNotchDetectionStatus notchStatus,
+            FrontNotchGeometry notchGeometry,
+            out double bCutY,
+            out double bDepth,
+            out double cCutY,
+            out double cDepth,
+            out string message)
+        {
+            message = "";
+            bCutY = maxY;
+            bDepth = flangeThickness + SECTION_B_EXTRA_DEPTH;
+            cCutY = minY + flangeThickness + SECTION_C_EXTRA_START;
+            cDepth = cCutY - minY;
+
+            bool hasTopNotch =
+                notchStatus == FrontNotchDetectionStatus.Found &&
+                notchGeometry != null &&
+                notchGeometry.HasAnyTopNotch;
+            bool hasBottomNotch =
+                notchStatus == FrontNotchDetectionStatus.Found &&
+                notchGeometry != null &&
+                notchGeometry.HasAnyBottomNotch;
+
+            if (hasTopNotch)
+            {
+                bDepth =
+                    maxY -
+                    notchGeometry.LowestTopNotchY +
+                    SECTION_B_EXTRA_DEPTH;
+            }
+
+            if (hasBottomNotch)
+            {
+                cCutY =
+                    notchGeometry.HighestBottomNotchY +
+                    SECTION_C_EXTRA_START;
+                cDepth = cCutY - minY;
+            }
+
+            return ValidateResolvedSectionGeometry(
+                minY,
+                maxY,
+                bCutY,
+                bDepth,
+                cCutY,
+                cDepth,
+                hasTopNotch,
+                hasBottomNotch,
+                notchGeometry,
+                out message);
+        }
+
+        private static bool TryResolveOrdinaryCSectionDepthFromNotches(
+            double minY,
+            double maxY,
+            CFlangeGeometry flangeGeometry,
+            FrontNotchDetectionStatus notchStatus,
+            FrontNotchGeometry notchGeometry,
+            out double bCutY,
+            out double bDepth,
+            out double cCutY,
+            out double cDepth,
+            out string message)
+        {
+            message = "";
+            bCutY = 0.0;
+            bDepth = 0.0;
+            cCutY = 0.0;
+            cDepth = 0.0;
+
+            if (flangeGeometry == null)
+            {
+                message = "Thieu geometry hai mep canh Shape C.";
+                return false;
+            }
+
+            bCutY = flangeGeometry.OuterTopY;
+            bDepth =
+                flangeGeometry.OuterTopY -
+                flangeGeometry.InnerTopY +
+                SECTION_B_EXTRA_DEPTH;
+            cCutY =
+                flangeGeometry.InnerBottomY +
+                SECTION_C_EXTRA_START;
+            cDepth = cCutY - flangeGeometry.OuterBottomY;
+
+            double baseBDepth = bDepth;
+            double baseCCutY = cCutY;
+            bool hasTopNotch =
+                notchStatus == FrontNotchDetectionStatus.Found &&
+                notchGeometry != null &&
+                notchGeometry.HasAnyTopNotch;
+            bool hasBottomNotch =
+                notchStatus == FrontNotchDetectionStatus.Found &&
+                notchGeometry != null &&
+                notchGeometry.HasAnyBottomNotch;
+
+            if (hasTopNotch)
+            {
+                double notchBDepth =
+                    maxY -
+                    notchGeometry.LowestTopNotchY +
+                    SECTION_B_EXTRA_DEPTH;
+                bDepth = Math.Max(baseBDepth, notchBDepth);
+                AddGeometryDiagnostic(
+                    "TopLimit flange=" +
+                    FormatDiagnosticNumber(baseBDepth) +
+                    " notch=" +
+                    FormatDiagnosticNumber(notchBDepth));
+            }
+            else
+            {
+                AddGeometryDiagnostic(
+                    "TopLimit flange=" +
+                    FormatDiagnosticNumber(baseBDepth) +
+                    " notch=none");
+            }
+
+            if (hasBottomNotch)
+            {
+                double notchCCutY =
+                    notchGeometry.HighestBottomNotchY +
+                    SECTION_C_EXTRA_START;
+                cCutY = Math.Max(baseCCutY, notchCCutY);
+                cDepth = cCutY - minY;
+                AddGeometryDiagnostic(
+                    "BottomLimit flangeCutY=" +
+                    FormatDiagnosticNumber(baseCCutY) +
+                    " notchCutY=" +
+                    FormatDiagnosticNumber(notchCCutY));
+            }
+            else
+            {
+                AddGeometryDiagnostic(
+                    "BottomLimit flangeCutY=" +
+                    FormatDiagnosticNumber(baseCCutY) +
+                    " notch=none");
+            }
+
+            return ValidateResolvedOrdinaryCSectionGeometry(
+                minY,
+                maxY,
+                bCutY,
+                bDepth,
+                cCutY,
+                cDepth,
+                hasTopNotch,
+                hasBottomNotch,
+                notchGeometry,
+                out message);
+        }
+
+        private static bool ValidateResolvedOrdinaryCSectionGeometry(
+            double minY,
+            double maxY,
+            double bCutY,
+            double bDepth,
+            double cCutY,
+            double cDepth,
+            bool hasTopNotch,
+            bool hasBottomNotch,
+            FrontNotchGeometry notchGeometry,
+            out string message)
+        {
+            message = "";
+            double partHeight = maxY - minY;
+
+            if (!IsFinite(partHeight) || partHeight <= TOL)
+            {
+                message =
+                    "Chieu cao Shape C khong hop le de tinh Section B/C.";
+                return false;
+            }
+
+            if (!IsFinite(bCutY) || !IsFinite(bDepth) || bDepth <= TOL)
+            {
+                message =
+                    "Section B tinh theo mep canh Shape C khong hop le.";
+                return false;
+            }
+
+            if (bDepth >= partHeight)
+            {
+                message =
+                    "Section B theo mep canh/notch Shape C vuot chieu cao part.";
+                return false;
+            }
+
+            if (bCutY > maxY + TOL || bCutY < minY - TOL)
+            {
+                message = "Section B Shape C nam ngoai chieu cao part.";
+                return false;
+            }
+
+            if (!IsFinite(cCutY) || !IsFinite(cDepth) || cDepth <= TOL)
+            {
+                message =
+                    "Section C tinh theo mep canh Shape C khong hop le.";
+                return false;
+            }
+
+            if (cDepth >= partHeight)
+            {
+                message =
+                    "Section C theo mep canh/notch Shape C vuot chieu cao part.";
+                return false;
+            }
+
+            if (cCutY >= maxY || cCutY <= minY)
+            {
+                message = "Section C Shape C nam ngoai mien trong cua part.";
+                return false;
+            }
+
+            if (hasTopNotch)
+            {
+                double requiredBDepth =
+                    maxY -
+                    notchGeometry.LowestTopNotchY +
+                    SECTION_B_EXTRA_DEPTH;
+
+                if (!IsFinite(requiredBDepth) ||
+                    bDepth < requiredBDepth - TOL)
+                {
+                    message =
+                        "Section B Shape C khong bao phu day notch tren.";
+                    return false;
+                }
+            }
+
+            if (hasBottomNotch)
+            {
+                double requiredCCutY =
+                    notchGeometry.HighestBottomNotchY +
+                    SECTION_C_EXTRA_START;
+
+                if (!IsFinite(requiredCCutY) ||
+                    cCutY < requiredCCutY - TOL)
+                {
+                    message =
+                        "Section C Shape C khong bao phu dinh notch duoi.";
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool ValidateResolvedSectionGeometry(
+            double minY,
+            double maxY,
+            double bCutY,
+            double bDepth,
+            double cCutY,
+            double cDepth,
+            bool hasTopNotch,
+            bool hasBottomNotch,
+            FrontNotchGeometry notchGeometry,
+            out string message)
+        {
+            message = "";
+            double partHeight = maxY - minY;
+
+            if (!IsFinite(partHeight) || partHeight <= TOL)
+            {
+                message = "Chieu cao part khong hop le de tinh Section B/C.";
+                return false;
+            }
+
+            if (!IsFinite(bCutY) || !IsFinite(bDepth))
+            {
+                message = "Section B geometry khong phai gia tri huu han.";
+                return false;
+            }
+
+            if (bDepth <= TOL)
+            {
+                message = "Section B depth khong hop le.";
+                return false;
+            }
+
+            if (bDepth >= partHeight)
+            {
+                message = hasTopNotch
+                    ? "Section B depth tinh theo notch vuot qua chieu cao part."
+                    : "Section B depth tinh tu do day canh vuot qua chieu cao part.";
+                return false;
+            }
+
+            if (bCutY > maxY + TOL || bCutY < minY - TOL)
+            {
+                message = "Section B cut line nam ngoai chieu cao part.";
+                return false;
+            }
+
+            if (!IsFinite(cCutY) || !IsFinite(cDepth))
+            {
+                message = "Section C geometry khong phai gia tri huu han.";
+                return false;
+            }
+
+            if (cDepth <= TOL)
+            {
+                message = "Section C depth khong hop le.";
+                return false;
+            }
+
+            if (cDepth >= partHeight)
+            {
+                message = hasBottomNotch
+                    ? "Section C depth tinh theo notch vuot qua chieu cao part."
+                    : "Section C depth tinh tu do day canh vuot qua chieu cao part.";
+                return false;
+            }
+
+            if (cCutY >= maxY || cCutY <= minY)
+            {
+                message = "Section C cut line nam ngoai mien trong cua part.";
+                return false;
+            }
+
+            if (hasTopNotch)
+            {
+                double requiredBDepth =
+                    maxY -
+                    notchGeometry.LowestTopNotchY +
+                    SECTION_B_EXTRA_DEPTH;
+
+                if (!IsFinite(requiredBDepth) ||
+                    bDepth < requiredBDepth - TOL)
+                {
+                    message = "Section B depth khong bao phu day notch tren.";
+                    return false;
+                }
+            }
+
+            if (hasBottomNotch)
+            {
+                double requiredCCutY =
+                    notchGeometry.HighestBottomNotchY +
+                    SECTION_C_EXTRA_START;
+
+                if (!IsFinite(requiredCCutY) ||
+                    cCutY < requiredCCutY - TOL)
+                {
+                    message = "Section C cut line khong bao phu dinh notch duoi.";
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         private static bool TryLoadSectionAttributes(
