@@ -89,6 +89,7 @@ namespace TTSK_AutoDim_Plates
         private Label slideHandleLabel;
         private Label slideTitleLabel;
         private FitViewModeSwitch fitViewModeSwitch;
+        private BeamColumnModeSwitch beamColumnModeSwitch;
         private Label fitGridAxisCountLabel;
         private GridAxisCountBox fitGridAxisCountBox;
         private SafeRoundedButton fitViewButton;
@@ -118,6 +119,7 @@ namespace TTSK_AutoDim_Plates
         private bool arrangeMainHorizontal = true;
         private bool arrangeSectionHorizontal = true;
         private bool fitKeepGridAxes = false;
+        private bool fitArrangeColumnMode = false;
         private int fitGridAxisCount = 3;
         private bool slideToolsOpen = false;
         private bool slideDimOpen = false;
@@ -1985,13 +1987,35 @@ namespace TTSK_AutoDim_Plates
         {
             int innerMargin = 16;
             int innerWidth = slideGridPanel.Width - (innerMargin * 2);
+            const int memberModeWidth = 96;
+            const int memberModeHeight = 22;
 
             Label title = new Label();
             title.Text = "OPEN GRID VIEW";
             title.Font = new Font("Segoe UI", 11F, FontStyle.Bold);
             title.Location = new Point(innerMargin, 14);
-            title.Size = new System.Drawing.Size(innerWidth, 24);
+            title.Size = new System.Drawing.Size(
+                innerWidth - memberModeWidth - 10,
+                24);
             slideGridPanel.Controls.Add(title);
+
+            beamColumnModeSwitch = new BeamColumnModeSwitch();
+            beamColumnModeSwitch.Location = new Point(
+                slideGridPanel.Width - innerMargin - memberModeWidth,
+                15);
+            beamColumnModeSwitch.Size =
+                new System.Drawing.Size(
+                    memberModeWidth,
+                    memberModeHeight);
+            beamColumnModeSwitch.Font =
+                new Font("Segoe UI", 8F, FontStyle.Bold);
+            beamColumnModeSwitch.Checked = false;
+            beamColumnModeSwitch.CheckedChanged += delegate
+            {
+                fitArrangeColumnMode =
+                    beamColumnModeSwitch.Checked;
+            };
+            slideGridPanel.Controls.Add(beamColumnModeSwitch);
 
             Label note = new Label();
             note.Text = "Mở khung view chạm trục trên / dưới / trái / phải";
@@ -3505,8 +3529,11 @@ namespace TTSK_AutoDim_Plates
 
                 if (canArrangeTopFront)
                 {
-                    arrangeResult =
-                        PHU_OpenGridView.ArrangeTopFrontByOriginAfterGridFit();
+                    arrangeResult = fitArrangeColumnMode
+                        ? PHU_OpenGridView
+                            .ArrangeTopFrontHorizontallyByOriginAfterGridFit()
+                        : PHU_OpenGridView
+                            .ArrangeTopFrontByOriginAfterGridFit();
                 }
 
                 if (gridResultLabel != null)
@@ -3553,6 +3580,14 @@ namespace TTSK_AutoDim_Plates
                         ? "⚠  Fit Grid hoàn tất nhưng không xác định được cặp Top/Front"
                         : "⚠  Fit Grid hoàn tất nhưng sắp xếp Origin thất bại";
                     lblStatus.ForeColor = Color.FromArgb(217, 119, 6);
+                    if (fitArrangeColumnMode &&
+                        arrangeResult != null &&
+                        !string.IsNullOrEmpty(arrangeResult.Message) &&
+                        arrangeResult.Message.StartsWith(
+                            "⚠", StringComparison.Ordinal))
+                    {
+                        lblStatus.Text = arrangeResult.Message;
+                    }
                     return;
                 }
 
@@ -3582,6 +3617,13 @@ namespace TTSK_AutoDim_Plates
                     ? "✓  Fit Grid applied | Top/Front aligned by Origin"
                     : "✓  Fit Grid applied";
                 lblStatus.ForeColor = Color.FromArgb(22, 163, 74);
+                if (fitArrangeColumnMode &&
+                    arrangeResult != null &&
+                    arrangeResult.Applied)
+                {
+                    lblStatus.Text =
+                        "✓  Fit Grid applied | Column horizontal aligned by Origin";
+                }
             }
             catch (Exception ex)
             {
@@ -3951,6 +3993,12 @@ namespace TTSK_AutoDim_Plates
                 fitViewModeSwitch.DarkMode = _darkMode;
                 fitViewModeSwitch.AccentColor = accent;
                 fitViewModeSwitch.Invalidate();
+            }
+            if (beamColumnModeSwitch != null)
+            {
+                beamColumnModeSwitch.DarkMode = _darkMode;
+                beamColumnModeSwitch.AccentColor = accent;
+                beamColumnModeSwitch.Invalidate();
             }
             if (fitGridAxisCountBox != null)
             {
@@ -10130,6 +10178,254 @@ namespace TTSK_AutoDim_Plates
                         new SolidBrush(_checked ? selectedText : normalText))
                     {
                         e.Graphics.DrawString("Grid", font, brush, gridRect, format);
+                    }
+                }
+            }
+        }
+
+        private class BeamColumnModeSwitch : Control
+        {
+            private bool _checked;
+
+            public event EventHandler CheckedChanged;
+            public bool DarkMode { get; set; }
+            public Color AccentColor { get; set; }
+
+            public bool Checked
+            {
+                get { return _checked; }
+                set
+                {
+                    if (_checked == value)
+                        return;
+
+                    _checked = value;
+                    AccessibleName = _checked ? "Column mode" : "Beam mode";
+                    Invalidate();
+
+                    if (CheckedChanged != null)
+                        CheckedChanged(this, EventArgs.Empty);
+                }
+            }
+
+            public BeamColumnModeSwitch()
+            {
+                SetStyle(ControlStyles.UserPaint, true);
+                SetStyle(ControlStyles.AllPaintingInWmPaint, true);
+                SetStyle(ControlStyles.OptimizedDoubleBuffer, true);
+                SetStyle(ControlStyles.ResizeRedraw, true);
+                SetStyle(ControlStyles.SupportsTransparentBackColor, true);
+                SetStyle(ControlStyles.Selectable, true);
+
+                DoubleBuffered = true;
+                Cursor = Cursors.Hand;
+                TabStop = true;
+                Size = new System.Drawing.Size(96, 22);
+                Font = new Font("Segoe UI", 8F, FontStyle.Bold);
+                DarkMode = false;
+                AccentColor = Color.FromArgb(37, 99, 235);
+                BackColor = Color.Transparent;
+                AccessibleRole = AccessibleRole.CheckButton;
+                AccessibleName = "Beam mode";
+            }
+
+            protected override void OnMouseDown(MouseEventArgs e)
+            {
+                if (Enabled)
+                    Checked = e.X >= Width / 2;
+
+                Focus();
+                base.OnMouseDown(e);
+            }
+
+            protected override bool ProcessCmdKey(
+                ref Message msg,
+                Keys keyData)
+            {
+                Keys keyCode = keyData & Keys.KeyCode;
+                if (Enabled &&
+                    (keyData & Keys.Modifiers) == Keys.None)
+                {
+                    if (keyCode == Keys.Left)
+                    {
+                        Checked = false;
+                        return true;
+                    }
+
+                    if (keyCode == Keys.Right)
+                    {
+                        Checked = true;
+                        return true;
+                    }
+
+                    if (keyCode == Keys.Space)
+                    {
+                        Checked = !Checked;
+                        return true;
+                    }
+                }
+
+                return base.ProcessCmdKey(ref msg, keyData);
+            }
+
+            protected override void OnGotFocus(EventArgs e)
+            {
+                base.OnGotFocus(e);
+                Invalidate();
+            }
+
+            protected override void OnLostFocus(EventArgs e)
+            {
+                base.OnLostFocus(e);
+                Invalidate();
+            }
+
+            protected override bool IsInputKey(Keys keyData)
+            {
+                Keys keyCode = keyData & Keys.KeyCode;
+                if (keyCode == Keys.Left ||
+                    keyCode == Keys.Right ||
+                    keyCode == Keys.Space)
+                    return true;
+
+                return base.IsInputKey(keyData);
+            }
+
+            protected override void OnKeyDown(KeyEventArgs e)
+            {
+                if (Enabled &&
+                    (e.KeyCode == Keys.Space ||
+                     e.KeyCode == Keys.Left ||
+                     e.KeyCode == Keys.Right))
+                {
+                    if (e.KeyCode == Keys.Left)
+                        Checked = false;
+                    else if (e.KeyCode == Keys.Right)
+                        Checked = true;
+                    else
+                        Checked = !Checked;
+
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                }
+
+                base.OnKeyDown(e);
+            }
+
+            protected override void OnEnabledChanged(EventArgs e)
+            {
+                base.OnEnabledChanged(e);
+                Cursor = Enabled ? Cursors.Hand : Cursors.Default;
+                Invalidate();
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                base.OnPaint(e);
+
+                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                e.Graphics.PixelOffsetMode = PixelOffsetMode.Half;
+                e.Graphics.CompositingQuality = CompositingQuality.HighQuality;
+
+                RectangleF track = new RectangleF(
+                    1.5f,
+                    1.5f,
+                    Math.Max(1f, Width - 3f),
+                    Math.Max(1f, Height - 3f));
+
+                Color accent = AccentColor.IsEmpty
+                    ? Color.FromArgb(37, 99, 235)
+                    : AccentColor;
+                Color trackBack = Enabled
+                    ? (DarkMode
+                        ? Color.FromArgb(30, 24, 20)
+                        : Color.FromArgb(239, 246, 255))
+                    : (DarkMode
+                        ? Color.FromArgb(16, 16, 16)
+                        : Color.FromArgb(245, 247, 250));
+                Color border = Enabled
+                    ? accent
+                    : (DarkMode
+                        ? Color.FromArgb(73, 56, 43)
+                        : Color.FromArgb(203, 213, 225));
+                Color selectedBack = Enabled
+                    ? accent
+                    : (DarkMode
+                        ? Color.FromArgb(92, 82, 72)
+                        : Color.FromArgb(148, 163, 184));
+                Color normalText = Enabled
+                    ? (DarkMode
+                        ? Color.FromArgb(245, 186, 126)
+                        : Color.FromArgb(30, 58, 138))
+                    : (DarkMode
+                        ? Color.FromArgb(92, 82, 72)
+                        : Color.FromArgb(148, 163, 184));
+                Color selectedText = Enabled
+                    ? (DarkMode ? Color.FromArgb(20, 16, 14) : Color.White)
+                    : (DarkMode
+                        ? Color.FromArgb(210, 210, 210)
+                        : Color.White);
+
+                using (GraphicsPath path =
+                    RoundedRectF(track, track.Height / 2f))
+                using (SolidBrush brush = new SolidBrush(trackBack))
+                using (Pen pen = new Pen(border, Focused ? 1.8f : 1.2f))
+                {
+                    e.Graphics.FillPath(brush, path);
+                    e.Graphics.DrawPath(pen, path);
+                }
+
+                float halfWidth = track.Width / 2f;
+                RectangleF selected = _checked
+                    ? new RectangleF(
+                        track.X + halfWidth + 1f,
+                        track.Y + 2f,
+                        halfWidth - 3f,
+                        track.Height - 4f)
+                    : new RectangleF(
+                        track.X + 2f,
+                        track.Y + 2f,
+                        halfWidth - 3f,
+                        track.Height - 4f);
+
+                using (GraphicsPath selectedPath =
+                    RoundedRectF(selected, selected.Height / 2f))
+                using (SolidBrush brush = new SolidBrush(selectedBack))
+                {
+                    e.Graphics.FillPath(brush, selectedPath);
+                }
+
+                RectangleF beamRect =
+                    new RectangleF(2f, 0f, Width / 2f - 2f, Height);
+                RectangleF columnRect =
+                    new RectangleF(Width / 2f, 0f, Width / 2f - 2f, Height);
+
+                using (Font font = new Font("Segoe UI", 8F, FontStyle.Bold))
+                using (StringFormat format = new StringFormat())
+                {
+                    format.Alignment = StringAlignment.Center;
+                    format.LineAlignment = StringAlignment.Center;
+
+                    using (SolidBrush brush =
+                        new SolidBrush(_checked ? normalText : selectedText))
+                    {
+                        e.Graphics.DrawString(
+                            "Dầm",
+                            font,
+                            brush,
+                            beamRect,
+                            format);
+                    }
+
+                    using (SolidBrush brush =
+                        new SolidBrush(_checked ? selectedText : normalText))
+                    {
+                        e.Graphics.DrawString(
+                            "Cột",
+                            font,
+                            brush,
+                            columnRect,
+                            format);
                     }
                 }
             }

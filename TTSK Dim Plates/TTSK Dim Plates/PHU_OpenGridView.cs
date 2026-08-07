@@ -69,6 +69,7 @@ public static class PHU_OpenGridView
         "FIT chưa được thực thi. Hãy chạy OPEN GRID trước khi FIT.";
 
     private const double FIT_GRID_TOP_FRONT_GAP = 20.0;
+    private const double FIT_GRID_TOP_FRONT_HORIZONTAL_GAP = 20.0;
     private const double FIT_GRID_ORIGIN_TOLERANCE = 0.01;
     private const double FIT_GRID_GAP_TOLERANCE = 0.5;
 
@@ -1931,6 +1932,332 @@ public static class PHU_OpenGridView
         }
     }
 
+    public static FitGridOriginArrangeResult
+        ArrangeTopFrontHorizontallyByOriginAfterGridFit()
+    {
+        FitGridOriginArrangeResult result =
+            new FitGridOriginArrangeResult();
+        Drawing drawing = null;
+        View frontView = null;
+        Point originalFrontOrigin = null;
+        bool frontOriginChanged = false;
+
+        try
+        {
+            DrawingHandler dh = new DrawingHandler();
+            if (!dh.GetConnectionStatus())
+            {
+                result.Success = false;
+                result.Applied = false;
+                result.Message =
+                    "⚠  Fit Grid hoàn tất nhưng sắp xếp ngang theo Origin thất bại.";
+                return result;
+            }
+
+            drawing = dh.GetActiveDrawing();
+            if (drawing == null)
+            {
+                result.Success = false;
+                result.Applied = false;
+                result.Message =
+                    "⚠  Fit Grid hoàn tất nhưng sắp xếp ngang theo Origin thất bại.";
+                return result;
+            }
+
+            List<View> targetViews = GetTargetViews(dh, drawing);
+            List<View> topViews = new List<View>();
+            List<View> frontViews = new List<View>();
+
+            if (targetViews != null)
+            {
+                foreach (View view in targetViews)
+                {
+                    if (ViewTypeMatches(view, "TopView", "Top"))
+                        topViews.Add(view);
+
+                    if (ViewTypeMatches(view, "FrontView", "Front"))
+                        frontViews.Add(view);
+                }
+            }
+
+            if (topViews.Count == 0 || frontViews.Count == 0)
+            {
+                result.Success = true;
+                result.Applied = false;
+                result.Message =
+                    "⚠  Fit Grid hoàn tất nhưng không đủ cặp Top/Front; bỏ qua sắp xếp ngang.";
+                return result;
+            }
+
+            if (topViews.Count > 1 || frontViews.Count > 1)
+            {
+                result.Success = false;
+                result.Applied = false;
+                result.Message =
+                    "⚠  Fit Grid hoàn tất nhưng có nhiều Top hoặc Front View; không tự đoán cặp.";
+                return result;
+            }
+
+            View topView = topViews[0];
+            frontView = frontViews[0];
+
+            drawing.CommitChanges();
+
+            Point topOrigin = topView.Origin;
+            Point frontOrigin = frontView.Origin;
+            if (topOrigin == null || frontOrigin == null)
+            {
+                result.Success = false;
+                result.Applied = false;
+                result.Message =
+                    "⚠  Fit Grid hoàn tất nhưng sắp xếp ngang theo Origin thất bại.";
+                return result;
+            }
+
+            Point originalTopOrigin =
+                new Point(topOrigin.X, topOrigin.Y, topOrigin.Z);
+            originalFrontOrigin =
+                new Point(frontOrigin.X, frontOrigin.Y, frontOrigin.Z);
+
+            ViewSheetBox originalTopBox;
+            ViewSheetBox originalFrontBox;
+            if (!TryGetFitOriginalSheetBox(
+                    topView,
+                    out originalTopBox) ||
+                !TryGetFitOriginalSheetBox(
+                    frontView,
+                    out originalFrontBox))
+            {
+                result.Success = false;
+                result.Applied = false;
+                result.Message =
+                    "⚠  Fit Grid hoàn tất nhưng thiếu snapshot trước Open Grid; không sắp xếp ngang theo Origin.";
+                return result;
+            }
+
+            ViewSheetBox topBox;
+            ViewSheetBox frontBox;
+            if (!TryGetViewSheetBox(topView, out topBox) ||
+                !TryGetViewSheetBox(frontView, out frontBox))
+            {
+                result.Success = false;
+                result.Applied = false;
+                result.Message =
+                    "⚠  Fit Grid hoàn tất nhưng sắp xếp ngang theo Origin thất bại.";
+                return result;
+            }
+
+            bool frontWasLeft = false;
+            bool frontWasRight = false;
+
+            if (originalFrontBox.MaxX <=
+                originalTopBox.MinX + FIT_GRID_ORIGIN_TOLERANCE)
+            {
+                frontWasLeft = true;
+            }
+            else if (originalFrontBox.MinX >=
+                     originalTopBox.MaxX - FIT_GRID_ORIGIN_TOLERANCE)
+            {
+                frontWasRight = true;
+            }
+            else if (originalFrontBox.CenterX <
+                     originalTopBox.CenterX - FIT_GRID_ORIGIN_TOLERANCE)
+            {
+                frontWasLeft = true;
+            }
+            else if (originalFrontBox.CenterX >
+                     originalTopBox.CenterX + FIT_GRID_ORIGIN_TOLERANCE)
+            {
+                frontWasRight = true;
+            }
+            else
+            {
+                result.Success = false;
+                result.Applied = false;
+                result.Message =
+                    "⚠  Fit Grid hoàn tất nhưng không xác định được phía ban đầu của Front";
+                return result;
+            }
+
+            double desiredFrontOriginX;
+            if (frontWasRight)
+            {
+                double frontLeftOffset =
+                    originalFrontOrigin.X - frontBox.MinX;
+                desiredFrontOriginX =
+                    topBox.MaxX +
+                    FIT_GRID_TOP_FRONT_HORIZONTAL_GAP +
+                    frontLeftOffset;
+            }
+            else if (frontWasLeft)
+            {
+                double frontRightOffset =
+                    frontBox.MaxX - originalFrontOrigin.X;
+                desiredFrontOriginX =
+                    topBox.MinX -
+                    FIT_GRID_TOP_FRONT_HORIZONTAL_GAP -
+                    frontRightOffset;
+            }
+            else
+            {
+                result.Success = false;
+                result.Applied = false;
+                result.Message =
+                    "⚠  Fit Grid hoàn tất nhưng không xác định được phía ban đầu của Front";
+                return result;
+            }
+
+            double desiredFrontOriginY = originalTopOrigin.Y;
+            Point desiredFrontOrigin = new Point(
+                desiredFrontOriginX,
+                desiredFrontOriginY,
+                originalFrontOrigin.Z);
+
+            double currentGap = frontWasRight
+                ? frontBox.MinX - topBox.MaxX
+                : topBox.MinX - frontBox.MaxX;
+            bool originYAlreadyCorrect =
+                Math.Abs(originalFrontOrigin.Y - originalTopOrigin.Y) <=
+                FIT_GRID_ORIGIN_TOLERANCE;
+            bool gapAlreadyCorrect =
+                Math.Abs(currentGap -
+                         FIT_GRID_TOP_FRONT_HORIZONTAL_GAP) <=
+                FIT_GRID_GAP_TOLERANCE;
+            bool sideAlreadyCorrect = frontWasRight
+                ? frontBox.MinX > topBox.MaxX
+                : frontBox.MaxX < topBox.MinX;
+
+            if (originYAlreadyCorrect &&
+                gapAlreadyCorrect &&
+                sideAlreadyCorrect)
+            {
+                result.Success = true;
+                result.Applied = true;
+                result.Message = frontWasRight
+                    ? "Horizontal Top/Front aligned by Origin | Front Right | Gap = 20."
+                    : "Horizontal Top/Front aligned by Origin | Front Left | Gap = 20.";
+                return result;
+            }
+
+            if (!TrySetViewOrigin(frontView, desiredFrontOrigin))
+            {
+                RestoreFrontOriginAfterArrangeFailure(
+                    drawing,
+                    frontView,
+                    originalFrontOrigin);
+                result.Success = false;
+                result.Applied = false;
+                result.Message =
+                    "⚠  Fit Grid hoàn tất nhưng sắp xếp ngang theo Origin thất bại.";
+                return result;
+            }
+
+            frontOriginChanged = true;
+            SafeModify(
+                frontView,
+                "arrange top front horizontally by origin");
+            drawing.CommitChanges();
+
+            Point verifiedTopOrigin = topView.Origin;
+            Point verifiedFrontOrigin = frontView.Origin;
+            ViewSheetBox verifiedTopBox = null;
+            ViewSheetBox verifiedFrontBox = null;
+
+            bool verifiedBoxes =
+                verifiedTopOrigin != null &&
+                verifiedFrontOrigin != null &&
+                TryGetViewSheetBox(topView, out verifiedTopBox) &&
+                TryGetViewSheetBox(frontView, out verifiedFrontBox);
+
+            bool topOriginUnchanged = false;
+            bool frontZUnchanged = false;
+            bool originYCorrect = false;
+            bool sideCorrect = false;
+            bool gapCorrect = false;
+
+            if (verifiedBoxes)
+            {
+                topOriginUnchanged =
+                    Math.Abs(verifiedTopOrigin.X - originalTopOrigin.X) <=
+                    FIT_GRID_ORIGIN_TOLERANCE &&
+                    Math.Abs(verifiedTopOrigin.Y - originalTopOrigin.Y) <=
+                    FIT_GRID_ORIGIN_TOLERANCE &&
+                    Math.Abs(verifiedTopOrigin.Z - originalTopOrigin.Z) <=
+                    FIT_GRID_ORIGIN_TOLERANCE;
+                frontZUnchanged =
+                    Math.Abs(verifiedFrontOrigin.Z - originalFrontOrigin.Z) <=
+                    FIT_GRID_ORIGIN_TOLERANCE;
+                originYCorrect =
+                    Math.Abs(verifiedFrontOrigin.Y - verifiedTopOrigin.Y) <=
+                    FIT_GRID_ORIGIN_TOLERANCE;
+
+                double actualGap;
+                if (frontWasRight)
+                {
+                    actualGap =
+                        verifiedFrontBox.MinX - verifiedTopBox.MaxX;
+                    sideCorrect =
+                        verifiedFrontBox.MinX > verifiedTopBox.MaxX;
+                }
+                else
+                {
+                    actualGap =
+                        verifiedTopBox.MinX - verifiedFrontBox.MaxX;
+                    sideCorrect =
+                        verifiedFrontBox.MaxX < verifiedTopBox.MinX;
+                }
+
+                gapCorrect =
+                    Math.Abs(actualGap -
+                             FIT_GRID_TOP_FRONT_HORIZONTAL_GAP) <=
+                    FIT_GRID_GAP_TOLERANCE;
+            }
+
+            if (verifiedBoxes &&
+                topOriginUnchanged &&
+                frontZUnchanged &&
+                originYCorrect &&
+                sideCorrect &&
+                gapCorrect)
+            {
+                result.Success = true;
+                result.Applied = true;
+                result.Message = frontWasRight
+                    ? "Horizontal Top/Front aligned by Origin | Front Right | Gap = 20."
+                    : "Horizontal Top/Front aligned by Origin | Front Left | Gap = 20.";
+                return result;
+            }
+
+            RestoreFrontOriginAfterArrangeFailure(
+                drawing,
+                frontView,
+                originalFrontOrigin);
+            frontOriginChanged = false;
+
+            result.Success = false;
+            result.Applied = false;
+            result.Message =
+                "⚠  Fit Grid hoàn tất nhưng sắp xếp ngang theo Origin thất bại.";
+            return result;
+        }
+        catch
+        {
+            if (frontOriginChanged)
+            {
+                RestoreFrontOriginAfterArrangeFailure(
+                    drawing,
+                    frontView,
+                    originalFrontOrigin);
+            }
+
+            result.Success = false;
+            result.Applied = false;
+            result.Message =
+                "⚠  Fit Grid hoàn tất nhưng sắp xếp ngang theo Origin thất bại.";
+            return result;
+        }
+    }
+
     private static void RestoreFrontOriginAfterArrangeFailure(
         Drawing drawing,
         View frontView,
@@ -2658,6 +2985,29 @@ public static class PHU_OpenGridView
         double baseMinY = Math.Min(originalMinY, contentMinY);
         double baseMaxY = Math.Max(originalMaxY, contentMaxY);
 
+        // Fit is called after Open Grid, so the current RestrictionBox can
+        // already be wider than the original snapshot.  Keep that scanned
+        // area as the minimum search box; otherwise the first progressive
+        // step visibly shrinks the View and re-opens an area already read.
+        AABB currentBox = view.RestrictionBox;
+        if (currentBox != null &&
+            currentBox.MinPoint != null &&
+            currentBox.MaxPoint != null)
+        {
+            baseMinX = Math.Min(
+                baseMinX,
+                Math.Min(currentBox.MinPoint.X, currentBox.MaxPoint.X));
+            baseMaxX = Math.Max(
+                baseMaxX,
+                Math.Max(currentBox.MinPoint.X, currentBox.MaxPoint.X));
+            baseMinY = Math.Min(
+                baseMinY,
+                Math.Min(currentBox.MinPoint.Y, currentBox.MaxPoint.Y));
+            baseMaxY = Math.Max(
+                baseMaxY,
+                Math.Max(currentBox.MinPoint.Y, currentBox.MaxPoint.Y));
+        }
+
         for (int i = 0; i < TEMP_EXPAND_STEPS.Length; i++)
         {
             double step = TEMP_EXPAND_STEPS[i];
@@ -2867,13 +3217,36 @@ public static class PHU_OpenGridView
         int expectedGridCount,
         ref NearestGridSelection bestSelection)
     {
+        double baseMinX = Math.Min(originalMinX, contentMinX);
+        double baseMaxX = Math.Max(originalMaxX, contentMaxX);
+        double baseMinY = Math.Min(originalMinY, contentMinY);
+        double baseMaxY = Math.Max(originalMaxY, contentMaxY);
+
+        // Reuse the area already exposed by Open Grid.  The progressive
+        // fallback may only expand from here; it must not collapse back to
+        // the pre-Open-Grid snapshot before searching for a missing axis.
+        AABB currentBox = view == null ? null : view.RestrictionBox;
+        if (currentBox != null &&
+            currentBox.MinPoint != null &&
+            currentBox.MaxPoint != null)
+        {
+            baseMinX = Math.Min(
+                baseMinX,
+                Math.Min(currentBox.MinPoint.X, currentBox.MaxPoint.X));
+            baseMaxX = Math.Max(
+                baseMaxX,
+                Math.Max(currentBox.MinPoint.X, currentBox.MaxPoint.X));
+            baseMinY = Math.Min(
+                baseMinY,
+                Math.Min(currentBox.MinPoint.Y, currentBox.MaxPoint.Y));
+            baseMaxY = Math.Max(
+                baseMaxY,
+                Math.Max(currentBox.MinPoint.Y, currentBox.MaxPoint.Y));
+        }
+
         for (int i = 0; i < TEMP_EXPAND_STEPS.Length; i++)
         {
             double step = TEMP_EXPAND_STEPS[i];
-            double baseMinX = Math.Min(originalMinX, contentMinX);
-            double baseMaxX = Math.Max(originalMaxX, contentMaxX);
-            double baseMinY = Math.Min(originalMinY, contentMinY);
-            double baseMaxY = Math.Max(originalMaxY, contentMaxY);
 
             view.RestrictionBox = new AABB(
                 new Point(baseMinX - step, baseMinY - step, originalMinZ),
