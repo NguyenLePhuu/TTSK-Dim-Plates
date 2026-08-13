@@ -24,6 +24,9 @@ namespace TTSK_AutoDim_Plates
         public const string ActionSlot04 = "Slot04";
         public const string ActionSlot05 = "Slot05";
         public const string ActionSlot06 = "Slot06";
+        public const string ActionSlot07 = "Slot07";
+        public const string ActionSlot08 = "Slot08";
+        public const string ActionSlot09 = "Slot09";
 
         private readonly string _filePath;
         private readonly List<ShortcutActionDefinition> _definitions;
@@ -132,6 +135,9 @@ namespace TTSK_AutoDim_Plates
                 string[] lines = File.ReadAllLines(_filePath, Encoding.UTF8);
                 bool hasBatchCreateSetting = false;
                 bool hasArrangeViewSetting = false;
+                bool hasSlot07Setting = false;
+                bool hasSlot08Setting = false;
+                bool hasSlot09Setting = false;
                 bool migratedDefaults = false;
 
                 foreach (string rawLine in lines)
@@ -155,6 +161,13 @@ namespace TTSK_AutoDim_Plates
 
                     if (string.Equals(actionId, ActionArrangeView, StringComparison.OrdinalIgnoreCase))
                         hasArrangeViewSetting = true;
+
+                    if (string.Equals(actionId, ActionSlot07, StringComparison.OrdinalIgnoreCase))
+                        hasSlot07Setting = true;
+                    if (string.Equals(actionId, ActionSlot08, StringComparison.OrdinalIgnoreCase))
+                        hasSlot08Setting = true;
+                    if (string.Equals(actionId, ActionSlot09, StringComparison.OrdinalIgnoreCase))
+                        hasSlot09Setting = true;
 
                     if (!IsKnownAction(actionId))
                         continue;
@@ -192,6 +205,24 @@ namespace TTSK_AutoDim_Plates
                     NormalizeShortcut(Keys.Control | Keys.Shift))
                 {
                     _shortcuts[ActionFitView] = Keys.W;
+                    migratedDefaults = true;
+                }
+
+                // Existing shortcut.cfg files predate page 2.  Add the new
+                // defaults once, then persist them so 7 and 9 work immediately.
+                if (!hasSlot07Setting)
+                {
+                    _shortcuts[ActionSlot07] = Keys.D7;
+                    migratedDefaults = true;
+                }
+                if (!hasSlot08Setting)
+                {
+                    _shortcuts[ActionSlot08] = Keys.D8;
+                    migratedDefaults = true;
+                }
+                if (!hasSlot09Setting)
+                {
+                    _shortcuts[ActionSlot09] = Keys.D9;
                     migratedDefaults = true;
                 }
 
@@ -360,6 +391,9 @@ namespace TTSK_AutoDim_Plates
             list.Add(new ShortcutActionDefinition(ActionSlot04, "Slot04 (Function 4)", "Use current Slot04 mode", "4", Keys.D4));
             list.Add(new ShortcutActionDefinition(ActionSlot05, "Slot05 (Function 5)", "Use current Slot05 mode", "5", Keys.D5));
             list.Add(new ShortcutActionDefinition(ActionSlot06, "Slot06 (Function 6)", "AutoDim function 6", "6", Keys.D6));
+            list.Add(new ShortcutActionDefinition(ActionSlot07, "Slot07 (Nishi Azabu 2)", "AutoDim Nishi topology 2", "7", Keys.D7));
+            list.Add(new ShortcutActionDefinition(ActionSlot08, "Slot08 (Function 8)", "Chờ gắn file CS", "8", Keys.D8));
+            list.Add(new ShortcutActionDefinition(ActionSlot09, "Slot09 (Function 9)", "AutoDim function 9", "9", Keys.D9));
 
             return list;
         }

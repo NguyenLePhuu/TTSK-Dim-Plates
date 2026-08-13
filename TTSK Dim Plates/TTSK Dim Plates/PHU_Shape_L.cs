@@ -125,6 +125,7 @@ namespace Tekla.Technology.Akit.UserScript
         // Không pick: giữ nguyên flow tự nhận MainPart gốc.
         // Có pick Drawing.Part: dùng part được pick và lọc bolt/lỗ đúng part đó.
         private static bool UseSelectedMainPartMode = false;
+        private static bool AllowViewBoundaryResizeForCurrentDrawing = false;
         private static ModelPart SelectedMainPartForBoltFilter = null;
         private static ModelPart CurrentLShapeHolePartForLocalClassify = null;
         private static View CurrentLShapeTopViewForHoleClassify = null;
@@ -144,6 +145,7 @@ namespace Tekla.Technology.Akit.UserScript
             CurrentMiddleVerticalDimOffset =
                 DIM_TIER_SCALE_15_MIDDLE;
             UseSelectedMainPartMode = false;
+            AllowViewBoundaryResizeForCurrentDrawing = false;
             SelectedMainPartForBoltFilter = null;
             CurrentLShapeHolePartForLocalClassify = null;
             CurrentLShapeTopViewForHoleClassify = null;
@@ -155,29 +157,15 @@ namespace Tekla.Technology.Akit.UserScript
             if (drawing == null) return;
 
             bool isSinglePartDrawing = drawing is SinglePartDrawing;
+            AllowViewBoundaryResizeForCurrentDrawing = isSinglePartDrawing;
 
             Model model = new Model();
             if (!model.GetConnectionStatus()) return;
 
             // HỖ TRỢ CẢ SINGLE PART + ASSEMBLY DRAWING:
-            // Không pick: giữ nguyên cách tự nhận MainPart gốc.
-            // Có pick Drawing.Part: dùng đúng part được pick và bật lọc bolt/lỗ theo part đó.
-            DrawingPart selectedDrawingPart = GetSelectedDrawingPart(dh);
-            ModelPart selectedModelPart = null;
-            if (selectedDrawingPart != null && selectedDrawingPart.ModelIdentifier != null)
-                selectedModelPart = TrySelectModelPart(model, selectedDrawingPart.ModelIdentifier);
-
-            ModelPart part = null;
-            if (selectedModelPart != null)
-            {
-                part = selectedModelPart;
-                UseSelectedMainPartMode = true;
-                SelectedMainPartForBoltFilter = part;
-            }
-            else
-            {
-                part = GetMainPartFromDrawing(model, drawing);
-            }
+            // MainPart luôn lấy trực tiếp từ drawing/model theo resolver chung;
+            // không phụ thuộc Drawing.Part đang được chọn.
+            ModelPart part = PHU_MainPartResolver.Resolve(model, drawing);
 
             if (part == null) return;
 
@@ -7555,7 +7543,8 @@ namespace Tekla.Technology.Akit.UserScript
             double minY,
             double maxY)
         {
-            if (UseSelectedMainPartMode)
+            if (!AllowViewBoundaryResizeForCurrentDrawing ||
+                UseSelectedMainPartMode)
                 return;
 
             try
@@ -9475,10 +9464,9 @@ namespace Tekla.Technology.Akit.UserScript
                         return spPart;
                 }
 
-                // ASSEMBLY DRAWING / fallback:
-                // Không dùng Modify, không đụng model 3D.
-                // Quét Drawing.Part trong các view, chọn part chính theo kích thước solid lớn nhất.
-                return FindLargestModelPartFromDrawingViews(model, drawing);
+                // AssemblyDrawing dùng AssemblyIdentifier/ModelIdentifier và
+                // Assembly.GetMainPart(); không dùng part lớn nhất làm fallback.
+                return PHU_MainPartResolver.Resolve(model, drawing);
             }
             catch
             {

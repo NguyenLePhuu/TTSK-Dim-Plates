@@ -174,6 +174,7 @@ namespace Tekla.Technology.Akit.UserScript
         private static int LastBottomTopDimTier = 1;
         private static bool EnableNotchRadiusDimensionForCurrentDrawing = false;
         private static bool UseSelectedMainPartMode = false;
+        private static bool AllowViewBoundaryResizeForCurrentDrawing = false;
         private static ModelPart CurrentHShapeHolePartForLocalClassify = null;
         private static View CurrentHShapeTopViewForHoleClassify = null;
         private static View CurrentHShapeFrontViewForHoleClassify = null;
@@ -418,7 +419,7 @@ namespace Tekla.Technology.Akit.UserScript
         {
             bool autoSectionDimPass = PendingAutoSectionDimPass;
             bool autoSectionSingleLayout = PendingAutoSectionSingleLayout;
-            int autoSectionSelectedPartId = PendingAutoSectionSelectedPartId;
+            int autoSectionMainPartId = PendingAutoSectionSelectedPartId;
             PendingAutoSectionDimPass = false;
             PendingAutoSectionSingleLayout = false;
             PendingAutoSectionSelectedPartId = 0;
@@ -436,6 +437,7 @@ namespace Tekla.Technology.Akit.UserScript
                 DIM_TIER_SCALE_15_MIDDLE;
             EnableNotchRadiusDimensionForCurrentDrawing = false;
             UseSelectedMainPartMode = false;
+            AllowViewBoundaryResizeForCurrentDrawing = false;
             CurrentHShapeHolePartForLocalClassify = null;
             CurrentHShapeTopViewForHoleClassify = null;
             CurrentHShapeFrontViewForHoleClassify = null;
@@ -448,6 +450,7 @@ namespace Tekla.Technology.Akit.UserScript
 
             bool isSinglePartDrawing = drawing is SinglePartDrawing;
             bool isAssemblyDrawing = drawing is AssemblyDrawing;
+            AllowViewBoundaryResizeForCurrentDrawing = isSinglePartDrawing;
             EnableNotchRadiusDimensionForCurrentDrawing = isSinglePartDrawing;
 
             Model model = new Model();
@@ -455,30 +458,16 @@ namespace Tekla.Technology.Akit.UserScript
 
             // HỖ TRỢ CẢ SINGLE PART + ASSEMBLY DRAWING:
             // Chỉ thay phần lấy main part/view, không thay thuật toán DIM phía dưới.
-            ModelPart selectedModelPart = null;
-            DrawingPart selectedDrawingPart = null;
-
-            if (autoSectionSelectedPartId > 0)
+            ModelPart part = null;
+            if (autoSectionMainPartId > 0)
             {
-                selectedModelPart = TrySelectModelPart(
+                part = TrySelectModelPart(
                     model,
-                    new Identifier(autoSectionSelectedPartId));
+                    new Identifier(autoSectionMainPartId));
             }
-
-            if (selectedModelPart == null)
-            {
-                selectedDrawingPart = GetSelectedDrawingPart(dh);
-                if (selectedDrawingPart != null && selectedDrawingPart.ModelIdentifier != null)
-                    selectedModelPart = TrySelectModelPart(model, selectedDrawingPart.ModelIdentifier);
-            }
-
-            ModelPart part = selectedModelPart;
-            if (part != null &&
-                (autoSectionSelectedPartId > 0 || selectedDrawingPart != null))
-                UseSelectedMainPartMode = true;
 
             if (part == null)
-                part = GetMainPartFromDrawing(model, drawing);
+                part = PHU_MainPartResolver.Resolve(model, drawing);
 
             if (part == null) return;
             CurrentHShapeHolePartForLocalClassify = part;
@@ -592,6 +581,16 @@ namespace Tekla.Technology.Akit.UserScript
             VerifyManualScaleApplied(views);
             InitializeCurrentDimTierSpacing(topView);
 
+            // Grid DIM preflight is intentionally after AutoScale and before
+            // any Shape DIM is created. It receives this exact MainPart and
+            // Top/Front pair; it never reselects a part or scans for another view.
+            PHU_BeamGridDimensionEngine.Prepare(
+                model,
+                drawing,
+                part,
+                topViewByType,
+                frontViewByType);
+
             View frontViewForTopBottomNotch =
                 (dimViews.Count > 1) ? dimViews[1] : frontViewByType;
             ChamferInfluence frontNotchInfluenceForTopBottom =
@@ -688,6 +687,21 @@ namespace Tekla.Technology.Akit.UserScript
                 bottomBoundaries.Add(bottomBoundary);
             }
 
+            // The Grid engine creates every validated Top/Front plan together
+            // only after Shape has completed its own inner tiers. On an engine
+            // failure it rolls its work back and restores the replaced totals.
+            bool beamGridDimensionsCreated =
+                PHU_BeamGridDimensionEngine.CreatePreparedDimensions();
+            if (beamGridDimensionsCreated)
+            {
+                // The existing layout algorithm remains unchanged; it receives
+                // the real outer Front Grid tier so its current gap calculation
+                // accounts for the directly added Grid layer.
+                LastFrontTopDimTier = Math.Max(
+                    LastFrontTopDimTier,
+                    PHU_BeamGridDimensionEngine.GetOutermostHorizontalTier(frontView));
+            }
+
             AlignMainViewsByGeometry(
                 topView,
                 boundary,
@@ -755,6 +769,12 @@ namespace Tekla.Technology.Akit.UserScript
                 CheckTopBottomHolesAndMark(model, part, topView);
                 CommitAndWait(drawing, 250);
             }
+
+            // This is deliberately the final geometry mutation in the Beam Grid
+            // flow. It aligns corresponding real GridLine endpoints and moves
+            // FRONT only; no later fit/center step may disturb the result.
+            if (beamGridDimensionsCreated)
+                PHU_BeamGridDimensionEngine.AlignPreparedTopFrontByGrid();
 
             SelectViews(dh, views);
         }
@@ -3126,6 +3146,8 @@ namespace Tekla.Technology.Akit.UserScript
                     maxY,
                     edgeAnchors,
                     offsetAnchors,
+                    topHorizontalTier,
+                    leftVerticalTier,
                     GetSteelDimOffsetByTier(topHorizontalTier),
                     leftTotalVerticalOffset
                 );
@@ -3436,6 +3458,8 @@ namespace Tekla.Technology.Akit.UserScript
                     maxY,
                     edgeAnchors,
                     offsetAnchors,
+                    topHorizontalTier,
+                    leftVerticalTier,
                     GetSteelDimOffsetByTier(topHorizontalTier),
                     leftTotalVerticalOffset
                 );
@@ -7868,6 +7892,8 @@ namespace Tekla.Technology.Akit.UserScript
                double maxY,
                ChamferEdgeAnchors edgeAnchors,
                DimOffsetAnchor4 offsetAnchors,
+               int horizontalTotalTier,
+               int verticalTotalTier,
                double horizontalTotalOffset,
                double verticalTotalOffset)
         {
@@ -7886,13 +7912,6 @@ namespace Tekla.Technology.Akit.UserScript
                 horizontalTotalOffset
             );
 
-            if (handler.CreateDimensionSet(
-                view,
-                lengthPts,
-                new Vector(0, 1, 0),
-                realUpperTotalOffset) != null)
-                count++;
-
             PointList heightPts = new PointList();
             // DIM tổng dọc phải bắt vào điểm thấp/cao ngoài cùng thật của dầm.
             heightPts.Add(Clone2D(edgeAnchors.TopMost));
@@ -7904,6 +7923,34 @@ namespace Tekla.Technology.Akit.UserScript
                 offsetAnchors,
                 verticalTotalOffset
             );
+
+            bool createHorizontalTotal = true;
+            if (PHU_BeamGridDimensionEngine.ShouldTakeOverHorizontalTotal(view))
+            {
+                createHorizontalTotal = !PHU_BeamGridDimensionEngine
+                    .ReportShapeHorizontalTotal(
+                        view,
+                        lengthPts[0] as Point,
+                        lengthPts[1] as Point,
+                        realUpperTotalOffset,
+                        horizontalTotalTier,
+                        horizontalTotalOffset,
+                        GetSteelDimOffsetByTier(horizontalTotalTier + 1),
+                        GetSteelDimOffsetByTier(horizontalTotalTier + 2),
+                        heightPts[0] as Point,
+                        realLeftTotalOffset,
+                        verticalTotalTier,
+                        verticalTotalOffset,
+                        GetSteelDimOffsetByTier(verticalTotalTier + 1));
+            }
+
+            if (createHorizontalTotal &&
+                handler.CreateDimensionSet(
+                    view,
+                    lengthPts,
+                    new Vector(0, 1, 0),
+                    realUpperTotalOffset) != null)
+                count++;
 
             if (handler.CreateDimensionSet(
                 view,
@@ -9566,9 +9613,11 @@ namespace Tekla.Technology.Akit.UserScript
                     }
                 }
 
-                // Vẫn dùng lỗ thấp nhất của cột, nhưng khoảng hở hướng lên trên.
-                Point horizontalHolePoint =
-                    CreateHorizontalHoleDimFootAbove(hole, gap);
+                // Lỗ đơn đối xứng chéo không phải là dãy lỗ theo Y:
+                // DIM trên dùng chân trên, DIM dưới dùng chân dưới.
+                Point horizontalHolePoint = horizontalDimOnTop
+                    ? CreateHorizontalHoleDimFootAbove(hole, gap)
+                    : CreateHorizontalHoleDimFootBelow(hole, gap);
 
                 double realEdgeHorizontalOffset = ResolveDimDistanceByAnchor4(
                     horizontalEdgePoint,
@@ -14260,7 +14309,8 @@ namespace Tekla.Technology.Akit.UserScript
             double minY,
             double maxY)
         {
-            if (UseSelectedMainPartMode)
+            if (!AllowViewBoundaryResizeForCurrentDrawing ||
+                UseSelectedMainPartMode)
                 return;
 
             try
@@ -14554,6 +14604,8 @@ namespace Tekla.Technology.Akit.UserScript
                     maxY,
                     frontEdgeAnchors,
                     offsetAnchors,
+                    frontHorizontalTotalTier,
+                    frontVerticalTotalTier,
                     GetSteelDimOffsetByTier(frontHorizontalTotalTier),
                     GetSteelDimOffsetByTier(frontVerticalTotalTier)
                 );
@@ -14883,6 +14935,8 @@ namespace Tekla.Technology.Akit.UserScript
             double maxY,
             ChamferEdgeAnchors edgeAnchors,
             DimOffsetAnchor4 offsetAnchors,
+            int horizontalTotalTier,
+            int verticalTotalTier,
             double horizontalTotalOffset,
             double verticalTotalOffset)
         {
@@ -14900,13 +14954,6 @@ namespace Tekla.Technology.Akit.UserScript
                 horizontalTotalOffset
             );
 
-            if (handler.CreateDimensionSet(
-                view,
-                lengthPts,
-                new Vector(0, 1, 0),
-                realUpperTotalOffset) != null)
-                count++;
-
             PointList heightPts = new PointList();
             // FRONT tổng dọc: dùng điểm thấp/cao ngoài cùng thật của dầm.
             heightPts.Add(Clone2D(edgeAnchors.TopMost));
@@ -14918,6 +14965,34 @@ namespace Tekla.Technology.Akit.UserScript
                 offsetAnchors,
                 verticalTotalOffset
             );
+
+            bool createHorizontalTotal = true;
+            if (PHU_BeamGridDimensionEngine.ShouldTakeOverHorizontalTotal(view))
+            {
+                createHorizontalTotal = !PHU_BeamGridDimensionEngine
+                    .ReportShapeHorizontalTotal(
+                        view,
+                        lengthPts[0] as Point,
+                        lengthPts[1] as Point,
+                        realUpperTotalOffset,
+                        horizontalTotalTier,
+                        horizontalTotalOffset,
+                        GetSteelDimOffsetByTier(horizontalTotalTier + 1),
+                        GetSteelDimOffsetByTier(horizontalTotalTier + 2),
+                        heightPts[0] as Point,
+                        realLeftTotalOffset,
+                        verticalTotalTier,
+                        verticalTotalOffset,
+                        GetSteelDimOffsetByTier(verticalTotalTier + 1));
+            }
+
+            if (createHorizontalTotal &&
+                handler.CreateDimensionSet(
+                    view,
+                    lengthPts,
+                    new Vector(0, 1, 0),
+                    realUpperTotalOffset) != null)
+                count++;
 
             if (handler.CreateDimensionSet(
                 view,
@@ -16471,10 +16546,9 @@ namespace Tekla.Technology.Akit.UserScript
                         return spPart;
                 }
 
-                // ASSEMBLY DRAWING / fallback:
-                // Không dùng Modify, không đụng model 3D.
-                // Quét Drawing.Part trong các view, chọn part chính theo kích thước solid lớn nhất.
-                return FindLargestModelPartFromDrawingViews(model, drawing);
+                // AssemblyDrawing dùng AssemblyIdentifier/ModelIdentifier và
+                // Assembly.GetMainPart(); không dùng part lớn nhất làm fallback.
+                return PHU_MainPartResolver.Resolve(model, drawing);
             }
             catch
             {

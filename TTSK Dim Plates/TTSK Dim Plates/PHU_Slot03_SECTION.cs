@@ -1021,12 +1021,14 @@ namespace Tekla.Technology.Akit.UserScript
         private class VerticalGroup
         {
             public bool Valid;
-            public bool IsTop;
+            public bool HoleIsBelowMainBottom;
+            public bool HoleIsOnRightOfMain;
             public ModelPart Neighbor;
             public ModelPart Plate;
             public Bounds2D NeighborBox;
             public Bounds2D PlateBox;
-            public Point HolePoint;
+            public List<Point> HorizontalHolePoints;
+            public List<Point> VerticalHolePoints;
             public Point MainEdgeToHolePoint;
             public Point MainCenterPoint;
             public Point NeighborEdge1Point;
@@ -1043,7 +1045,6 @@ namespace Tekla.Technology.Akit.UserScript
         {
             VerticalGroup g = new VerticalGroup();
             g.Valid = false;
-            g.IsTop = isTop;
 
             double mainCenterX = (mainBox.MinX + mainBox.MaxX) / 2.0;
             double mainCenterY = (mainBox.MinY + mainBox.MaxY) / 2.0;
@@ -1138,41 +1139,92 @@ namespace Tekla.Technology.Akit.UserScript
             List<Point> linkedBoltCenters =
                 GetLinkedPlateNeighborBoltCenters(model, view, plate, neighbor, plateBox, neighborBox);
 
-            Point hole = PickPlateHoleForVerticalGroup(plateBox, linkedBoltCenters, isTop, mainCenterY);
-            if (hole == null)
+            List<Point> holePoints = GetPlateHolesForVerticalGroup(plateBox, linkedBoltCenters);
+            if (holePoints.Count == 0)
             {
                 linkedBoltCenters = GetViewBoltCentersInPlateNeighborOverlap(model, view, plateBox, neighborBox);
-                hole = PickPlateHoleForVerticalGroup(plateBox, linkedBoltCenters, isTop, mainCenterY);
+                holePoints = GetPlateHolesForVerticalGroup(plateBox, linkedBoltCenters);
             }
 
-            if (hole == null)
+            Point verticalHole = PickHighestHoleForVerticalGroup(holePoints);
+            if (verticalHole == null)
                 return g;
 
-            double mainEdgeY = isTop ? mainBox.MaxY : mainBox.MinY;
-            double neighborNearMainY = isTop ? neighborBox.MinY : neighborBox.MaxY;
+            bool holeIsBelowMainBottom =
+                IsSlot03HoleBelowMainBottom(verticalHole.Y, mainBox.MinY);
+            bool holeIsOnRightOfMain =
+                IsSlot03HoleOnRightOfMain(verticalHole.X, mainCenterX);
+            bool horizontalDimOnTop = !holeIsBelowMainBottom;
 
-            // Điểm neo thật trên main: không project theo Y của hole nữa.
-            // Dùng tâm main theo X + mép trên/dưới thật theo Y để chân dim bám vào biên dạng main.
-            Point realMainCenterEdgePoint = new Point(mainCenterX, mainEdgeY, 0);
+            // One horizontal foot per X column. For a top DIM, each column uses
+            // its lowest hole; for a bottom DIM, each column uses its highest hole.
+            List<Point> horizontalHoles = BuildHorizontalHoleChainForVerticalGroup(
+                holePoints,
+                horizontalDimOnTop);
+            List<Point> verticalHoles = BuildVerticalHoleChainForVerticalGroup(
+                holePoints,
+                holeIsOnRightOfMain);
+            if (horizontalHoles.Count == 0 || verticalHoles.Count == 0)
+                return g;
+
+            double horizontalPartEdgeY = horizontalDimOnTop
+                ? mainBox.MaxY
+                : mainBox.MinY;
+            double horizontalNeighborEdgeY = horizontalDimOnTop
+                ? neighborBox.MaxY
+                : neighborBox.MinY;
+
+            // Chân DIM dọc trên dầm chính:
+            // - lỗ trái/phải chọn đúng mép trái/phải của dầm;
+            // - lỗ dưới đáy đo từ đáy, còn lại đo từ đỉnh dầm.
+            Point verticalMainEdgePoint = new Point(
+                holeIsOnRightOfMain ? mainBox.MaxX : mainBox.MinX,
+                holeIsBelowMainBottom ? mainBox.MinY : mainBox.MaxY,
+                0);
+
+            // The main-beam foot follows the visual side of the horizontal DIM:
+            // top DIM -> main top edge; bottom DIM -> main bottom edge.
+            Point horizontalMainCenterEdgePoint =
+                new Point(mainCenterX, horizontalPartEdgeY, 0);
 
             g.Neighbor = neighbor;
             g.Plate = plate;
             g.NeighborBox = neighborBox;
             g.PlateBox = plateBox;
-            g.HolePoint = hole;
+            g.HorizontalHolePoints = horizontalHoles;
+            g.VerticalHolePoints = verticalHoles;
+            g.HoleIsBelowMainBottom = holeIsBelowMainBottom;
+            g.HoleIsOnRightOfMain = holeIsOnRightOfMain;
 
-            // Dim dọc: mép trên/dưới thật của main -> tâm lỗ liên kết đầu tiên.
-            g.MainEdgeToHolePoint = realMainCenterEdgePoint;
+            // DIM dọc: mép bên + đỉnh/đáy thật của main -> tâm lỗ.
+            g.MainEdgeToHolePoint = verticalMainEdgePoint;
 
             // Dim ngang tầng 2: tâm main thật trên mép main -> tâm lỗ liên kết.
-            g.MainCenterPoint = realMainCenterEdgePoint;
+            g.MainCenterPoint = horizontalMainCenterEdgePoint;
 
             // Dim ngang tầng 1: mép neighbor -> tâm lỗ -> mép neighbor.
-            g.NeighborEdge1Point = new Point(neighborBox.MinX, neighborNearMainY, 0);
-            g.NeighborEdge2Point = new Point(neighborBox.MaxX, neighborNearMainY, 0);
+            g.NeighborEdge1Point = new Point(neighborBox.MinX, horizontalNeighborEdgeY, 0);
+            g.NeighborEdge2Point = new Point(neighborBox.MaxX, horizontalNeighborEdgeY, 0);
 
             g.Valid = true;
             return g;
+        }
+
+        private static bool IsSlot03HoleBelowMainBottom(
+            double holeY,
+            double mainBottomY)
+        {
+            // Lỗ bằng hoặc chỉ lệch trong tolerance tại đáy vẫn được xem là
+            // nằm trên đáy, do đó DIM ngang phải đặt phía trên.
+            return holeY < mainBottomY - TOL;
+        }
+
+        private static bool IsSlot03HoleOnRightOfMain(
+            double holeX,
+            double mainCenterX)
+        {
+            // Chỉ điểm đúng tâm mới dùng phía trái làm tie-break ổn định.
+            return holeX > mainCenterX;
         }
 
         private static int CreateOneVerticalNeighborGroupDims(
@@ -1186,48 +1238,119 @@ namespace Tekla.Technology.Akit.UserScript
             if (handler == null || view == null || tierManager == null || g == null || !g.Valid)
                 return count;
 
-            Vector verticalDimDirection = new Vector(1, 0, 0);
-            Vector horizontalDimDirection = g.IsTop ? new Vector(0, 1, 0) : new Vector(0, -1, 0);
+            Vector verticalDimDirection = g.HoleIsOnRightOfMain
+                ? new Vector(1, 0, 0)
+                : new Vector(-1, 0, 0);
+            bool horizontalDimOnTop = !g.HoleIsBelowMainBottom;
+            Vector horizontalDimDirection = horizontalDimOnTop
+                ? new Vector(0, 1, 0)
+                : new Vector(0, -1, 0);
 
-            // 1. Dim dọc: mép main trên/dưới -> tâm lỗ liên kết plate-neighbor.
-            if (g.MainEdgeToHolePoint != null && g.HolePoint != null)
+            List<Point> verticalChain = new List<Point>();
+            AddUniquePointByAxis(verticalChain, g.MainEdgeToHolePoint, false, TOL);
+            if (g.VerticalHolePoints != null)
+            {
+                for (int i = 0; i < g.VerticalHolePoints.Count; i++)
+                {
+                    Point foot = GetHolePointWithPhiGap(
+                        g.Plate,
+                        g.Neighbor,
+                        g.VerticalHolePoints[i],
+                        verticalDimDirection);
+                    AddUniquePointByAxis(verticalChain, foot, false, TOL);
+                }
+            }
+            verticalChain.Sort(delegate (Point a, Point b)
+            {
+                int byY = b.Y.CompareTo(a.Y);
+                return byY != 0 ? byY : a.X.CompareTo(b.X);
+            });
+
+            List<Point> horizontalHoleFeet = new List<Point>();
+            if (g.HorizontalHolePoints != null)
+            {
+                for (int i = 0; i < g.HorizontalHolePoints.Count; i++)
+                {
+                    Point foot = GetHolePointWithPhiGap(
+                        g.Plate,
+                        g.Neighbor,
+                        g.HorizontalHolePoints[i],
+                        horizontalDimDirection);
+                    AddUniquePointByAxis(horizontalHoleFeet, foot, true, TOL);
+                }
+            }
+            horizontalHoleFeet.Sort(delegate (Point a, Point b)
+            {
+                int byX = a.X.CompareTo(b.X);
+                return byX != 0 ? byX : a.Y.CompareTo(b.Y);
+            });
+
+            // 1. Vertical chain: main top/bottom -> every distinct Y row, top to bottom.
+            if (verticalChain.Count >= 2)
             {
                 if (CreateDimChain(
                     handler,
                     view,
-                    new Point[] { g.MainEdgeToHolePoint, g.HolePoint },
+                    verticalChain.ToArray(),
                     verticalDimDirection,
-                    g.IsTop ? tierManager.TakeRightDistance(g.MainEdgeToHolePoint, g.PlateBox) : tierManager.TakeRightDistance(g.MainEdgeToHolePoint, g.PlateBox),
+                    g.HoleIsOnRightOfMain
+                        ? tierManager.TakeRightDistance(g.MainEdgeToHolePoint, g.PlateBox)
+                        : tierManager.TakeLeftDistance(g.MainEdgeToHolePoint, g.PlateBox),
                     "GEO_DIMENSION"))
                 {
                     count++;
                 }
             }
 
-            // 2. Dim ngang tầng 1: mép neighbor -> tâm lỗ -> mép neighbor.
-            if (g.NeighborEdge1Point != null && g.HolePoint != null && g.NeighborEdge2Point != null)
+            // 2. Horizontal chain tier 1: neighbor edge -> every distinct X column -> edge.
+            List<Point> neighborHorizontalChain = new List<Point>();
+            AddUniquePointByAxis(neighborHorizontalChain, g.NeighborEdge1Point, true, TOL);
+            for (int i = 0; i < horizontalHoleFeet.Count; i++)
+                AddUniquePointByAxis(neighborHorizontalChain, horizontalHoleFeet[i], true, TOL);
+            AddUniquePointByAxis(neighborHorizontalChain, g.NeighborEdge2Point, true, TOL);
+            neighborHorizontalChain.Sort(delegate (Point a, Point b)
+            {
+                int byX = a.X.CompareTo(b.X);
+                return byX != 0 ? byX : a.Y.CompareTo(b.Y);
+            });
+
+            if (neighborHorizontalChain.Count >= 2)
             {
                 if (CreateDimChain(
                     handler,
                     view,
-                    new Point[] { g.NeighborEdge1Point, g.HolePoint, g.NeighborEdge2Point },
+                    neighborHorizontalChain.ToArray(),
                     horizontalDimDirection,
-                    g.IsTop ? tierManager.TakeTopDistance(g.NeighborEdge1Point, mainBox) : tierManager.TakeBottomDistance(g.NeighborEdge1Point, mainBox),
+                    horizontalDimOnTop
+                        ? tierManager.TakeTopDistance(g.NeighborEdge1Point, mainBox)
+                        : tierManager.TakeBottomDistance(g.NeighborEdge1Point, mainBox),
                     "GEO_DIMENSION"))
                 {
                     count++;
                 }
             }
 
-            // 3. Dim ngang tầng 2: tâm main -> tâm lỗ liên kết plate-neighbor.
-            if (g.MainCenterPoint != null && g.HolePoint != null)
+            // 3. Horizontal chain tier 2: main foot -> every distinct X column.
+            List<Point> mainHorizontalChain = new List<Point>();
+            AddUniquePointByAxis(mainHorizontalChain, g.MainCenterPoint, true, TOL);
+            for (int i = 0; i < horizontalHoleFeet.Count; i++)
+                AddUniquePointByAxis(mainHorizontalChain, horizontalHoleFeet[i], true, TOL);
+            mainHorizontalChain.Sort(delegate (Point a, Point b)
+            {
+                int byX = a.X.CompareTo(b.X);
+                return byX != 0 ? byX : a.Y.CompareTo(b.Y);
+            });
+
+            if (mainHorizontalChain.Count >= 2)
             {
                 if (CreateDimChain(
                     handler,
                     view,
-                    new Point[] { g.MainCenterPoint, g.HolePoint },
+                    mainHorizontalChain.ToArray(),
                     horizontalDimDirection,
-                    g.IsTop ? tierManager.TakeTopDistance(g.MainCenterPoint, mainBox) : tierManager.TakeBottomDistance(g.MainCenterPoint, mainBox),
+                    horizontalDimOnTop
+                        ? tierManager.TakeTopDistance(g.MainCenterPoint, mainBox)
+                        : tierManager.TakeBottomDistance(g.MainCenterPoint, mainBox),
                     "GEO_DIMENSION"))
                 {
                     count++;
@@ -1237,17 +1360,13 @@ namespace Tekla.Technology.Akit.UserScript
             return count;
         }
 
-        private static Point PickPlateHoleForVerticalGroup(
+        private static List<Point> GetPlateHolesForVerticalGroup(
             Bounds2D plateBox,
-            List<Point> boltCenters,
-            bool isTop,
-            double mainCenterY)
+            List<Point> boltCenters)
         {
+            List<Point> result = new List<Point>();
             if (boltCenters == null || boltCenters.Count == 0)
-                return null;
-
-            Point best = null;
-            double bestDistanceToMain = 999999999.0;
+                return result;
 
             for (int i = 0; i < boltCenters.Count; i++)
             {
@@ -1259,20 +1378,147 @@ namespace Tekla.Technology.Akit.UserScript
                     p.Y < plateBox.MinY - 20.0 || p.Y > plateBox.MaxY + 20.0)
                     continue;
 
-                bool sideOK = isTop ? p.Y > mainCenterY : p.Y < mainCenterY;
-                if (!sideOK)
+                AddUniquePoint2D(result, new Point(p.X, p.Y, 0), POINT_DUP_TOL);
+            }
+
+            return result;
+        }
+
+        private static Point PickHighestHoleForVerticalGroup(List<Point> holePoints)
+        {
+            if (holePoints == null || holePoints.Count == 0)
+                return null;
+
+            Point best = null;
+            for (int i = 0; i < holePoints.Count; i++)
+            {
+                Point p = holePoints[i];
+                if (p == null)
                     continue;
 
-                // Lỗ liên kết đầu tiên tính từ mép main đi ra neighbor.
-                double d = Math.Abs(p.Y - mainCenterY);
-                if (best == null || d < bestDistanceToMain)
+                if (best == null || p.Y > best.Y + TOL ||
+                    (Math.Abs(p.Y - best.Y) <= TOL && p.X < best.X))
                 {
-                    best = new Point(p.X, p.Y, 0);
-                    bestDistanceToMain = d;
+                    best = p;
                 }
             }
 
-            return best;
+            return best == null ? null : new Point(best.X, best.Y, 0);
+        }
+
+        private static List<Point> BuildHorizontalHoleChainForVerticalGroup(
+            List<Point> holePoints,
+            bool dimOnTop)
+        {
+            List<Point> result = new List<Point>();
+            if (holePoints == null || holePoints.Count == 0)
+                return result;
+
+            List<Point> sorted = new List<Point>();
+            for (int i = 0; i < holePoints.Count; i++)
+            {
+                Point p = holePoints[i];
+                if (p != null)
+                    sorted.Add(new Point(p.X, p.Y, 0));
+            }
+            sorted.Sort(delegate (Point a, Point b)
+            {
+                int byX = a.X.CompareTo(b.X);
+                return byX != 0 ? byX : a.Y.CompareTo(b.Y);
+            });
+
+            int index = 0;
+            while (index < sorted.Count)
+            {
+                double columnX = sorted[index].X;
+                Point selected = sorted[index];
+                int next = index + 1;
+
+                while (next < sorted.Count && Math.Abs(sorted[next].X - columnX) <= TOL)
+                {
+                    Point candidate = sorted[next];
+                    bool better = dimOnTop
+                        ? candidate.Y < selected.Y - TOL
+                        : candidate.Y > selected.Y + TOL;
+                    if (better)
+                        selected = candidate;
+                    next++;
+                }
+
+                result.Add(new Point(selected.X, selected.Y, 0));
+                index = next;
+            }
+
+            return result;
+        }
+
+        private static List<Point> BuildVerticalHoleChainForVerticalGroup(
+            List<Point> holePoints,
+            bool dimOnRight)
+        {
+            List<Point> result = new List<Point>();
+            if (holePoints == null || holePoints.Count == 0)
+                return result;
+
+            List<Point> sorted = new List<Point>();
+            for (int i = 0; i < holePoints.Count; i++)
+            {
+                Point p = holePoints[i];
+                if (p != null)
+                    sorted.Add(new Point(p.X, p.Y, 0));
+            }
+            sorted.Sort(delegate (Point a, Point b)
+            {
+                int byY = b.Y.CompareTo(a.Y);
+                return byY != 0 ? byY : a.X.CompareTo(b.X);
+            });
+
+            int index = 0;
+            while (index < sorted.Count)
+            {
+                double rowY = sorted[index].Y;
+                Point selected = sorted[index];
+                int next = index + 1;
+
+                while (next < sorted.Count && Math.Abs(sorted[next].Y - rowY) <= TOL)
+                {
+                    Point candidate = sorted[next];
+                    // Put the foot on the far side of the row so the extension
+                    // line crosses all holes before reaching the DIM line.
+                    bool better = dimOnRight
+                        ? candidate.X < selected.X - TOL
+                        : candidate.X > selected.X + TOL;
+                    if (better)
+                        selected = candidate;
+                    next++;
+                }
+
+                result.Add(new Point(selected.X, selected.Y, 0));
+                index = next;
+            }
+
+            return result;
+        }
+
+        private static void AddUniquePointByAxis(
+            List<Point> points,
+            Point point,
+            bool compareX,
+            double tolerance)
+        {
+            if (points == null || point == null)
+                return;
+
+            for (int i = 0; i < points.Count; i++)
+            {
+                double delta = compareX
+                    ? Math.Abs(points[i].X - point.X)
+                    : Math.Abs(points[i].Y - point.Y);
+                if (delta <= tolerance)
+                    return;
+            }
+
+            points.Add(new Point(point.X, point.Y, 0));
         }
 
         private class SideGroup

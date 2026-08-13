@@ -25,6 +25,9 @@ namespace TTSK_AutoDim_Plates
         private const bool DEFAULT_AUTO_SECTION_ENABLED = false;
         private bool _autoSectionEnabled = DEFAULT_AUTO_SECTION_ENABLED;
         private bool? _batchAutoSectionEnabledSnapshot = null;
+        private bool? _batchGridDimEnabledSnapshot = null;
+        private bool? _batchGridDimBeamSnapshot = null;
+        private int? _batchGridDimAxisCountSnapshot = null;
         private bool _syncingAutoSectionSwitch = false;
 
         private RadioButton rbActive;
@@ -98,6 +101,9 @@ namespace TTSK_AutoDim_Plates
         private Label gridResultLabel;
         private Label arrangeResultLabel;
         private Label autoDimResultLabel;
+        private readonly List<Panel> autoDimPages = new List<Panel>();
+        private readonly List<SafeRoundedButton> autoDimPageButtons = new List<SafeRoundedButton>();
+        private int selectedAutoDimPage = 0;
         private BorderNumericUpDown nudDimSpacing;
         private BorderNumericUpDown nudLineDistance;
         private BorderNumericUpDown nudNeighborGridX;
@@ -921,13 +927,16 @@ namespace TTSK_AutoDim_Plates
             if (slideAutoDimPanel == null)
                 return;
 
+            autoDimPages.Clear();
+            autoDimPageButtons.Clear();
+
             int innerMargin = 14;
             int innerWidth = slideAutoDimPanel.Width - (innerMargin * 2);
             int gap = 12;
-            int titleH = 42;
             int boxW = (innerWidth - gap) / 2;
             int boxH = 86;
             int startY = 52;
+            int pageHeight = (boxH * 3) + (gap * 2);
 
             Label title = new Label();
             title.Text = "AUTO DIMENSION";
@@ -937,65 +946,100 @@ namespace TTSK_AutoDim_Plates
             slideAutoDimPanel.Controls.Add(title);
 
             Label note = new Label();
-            note.Text = "Chọn 1 part trong drawing rồi bấm ô chức năng.";
+            note.Text = "Chọn part nếu chức năng yêu cầu, rồi bấm ô.";
             note.Font = new Font("Segoe UI", 8.5F, FontStyle.Bold);
             note.Location = new Point(innerMargin, 33);
             note.Size = new System.Drawing.Size(innerWidth, 18);
             slideAutoDimPanel.Controls.Add(note);
 
+            Panel page1 = MakeAutoDimPage(startY, pageHeight);
+            Panel page2 = MakeAutoDimPage(startY, pageHeight);
+            Panel page3 = MakeAutoDimPage(startY, pageHeight);
+            autoDimPages.Add(page1);
+            autoDimPages.Add(page2);
+            autoDimPages.Add(page3);
+            slideAutoDimPanel.Controls.Add(page1);
+            slideAutoDimPanel.Controls.Add(page2);
+            slideAutoDimPanel.Controls.Add(page3);
+
             Panel slot1 = MakeAutoDimImageSlotBox(
                 "Slot01_light.png",
                 innerMargin,
-                startY,
+                0,
                 boxW,
                 boxH,
                 delegate { RunSelectedMainPartAutoDim(); });
-            slideAutoDimPanel.Controls.Add(slot1);
+            page1.Controls.Add(slot1);
 
             Panel slot2 = MakeAutoDimImageSlotBox(
                 "Slot02.png",
                 innerMargin + boxW + gap,
-                startY,
+                0,
                 boxW,
                 boxH,
                 delegate { RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot02"); });
-            slideAutoDimPanel.Controls.Add(slot2);
+            page1.Controls.Add(slot2);
 
             Panel slot3 = MakeAutoDimImageSlotBox(
                 "Slot03_light.png",
                 innerMargin,
-                startY + boxH + gap,
+                boxH + gap,
                 boxW,
                 boxH,
                 delegate { RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot03"); });
-            slideAutoDimPanel.Controls.Add(slot3);
+            page1.Controls.Add(slot3);
 
             Panel slot4 = MakeAutoDimSlot04Box(
                 "Slot04_light.png",
                 innerMargin + boxW + gap,
-                startY + boxH + gap,
+                boxH + gap,
                 boxW,
                 boxH);
-            slideAutoDimPanel.Controls.Add(slot4);
+            page1.Controls.Add(slot4);
 
             Panel slot5 = MakeAutoDimSlot05Box(
                 "Slot05_light.png",
                 innerMargin,
-                startY + (boxH + gap) * 2,
+                (boxH + gap) * 2,
                 boxW,
                 boxH);
-            slideAutoDimPanel.Controls.Add(slot5);
+            page1.Controls.Add(slot5);
 
             Panel slot6 = MakeAutoDimSlotBox(
                 "⑥",
-                "Slot 06",
-                "Chờ gắn file CS",
+                "Nishi Azabu",
+                "Auto dim toàn bộ",
                 innerMargin + boxW + gap,
-                startY + (boxH + gap) * 2,
+                (boxH + gap) * 2,
+                boxW,
+                boxH,
+                delegate { RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_NishiAzabuAutoDim"); });
+            page1.Controls.Add(slot6);
+
+            Panel slot7 = MakeAutoDimSlotBox(
+                GetAutoDimCircledNumber(7),
+                "Nishi Azabu 2",
+                "Auto dim topology 2",
+                innerMargin,
+                0,
+                boxW,
+                boxH,
+                delegate { RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_NishiAzabuAutoDimSlot07"); });
+            page2.Controls.Add(slot7);
+
+            AddAutoDimPlaceholderSlots(page2, 8, 12, innerMargin, gap, boxW, boxH);
+            AddAutoDimPlaceholderSlots(page3, 13, 17, innerMargin, gap, boxW, boxH);
+
+            Panel slot18 = MakeAutoDimSlotBox(
+                GetAutoDimCircledNumber(18),
+                "Slot 18",
+                "Dim spacing audit",
+                innerMargin + boxW + gap,
+                (boxH + gap) * 2,
                 boxW,
                 boxH,
                 delegate { RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot06"); });
-            slideAutoDimPanel.Controls.Add(slot6);
+            page3.Controls.Add(slot18);
 
             autoDimResultLabel = new Label();
             autoDimResultLabel.Text = "";
@@ -1004,6 +1048,119 @@ namespace TTSK_AutoDim_Plates
             autoDimResultLabel.Location = new Point(innerMargin, startY + (boxH + gap) * 3 + 4);
             autoDimResultLabel.Size = new System.Drawing.Size(innerWidth, 24);
             slideAutoDimPanel.Controls.Add(autoDimResultLabel);
+
+            int pageButtonWidth = 30;
+            int pageButtonHeight = 24;
+            int pageButtonGap = 7;
+            int pageButtonsWidth = (pageButtonWidth * 3) + (pageButtonGap * 2);
+            int pageButtonX = (slideAutoDimPanel.Width - pageButtonsWidth) / 2;
+            int pageButtonY = slideAutoDimPanel.Height - pageButtonHeight - 8;
+
+            for (int pageIndex = 0; pageIndex < 3; pageIndex++)
+            {
+                int targetPage = pageIndex;
+                SafeRoundedButton pageButton = new SafeRoundedButton();
+                pageButton.Text = (pageIndex + 1).ToString();
+                pageButton.Font = new Font("Segoe UI", 8.5F, FontStyle.Bold);
+                pageButton.Location = new Point(
+                    pageButtonX + (pageIndex * (pageButtonWidth + pageButtonGap)),
+                    pageButtonY);
+                pageButton.Size = new System.Drawing.Size(pageButtonWidth, pageButtonHeight);
+                pageButton.BorderRadius = 10;
+                pageButton.AccessibleName = "Trang Auto Dimension " + (pageIndex + 1).ToString();
+                pageButton.Click += delegate { SetAutoDimPage(targetPage); };
+                autoDimPageButtons.Add(pageButton);
+                slideAutoDimPanel.Controls.Add(pageButton);
+            }
+
+            SetAutoDimPage(0);
+        }
+
+        private Panel MakeAutoDimPage(int y, int height)
+        {
+            Panel page = new Panel();
+            page.Location = new Point(0, y);
+            page.Size = new System.Drawing.Size(slideAutoDimPanel.Width, height);
+            page.BackColor = Color.Transparent;
+            return page;
+        }
+
+        private void AddAutoDimPlaceholderSlots(
+            Panel page,
+            int firstSlot,
+            int lastSlot,
+            int innerMargin,
+            int gap,
+            int boxW,
+            int boxH)
+        {
+            for (int slotNumber = firstSlot; slotNumber <= lastSlot; slotNumber++)
+            {
+                int position = (slotNumber - 1) % 6;
+                int column = position % 2;
+                int row = position / 2;
+                string targetTypeName = "Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot" + slotNumber.ToString("00");
+
+                Panel slot = MakeAutoDimSlotBox(
+                    GetAutoDimCircledNumber(slotNumber),
+                    "Slot " + slotNumber.ToString("00"),
+                    "Chờ gắn file CS",
+                    innerMargin + (column * (boxW + gap)),
+                    row * (boxH + gap),
+                    boxW,
+                    boxH,
+                    delegate { RunExternalAutoDimSlot(targetTypeName); });
+                page.Controls.Add(slot);
+            }
+        }
+
+        private static string GetAutoDimCircledNumber(int number)
+        {
+            if (number >= 1 && number <= 20)
+                return char.ConvertFromUtf32(0x245F + number);
+
+            return number.ToString("00");
+        }
+
+        private void SetAutoDimPage(int pageIndex)
+        {
+            if (pageIndex < 0 || pageIndex >= autoDimPages.Count)
+                return;
+
+            selectedAutoDimPage = pageIndex;
+            for (int i = 0; i < autoDimPages.Count; i++)
+            {
+                bool isSelected = i == selectedAutoDimPage;
+                autoDimPages[i].Visible = isSelected;
+                if (isSelected)
+                    autoDimPages[i].BringToFront();
+            }
+
+            if (autoDimResultLabel != null)
+                autoDimResultLabel.BringToFront();
+
+            for (int i = 0; i < autoDimPageButtons.Count; i++)
+                autoDimPageButtons[i].BringToFront();
+
+            ApplyAutoDimPageButtonStyles();
+        }
+
+        private void ApplyAutoDimPageButtonStyles()
+        {
+            Color accent = _darkMode ? Color.FromArgb(201, 122, 64) : BrightBlue;
+            Color idleBack = _darkMode ? Color.FromArgb(24, 24, 24) : Color.White;
+            Color selectedText = _darkMode ? Color.FromArgb(20, 16, 14) : Color.White;
+
+            for (int i = 0; i < autoDimPageButtons.Count; i++)
+            {
+                SafeRoundedButton button = autoDimPageButtons[i];
+                bool isSelected = i == selectedAutoDimPage;
+                button.FillColor = isSelected ? accent : idleBack;
+                button.BorderColor = accent;
+                button.HoverBorderColor = accent;
+                button.TextColor = isSelected ? selectedText : accent;
+                button.Invalidate();
+            }
         }
 
         private Panel MakeAutoDimSlotBox(
@@ -1381,6 +1538,20 @@ namespace TTSK_AutoDim_Plates
                     if (successValue is bool && !(bool)successValue)
                     {
                         SetAutoDimResult("NO DIM CREATED");
+                        return;
+                    }
+                }
+
+                PropertyInfo messageProperty = t.GetProperty(
+                    "LastRunMessage",
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+                if (messageProperty != null && messageProperty.PropertyType == typeof(string))
+                {
+                    string message = messageProperty.GetValue(null, null) as string;
+                    if (!string.IsNullOrWhiteSpace(message))
+                    {
+                        SetAutoDimResult("DONE");
+                        SetMainStatus(message, MainStatusKind.Success);
                         return;
                     }
                 }
@@ -1805,7 +1976,25 @@ namespace TTSK_AutoDim_Plates
 
             if (string.Equals(actionId, ShortcutManager.ActionSlot06, StringComparison.OrdinalIgnoreCase))
             {
-                RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot06");
+                RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_NishiAzabuAutoDim");
+                return;
+            }
+
+            if (string.Equals(actionId, ShortcutManager.ActionSlot07, StringComparison.OrdinalIgnoreCase))
+            {
+                RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_NishiAzabuAutoDimSlot07");
+                return;
+            }
+
+            if (string.Equals(actionId, ShortcutManager.ActionSlot08, StringComparison.OrdinalIgnoreCase))
+            {
+                RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot08");
+                return;
+            }
+
+            if (string.Equals(actionId, ShortcutManager.ActionSlot09, StringComparison.OrdinalIgnoreCase))
+            {
+                RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot09");
                 return;
             }
         }
@@ -4009,6 +4198,7 @@ namespace TTSK_AutoDim_Plates
             if (japaneseDictionaryPanel != null)
                 japaneseDictionaryPanel.ApplyTheme(_darkMode);
             ApplyArrangeOptionStyles();
+            ApplyAutoDimPageButtonStyles();
         }
 
         private void StyleSlidePanelRecursive(Control root, Color panelBg, Color panelBg2, Color text, Color muted, Color border, Color accent)
@@ -6710,6 +6900,9 @@ namespace TTSK_AutoDim_Plates
             public AutoSectionStatus SectionStatus = AutoSectionStatus.NotApplicable;
             public int OriginalHoleResult = -1;
             public string SectionMessage = "";
+            public bool GridDimensionRequested = false;
+            public bool GridDimensionApplied = false;
+            public string GridDimensionMessage = "";
             public bool CanSaveDrawing = true;
         }
 
@@ -6805,27 +6998,8 @@ namespace TTSK_AutoDim_Plates
         private AutoDimExecutionResult RunCurrentAutoDimScript()
         {
             AutoDimExecutionResult execution = new AutoDimExecutionResult();
+            Tekla.Technology.Akit.UserScript.PHU_BeamGridDimensionEngine.Reset();
             AutoDimPartType partType = DetectActiveDrawingAutoDimPartType();
-
-            int selectedShapeAssemblyPartId =
-                CaptureSelectedShapeAssemblyPartId(partType);
-
-            bool runAutoSection = ShouldRunAutoSection(partType);
-            bool autoSectionDimPassRequired = false;
-            bool autoSectionSingleLayout = false;
-
-            // Geometry Standard is independent from Auto Section and must
-            // finish before geometry analysis or any Section-specific work.
-            string loadStandardMessage;
-            if (!TryRunLoadStandardBeforeAutoDim(out loadStandardMessage))
-                throw new Exception(loadStandardMessage);
-
-            if (selectedShapeAssemblyPartId > 0 &&
-                !RestoreSelectedDrawingPartByModelId(selectedShapeAssemblyPartId))
-            {
-                throw new Exception(
-                    "Không khôi phục được part thép hình đã chọn sau khi Load Standard.");
-            }
 
             if (partType == AutoDimPartType.Unknown)
             {
@@ -6840,6 +7014,34 @@ namespace TTSK_AutoDim_Plates
                 return execution;
             }
 
+            int resolvedMainPartId = 0;
+            if (partType == AutoDimPartType.ShapeIH ||
+                partType == AutoDimPartType.ShapeC ||
+                partType == AutoDimPartType.ShapeL ||
+                partType == AutoDimPartType.ShapeBox ||
+                partType == AutoDimPartType.ShapeUnknown)
+            {
+                Tekla.Structures.Model.Part resolvedMainPart =
+                    GetActiveDrawingMainModelPart();
+                if (resolvedMainPart != null &&
+                    resolvedMainPart.Identifier != null)
+                {
+                    resolvedMainPartId = resolvedMainPart.Identifier.ID;
+                }
+            }
+
+            bool runAutoSection = ShouldRunAutoSection(partType);
+            bool autoSectionDimPassRequired = false;
+            bool autoSectionSingleLayout = false;
+
+            // Geometry Standard is independent from Auto Section and must
+            // finish before geometry analysis or any Section-specific work.
+            string loadStandardMessage;
+            if (!TryRunLoadStandardBeforeAutoDim(out loadStandardMessage))
+                throw new Exception(loadStandardMessage);
+
+            // MainPart identity is preserved by model ID; drawing selection is not restored.
+
             if ((partType == AutoDimPartType.ShapeIH ||
                  partType == AutoDimPartType.ShapeC) &&
                 !runAutoSection)
@@ -6847,14 +7049,13 @@ namespace TTSK_AutoDim_Plates
 
             if (runAutoSection)
             {
-                bool sectionWorkerInvoked = false;
                 DrawingHandler drawingHandler = new DrawingHandler();
                 Drawing drawing = drawingHandler.GetActiveDrawing();
                 Model model = new Model();
                 Tekla.Structures.Model.Part part = ResolveAutoSectionModelPart(
                     drawing,
                     model,
-                    selectedShapeAssemblyPartId);
+                    resolvedMainPartId);
                 bool useLegacyAutoSectionPrecheck =
                     partType == AutoDimPartType.ShapeIH ||
                     (partType == AutoDimPartType.ShapeC &&
@@ -6906,7 +7107,6 @@ namespace TTSK_AutoDim_Plates
                 }
                 else
                 {
-                    sectionWorkerInvoked = true;
                     Tekla.Technology.Akit.UserScript
                         .SectionViewAttributeResolution sectionAttributeResolution =
                             Tekla.Technology.Akit.UserScript
@@ -6981,52 +7181,61 @@ namespace TTSK_AutoDim_Plates
                 if (!execution.CanSaveDrawing)
                     return execution;
 
-                if (sectionWorkerInvoked &&
-                    selectedShapeAssemblyPartId > 0 &&
-                    !RestoreSelectedDrawingPartByModelId(selectedShapeAssemblyPartId))
-                {
-                    if (autoSectionDimPassRequired)
-                    {
-                        execution.SectionMessage +=
-                            " Shape DIM se dung selected ModelPart ID da capture.";
-                    }
-                    else
-                    {
-                        execution.SectionStatus = AutoSectionStatus.CreateFailed;
-                        execution.SectionMessage =
-                            "Khong restore duoc selected Drawing.Part sau Auto Section.";
-                        execution.CanSaveDrawing = false;
-                        return execution;
-                    }
-                }
             }
 
-            switch (partType)
+            bool gridModeEnabled = IsGridDimensionModeEnabledForAutoDim();
+            bool beamModeEnabled = IsBeamModeForAutoDimGrid();
+            bool shapeSupportsBeamGridDimensions =
+                partType == AutoDimPartType.ShapeIH ||
+                partType == AutoDimPartType.ShapeC ||
+                partType == AutoDimPartType.ShapeBox ||
+                partType == AutoDimPartType.ShapeUnknown;
+            bool runBeamGridDimensions =
+                gridModeEnabled && beamModeEnabled &&
+                shapeSupportsBeamGridDimensions;
+
+            if (gridModeEnabled && !runBeamGridDimensions)
             {
-                case AutoDimPartType.Plate:
-                    Tekla.Technology.Akit.UserScript.Script.Run(null);
-                    break;
+                execution.GridDimensionRequested = true;
+                execution.GridDimensionMessage = !beamModeEnabled
+                    ? "Grid DIM is currently supported for Beam only; Column AutoDim is unchanged."
+                    : partType == AutoDimPartType.ShapeL
+                        ? "Grid DIM is disabled for Shape L; Shape L AutoDim and Open/Fit Grid are unchanged."
+                        : "Grid DIM requires a supported Beam Shape path (I/H, C, Box or Unknown); the current AutoDim is unchanged.";
+            }
 
-                case AutoDimPartType.ShapeIH:
-                    if (autoSectionDimPassRequired)
-                    {
-                        Tekla.Technology.Akit.UserScript.ShapeScript
-                            .PrepareAutoSectionDimPass(
-                                autoSectionSingleLayout,
-                                selectedShapeAssemblyPartId);
-                    }
+            Tekla.Technology.Akit.UserScript.PHU_BeamGridDimensionEngine.Configure(
+                runBeamGridDimensions,
+                GetGridDimensionAxisCountForAutoDim());
 
-                    Tekla.Technology.Akit.UserScript.ShapeScript.Run(null);
-                    break;
+            try
+            {
+                switch (partType)
+                {
+                    case AutoDimPartType.Plate:
+                        Tekla.Technology.Akit.UserScript.Script.Run(null);
+                        break;
 
-                case AutoDimPartType.ShapeC:
-                    {
+                    case AutoDimPartType.ShapeIH:
+                        if (autoSectionDimPassRequired)
+                        {
+                            Tekla.Technology.Akit.UserScript.ShapeScript
+                                .PrepareAutoSectionDimPass(
+                                    autoSectionSingleLayout,
+                                    resolvedMainPartId);
+                        }
+
+                        Tekla.Technology.Akit.UserScript.ShapeScript.Run(null);
+                        break;
+
+                    case AutoDimPartType.ShapeC:
+                        {
                         if (autoSectionDimPassRequired)
                         {
                             Tekla.Technology.Akit.UserScript.ShapeCScript
                                 .PrepareAutoSectionDimPass(
                                     autoSectionSingleLayout,
-                                    selectedShapeAssemblyPartId);
+                                    resolvedMainPartId);
                         }
 
                         string shapeError;
@@ -7039,11 +7248,11 @@ namespace TTSK_AutoDim_Plates
                             execution.CanSaveDrawing = false;
                             return execution;
                         }
-                    }
-                    break;
+                        }
+                        break;
 
-                case AutoDimPartType.ShapeL:
-                    {
+                    case AutoDimPartType.ShapeL:
+                        {
                         string shapeError;
                         if (!RunOptionalShapeScriptByClassName(
                                 "ShapeLScript",
@@ -7054,11 +7263,11 @@ namespace TTSK_AutoDim_Plates
                             execution.CanSaveDrawing = false;
                             return execution;
                         }
-                    }
-                    break;
+                        }
+                        break;
 
-                case AutoDimPartType.ShapeBox:
-                    {
+                    case AutoDimPartType.ShapeBox:
+                        {
                         string shapeError;
                         if (!RunOptionalShapeScriptByClassName(
                                 "ShapeBoxScript",
@@ -7069,11 +7278,11 @@ namespace TTSK_AutoDim_Plates
                             execution.CanSaveDrawing = false;
                             return execution;
                         }
-                    }
-                    break;
+                        }
+                        break;
 
-                case AutoDimPartType.ShapeUnknown:
-                    {
+                    case AutoDimPartType.ShapeUnknown:
+                        {
                         DrawingHandler unknownDrawingHandler = new DrawingHandler();
                         Drawing unknownDrawing = unknownDrawingHandler.GetActiveDrawing();
                         Model unknownModel = new Model();
@@ -7081,7 +7290,7 @@ namespace TTSK_AutoDim_Plates
                             ResolveAutoSectionModelPart(
                                 unknownDrawing,
                                 unknownModel,
-                                selectedShapeAssemblyPartId);
+                                resolvedMainPartId);
 
                         Tekla.Technology.Akit.UserScript.ShapeUnknownRunResult unknownResult =
                             Tekla.Technology.Akit.UserScript.ShapeUnknownScript.RunSafe(
@@ -7099,8 +7308,24 @@ namespace TTSK_AutoDim_Plates
                         }
 
                         execution.SectionMessage = unknownResult.Message;
-                        break;
-                    }
+                            break;
+                        }
+                }
+            }
+            finally
+            {
+                if (runBeamGridDimensions)
+                {
+                    execution.GridDimensionRequested = true;
+                    execution.GridDimensionApplied =
+                        Tekla.Technology.Akit.UserScript
+                            .PHU_BeamGridDimensionEngine.LastRunSucceeded;
+                    execution.GridDimensionMessage =
+                        Tekla.Technology.Akit.UserScript
+                            .PHU_BeamGridDimensionEngine.LastRunMessage;
+                }
+
+                Tekla.Technology.Akit.UserScript.PHU_BeamGridDimensionEngine.Reset();
             }
 
             if (!runAutoSection)
@@ -7117,7 +7342,30 @@ namespace TTSK_AutoDim_Plates
 
             return enabled &&
                 (partType == AutoDimPartType.ShapeIH ||
-                 partType == AutoDimPartType.ShapeC);
+                  partType == AutoDimPartType.ShapeC);
+        }
+
+        private bool IsGridDimensionModeEnabledForAutoDim()
+        {
+            return _isBatchRunning && _batchGridDimEnabledSnapshot.HasValue
+                ? _batchGridDimEnabledSnapshot.Value
+                : fitKeepGridAxes;
+        }
+
+        private bool IsBeamModeForAutoDimGrid()
+        {
+            bool columnMode = _isBatchRunning && _batchGridDimBeamSnapshot.HasValue
+                ? !_batchGridDimBeamSnapshot.Value
+                : fitArrangeColumnMode;
+            return !columnMode;
+        }
+
+        private int GetGridDimensionAxisCountForAutoDim()
+        {
+            int value = _isBatchRunning && _batchGridDimAxisCountSnapshot.HasValue
+                ? _batchGridDimAxisCountSnapshot.Value
+                : fitGridAxisCount;
+            return Math.Max(1, Math.Min(3, value));
         }
 
         private bool IsBracketShapeProfile(
@@ -7138,27 +7386,28 @@ namespace TTSK_AutoDim_Plates
         private Tekla.Structures.Model.Part ResolveAutoSectionModelPart(
             Drawing drawing,
             Model model,
-            int selectedShapeAssemblyPartId)
+            int resolvedMainPartId)
         {
             try
             {
                 if (model == null || !model.GetConnectionStatus())
                     return null;
 
-                if (selectedShapeAssemblyPartId > 0)
+                if (resolvedMainPartId > 0)
                 {
-                    Tekla.Structures.Model.ModelObject selectedObject =
+                    Tekla.Structures.Model.ModelObject resolvedObject =
                         model.SelectModelObject(
-                            new Tekla.Structures.Identifier(selectedShapeAssemblyPartId));
+                            new Tekla.Structures.Identifier(resolvedMainPartId));
 
-                    Tekla.Structures.Model.Part selectedPart =
-                        selectedObject as Tekla.Structures.Model.Part;
+                    Tekla.Structures.Model.Part resolvedPart =
+                        resolvedObject as Tekla.Structures.Model.Part;
 
-                    if (selectedPart != null)
-                        return selectedPart;
+                    if (resolvedPart != null)
+                        return resolvedPart;
                 }
 
-                return GetMainModelPartFromDrawing(drawing);
+                return Tekla.Technology.Akit.UserScript.PHU_MainPartResolver
+                    .Resolve(model, drawing);
             }
             catch
             {
@@ -7230,6 +7479,16 @@ namespace TTSK_AutoDim_Plates
                 return;
             }
 
+            if (execution.GridDimensionRequested &&
+                !execution.GridDimensionApplied)
+            {
+                lblStatus.Text = !string.IsNullOrWhiteSpace(execution.GridDimensionMessage)
+                    ? "Done | " + execution.GridDimensionMessage
+                    : "Done | Grid DIM preflight did not take over Shape totals.";
+                lblStatus.ForeColor = Color.DarkOrange;
+                return;
+            }
+
             switch (execution.SectionStatus)
             {
                 case AutoSectionStatus.CreatedSingle:
@@ -7287,7 +7546,10 @@ namespace TTSK_AutoDim_Plates
                     break;
             }
 
-            lblStatus.Text = "Done active drawing";
+            lblStatus.Text = execution.GridDimensionRequested &&
+                execution.GridDimensionApplied
+                ? "Done | " + execution.GridDimensionMessage
+                : "Done active drawing";
             lblStatus.ForeColor = Color.FromArgb(22, 163, 74);
         }
 
@@ -7303,6 +7565,17 @@ namespace TTSK_AutoDim_Plates
                 color = Color.FromArgb(220, 38, 38);
                 return "ERROR";
             }
+
+            if (execution.GridDimensionRequested &&
+                !execution.GridDimensionApplied)
+            {
+                color = Color.DarkOrange;
+                return "GRID FALLBACK";
+            }
+
+            if (execution.GridDimensionRequested &&
+                execution.GridDimensionApplied)
+                return "GRID OK";
 
             switch (execution.SectionStatus)
             {
@@ -7359,96 +7632,6 @@ namespace TTSK_AutoDim_Plates
                    execution.SectionStatus == AutoSectionStatus.UnsafeRollbackFailed;
         }
 
-        private int CaptureSelectedShapeAssemblyPartId(AutoDimPartType partType)
-        {
-            if (partType != AutoDimPartType.ShapeIH &&
-                partType != AutoDimPartType.ShapeC &&
-                partType != AutoDimPartType.ShapeL &&
-                partType != AutoDimPartType.ShapeBox &&
-                partType != AutoDimPartType.ShapeUnknown)
-                return 0;
-
-            try
-            {
-                DrawingHandler drawingHandler = new DrawingHandler();
-                Drawing drawing = drawingHandler.GetActiveDrawing();
-                if (!(drawing is AssemblyDrawing))
-                    return 0;
-
-                DrawingObjectEnumerator selected =
-                    drawingHandler.GetDrawingObjectSelector().GetSelected();
-
-                while (selected != null && selected.MoveNext())
-                {
-                    Tekla.Structures.Drawing.Part drawingPart =
-                        selected.Current as Tekla.Structures.Drawing.Part;
-
-                    if (drawingPart != null && drawingPart.ModelIdentifier != null)
-                        return drawingPart.ModelIdentifier.ID;
-                }
-            }
-            catch
-            {
-            }
-
-            return 0;
-        }
-
-        private bool RestoreSelectedDrawingPartByModelId(int modelId)
-        {
-            if (modelId <= 0)
-                return false;
-
-            try
-            {
-                DrawingHandler drawingHandler = new DrawingHandler();
-                Drawing drawing = drawingHandler.GetActiveDrawing();
-                if (!(drawing is AssemblyDrawing))
-                    return false;
-
-                ContainerView sheet = drawing.GetSheet();
-                if (sheet == null)
-                    return false;
-
-                DrawingObjectEnumerator views = sheet.GetAllViews();
-                while (views != null && views.MoveNext())
-                {
-                    Tekla.Structures.Drawing.View view =
-                        views.Current as Tekla.Structures.Drawing.View;
-                    if (view == null)
-                        continue;
-
-                    DrawingObjectEnumerator parts =
-                        view.GetAllObjects(typeof(Tekla.Structures.Drawing.Part));
-
-                    while (parts != null && parts.MoveNext())
-                    {
-                        Tekla.Structures.Drawing.Part drawingPart =
-                            parts.Current as Tekla.Structures.Drawing.Part;
-
-                        if (drawingPart == null || drawingPart.ModelIdentifier == null)
-                            continue;
-
-                        if (drawingPart.ModelIdentifier.ID != modelId)
-                            continue;
-
-                        System.Collections.ArrayList partToSelect =
-                            new System.Collections.ArrayList();
-                        partToSelect.Add(drawingPart);
-
-                        return drawingHandler
-                            .GetDrawingObjectSelector()
-                            .SelectObjects(partToSelect, false);
-                    }
-                }
-            }
-            catch
-            {
-            }
-
-            return false;
-        }
-
         private int GetTopBottomHoleCheckResult()
         {
             try
@@ -7482,12 +7665,6 @@ namespace TTSK_AutoDim_Plates
         {
             try
             {
-                Tekla.Structures.Model.Part selectedUnknownPart =
-                    GetSelectedAssemblyUnknownModelPartForAutoDim();
-
-                if (selectedUnknownPart != null)
-                    return AutoDimPartType.ShapeUnknown;
-
                 Tekla.Structures.Model.Part part = GetActiveDrawingMainModelPart();
                 if (part == null)
                     return AutoDimPartType.Unknown;
@@ -7515,48 +7692,6 @@ namespace TTSK_AutoDim_Plates
             {
                 return AutoDimPartType.Unknown;
             }
-        }
-
-        private Tekla.Structures.Model.Part GetSelectedAssemblyUnknownModelPartForAutoDim()
-        {
-            try
-            {
-                DrawingHandler drawingHandler = new DrawingHandler();
-                Drawing drawing = drawingHandler.GetActiveDrawing();
-                if (!(drawing is AssemblyDrawing))
-                    return null;
-
-                Model model = new Model();
-                if (!model.GetConnectionStatus())
-                    return null;
-
-                DrawingObjectEnumerator selected =
-                    drawingHandler.GetDrawingObjectSelector().GetSelected();
-
-                while (selected != null && selected.MoveNext())
-                {
-                    Tekla.Structures.Drawing.Part drawingPart =
-                        selected.Current as Tekla.Structures.Drawing.Part;
-
-                    if (drawingPart == null || drawingPart.ModelIdentifier == null)
-                        continue;
-
-                    Tekla.Structures.Model.Part modelPart =
-                        model.SelectModelObject(drawingPart.ModelIdentifier)
-                        as Tekla.Structures.Model.Part;
-
-                    if (modelPart == null || IsPlatePart(modelPart))
-                        continue;
-
-                    if (DetectShapeProfile(modelPart) == ShapeProfileType.Unknown)
-                        return modelPart;
-                }
-            }
-            catch
-            {
-            }
-
-            return null;
         }
 
         private Tekla.Structures.Model.Part GetActiveDrawingMainModelPart()
@@ -7587,34 +7722,8 @@ namespace TTSK_AutoDim_Plates
                 if (!model.GetConnectionStatus())
                     return null;
 
-                SinglePartDrawing spDrawing = drawing as SinglePartDrawing;
-                if (spDrawing != null)
-                {
-                    Tekla.Structures.Model.ModelObject mo =
-                        model.SelectModelObject(spDrawing.PartIdentifier);
-
-                    Tekla.Structures.Model.Part part =
-                        mo as Tekla.Structures.Model.Part;
-
-                    if (part != null)
-                        return part;
-                }
-
-                AssemblyDrawing assemblyDrawing = drawing as AssemblyDrawing;
-                if (assemblyDrawing != null)
-                {
-                    Tekla.Structures.Model.Part mainPart =
-                        TryGetAssemblyDrawingMainPart(model, assemblyDrawing);
-
-                    if (mainPart != null)
-                        return mainPart;
-                }
-
-                // Fallback chung cho cả Single/Assembly:
-                // quét các Drawing.Part trong các view và lấy model part lớn nhất.
-                // Cách này giúp nhận diện được cả bản vẽ Assembly khi AssemblyIdentifier
-                // không đọc được hoặc Tekla không trả main part trực tiếp.
-                return FindLargestModelPartVisibleInDrawing(model, drawing);
+                return Tekla.Technology.Akit.UserScript.PHU_MainPartResolver
+                    .Resolve(model, drawing);
             }
             catch
             {
@@ -8220,6 +8329,18 @@ namespace TTSK_AutoDim_Plates
             if (_resumeIndex == 0 || !_batchAutoSectionEnabledSnapshot.HasValue)
                 _batchAutoSectionEnabledSnapshot = _autoSectionEnabled;
 
+            if (_resumeIndex == 0 ||
+                !_batchGridDimEnabledSnapshot.HasValue ||
+                !_batchGridDimBeamSnapshot.HasValue ||
+                !_batchGridDimAxisCountSnapshot.HasValue)
+            {
+                _batchGridDimEnabledSnapshot = fitKeepGridAxes;
+                _batchGridDimBeamSnapshot = !fitArrangeColumnMode;
+                _batchGridDimAxisCountSnapshot = Math.Max(
+                    1,
+                    Math.Min(3, fitGridAxisCount));
+            }
+
             _isBatchRunning = true;
             _stopRequested = false;
             ApplyAutoSectionSwitchUi();
@@ -8482,6 +8603,9 @@ namespace TTSK_AutoDim_Plates
 
             _resumeIndex = 0;
             _batchAutoSectionEnabledSnapshot = null;
+            _batchGridDimEnabledSnapshot = null;
+            _batchGridDimBeamSnapshot = null;
+            _batchGridDimAxisCountSnapshot = null;
 
             lblStatus.Text = "✓  Batch done: " + ok + " OK, Revision skipped: " + skippedRevision + ", Error: " + fail;
             lblStatus.ForeColor = fail == 0 ? Color.FromArgb(22, 163, 74) : Color.DarkOrange;

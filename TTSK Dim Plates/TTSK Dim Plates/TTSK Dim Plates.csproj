@@ -187,6 +187,9 @@
     <Compile Include="PHU_Slot04_Pallet01_02_Main.cs" />
     <Compile Include="PHU_Slot05_DimPlate.cs" />
     <Compile Include="PHU_Slot06_DumpSelectedPlateAndDims.cs" />
+    <Compile Include="PHU_NishiAzabuAutoDim.cs" />
+    <Compile Include="PHU_NishiAzabuAutoDimSlot07.cs" />
+    <Compile Include="PHU_BeamGridDimensionEngine.cs" />
     <Compile Include="PHU_LineDistance.cs" />
     <Compile Include="PHU_OpenGridView.cs" />
     <Compile Include="PHU_Slot02_Select-Main-neighbor-Plate.cs" />
@@ -198,6 +201,7 @@
     <Compile Include="PHU_Shape_Box.cs" />
     <Compile Include="PHU_Shape_L.cs" />
     <Compile Include="PHU_Shape_Unknown.cs" />
+    <Compile Include="PHU_MainPartResolver.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <EmbeddedResource Include="Properties\Resources.resx">

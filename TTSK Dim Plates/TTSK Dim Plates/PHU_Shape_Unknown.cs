@@ -105,6 +105,9 @@ namespace Tekla.Technology.Akit.UserScript
                     return Fail(result, "Khong ket noi duoc model Tekla.");
 
                 if (part == null || part.Identifier == null)
+                    part = PHU_MainPartResolver.Resolve(model, drawing);
+
+                if (part == null || part.Identifier == null)
                     return Fail(result, "Khong xac dinh duoc ModelPart can dim.");
 
                 List<View> partViews = GetViewsContainingPart(
@@ -244,26 +247,58 @@ namespace Tekla.Technology.Akit.UserScript
                 VerifyManualScaleAppliedUnknown(partViews);
                 InitializeCurrentDimTierSpacing(topView);
 
+                PHU_BeamGridDimensionEngine.Prepare(
+                    model,
+                    drawing,
+                    part,
+                    topView,
+                    frontView);
+
                 StraightDimensionSetHandler handler =
                     new StraightDimensionSetHandler();
 
                 foreach (ViewDimensionPlan plan in plans)
                 {
-                    StraightDimensionSet horizontal = CreateDimension(
-                        handler,
-                        plan.View,
-                        plan.LeftPoint,
-                        plan.RightPoint,
-                        new Vector(0, 1, 0),
-                        GetSteelDimOffsetByTier(0));
+                    double horizontalOffset = GetSteelDimOffsetByTier(0);
+                    double verticalOffset = GetSteelDimOffsetByTier(0);
+                    bool createHorizontalTotal = true;
 
-                    if (horizontal == null)
+                    if (PHU_BeamGridDimensionEngine.ShouldTakeOverHorizontalTotal(plan.View))
                     {
-                        throw new InvalidOperationException(
-                            "Khong tao duoc dim ngang trong view " + plan.Name + ".");
+                        createHorizontalTotal = !PHU_BeamGridDimensionEngine.ReportShapeHorizontalTotal(
+                            plan.View,
+                            plan.LeftPoint,
+                            plan.RightPoint,
+                            horizontalOffset,
+                            0,
+                            GetSteelDimOffsetByTier(0),
+                            GetSteelDimOffsetByTier(1),
+                            GetSteelDimOffsetByTier(2),
+                            plan.TopPoint,
+                            verticalOffset,
+                            0,
+                            GetSteelDimOffsetByTier(0),
+                            GetSteelDimOffsetByTier(1));
                     }
 
-                    createdDimensions.Add(horizontal);
+                    if (createHorizontalTotal)
+                    {
+                        StraightDimensionSet horizontal = CreateDimension(
+                            handler,
+                            plan.View,
+                            plan.LeftPoint,
+                            plan.RightPoint,
+                            new Vector(0, 1, 0),
+                            horizontalOffset);
+
+                        if (horizontal == null)
+                        {
+                            throw new InvalidOperationException(
+                                "Khong tao duoc dim ngang trong view " + plan.Name + ".");
+                        }
+
+                        createdDimensions.Add(horizontal);
+                    }
 
                     StraightDimensionSet vertical = CreateDimension(
                         handler,
@@ -271,7 +306,7 @@ namespace Tekla.Technology.Akit.UserScript
                         plan.TopPoint,
                         plan.BottomPoint,
                         new Vector(-1, 0, 0),
-                        GetSteelDimOffsetByTier(0));
+                        verticalOffset);
 
                     if (vertical == null)
                     {
@@ -281,6 +316,9 @@ namespace Tekla.Technology.Akit.UserScript
 
                     createdDimensions.Add(vertical);
                 }
+
+                bool gridDimensionsCreated =
+                    PHU_BeamGridDimensionEngine.CreatePreparedDimensions();
 
                 CommitAndWait(drawing, 250);
 
@@ -347,6 +385,9 @@ namespace Tekla.Technology.Akit.UserScript
 
                 UpdateDrawingTitle3ScaleUnknown(drawing, topView);
                 CommitAndWait(drawing, 250);
+
+                if (gridDimensionsCreated)
+                    PHU_BeamGridDimensionEngine.AlignPreparedTopFrontByGrid();
 
                 SelectViewsUnknown(partViews);
 

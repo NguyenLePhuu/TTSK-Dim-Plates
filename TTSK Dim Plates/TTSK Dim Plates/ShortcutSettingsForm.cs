@@ -774,6 +774,12 @@ namespace TTSK_AutoDim_Plates
                 return Color.FromArgb(239, 68, 68);
             if (string.Equals(actionId, ShortcutManager.ActionSlot06, StringComparison.OrdinalIgnoreCase))
                 return Color.FromArgb(20, 184, 166);
+            if (string.Equals(actionId, ShortcutManager.ActionSlot07, StringComparison.OrdinalIgnoreCase))
+                return Color.FromArgb(0, 150, 125);
+            if (string.Equals(actionId, ShortcutManager.ActionSlot08, StringComparison.OrdinalIgnoreCase))
+                return Color.FromArgb(14, 165, 233);
+            if (string.Equals(actionId, ShortcutManager.ActionSlot09, StringComparison.OrdinalIgnoreCase))
+                return Color.FromArgb(48, 162, 121);
 
             return _accentColor;
         }
