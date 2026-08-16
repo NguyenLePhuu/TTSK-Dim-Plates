@@ -44,3 +44,8 @@ backup/
 .codex-backups/
 launcher/
 /TTSK Dim Plates.exe
+
+# Temporary cloud drive folders
+.tmp.driveupload/
+.tmp.drivedownload/
+

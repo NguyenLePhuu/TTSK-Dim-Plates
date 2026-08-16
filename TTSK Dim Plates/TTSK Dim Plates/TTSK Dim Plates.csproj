@@ -189,6 +189,8 @@
     <Compile Include="PHU_Slot06_DumpSelectedPlateAndDims.cs" />
     <Compile Include="PHU_NishiAzabuAutoDim.cs" />
     <Compile Include="PHU_NishiAzabuAutoDimSlot07.cs" />
+    <Compile Include="PHU_AutoDimSlot08.cs" />
+    <Compile Include="PHU_AutoDimSlot08.Type2.cs" />
     <Compile Include="PHU_BeamGridDimensionEngine.cs" />
     <Compile Include="PHU_LineDistance.cs" />
     <Compile Include="PHU_OpenGridView.cs" />

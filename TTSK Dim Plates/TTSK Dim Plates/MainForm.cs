@@ -1027,7 +1027,18 @@ namespace TTSK_AutoDim_Plates
                 delegate { RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_NishiAzabuAutoDimSlot07"); });
             page2.Controls.Add(slot7);
 
-            AddAutoDimPlaceholderSlots(page2, 8, 12, innerMargin, gap, boxW, boxH);
+            Panel slot8 = MakeAutoDimSlotBox(
+                GetAutoDimCircledNumber(8),
+                "Liên kết giằng xéo",
+                "3 thanh L + plate liên kết",
+                innerMargin + boxW + gap,
+                0,
+                boxW,
+                boxH,
+                delegate { RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot08"); });
+            page2.Controls.Add(slot8);
+
+            AddAutoDimPlaceholderSlots(page2, 9, 12, innerMargin, gap, boxW, boxH);
             AddAutoDimPlaceholderSlots(page3, 13, 17, innerMargin, gap, boxW, boxH);
 
             Panel slot18 = MakeAutoDimSlotBox(

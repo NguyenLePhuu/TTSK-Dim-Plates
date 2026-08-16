@@ -392,7 +392,7 @@ namespace TTSK_AutoDim_Plates
             list.Add(new ShortcutActionDefinition(ActionSlot05, "Slot05 (Function 5)", "Use current Slot05 mode", "5", Keys.D5));
             list.Add(new ShortcutActionDefinition(ActionSlot06, "Slot06 (Function 6)", "AutoDim function 6", "6", Keys.D6));
             list.Add(new ShortcutActionDefinition(ActionSlot07, "Slot07 (Nishi Azabu 2)", "AutoDim Nishi topology 2", "7", Keys.D7));
-            list.Add(new ShortcutActionDefinition(ActionSlot08, "Slot08 (Function 8)", "Chờ gắn file CS", "8", Keys.D8));
+            list.Add(new ShortcutActionDefinition(ActionSlot08, "Slot08 (Liên kết giằng xéo)", "Auto dim 3 thanh L + plate liên kết", "8", Keys.D8));
             list.Add(new ShortcutActionDefinition(ActionSlot09, "Slot09 (Function 9)", "AutoDim function 9", "9", Keys.D9));
 
             return list;

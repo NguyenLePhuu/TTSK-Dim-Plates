@@ -485,6 +485,7 @@ namespace Tekla.Technology.Akit.UserScript
             // Các thuật toán DIM / MOVE / CENTER / ARRANGE phía dưới giữ nguyên.
             View topViewByType = FindViewByViewTypeForH(views, "TopView", "Top");
             View frontViewByType = FindViewByViewTypeForH(views, "FrontView", "Front");
+            View backViewByType = FindViewByViewTypeForH(views, "BackView", "Back");
             View bottomViewByType = FindViewByViewTypeForH(views, "BottomView", "Bottom");
 
             List<View> specialTopSections = new List<View>();
@@ -515,14 +516,35 @@ namespace Tekla.Technology.Akit.UserScript
                 );
             }
 
-            // Nếu Tekla không trả TopView thật vì người dùng cắt mặt Top thủ công dạng SectionView,
-            // lấy Section đặc biệt nằm trên Front và có chiều ngang gần bằng Front làm Top.
+            // Assembly view routing is flexible but deterministic:
+            // TOP -> BOTTOM, and FRONT -> BACK. A fallback becomes the primary
+            // view for the existing DIM flow and is not dimensioned a second time.
+            if (isAssemblyDrawing && topViewByType == null)
+            {
+                if (bottomViewByType != null)
+                    topViewByType = bottomViewByType;
+                else if (specialBottomSections.Count > 0)
+                    topViewByType = specialBottomSections[0];
+            }
+
+            if (isAssemblyDrawing && frontViewByType == null && backViewByType != null)
+                frontViewByType = backViewByType;
+
+            // Single Part keeps the established special-section fallback.
             if (topViewByType == null && specialTopSections.Count > 0)
                 topViewByType = specialTopSections[0];
 
-            // Hướng mới bắt buộc Front phải xác định bằng ViewType để phân biệt Top/Bottom Section đặc biệt.
             if (frontViewByType == null || topViewByType == null)
                 return;
+
+            // Chỉ tách nhánh khi trục dài của I/H thực sự dựng đứng trong Top view.
+            // Trường hợp ngang tiếp tục đi nguyên flow legacy phía dưới.
+            bool hShapeLongitudinalVertical =
+                isAssemblyDrawing &&
+                IsHShapeLongitudinalVerticalInView(
+                    model,
+                    part,
+                    topViewByType);
 
             InitializeHShapeHoleCatalog(
                 model,
@@ -584,20 +606,35 @@ namespace Tekla.Technology.Akit.UserScript
             // Grid DIM preflight is intentionally after AutoScale and before
             // any Shape DIM is created. It receives this exact MainPart and
             // Top/Front pair; it never reselects a part or scans for another view.
-            PHU_BeamGridDimensionEngine.Prepare(
-                model,
-                drawing,
-                part,
-                topViewByType,
-                frontViewByType);
+            if (hShapeLongitudinalVertical)
+            {
+                PHU_BeamGridDimensionEngine.Reset();
+            }
+            else
+            {
+                PHU_BeamGridDimensionEngine.Prepare(
+                    model,
+                    drawing,
+                    part,
+                    topViewByType,
+                    frontViewByType);
+            }
 
             View frontViewForTopBottomNotch =
                 (dimViews.Count > 1) ? dimViews[1] : frontViewByType;
             ChamferInfluence frontNotchInfluenceForTopBottom =
-                DetectFrontNotchInfluenceOnly(model, part, frontViewForTopBottomNotch);
+                hShapeLongitudinalVertical
+                ? new ChamferInfluence()
+                : DetectFrontNotchInfluenceOnly(model, part, frontViewForTopBottomNotch);
 
             TopBoundary boundary;
-            CreateDimsForTopView(model, part, topView, frontNotchInfluenceForTopBottom, out boundary);
+            CreateDimsForTopView(
+                model,
+                part,
+                topView,
+                frontNotchInfluenceForTopBottom,
+                isAssemblyDrawing,
+                out boundary);
             CommitAndWait(drawing, 250);
 
             if (boundary.IsValid)
@@ -653,6 +690,41 @@ namespace Tekla.Technology.Akit.UserScript
                 CommitAndWait(drawing, 250);
             }
 
+            // BACK VIEW chỉ tham gia flow Assembly + dầm dọc. Dùng nguyên thuật toán
+            // FRONT để tạo đầy đủ DIM tổng/lỗ/rãnh theo hệ tọa độ riêng của view.
+            // Không đưa BACK vào dimViews vì danh sách đó còn được dùng để nhận diện BOTTOM.
+            List<View> backViews = new List<View>();
+            if (hShapeLongitudinalVertical &&
+                backViewByType != null &&
+                !IsSameViewForH(backViewByType, frontView))
+            {
+                TopBoundary backBoundary;
+                CreateDimsForFrontView(
+                    model,
+                    part,
+                    backViewByType,
+                    true,
+                    out backBoundary);
+                CommitAndWait(drawing, 250);
+
+                if (backBoundary.IsValid)
+                {
+                    ResizeViewBoundaryKeepDepth(
+                        backViewByType,
+                        backBoundary.MinX,
+                        backBoundary.MaxX,
+                        backBoundary.MinY,
+                        backBoundary.MaxY);
+                }
+                else
+                {
+                    ResizeViewBoundaryKeepDepthBySolid(backViewByType, model, part);
+                }
+
+                CommitAndWait(drawing, 250);
+                AddUniqueViewForMove(backViews, backViewByType);
+            }
+
             // BOTTOM VIEW: cho phép người dùng tự cắt mặt bottom ra.
             // Không bắt buộc view phải có hướng nhìn ngược Top, vì mặt cắt bottom có thể không phải
             // là Bottom View chuẩn của Tekla. Các view phụ còn lại sau khi bỏ Top / Front / view nhỏ nhất Exact
@@ -664,7 +736,13 @@ namespace Tekla.Technology.Akit.UserScript
             {
                 TopBoundary bottomBoundary;
 
-                CreateDimsForBottomView(model, part, bottomView, frontNotchInfluenceForTopBottom, out bottomBoundary);
+                CreateDimsForBottomView(
+                    model,
+                    part,
+                    bottomView,
+                    frontNotchInfluenceForTopBottom,
+                    isAssemblyDrawing,
+                    out bottomBoundary);
                 bottomTopDimTiers.Add(LastBottomTopDimTier);
                 CommitAndWait(drawing, 250);
 
@@ -691,6 +769,7 @@ namespace Tekla.Technology.Akit.UserScript
             // only after Shape has completed its own inner tiers. On an engine
             // failure it rolls its work back and restores the replaced totals.
             bool beamGridDimensionsCreated =
+                !hShapeLongitudinalVertical &&
                 PHU_BeamGridDimensionEngine.CreatePreparedDimensions();
             if (beamGridDimensionsCreated)
             {
@@ -702,29 +781,32 @@ namespace Tekla.Technology.Akit.UserScript
                     PHU_BeamGridDimensionEngine.GetOutermostHorizontalTier(frontView));
             }
 
-            AlignMainViewsByGeometry(
-                topView,
-                boundary,
-                frontView,
-                frontBoundary,
-                LastTopBottomDimTier,
-                LastFrontTopDimTier
-            );
-
-            for (int i = 0; i < bottomViews.Count; i++)
+            if (!hShapeLongitudinalVertical)
             {
-                View bottomView = bottomViews[i];
-                TopBoundary bottomBoundary = (i < bottomBoundaries.Count) ? bottomBoundaries[i] : new TopBoundary();
-                int bottomTopDimTier = (i < bottomTopDimTiers.Count) ? bottomTopDimTiers[i] : 1;
-
                 AlignMainViewsByGeometry(
+                    topView,
+                    boundary,
                     frontView,
                     frontBoundary,
-                    bottomView,
-                    bottomBoundary,
-                    LastFrontBottomDimTier,
-                    bottomTopDimTier
+                    LastTopBottomDimTier,
+                    LastFrontTopDimTier
                 );
+
+                for (int i = 0; i < bottomViews.Count; i++)
+                {
+                    View bottomView = bottomViews[i];
+                    TopBoundary bottomBoundary = (i < bottomBoundaries.Count) ? bottomBoundaries[i] : new TopBoundary();
+                    int bottomTopDimTier = (i < bottomTopDimTiers.Count) ? bottomTopDimTiers[i] : 1;
+
+                    AlignMainViewsByGeometry(
+                        frontView,
+                        frontBoundary,
+                        bottomView,
+                        bottomBoundary,
+                        LastFrontBottomDimTier,
+                        bottomTopDimTier
+                    );
+                }
             }
 
             const double finalGreenBoxGap = 15.0;
@@ -738,16 +820,43 @@ namespace Tekla.Technology.Akit.UserScript
             // MOVE CENTER MỚI: dùng KHUNG TÍM RestrictionBox giống file plate OK-V3.
             // Không dùng CenterViewGroupOnSheet() cũ vì hàm cũ lấy biên hình học/tier DIM,
             // dễ làm tâm cụm view lệch sau khi DIM/mark làm khung xanh thay đổi.
-            CenterShapeViewsByPurpleBoxOnSheet(drawing, topView, frontView, smallestExactView, bottomViews);
+            List<View> verticalCenterExtraViews = bottomViews;
+            if (hShapeLongitudinalVertical && backViews.Count > 0)
+            {
+                verticalCenterExtraViews = new List<View>();
+                foreach (View bottomView in bottomViews)
+                    AddUniqueViewForMove(verticalCenterExtraViews, bottomView);
+                foreach (View backView in backViews)
+                    AddUniqueViewForMove(verticalCenterExtraViews, backView);
+            }
+
+            CenterShapeViewsByPurpleBoxOnSheet(
+                drawing,
+                topView,
+                frontView,
+                smallestExactView,
+                verticalCenterExtraViews);
             CommitAndWait(drawing, 250);
 
             // ARRANGE CUỐI MỚI: dùng KHUNG XANH để ép gap 15 có tính cả DIM/mark.
             // Chỉ xử lý cụm Top / Front / Bottom. Section bên cạnh không tham gia gap dọc.
-            ForceFinalEqualArrangeShapeTopFrontBottomGap15(
-                topView,
-                frontView,
-                bottomViews,
-                finalGreenBoxGap);
+            if (hShapeLongitudinalVertical)
+            {
+                ForceFinalArrangeVerticalHShapeTwoColumns(
+                    topView,
+                    frontView,
+                    bottomViews,
+                    backViews,
+                    finalGreenBoxGap);
+            }
+            else
+            {
+                ForceFinalEqualArrangeShapeTopFrontBottomGap15(
+                    topView,
+                    frontView,
+                    bottomViews,
+                    finalGreenBoxGap);
+            }
             CommitAndWait(drawing, 250);
 
             // ALIGN LẠI MẶT CẮT SAU KHI CENTER + GAP 15.
@@ -807,6 +916,24 @@ namespace Tekla.Technology.Akit.UserScript
             public Point RightInner;
         }
 
+        private sealed class VerticalAssemblyRightNotchGeometry
+        {
+            public Point Outer;
+            public Point Inner;
+            public double Width;
+            public double Depth;
+            public bool IsTop;
+        }
+
+        private sealed class VerticalAssemblyLeftNotchGeometry
+        {
+            public Point Outer;
+            public Point Inner;
+            public double Width;
+            public double Depth;
+            public bool IsTop;
+        }
+
         private struct ChamferEdgeAnchors
         {
             public Point TopLeft;
@@ -828,6 +955,11 @@ namespace Tekla.Technology.Akit.UserScript
             // Mặt Front không dùng override này; chân DIM Front giữ theo thuật toán gốc.
             public bool HasLeftNotchHoleAnchor;
             public bool HasRightNotchHoleAnchor;
+
+            // Assembly H/I dọc: DIM lỗ ở đầu có rãnh trái vẫn phải đo từ
+            // mép ngoài thật (TopMost/BottomMost), không từ vai trong của rãnh.
+            public bool HasTopLeftVerticalEndNotch;
+            public bool HasBottomLeftVerticalEndNotch;
         }
 
         private sealed class DimOffsetAnchor4
@@ -869,6 +1001,7 @@ namespace Tekla.Technology.Akit.UserScript
             public HShapeHoleFace Face;
             public double TopBottomHoleDiameter;
             public double FrontHoleDiameter;
+            public double BoltSize;
             public double SlotX;
             public double SlotY;
             public string HoleType;
@@ -878,6 +1011,7 @@ namespace Tekla.Technology.Akit.UserScript
         {
             public Point Point;
             public double HoleDiameter;
+            public double BoltSize;
             public double SlotX;
             public double SlotY;
             public string HoleType;
@@ -892,9 +1026,21 @@ namespace Tekla.Technology.Akit.UserScript
             public List<HHoleCandidate> FrontCandidates = new List<HHoleCandidate>();
         }
 
+        // H/I HOLE TECHNICAL FAMILY:
+        // Chỉ phân loại kỹ thuật trước khi chạy geometry DIM legacy.
+        // Khác phi HOẶC khác M (BoltSize) => family khác, không được gom chung chain.
+        // Các writer DIM/tier/representative phía sau vẫn dùng nguyên thuật toán hiện tại.
+        private class HHoleTechnicalFamily
+        {
+            public double HoleDiameter;
+            public double BoltSize;
+            public List<HHoleCandidate> Holes = new List<HHoleCandidate>();
+        }
+
         private class TopBottomHoleGroup
         {
             public List<Point> Holes = new List<Point>();
+            public double BoltSize;
 
             // 0 = lỗ đơn, 1 = cụm ngang, 2 = cụm dọc, 3 = cụm 2 chiều.
             public int Type;
@@ -1131,6 +1277,7 @@ namespace Tekla.Technology.Akit.UserScript
                         frontHoleDiameter = modelHoleDiameter;
                 }
 
+                double boltSize = bg.BoltSize;
                 double slotX = GetHoleSlotX(bg);
                 double slotY = GetHoleSlotY(bg);
                 string holeType = GetHoleTypeText(bg);
@@ -1176,6 +1323,7 @@ namespace Tekla.Technology.Akit.UserScript
                     );
                     record.TopBottomHoleDiameter = topBottomHoleDiameter;
                     record.FrontHoleDiameter = frontHoleDiameter;
+                    record.BoltSize = boltSize;
                     record.SlotX = slotX;
                     record.SlotY = slotY;
                     record.HoleType = holeType;
@@ -1852,6 +2000,7 @@ namespace Tekla.Technology.Akit.UserScript
                     HHoleCandidate item = new HHoleCandidate();
                     item.Point = new Point(p.X, p.Y, p.Z);
                     item.HoleDiameter = holeDiameter;
+                    item.BoltSize = record.BoltSize;
                     item.SlotX = record.SlotX;
                     item.SlotY = record.SlotY;
                     item.HoleType = record.HoleType;
@@ -1934,6 +2083,72 @@ namespace Tekla.Technology.Akit.UserScript
             }
 
             return result;
+        }
+
+        private static List<HHoleTechnicalFamily> GroupHHoleCandidatesByPhiAndM(
+            List<HHoleCandidate> holes)
+        {
+            List<HHoleTechnicalFamily> result = new List<HHoleTechnicalFamily>();
+
+            try
+            {
+                if (holes == null)
+                    return result;
+
+                foreach (HHoleCandidate hole in holes)
+                {
+                    if (hole == null || hole.Point == null)
+                        continue;
+
+                    HHoleTechnicalFamily found = null;
+                    foreach (HHoleTechnicalFamily family in result)
+                    {
+                        if (family == null)
+                            continue;
+
+                        if (AreSameHHoleTechnicalValue(
+                                family.HoleDiameter,
+                                hole.HoleDiameter) &&
+                            AreSameHHoleTechnicalValue(
+                                family.BoltSize,
+                                hole.BoltSize))
+                        {
+                            found = family;
+                            break;
+                        }
+                    }
+
+                    if (found == null)
+                    {
+                        found = new HHoleTechnicalFamily();
+                        found.HoleDiameter = hole.HoleDiameter;
+                        found.BoltSize = hole.BoltSize;
+                        result.Add(found);
+                    }
+
+                    found.Holes.Add(hole);
+                }
+            }
+            catch
+            {
+            }
+
+            return result;
+        }
+
+        private static bool AreSameHHoleTechnicalValue(double first, double second)
+        {
+            // Phi/M từ Tekla là giá trị kỹ thuật theo mm; chỉ cho sai số số thực rất nhỏ.
+            // Không dùng TOP_BOTTOM_HOLE_SIZE_TOL=1mm vì identity family phải strict hơn.
+            const double familyValueTol = 0.10;
+            return Math.Abs(first - second) <= familyValueTol;
+        }
+
+        private static double GetHHoleLegacyDiameterKey(double diameter)
+        {
+            if (diameter <= MIN_VALID_HOLE_DIM_GAP)
+                return 0.0;
+            return Math.Round(diameter, 0);
         }
 
         private static List<Point> ConvertHHoleCandidatesToDimPoints(List<HHoleCandidate> holes)
@@ -2815,6 +3030,7 @@ namespace Tekla.Technology.Akit.UserScript
             ModelPart part,
             View view,
             ChamferInfluence frontNotchInfluence,
+            bool isAssemblyDrawing,
             out TopBoundary boundary)
         {
             boundary = new TopBoundary();
@@ -2867,7 +3083,9 @@ namespace Tekla.Technology.Akit.UserScript
                 boundary.MinY = minY;
                 boundary.MaxY = maxY;
 
-                double beamLength = Math.Abs(maxX - minX);
+                double beamLength = isAssemblyDrawing
+                    ? GetHShapeLongitudinalSize(minX, maxX, minY, maxY)
+                    : Math.Abs(maxX - minX);
 
                 StraightDimensionSetHandler handler =
                     new StraightDimensionSetHandler();
@@ -2961,8 +3179,8 @@ namespace Tekla.Technology.Akit.UserScript
                 leftChamferTierReserved = chamferInfluence.Left;
                 rightChamferTierReserved = chamferInfluence.Right;
 
-                List<Point> topFlangeHoles =
-                    GetVisibleTopFlangeBoltCentersFromView(
+                List<HHoleCandidate> topFlangeHoleCandidates =
+                    GetVisibleTopFlangeHoleCandidatesFromView(
                         model,
                         view,
                         minX,
@@ -2970,6 +3188,8 @@ namespace Tekla.Technology.Akit.UserScript
                         minY,
                         maxY
                     );
+                List<Point> topFlangeHoles =
+                    ConvertHHoleCandidatesToDimPoints(topFlangeHoleCandidates);
 
                 bool holeDimCreated = false;
                 int topHoleTierCount = 0;
@@ -2985,6 +3205,7 @@ namespace Tekla.Technology.Akit.UserScript
                         handler,
                         view,
                         topFlangeHoles,
+                        topFlangeHoleCandidates,
                         topPolygon,
                         topHoleVerticalPolygon,
                         minX,
@@ -3168,6 +3389,7 @@ namespace Tekla.Technology.Akit.UserScript
             ModelPart part,
             View view,
             ChamferInfluence frontNotchInfluence,
+            bool isAssemblyDrawing,
             out TopBoundary boundary)
         {
             boundary = new TopBoundary();
@@ -3220,7 +3442,9 @@ namespace Tekla.Technology.Akit.UserScript
                 boundary.MinY = minY;
                 boundary.MaxY = maxY;
 
-                double beamLength = Math.Abs(maxX - minX);
+                double beamLength = isAssemblyDrawing
+                    ? GetHShapeLongitudinalSize(minX, maxX, minY, maxY)
+                    : Math.Abs(maxX - minX);
 
                 StraightDimensionSetHandler handler =
                     new StraightDimensionSetHandler();
@@ -3310,8 +3534,8 @@ namespace Tekla.Technology.Akit.UserScript
                 leftChamferTierReserved = chamferInfluence.Left;
                 rightChamferTierReserved = chamferInfluence.Right;
 
-                List<Point> topFlangeHoles =
-                    GetVisibleBottomFlangeBoltCentersFromView(
+                List<HHoleCandidate> topFlangeHoleCandidates =
+                    GetVisibleBottomFlangeHoleCandidatesFromView(
                         model,
                         view,
                         minX,
@@ -3319,6 +3543,8 @@ namespace Tekla.Technology.Akit.UserScript
                         minY,
                         maxY
                     );
+                List<Point> topFlangeHoles =
+                    ConvertHHoleCandidatesToDimPoints(topFlangeHoleCandidates);
 
                 bool holeDimCreated = false;
                 int topHoleTierCount = 0;
@@ -3334,6 +3560,7 @@ namespace Tekla.Technology.Akit.UserScript
                         handler,
                         view,
                         topFlangeHoles,
+                        topFlangeHoleCandidates,
                         topPolygon,
                         topHoleVerticalPolygon,
                         minX,
@@ -5368,6 +5595,437 @@ namespace Tekla.Technology.Akit.UserScript
             }
 
             return count;
+        }
+
+        private static int CreateAssemblyFrontVerticalMemberRightNotchDims(
+            StraightDimensionSetHandler handler,
+            View view,
+            List<Point> projectedPoints,
+            DimOffsetAnchor4 offsetAnchors,
+            double minX,
+            double maxX,
+            double minY,
+            double maxY,
+            out ChamferInfluence influence,
+            out Point topRightOuter,
+            out Point bottomRightOuter)
+        {
+            influence = new ChamferInfluence();
+            topRightOuter = null;
+            bottomRightOuter = null;
+            int count = 0;
+
+            try
+            {
+                if (handler == null || view == null ||
+                    projectedPoints == null || projectedPoints.Count < 4)
+                    return count;
+
+                VerticalAssemblyRightNotchGeometry topNotch;
+                VerticalAssemblyRightNotchGeometry bottomNotch;
+                bool hasTop = TryResolveAssemblyFrontVerticalMemberRightNotch(
+                    projectedPoints,
+                    minX,
+                    maxX,
+                    minY,
+                    maxY,
+                    true,
+                    out topNotch);
+                bool hasBottom = TryResolveAssemblyFrontVerticalMemberRightNotch(
+                    projectedPoints,
+                    minX,
+                    maxX,
+                    minY,
+                    maxY,
+                    false,
+                    out bottomNotch);
+
+                // Assembly H/I dọc có rãnh:
+                // - DIM ngang rãnh ở tầng 1.
+                // - DIM dọc rãnh ở tầng 2, sau DIM dọc lỗ gần mép.
+                double verticalOffset = GetSteelDimOffsetByTier(1);
+                double horizontalOffset = GetSteelDimOffsetByTier(0);
+
+                if (hasTop && topNotch != null)
+                {
+                    // DIM ngang = bề rộng rãnh, đặt phía trên; không gán chữ notch.
+                    if (CreateEdgeAnchoredNotchDimBySize(
+                        handler,
+                        view,
+                        Clone2D(topNotch.Outer),
+                        Clone2D(topNotch.Inner),
+                        new Vector(0, 1, 0),
+                        horizontalOffset,
+                        offsetAnchors,
+                        topNotch.Width))
+                        count++;
+
+                    // DIM dọc = chiều sâu dọc của rãnh, đặt bên phải và gán 切り欠き.
+                    if (CreateEdgeAnchoredNotchDimBySize(
+                        handler,
+                        view,
+                        Clone2D(topNotch.Outer),
+                        Clone2D(topNotch.Inner),
+                        new Vector(1, 0, 0),
+                        verticalOffset,
+                        offsetAnchors,
+                        topNotch.Depth,
+                        "GEO_\u5207\u308a\u6b20\u304d"))
+                        count++;
+
+                    topRightOuter = Clone2D(topNotch.Outer);
+                    influence.Right = true;
+                    influence.Top = true;
+                    influence.Any = true;
+                }
+
+                if (hasBottom && bottomNotch != null)
+                {
+                    // DIM ngang = bề rộng rãnh, đặt phía dưới; không gán chữ notch.
+                    if (CreateEdgeAnchoredNotchDimBySize(
+                        handler,
+                        view,
+                        Clone2D(bottomNotch.Outer),
+                        Clone2D(bottomNotch.Inner),
+                        new Vector(0, -1, 0),
+                        horizontalOffset,
+                        offsetAnchors,
+                        bottomNotch.Width))
+                        count++;
+
+                    // DIM dọc = chiều sâu dọc của rãnh, đặt bên phải và gán 切り欠き.
+                    if (CreateEdgeAnchoredNotchDimBySize(
+                        handler,
+                        view,
+                        Clone2D(bottomNotch.Outer),
+                        Clone2D(bottomNotch.Inner),
+                        new Vector(1, 0, 0),
+                        verticalOffset,
+                        offsetAnchors,
+                        bottomNotch.Depth,
+                        "GEO_\u5207\u308a\u6b20\u304d"))
+                        count++;
+
+                    bottomRightOuter = Clone2D(bottomNotch.Outer);
+                    influence.Right = true;
+                    influence.Bottom = true;
+                    influence.Any = true;
+                }
+            }
+            catch
+            {
+            }
+
+            return count;
+        }
+
+        private static int CreateAssemblyFrontVerticalMemberLeftNotchDims(
+            StraightDimensionSetHandler handler,
+            View view,
+            List<Point> projectedPoints,
+            DimOffsetAnchor4 offsetAnchors,
+            double minX,
+            double maxX,
+            double minY,
+            double maxY,
+            out ChamferInfluence influence,
+            out Point topLeftOuter,
+            out Point bottomLeftOuter)
+        {
+            influence = new ChamferInfluence();
+            topLeftOuter = null;
+            bottomLeftOuter = null;
+            int count = 0;
+
+            try
+            {
+                if (handler == null || view == null ||
+                    projectedPoints == null || projectedPoints.Count < 4)
+                    return count;
+
+                VerticalAssemblyLeftNotchGeometry topNotch;
+                VerticalAssemblyLeftNotchGeometry bottomNotch;
+                bool hasTop = TryResolveAssemblyFrontVerticalMemberLeftNotch(
+                    projectedPoints,
+                    minX,
+                    maxX,
+                    minY,
+                    maxY,
+                    true,
+                    out topNotch);
+                bool hasBottom = TryResolveAssemblyFrontVerticalMemberLeftNotch(
+                    projectedPoints,
+                    minX,
+                    maxX,
+                    minY,
+                    maxY,
+                    false,
+                    out bottomNotch);
+
+                // Assembly H/I dọc có rãnh:
+                // - DIM ngang rãnh ở tầng 1.
+                // - DIM dọc rãnh ở tầng 2, sau DIM dọc lỗ gần mép.
+                double verticalOffset = GetSteelDimOffsetByTier(1);
+                double horizontalOffset = GetSteelDimOffsetByTier(0);
+
+                if (hasTop && topNotch != null)
+                {
+                    // Notch width: exact left outer edge -> exact top shoulder.
+                    if (CreateEdgeAnchoredNotchDimBySize(
+                        handler,
+                        view,
+                        Clone2D(topNotch.Outer),
+                        Clone2D(topNotch.Inner),
+                        new Vector(0, 1, 0),
+                        horizontalOffset,
+                        offsetAnchors,
+                        topNotch.Width))
+                        count++;
+
+                    // Notch depth: place on the left and apply the notch text.
+                    if (CreateEdgeAnchoredNotchDimBySize(
+                        handler,
+                        view,
+                        Clone2D(topNotch.Outer),
+                        Clone2D(topNotch.Inner),
+                        new Vector(-1, 0, 0),
+                        verticalOffset,
+                        offsetAnchors,
+                        topNotch.Depth,
+                        "GEO_\u5207\u308a\u6b20\u304d"))
+                        count++;
+
+                    topLeftOuter = Clone2D(topNotch.Outer);
+                    influence.Left = true;
+                    influence.Top = true;
+                    influence.Any = true;
+                }
+
+                if (hasBottom && bottomNotch != null)
+                {
+                    // Notch width: exact left outer edge -> exact bottom shoulder.
+                    if (CreateEdgeAnchoredNotchDimBySize(
+                        handler,
+                        view,
+                        Clone2D(bottomNotch.Outer),
+                        Clone2D(bottomNotch.Inner),
+                        new Vector(0, -1, 0),
+                        horizontalOffset,
+                        offsetAnchors,
+                        bottomNotch.Width))
+                        count++;
+
+                    // Notch depth: place on the left and apply the notch text.
+                    if (CreateEdgeAnchoredNotchDimBySize(
+                        handler,
+                        view,
+                        Clone2D(bottomNotch.Outer),
+                        Clone2D(bottomNotch.Inner),
+                        new Vector(-1, 0, 0),
+                        verticalOffset,
+                        offsetAnchors,
+                        bottomNotch.Depth,
+                        "GEO_\u5207\u308a\u6b20\u304d"))
+                        count++;
+
+                    bottomLeftOuter = Clone2D(bottomNotch.Outer);
+                    influence.Left = true;
+                    influence.Bottom = true;
+                    influence.Any = true;
+                }
+            }
+            catch
+            {
+            }
+
+            return count;
+        }
+
+        private static bool TryResolveAssemblyFrontVerticalMemberRightNotch(
+            List<Point> points,
+            double minX,
+            double maxX,
+            double minY,
+            double maxY,
+            bool isTop,
+            out VerticalAssemblyRightNotchGeometry geometry)
+        {
+            geometry = null;
+
+            try
+            {
+                if (points == null || points.Count < 4)
+                    return false;
+
+                double edgeTol = Math.Max(2.0, TOL + 1.0);
+                double minSize = Math.Max(NOTCH_MIN_SIZE, NOTCH_MIN_DIM_TO_CREATE);
+                double maxSize = NOTCH_MAX_SIZE;
+                double endY = isTop ? maxY : minY;
+
+                // Góc ngoài phải còn tồn tại thì không phải rãnh góc.
+                if (ContainsPointNearXY(points, maxX, endY, edgeTol))
+                    return false;
+
+                Point outer = null;
+                Point inner = null;
+
+                foreach (Point point in points)
+                {
+                    if (point == null)
+                        continue;
+
+                    if (Math.Abs(point.X - maxX) <= edgeTol)
+                    {
+                        bool inEndZone = isTop
+                            ? point.Y < maxY - edgeTol && point.Y >= maxY - maxSize
+                            : point.Y > minY + edgeTol && point.Y <= minY + maxSize;
+
+                        if (inEndZone &&
+                            (outer == null ||
+                             (isTop ? point.Y > outer.Y : point.Y < outer.Y)))
+                            outer = Clone2D(point);
+                    }
+
+                    if (Math.Abs(point.Y - endY) <= edgeTol &&
+                        point.X < maxX - edgeTol)
+                    {
+                        double candidateWidth = maxX - point.X;
+                        if (candidateWidth >= minSize && candidateWidth <= maxSize &&
+                            (inner == null || point.X > inner.X))
+                            inner = Clone2D(point);
+                    }
+                }
+
+                if (outer == null || inner == null)
+                    return false;
+
+                double width = Math.Abs(maxX - inner.X);
+                double depth = Math.Abs(endY - outer.Y);
+                double memberWidth = Math.Abs(maxX - minX);
+                if (width < minSize || depth < minSize ||
+                    width > maxSize || depth > maxSize ||
+                    memberWidth <= minSize ||
+                    width >= memberWidth - edgeTol)
+                    return false;
+
+                geometry = new VerticalAssemblyRightNotchGeometry();
+                geometry.Outer = Clone2D(outer);
+                geometry.Inner = Clone2D(inner);
+                geometry.Width = width;
+                geometry.Depth = depth;
+                geometry.IsTop = isTop;
+                return true;
+            }
+            catch
+            {
+                geometry = null;
+                return false;
+            }
+        }
+
+        private static bool TryResolveAssemblyFrontVerticalMemberLeftNotch(
+            List<Point> points,
+            double minX,
+            double maxX,
+            double minY,
+            double maxY,
+            bool isTop,
+            out VerticalAssemblyLeftNotchGeometry geometry)
+        {
+            geometry = null;
+
+            try
+            {
+                if (points == null || points.Count < 4)
+                    return false;
+
+                double edgeTol = Math.Max(2.0, TOL + 1.0);
+                double minSize = Math.Max(NOTCH_MIN_SIZE, NOTCH_MIN_DIM_TO_CREATE);
+                double maxSize = NOTCH_MAX_SIZE;
+                double endY = isTop ? maxY : minY;
+
+                // An intact left bounding corner is not a left end notch.
+                if (ContainsPointNearXY(points, minX, endY, edgeTol))
+                    return false;
+
+                Point outer = null;
+                Point inner = null;
+
+                foreach (Point point in points)
+                {
+                    if (point == null)
+                        continue;
+
+                    // Exact point on the left outer edge closest to the cut end.
+                    if (Math.Abs(point.X - minX) <= edgeTol)
+                    {
+                        bool inEndZone = isTop
+                            ? point.Y < maxY - edgeTol && point.Y >= maxY - maxSize
+                            : point.Y > minY + edgeTol && point.Y <= minY + maxSize;
+
+                        if (inEndZone &&
+                            (outer == null ||
+                             (isTop ? point.Y > outer.Y : point.Y < outer.Y)))
+                            outer = Clone2D(point);
+                    }
+
+                    // Exact shoulder on the end edge nearest the left side. This prevents
+                    // an opposite-side endpoint from becoming a full-member-width notch.
+                    if (Math.Abs(point.Y - endY) <= edgeTol &&
+                        point.X > minX + edgeTol)
+                    {
+                        double candidateWidth = point.X - minX;
+                        if (candidateWidth >= minSize && candidateWidth <= maxSize &&
+                            (inner == null || point.X < inner.X))
+                            inner = Clone2D(point);
+                    }
+                }
+
+                if (outer == null || inner == null)
+                    return false;
+
+                double width = Math.Abs(inner.X - minX);
+                double depth = Math.Abs(endY - outer.Y);
+                double memberWidth = Math.Abs(maxX - minX);
+                if (width < minSize || depth < minSize ||
+                    width > maxSize || depth > maxSize ||
+                    memberWidth <= minSize ||
+                    width >= memberWidth - edgeTol)
+                    return false;
+
+                geometry = new VerticalAssemblyLeftNotchGeometry();
+                geometry.Outer = Clone2D(outer);
+                geometry.Inner = Clone2D(inner);
+                geometry.Width = width;
+                geometry.Depth = depth;
+                geometry.IsTop = isTop;
+                return true;
+            }
+            catch
+            {
+                geometry = null;
+                return false;
+            }
+        }
+
+        private static bool ContainsPointNearXY(
+            List<Point> points,
+            double x,
+            double y,
+            double tolerance)
+        {
+            if (points == null)
+                return false;
+
+            foreach (Point point in points)
+            {
+                if (point != null &&
+                    Math.Abs(point.X - x) <= tolerance &&
+                    Math.Abs(point.Y - y) <= tolerance)
+                    return true;
+            }
+
+            return false;
         }
 
         private static int CreateFrontAxisAlignedNotchDims(
@@ -7967,6 +8625,7 @@ namespace Tekla.Technology.Akit.UserScript
             StraightDimensionSetHandler handler,
             View view,
             List<Point> holes,
+            List<HHoleCandidate> holeCandidates,
             List<Point> polygon,
             List<Point> verticalPolygon,
             double minX,
@@ -8008,23 +8667,61 @@ namespace Tekla.Technology.Akit.UserScript
                     return count;
 
                 // TOP/BOTTOM - PHU FIX: tách cụm/chain theo giá trị lỗ.
-                // Chỉ cần khác phi/M là phải thành cụm chain riêng,
-                // không được gom chung dù cùng Y, cùng pattern X/Y.
+                // Identity kỹ thuật dùng cả phi + M. Sau bước này toàn bộ geometry/tier legacy giữ nguyên.
+                // Thứ tự nhóm phi bên ngoài vẫn kế thừa đúng GroupTopViewHolesByDiameter() cũ;
+                // chỉ tách thêm M bên trong từng key phi để giảm tối đa thay đổi behavior base.
                 List<TopBottomHoleGroup> groups = new List<TopBottomHoleGroup>();
-                Dictionary<double, List<Point>> holesByDiameter = GroupTopViewHolesByDiameter(holes);
+                Dictionary<double, List<Point>> legacyDiameterGroups =
+                    GroupTopViewHolesByDiameter(holes);
+                List<HHoleTechnicalFamily> technicalFamilies =
+                    GroupHHoleCandidatesByPhiAndM(holeCandidates);
 
-                foreach (KeyValuePair<double, List<Point>> kv in holesByDiameter)
+                foreach (KeyValuePair<double, List<Point>> legacyPair in legacyDiameterGroups)
                 {
-                    List<TopBottomHoleGroup> diameterGroups =
-                        BuildTopBottomHoleGroupsByGeometry(kv.Value, minX, maxX);
+                    bool addedTechnicalFamily = false;
 
-                    if (diameterGroups == null)
-                        continue;
-
-                    foreach (TopBottomHoleGroup g in diameterGroups)
+                    foreach (HHoleTechnicalFamily technicalFamily in technicalFamilies)
                     {
-                        if (g != null)
+                        if (technicalFamily == null || technicalFamily.Holes == null)
+                            continue;
+                        if (Math.Abs(
+                                GetHHoleLegacyDiameterKey(technicalFamily.HoleDiameter) -
+                                legacyPair.Key) > 0.001)
+                            continue;
+
+                        List<Point> familyPoints =
+                            ConvertHHoleCandidatesToDimPoints(technicalFamily.Holes);
+                        List<TopBottomHoleGroup> familyGroups =
+                            BuildTopBottomHoleGroupsByGeometry(familyPoints, minX, maxX);
+
+                        if (familyGroups == null)
+                            continue;
+
+                        foreach (TopBottomHoleGroup g in familyGroups)
+                        {
+                            if (g == null)
+                                continue;
+                            g.BoltSize = technicalFamily.BoltSize;
                             groups.Add(g);
+                            addedTechnicalFamily = true;
+                        }
+                    }
+
+                    if (!addedTechnicalFamily)
+                    {
+                        // Fail-safe cho caller legacy/metadata không có: giữ đúng grouping phi hiện tại.
+                        List<TopBottomHoleGroup> diameterGroups =
+                            BuildTopBottomHoleGroupsByGeometry(
+                                legacyPair.Value,
+                                minX,
+                                maxX);
+                        if (diameterGroups == null)
+                            continue;
+                        foreach (TopBottomHoleGroup g in diameterGroups)
+                        {
+                            if (g != null)
+                                groups.Add(g);
+                        }
                     }
                 }
 
@@ -8451,6 +9148,7 @@ namespace Tekla.Technology.Akit.UserScript
 
                     TopBottomHoleGroup cluster =
                         CreateTopBottomHoleGroup(clusterHoles, 3, tol);
+                    cluster.BoltSize = group.BoltSize;
 
                     // Không tách nếu một phía không còn đủ toàn bộ pattern Y của cụm gốc.
                     if (cluster.Holes.Count == 0 ||
@@ -8528,7 +9226,8 @@ namespace Tekla.Technology.Akit.UserScript
                 double da = GetHoleDiameterKey(a.Holes[0]);
                 double db = GetHoleDiameterKey(b.Holes[0]);
 
-                return Math.Abs(da - db) <= TOP_BOTTOM_HOLE_SIZE_TOL;
+                return AreSameHHoleTechnicalValue(da, db) &&
+                       AreSameHHoleTechnicalValue(a.BoltSize, b.BoltSize);
             }
             catch
             {
@@ -11037,7 +11736,7 @@ namespace Tekla.Technology.Akit.UserScript
                 return null;
             }
         }
-        private static List<Point> GetVisibleTopFlangeBoltCentersFromView(
+        private static List<HHoleCandidate> GetVisibleTopFlangeHoleCandidatesFromView(
             Model model,
             View view,
             double minX,
@@ -11056,7 +11755,42 @@ namespace Tekla.Technology.Akit.UserScript
             );
 
             HHoleClassification classified = ClassifyHHoleCandidates(holes);
-            return ConvertHHoleCandidatesToDimPoints(classified.TopCandidates);
+            return classified.TopCandidates ?? new List<HHoleCandidate>();
+        }
+
+        private static List<Point> GetVisibleTopFlangeBoltCentersFromView(
+            Model model,
+            View view,
+            double minX,
+            double maxX,
+            double minY,
+            double maxY)
+        {
+            return ConvertHHoleCandidatesToDimPoints(
+                GetVisibleTopFlangeHoleCandidatesFromView(
+                    model, view, minX, maxX, minY, maxY));
+        }
+
+        private static List<HHoleCandidate> GetVisibleBottomFlangeHoleCandidatesFromView(
+            Model model,
+            View view,
+            double minX,
+            double maxX,
+            double minY,
+            double maxY)
+        {
+            List<HHoleCandidate> holes = GetHHoleCandidatesInCurrentPlane(
+                model,
+                view,
+                minX,
+                maxX,
+                minY,
+                maxY,
+                true
+            );
+
+            HHoleClassification classified = ClassifyHHoleCandidates(holes);
+            return classified.BottomCandidates ?? new List<HHoleCandidate>();
         }
 
         private static List<Point> GetVisibleBottomFlangeBoltCentersFromView(
@@ -11067,18 +11801,9 @@ namespace Tekla.Technology.Akit.UserScript
             double minY,
             double maxY)
         {
-            List<HHoleCandidate> holes = GetHHoleCandidatesInCurrentPlane(
-                model,
-                view,
-                minX,
-                maxX,
-                minY,
-                maxY,
-                true
-            );
-
-            HHoleClassification classified = ClassifyHHoleCandidates(holes);
-            return ConvertHHoleCandidatesToDimPoints(classified.BottomCandidates);
+            return ConvertHHoleCandidatesToDimPoints(
+                GetVisibleBottomFlangeHoleCandidatesFromView(
+                    model, view, minX, maxX, minY, maxY));
         }
 
         private static double GetHoleDimGap(Point h)
@@ -12660,11 +13385,75 @@ namespace Tekla.Technology.Akit.UserScript
                 if (solid == null || solid.MinimumPoint == null || solid.MaximumPoint == null)
                     return 0.0;
 
-                return Math.Abs(solid.MaximumPoint.X - solid.MinimumPoint.X);
+                return Math.Abs(
+                    solid.MaximumPoint.X - solid.MinimumPoint.X);
             }
             catch
             {
                 return 0.0;
+            }
+            finally
+            {
+                try
+                {
+                    model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane);
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        private static double GetHShapeLongitudinalSize(
+            double minX,
+            double maxX,
+            double minY,
+            double maxY)
+        {
+            return Math.Max(
+                Math.Abs(maxX - minX),
+                Math.Abs(maxY - minY));
+        }
+
+        private static bool IsHShapeLongitudinalVertical(
+            double minX,
+            double maxX,
+            double minY,
+            double maxY)
+        {
+            double width = Math.Abs(maxX - minX);
+            double height = Math.Abs(maxY - minY);
+            return height > width + Math.Max(TOL, 0.01);
+        }
+
+        private static bool IsHShapeLongitudinalVerticalInView(
+            Model model,
+            ModelPart part,
+            View view)
+        {
+            if (model == null || part == null || view == null)
+                return false;
+
+            TransformationPlane oldPlane =
+                model.GetWorkPlaneHandler().GetCurrentTransformationPlane();
+
+            try
+            {
+                model.GetWorkPlaneHandler().SetCurrentTransformationPlane(
+                    new TransformationPlane(view.DisplayCoordinateSystem));
+                Solid solid = part.GetSolid();
+                if (solid == null || solid.MinimumPoint == null || solid.MaximumPoint == null)
+                    return false;
+
+                return IsHShapeLongitudinalVertical(
+                    solid.MinimumPoint.X,
+                    solid.MaximumPoint.X,
+                    solid.MinimumPoint.Y,
+                    solid.MaximumPoint.Y);
+            }
+            catch
+            {
+                return false;
             }
             finally
             {
@@ -13758,6 +14547,338 @@ namespace Tekla.Technology.Akit.UserScript
             }
         }
 
+        private static void ForceFinalArrangeVerticalHShapeTwoColumns(
+            View topView,
+            View frontView,
+            List<View> bottomViews,
+            List<View> backViews,
+            double gap)
+        {
+            try
+            {
+                if (topView == null || frontView == null)
+                    return;
+
+                if (gap < 0.0)
+                    gap = 0.0;
+
+                List<View> leftViews = new List<View>();
+                AddUniqueViewForMove(leftViews, topView);
+                if (bottomViews != null)
+                {
+                    foreach (View bottomView in bottomViews)
+                        AddUniqueViewForMove(leftViews, bottomView);
+                }
+
+                List<View> rightViews = new List<View>();
+                AddUniqueViewForMove(rightViews, frontView);
+                if (backViews != null)
+                {
+                    foreach (View backView in backViews)
+                        AddUniqueViewForMove(rightViews, backView);
+                }
+
+                // Vertical Assembly layout uses each view coordinate-system origin as
+                // the alignment datum. Green boxes are retained only for gap control.
+                if (TryArrangeVerticalShapeViewColumnsByAxes(leftViews, rightViews, gap))
+                    return;
+
+                List<ViewPaperBox> leftBoxes = new List<ViewPaperBox>();
+                List<ViewPaperBox> rightBoxes = new List<ViewPaperBox>();
+
+                foreach (View view in leftViews)
+                {
+                    ViewPaperBox box;
+                    if (TryGetViewGreenPaperBoxForShape(view, out box) &&
+                        box != null && box.Width > 1.0 && box.Height > 1.0)
+                        leftBoxes.Add(box);
+                }
+
+                foreach (View view in rightViews)
+                {
+                    ViewPaperBox box;
+                    if (TryGetViewGreenPaperBoxForShape(view, out box) &&
+                        box != null && box.Width > 1.0 && box.Height > 1.0)
+                        rightBoxes.Add(box);
+                }
+
+                if (leftBoxes.Count == 0 || rightBoxes.Count == 0)
+                    return;
+
+                double currentMinX = double.MaxValue;
+                double currentMaxX = double.MinValue;
+                double currentMinY = double.MaxValue;
+                double currentMaxY = double.MinValue;
+                double leftWidth = 0.0;
+                double rightWidth = 0.0;
+                double leftHeight = 0.0;
+                double rightHeight = 0.0;
+
+                foreach (ViewPaperBox box in leftBoxes)
+                {
+                    currentMinX = Math.Min(currentMinX, box.MinX);
+                    currentMaxX = Math.Max(currentMaxX, box.MaxX);
+                    currentMinY = Math.Min(currentMinY, box.MinY);
+                    currentMaxY = Math.Max(currentMaxY, box.MaxY);
+                    leftWidth = Math.Max(leftWidth, box.Width);
+                    if (leftHeight > 0.0) leftHeight += gap;
+                    leftHeight += box.Height;
+                }
+
+                foreach (ViewPaperBox box in rightBoxes)
+                {
+                    currentMinX = Math.Min(currentMinX, box.MinX);
+                    currentMaxX = Math.Max(currentMaxX, box.MaxX);
+                    currentMinY = Math.Min(currentMinY, box.MinY);
+                    currentMaxY = Math.Max(currentMaxY, box.MaxY);
+                    rightWidth = Math.Max(rightWidth, box.Width);
+                    if (rightHeight > 0.0) rightHeight += gap;
+                    rightHeight += box.Height;
+                }
+
+                double centerX = (currentMinX + currentMaxX) * 0.5;
+                double centerY = (currentMinY + currentMaxY) * 0.5;
+                double totalWidth = leftWidth + gap + rightWidth;
+                double columnTop = centerY + Math.Max(leftHeight, rightHeight) * 0.5;
+                double leftColumnMinX = centerX - totalWidth * 0.5;
+                double rightColumnMinX = leftColumnMinX + leftWidth + gap;
+
+                double leftCursorTop = columnTop;
+                double firstLeftCenterY = double.NaN;
+                foreach (ViewPaperBox box in leftBoxes)
+                {
+                    double desiredCenterX =
+                        leftColumnMinX + leftWidth - box.Width * 0.5;
+                    double desiredCenterY = leftCursorTop - box.Height * 0.5;
+                    if (double.IsNaN(firstLeftCenterY))
+                        firstLeftCenterY = desiredCenterY;
+
+                    MoveViewBySheetDelta(
+                        box.View,
+                        desiredCenterX - (box.MinX + box.MaxX) * 0.5,
+                        desiredCenterY - (box.MinY + box.MaxY) * 0.5);
+
+                    leftCursorTop -= box.Height + gap;
+                }
+
+                double rightCursorTop = columnTop;
+                for (int i = 0; i < rightBoxes.Count; i++)
+                {
+                    ViewPaperBox box = rightBoxes[i];
+                    double desiredCenterX =
+                        rightColumnMinX + box.Width * 0.5;
+                    double desiredCenterY = i == 0 && !double.IsNaN(firstLeftCenterY)
+                        ? firstLeftCenterY
+                        : rightCursorTop - box.Height * 0.5;
+
+                    MoveViewBySheetDelta(
+                        box.View,
+                        desiredCenterX - (box.MinX + box.MaxX) * 0.5,
+                        desiredCenterY - (box.MinY + box.MaxY) * 0.5);
+
+                    rightCursorTop = desiredCenterY - box.Height * 0.5 - gap;
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        private sealed class VerticalViewAxisLayoutItem
+        {
+            public View View;
+            public ViewPaperBox Box;
+            public double OriginX;
+            public double OriginY;
+            public double TargetOriginX;
+            public double TargetOriginY;
+        }
+
+        private static bool TryArrangeVerticalShapeViewColumnsByAxes(
+            List<View> leftViews,
+            List<View> rightViews,
+            double gap)
+        {
+            try
+            {
+                if (leftViews == null || rightViews == null ||
+                    leftViews.Count == 0 || rightViews.Count == 0)
+                    return false;
+
+                if (gap < 0.0)
+                    gap = 0.0;
+
+                List<VerticalViewAxisLayoutItem> leftItems =
+                    new List<VerticalViewAxisLayoutItem>();
+                List<VerticalViewAxisLayoutItem> rightItems =
+                    new List<VerticalViewAxisLayoutItem>();
+
+                foreach (View view in leftViews)
+                {
+                    ViewPaperBox box;
+                    Point origin = view != null ? view.Origin : null;
+                    if (origin == null ||
+                        !TryGetViewGreenPaperBoxForShape(view, out box) ||
+                        box == null || box.Width <= 1.0 || box.Height <= 1.0 ||
+                        double.IsNaN(origin.X) || double.IsInfinity(origin.X) ||
+                        double.IsNaN(origin.Y) || double.IsInfinity(origin.Y))
+                        return false;
+
+                    leftItems.Add(new VerticalViewAxisLayoutItem
+                    {
+                        View = view,
+                        Box = box,
+                        OriginX = origin.X,
+                        OriginY = origin.Y
+                    });
+                }
+
+                foreach (View view in rightViews)
+                {
+                    ViewPaperBox box;
+                    Point origin = view != null ? view.Origin : null;
+                    if (origin == null ||
+                        !TryGetViewGreenPaperBoxForShape(view, out box) ||
+                        box == null || box.Width <= 1.0 || box.Height <= 1.0 ||
+                        double.IsNaN(origin.X) || double.IsInfinity(origin.X) ||
+                        double.IsNaN(origin.Y) || double.IsInfinity(origin.Y))
+                        return false;
+
+                    rightItems.Add(new VerticalViewAxisLayoutItem
+                    {
+                        View = view,
+                        Box = box,
+                        OriginX = origin.X,
+                        OriginY = origin.Y
+                    });
+                }
+
+                double currentMinX = double.MaxValue;
+                double currentMaxX = double.MinValue;
+                double currentMinY = double.MaxValue;
+                double currentMaxY = double.MinValue;
+                double leftRightReach = 0.0;
+                double rightLeftReach = 0.0;
+
+                foreach (VerticalViewAxisLayoutItem item in leftItems)
+                {
+                    currentMinX = Math.Min(currentMinX, item.Box.MinX);
+                    currentMaxX = Math.Max(currentMaxX, item.Box.MaxX);
+                    currentMinY = Math.Min(currentMinY, item.Box.MinY);
+                    currentMaxY = Math.Max(currentMaxY, item.Box.MaxY);
+                    leftRightReach = Math.Max(
+                        leftRightReach,
+                        Math.Max(0.0, item.Box.MaxX - item.OriginX));
+                }
+
+                foreach (VerticalViewAxisLayoutItem item in rightItems)
+                {
+                    currentMinX = Math.Min(currentMinX, item.Box.MinX);
+                    currentMaxX = Math.Max(currentMaxX, item.Box.MaxX);
+                    currentMinY = Math.Min(currentMinY, item.Box.MinY);
+                    currentMaxY = Math.Max(currentMaxY, item.Box.MaxY);
+                    rightLeftReach = Math.Max(
+                        rightLeftReach,
+                        Math.Max(0.0, item.OriginX - item.Box.MinX));
+                }
+
+                int rowCount = Math.Max(leftItems.Count, rightItems.Count);
+                double[] rowUpperReach = new double[rowCount];
+                double[] rowLowerReach = new double[rowCount];
+                double[] rowAxisY = new double[rowCount];
+
+                for (int row = 0; row < rowCount; row++)
+                {
+                    if (row < leftItems.Count)
+                    {
+                        VerticalViewAxisLayoutItem item = leftItems[row];
+                        rowUpperReach[row] = Math.Max(
+                            rowUpperReach[row],
+                            Math.Max(0.0, item.Box.MaxY - item.OriginY));
+                        rowLowerReach[row] = Math.Max(
+                            rowLowerReach[row],
+                            Math.Max(0.0, item.OriginY - item.Box.MinY));
+                    }
+
+                    if (row < rightItems.Count)
+                    {
+                        VerticalViewAxisLayoutItem item = rightItems[row];
+                        rowUpperReach[row] = Math.Max(
+                            rowUpperReach[row],
+                            Math.Max(0.0, item.Box.MaxY - item.OriginY));
+                        rowLowerReach[row] = Math.Max(
+                            rowLowerReach[row],
+                            Math.Max(0.0, item.OriginY - item.Box.MinY));
+                    }
+
+                    if (row > 0)
+                    {
+                        rowAxisY[row] =
+                            rowAxisY[row - 1] -
+                            rowLowerReach[row - 1] -
+                            gap -
+                            rowUpperReach[row];
+                    }
+                }
+
+                double leftAxisX = 0.0;
+                double rightAxisX = leftRightReach + gap + rightLeftReach;
+                double desiredMinX = double.MaxValue;
+                double desiredMaxX = double.MinValue;
+                double desiredMinY = double.MaxValue;
+                double desiredMaxY = double.MinValue;
+
+                for (int row = 0; row < leftItems.Count; row++)
+                {
+                    VerticalViewAxisLayoutItem item = leftItems[row];
+                    item.TargetOriginX = leftAxisX;
+                    item.TargetOriginY = rowAxisY[row];
+                    desiredMinX = Math.Min(desiredMinX, leftAxisX + item.Box.MinX - item.OriginX);
+                    desiredMaxX = Math.Max(desiredMaxX, leftAxisX + item.Box.MaxX - item.OriginX);
+                    desiredMinY = Math.Min(desiredMinY, rowAxisY[row] + item.Box.MinY - item.OriginY);
+                    desiredMaxY = Math.Max(desiredMaxY, rowAxisY[row] + item.Box.MaxY - item.OriginY);
+                }
+
+                for (int row = 0; row < rightItems.Count; row++)
+                {
+                    VerticalViewAxisLayoutItem item = rightItems[row];
+                    item.TargetOriginX = rightAxisX;
+                    item.TargetOriginY = rowAxisY[row];
+                    desiredMinX = Math.Min(desiredMinX, rightAxisX + item.Box.MinX - item.OriginX);
+                    desiredMaxX = Math.Max(desiredMaxX, rightAxisX + item.Box.MaxX - item.OriginX);
+                    desiredMinY = Math.Min(desiredMinY, rowAxisY[row] + item.Box.MinY - item.OriginY);
+                    desiredMaxY = Math.Max(desiredMaxY, rowAxisY[row] + item.Box.MaxY - item.OriginY);
+                }
+
+                double shiftX =
+                    (currentMinX + currentMaxX - desiredMinX - desiredMaxX) * 0.5;
+                double shiftY =
+                    (currentMinY + currentMaxY - desiredMinY - desiredMaxY) * 0.5;
+
+                foreach (VerticalViewAxisLayoutItem item in leftItems)
+                {
+                    MoveViewBySheetDelta(
+                        item.View,
+                        item.TargetOriginX + shiftX - item.OriginX,
+                        item.TargetOriginY + shiftY - item.OriginY);
+                }
+
+                foreach (VerticalViewAxisLayoutItem item in rightItems)
+                {
+                    MoveViewBySheetDelta(
+                        item.View,
+                        item.TargetOriginX + shiftX - item.OriginX,
+                        item.TargetOriginY + shiftY - item.OriginY);
+                }
+
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         private static void AddUniqueViewForMove(List<View> views, View view)
         {
             try
@@ -14407,10 +15528,20 @@ namespace Tekla.Technology.Akit.UserScript
                 boundary.MinY = minY;
                 boundary.MaxY = maxY;
 
-                double beamLength = Math.Abs(maxX - minX);
+                bool isVerticalHMember =
+                    isAssemblyDrawing &&
+                    IsHShapeLongitudinalVertical(
+                        minX,
+                        maxX,
+                        minY,
+                        maxY);
 
-                List<Point> frontHoles =
-                    GetVisibleFrontWebBoltCentersFromView(
+                double beamLength = isAssemblyDrawing
+                    ? GetHShapeLongitudinalSize(minX, maxX, minY, maxY)
+                    : Math.Abs(maxX - minX);
+
+                List<HHoleCandidate> frontHoleCandidates =
+                    GetVisibleFrontWebHoleCandidatesFromView(
                         model,
                         view,
                         minX,
@@ -14418,6 +15549,8 @@ namespace Tekla.Technology.Akit.UserScript
                         minY,
                         maxY
                     );
+                List<Point> frontHoles =
+                    ConvertHHoleCandidatesToDimPoints(frontHoleCandidates);
 
                 StraightDimensionSetHandler handler =
                     new StraightDimensionSetHandler();
@@ -14462,19 +15595,82 @@ namespace Tekla.Technology.Akit.UserScript
                     : frontPolygon;
 
                 ChamferInfluence frontNotchInfluence = new ChamferInfluence();
-                int frontNotchCount = CreateFrontAxisAlignedNotchDims(
-                    handler,
-                    view,
-                    frontNotchProfile,
-                    frontProjectedSolidPoints,
-                    offsetAnchors,
-                    minX,
-                    maxX,
-                    minY,
-                    maxY,
-                    beamLength,
-                    out frontNotchInfluence
-                );
+                int frontNotchCount;
+                Point topLeftNotchOuter = null;
+                Point bottomLeftNotchOuter = null;
+                Point topRightNotchOuter = null;
+                Point bottomRightNotchOuter = null;
+
+                if (isVerticalHMember)
+                {
+                    // ASSEMBLY H/I dọc: resolver riêng cho rãnh trái/phải trên/dưới.
+                    // Không gọi hoặc thay đổi rule rãnh H/I ngang legacy.
+                    frontNotchCount = CreateAssemblyFrontVerticalMemberRightNotchDims(
+                        handler,
+                        view,
+                        frontNotchProfile,
+                        offsetAnchors,
+                        minX,
+                        maxX,
+                        minY,
+                        maxY,
+                        out frontNotchInfluence,
+                        out topRightNotchOuter,
+                        out bottomRightNotchOuter);
+
+                    ChamferInfluence leftNotchInfluence;
+                    int leftNotchCount = CreateAssemblyFrontVerticalMemberLeftNotchDims(
+                        handler,
+                        view,
+                        frontNotchProfile,
+                        offsetAnchors,
+                        minX,
+                        maxX,
+                        minY,
+                        maxY,
+                        out leftNotchInfluence,
+                        out topLeftNotchOuter,
+                        out bottomLeftNotchOuter);
+
+                    if (leftNotchCount > 0)
+                    {
+                        frontNotchCount += leftNotchCount;
+                        MergeInfluence(ref frontNotchInfluence, leftNotchInfluence);
+                    }
+
+                    // Góc vuông bao bị cắt mất không được dùng làm chân DIM.
+                    // Neo Top/Bottom phải vào đúng điểm thật trên mép ngoài của rãnh.
+                    if (topLeftNotchOuter != null)
+                    {
+                        frontEdgeAnchors.TopLeft = Clone2D(topLeftNotchOuter);
+                        frontEdgeAnchors.HasTopLeftVerticalEndNotch = true;
+                    }
+                    if (bottomLeftNotchOuter != null)
+                    {
+                        frontEdgeAnchors.BottomLeft = Clone2D(bottomLeftNotchOuter);
+                        frontEdgeAnchors.HasBottomLeftVerticalEndNotch = true;
+                    }
+                    if (topRightNotchOuter != null)
+                        frontEdgeAnchors.TopRight = Clone2D(topRightNotchOuter);
+                    if (bottomRightNotchOuter != null)
+                        frontEdgeAnchors.BottomRight = Clone2D(bottomRightNotchOuter);
+                }
+                else
+                {
+                    frontNotchCount = CreateFrontAxisAlignedNotchDims(
+                        handler,
+                        view,
+                        frontNotchProfile,
+                        frontProjectedSolidPoints,
+                        offsetAnchors,
+                        minX,
+                        maxX,
+                        minY,
+                        maxY,
+                        beamLength,
+                        out frontNotchInfluence
+                    );
+                }
 
                 if (frontNotchCount > 0)
                 {
@@ -14482,35 +15678,73 @@ namespace Tekla.Technology.Akit.UserScript
                     count += frontNotchCount;
                 }
 
-                int leftStartTier = 1;
+                bool verticalMemberHasFrontNotch =
+                    isAssemblyDrawing && isVerticalHMember && frontNotchInfluence.Any;
+
+                // H/I dọc có rãnh: DIM dọc lỗ gần mép ở tầng 1;
+                // tầng 2 được dành cho DIM dọc rãnh.
+                int leftStartTier = verticalMemberHasFrontNotch ? 0 : 1;
                 int rightStartTier = 1;
 
                 // FRONT VIEW - TẦNG DIM NGANG LỖ:
                 // Chỉ đổi bộ cấp tầng; giữ nguyên cách nhóm lỗ, chân DIM và quy luật lỗ giữa/đặc biệt.
-                // Rãnh Front phía trên có DIM ngang riêng ở tầng 1; DIM lỗ vẫn giữ tầng 0.
+                // Legacy giữ nguyên: rãnh Front phía trên ở tier 1, DIM lỗ ở tier 0.
+                // Riêng Assembly H/I dọc có rãnh: rãnh ở tier 0, lỗ gần mép ở tier 1.
                 // Chỉ chamfer phía trên (không phải rãnh đã nhận diện) mới đẩy DIM lỗ lên tầng 1.
-                int frontEndHoleXTier = frontNotchInfluence.Top
-                    ? 0
-                    : (frontTopChamferDimCreated ? 1 : 0);
-                int frontReservedNotchXTier = frontNotchInfluence.Top ? 1 : -1;
+                int frontEndHoleXTier = verticalMemberHasFrontNotch
+                    ? 1
+                    : (frontNotchInfluence.Top
+                        ? 0
+                        : (frontTopChamferDimCreated ? 1 : 0));
+                int frontReservedNotchXTier = verticalMemberHasFrontNotch
+                    ? -1
+                    : (frontNotchInfluence.Top ? 1 : -1);
+                int frontReservedVerticalNotchTier = verticalMemberHasFrontNotch ? 1 : -1;
 
                 int holeCount = 0;
                 int frontHorizontalHoleTierCount = 0;
                 int frontHorizontalHoleHighestTier = -1;
                 int frontLeftVerticalHoleTierCount = 0;
                 int frontRightVerticalHoleTierCount = 0;
+                int frontVerticalHoleHighestTier = -1;
 
-                if (isAssemblyDrawing)
+                if (isAssemblyDrawing && isVerticalHMember)
+                {
+                    // ASSEMBLY H/I dọng, không rãnh: chỉ đổi nhánh này.
+                    // Mỗi đầu dùng một lỗ đại diện cho cụm; rule H/I ngang bên dưới giữ nguyên.
+                    holeCount += CreateAssemblyFrontVerticalMemberHoleDims(
+                        handler,
+                        view,
+                        frontHoles,
+                        frontHoleCandidates,
+                        minX,
+                        maxX,
+                        minY,
+                        maxY,
+                        frontEdgeAnchors,
+                        offsetAnchors,
+                        frontEndHoleXTier,
+                        frontReservedNotchXTier,
+                        leftStartTier,
+                        frontReservedVerticalNotchTier,
+                        out frontHorizontalHoleTierCount,
+                        out frontHorizontalHoleHighestTier,
+                        out frontLeftVerticalHoleTierCount,
+                        out frontVerticalHoleHighestTier
+                    );
+                }
+                else if (isAssemblyDrawing)
                 {
                     // ASSEMBLY - FRONT:
                     // Mỗi phía chỉ định vị một lỗ gần mép nhất.
                     // DIM ngang: mép bên -> lỗ.
                     // DIM dọc: luôn mép trên -> lỗ gần mép trên nhất của phía đó.
                     // PointList chỉ có hai điểm nên không tạo chain qua các lỗ còn lại.
-                    holeCount += CreateAssemblyFrontNearestEdgeHoleDims(
+                    holeCount += CreateAssemblyFrontNearestEdgeHoleDimsByPhiAndM(
                         handler,
                         view,
                         frontHoles,
+                        frontHoleCandidates,
                         minX,
                         maxX,
                         maxY,
@@ -14532,6 +15766,7 @@ namespace Tekla.Technology.Akit.UserScript
                         handler,
                         view,
                         frontHoles,
+                        frontHoleCandidates,
                         minX,
                         maxX,
                         maxY,
@@ -14550,6 +15785,7 @@ namespace Tekla.Technology.Akit.UserScript
                         handler,
                         view,
                         frontHoles,
+                        frontHoleCandidates,
                         minX,
                         maxX,
                         minY,
@@ -14573,13 +15809,23 @@ namespace Tekla.Technology.Akit.UserScript
                 int frontHorizontalHighestTier = -1;
                 if (frontTopChamferDimCreated)
                     frontHorizontalHighestTier = Math.Max(frontHorizontalHighestTier, 0);
-                if (frontNotchInfluence.Top)
-                    frontHorizontalHighestTier = Math.Max(frontHorizontalHighestTier, 1);
+                if (frontNotchInfluence.Top ||
+                    (verticalMemberHasFrontNotch && frontNotchInfluence.Bottom))
+                {
+                    int notchHorizontalTier = verticalMemberHasFrontNotch ? 0 : 1;
+                    frontHorizontalHighestTier = Math.Max(
+                        frontHorizontalHighestTier,
+                        notchHorizontalTier);
+                }
                 if (frontHorizontalHoleHighestTier >= 0)
                     frontHorizontalHighestTier = Math.Max(frontHorizontalHighestTier, frontHorizontalHoleHighestTier);
 
                 int frontHorizontalTotalTier = Math.Max(1, frontHorizontalHighestTier + 1);
-                int frontVerticalTotalTier = leftStartTier + frontLeftVerticalHoleTierCount;
+                int frontVerticalTotalTier = isAssemblyDrawing && isVerticalHMember
+                    ? Math.Max(
+                        verticalMemberHasFrontNotch ? 1 : 0,
+                        frontVerticalHoleHighestTier) + 1
+                    : leftStartTier + frontLeftVerticalHoleTierCount;
                 int frontRightVerticalMaxTier = frontRightVerticalHoleTierCount > 0
                     ? rightStartTier + frontRightVerticalHoleTierCount - 1
                     : rightStartTier;
@@ -14587,13 +15833,17 @@ namespace Tekla.Technology.Akit.UserScript
                     rightStartTier + frontRightVerticalHoleTierCount;
 
                 LastFrontTopDimTier = Math.Max(1, frontHorizontalTotalTier);
-                LastFrontBottomDimTier = 1;
-                LastFrontRightDimTier = Math.Max(
-                    1,
-                    isAssemblyDrawing
-                        ? frontRightVerticalTotalTier
-                        : frontRightVerticalMaxTier
-                );
+                LastFrontBottomDimTier = isVerticalHMember
+                    ? Math.Max(1, frontHorizontalTotalTier)
+                    : 1;
+                LastFrontRightDimTier = isVerticalHMember
+                    ? 1
+                    : Math.Max(
+                        1,
+                        isAssemblyDrawing
+                            ? frontRightVerticalTotalTier
+                            : frontRightVerticalMaxTier
+                    );
 
                 count += CreateFrontTotalDims(
                     handler,
@@ -14610,7 +15860,7 @@ namespace Tekla.Technology.Akit.UserScript
                     GetSteelDimOffsetByTier(frontVerticalTotalTier)
                 );
 
-                if (isAssemblyDrawing)
+                if (isAssemblyDrawing && !isVerticalHMember)
                 {
                     // ASSEMBLY - FRONT:
                     // Bổ sung DIM tổng dọc bên phải, đặt ngoài DIM lỗ bên phải nếu có.
@@ -14623,6 +15873,16 @@ namespace Tekla.Technology.Akit.UserScript
                         GetSteelDimOffsetByTier(frontRightVerticalTotalTier)
                     );
                 }
+                else if (isAssemblyDrawing && isVerticalHMember)
+                {
+                    count += CreateAssemblyFrontVerticalMemberBottomTotalDim(
+                        handler,
+                        view,
+                        frontEdgeAnchors,
+                        offsetAnchors,
+                        GetSteelDimOffsetByTier(frontHorizontalTotalTier)
+                    );
+                }
             }
             catch
             {
@@ -14630,6 +15890,574 @@ namespace Tekla.Technology.Akit.UserScript
             finally
             {
                 model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane);
+            }
+
+            return count;
+        }
+
+        private static int CreateAssemblyFrontVerticalMemberHoleDims(
+            StraightDimensionSetHandler handler,
+            View view,
+            List<Point> holes,
+            List<HHoleCandidate> holeCandidates,
+            double minX,
+            double maxX,
+            double minY,
+            double maxY,
+            ChamferEdgeAnchors edgeAnchors,
+            DimOffsetAnchor4 offsetAnchors,
+            int horizontalFirstTier,
+            int horizontalReservedTier,
+            int verticalFirstTier,
+            int verticalReservedTier,
+            out int usedHorizontalTierCount,
+            out int highestHorizontalTier,
+            out int usedVerticalTierCount,
+            out int highestVerticalTier)
+        {
+            int count = 0;
+            usedHorizontalTierCount = 0;
+            highestHorizontalTier = -1;
+            usedVerticalTierCount = 0;
+            highestVerticalTier = -1;
+
+            try
+            {
+                if (handler == null || view == null || holes == null || holes.Count == 0)
+                    return count;
+
+                List<HHoleTechnicalFamily> technicalFamilies =
+                    GroupHHoleCandidatesByPhiAndM(holeCandidates);
+                if (technicalFamilies.Count == 0)
+                {
+                    // Fail-safe legacy: nếu metadata family không có thì vẫn chạy theo phi như cũ.
+                    Dictionary<double, List<Point>> legacyGroups =
+                        GroupTopViewHolesByDiameter(holes);
+                    foreach (KeyValuePair<double, List<Point>> pair in legacyGroups)
+                    {
+                        HHoleTechnicalFamily family = new HHoleTechnicalFamily();
+                        family.HoleDiameter = pair.Key;
+                        foreach (Point point in pair.Value)
+                        {
+                            if (point == null) continue;
+                            HHoleCandidate candidate = new HHoleCandidate();
+                            candidate.Point = Clone2DWithDiameter(point);
+                            candidate.HoleDiameter = GetHoleDimGap(point);
+                            family.Holes.Add(candidate);
+                        }
+                        technicalFamilies.Add(family);
+                    }
+                }
+
+                technicalFamilies.Sort(delegate (HHoleTechnicalFamily a, HHoleTechnicalFamily b)
+                {
+                    int c = GetHHoleLegacyDiameterKey(a.HoleDiameter).CompareTo(
+                        GetHHoleLegacyDiameterKey(b.HoleDiameter));
+                    if (c != 0) return c;
+                    c = a.BoltSize.CompareTo(b.BoltSize);
+                    if (c != 0) return c;
+                    return a.HoleDiameter.CompareTo(b.HoleDiameter);
+                });
+
+                double tol = Math.Max(2.0, TOL + 1.0);
+
+                foreach (HHoleTechnicalFamily technicalFamily in technicalFamilies)
+                {
+                    if (technicalFamily == null)
+                        continue;
+                    List<Point> samePhiHoles =
+                        ConvertHHoleCandidatesToDimPoints(technicalFamily.Holes);
+                    if (samePhiHoles == null || samePhiHoles.Count == 0)
+                        continue;
+
+                    List<Point> bottomEndHoles;
+                    List<Point> topEndHoles;
+                    SplitAssemblyFrontHolesByY(
+                        samePhiHoles,
+                        minY,
+                        maxY,
+                        out bottomEndHoles,
+                        out topEndHoles);
+
+                    List<List<Point>> endClusters = new List<List<Point>>();
+                    if (bottomEndHoles.Count > 0)
+                        endClusters.Add(bottomEndHoles);
+                    if (topEndHoles.Count > 0)
+                        endClusters.Add(topEndHoles);
+                    if (endClusters.Count == 0)
+                        continue;
+
+                    int horizontalTier = horizontalFirstTier + usedHorizontalTierCount;
+                    if (horizontalReservedTier >= 0 && horizontalTier >= horizontalReservedTier)
+                        horizontalTier++;
+
+                    double horizontalOffset = GetSteelDimOffsetByTier(horizontalTier);
+                    int horizontalCreated = 0;
+                    int verticalTier = verticalFirstTier + usedVerticalTierCount;
+                    if (verticalReservedTier >= 0 && verticalTier >= verticalReservedTier)
+                        verticalTier++;
+                    double verticalOffset = GetSteelDimOffsetByTier(verticalTier);
+                    int verticalCreated = 0;
+
+                    foreach (List<Point> cluster in endClusters)
+                    {
+                        bool isTopEnd = System.Object.ReferenceEquals(cluster, topEndHoles);
+                        bool placeBelow = !isTopEnd;
+
+                        // Quy tắc cụm dọc: DIM trên dùng hàng lỗ dưới,
+                        // DIM dưới dùng hàng lỗ trên.
+                        Point horizontalRepresentative =
+                            FindAssemblyVerticalMemberRepresentativeHole(
+                                cluster,
+                                placeBelow,
+                                tol);
+
+                        horizontalCreated +=
+                            CreateAssemblyVerticalMemberHorizontalRepresentativeDim(
+                                handler,
+                                view,
+                                cluster,
+                                horizontalRepresentative,
+                                minX,
+                                maxX,
+                                minY,
+                                maxY,
+                                edgeAnchors,
+                                offsetAnchors,
+                                horizontalOffset,
+                                placeBelow);
+
+                        verticalCreated +=
+                            CreateAssemblyVerticalMemberNearestEndDim(
+                                handler,
+                                view,
+                                cluster,
+                                isTopEnd,
+                                edgeAnchors,
+                                offsetAnchors,
+                                verticalOffset,
+                                tol);
+                    }
+
+                    if (horizontalCreated > 0)
+                    {
+                        count += horizontalCreated;
+                        usedHorizontalTierCount++;
+                        highestHorizontalTier = Math.Max(highestHorizontalTier, horizontalTier);
+                    }
+
+                    if (verticalCreated > 0)
+                    {
+                        count += verticalCreated;
+                        usedVerticalTierCount++;
+                        highestVerticalTier = Math.Max(highestVerticalTier, verticalTier);
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            return count;
+        }
+
+        private static Point FindAssemblyVerticalMemberRepresentativeHole(
+            List<Point> cluster,
+            bool placeBelow,
+            double tol)
+        {
+            if (cluster == null || cluster.Count == 0)
+                return null;
+
+            double representativeY = placeBelow
+                ? GetMaxYFromPointList(cluster, cluster[0].Y)
+                : GetMinYFromPointList(cluster, cluster[0].Y);
+            Point representative = FindRightmostHoleOnRow(cluster, representativeY, tol);
+            return representative != null ? Clone2DWithDiameter(representative) : null;
+        }
+
+        private static int CreateAssemblyVerticalMemberHorizontalRepresentativeDim(
+            StraightDimensionSetHandler handler,
+            View view,
+            List<Point> cluster,
+            Point representative,
+            double minX,
+            double maxX,
+            double minY,
+            double maxY,
+            ChamferEdgeAnchors edgeAnchors,
+            DimOffsetAnchor4 offsetAnchors,
+            double horizontalOffset,
+            bool placeBelow)
+        {
+            try
+            {
+                if (handler == null || view == null || representative == null)
+                    return 0;
+
+                Point leftEdge = placeBelow ? edgeAnchors.BottomLeft : edgeAnchors.TopLeft;
+                Point rightEdge = placeBelow ? edgeAnchors.BottomRight : edgeAnchors.TopRight;
+                double edgeY = placeBelow ? minY : maxY;
+
+                if (leftEdge == null)
+                    leftEdge = new Point(minX, edgeY, 0);
+                if (rightEdge == null)
+                    rightEdge = new Point(maxX, edgeY, 0);
+
+                Point sideEdge =
+                    Math.Abs(representative.X - leftEdge.X) <=
+                    Math.Abs(rightEdge.X - representative.X)
+                        ? leftEdge
+                        : rightEdge;
+                double gap = GetHoleDimGap(representative);
+                double footY = placeBelow
+                    ? representative.Y - gap
+                    : representative.Y + gap;
+
+                PointList pts = new PointList();
+                pts.Add(Clone2D(sideEdge));
+                pts.Add(new Point(representative.X, footY, 0));
+
+                Vector direction = placeBelow
+                    ? new Vector(0, -1, 0)
+                    : new Vector(0, 1, 0);
+                double realOffset = ResolveDimDistanceByAnchor4(
+                    pts,
+                    direction,
+                    offsetAnchors,
+                    horizontalOffset);
+
+                return handler.CreateDimensionSet(view, pts, direction, realOffset) != null
+                    ? 1
+                    : 0;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        private static int CreateAssemblyVerticalMemberNearestEndDim(
+            StraightDimensionSetHandler handler,
+            View view,
+            List<Point> endHoles,
+            bool isTopEnd,
+            ChamferEdgeAnchors edgeAnchors,
+            DimOffsetAnchor4 offsetAnchors,
+            double verticalOffset,
+            double tol)
+        {
+            try
+            {
+                if (handler == null || view == null || endHoles == null || endHoles.Count == 0)
+                    return 0;
+
+                Point representative = FindAssemblyVerticalMemberNearestEndHole(
+                    endHoles,
+                    isTopEnd,
+                    tol);
+                if (representative == null)
+                    return 0;
+
+                Point edge = ResolveAssemblyVerticalMemberHoleOuterEndEdge(
+                    isTopEnd,
+                    edgeAnchors);
+                if (edge == null)
+                    return 0;
+
+                PointList pts = new PointList();
+                pts.Add(Clone2D(edge));
+                pts.Add(new Point(
+                    representative.X - GetHoleDimGap(representative),
+                    representative.Y,
+                    0));
+
+                Vector direction = new Vector(-1, 0, 0);
+                double realOffset = ResolveDimDistanceByAnchor4(
+                    pts,
+                    direction,
+                    offsetAnchors,
+                    verticalOffset);
+
+                return handler.CreateDimensionSet(view, pts, direction, realOffset) != null
+                    ? 1
+                    : 0;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        private static Point ResolveAssemblyVerticalMemberHoleOuterEndEdge(
+            bool isTopEnd,
+            ChamferEdgeAnchors edgeAnchors)
+        {
+            bool hasLeftEndNotch = isTopEnd
+                ? edgeAnchors.HasTopLeftVerticalEndNotch
+                : edgeAnchors.HasBottomLeftVerticalEndNotch;
+
+            // Chỉ rãnh trái của đúng đầu đang DIM mới đổi neo về mép ngoài thật.
+            // Các đầu nguyên vẹn và toàn bộ rãnh phải giữ nguyên selector cũ.
+            Point edge = hasLeftEndNotch
+                ? (isTopEnd ? edgeAnchors.TopMost : edgeAnchors.BottomMost)
+                : (isTopEnd ? edgeAnchors.TopLeft : edgeAnchors.BottomLeft);
+
+            if (edge == null)
+                edge = isTopEnd ? edgeAnchors.TopMost : edgeAnchors.BottomMost;
+
+            return edge != null ? Clone2D(edge) : null;
+        }
+
+        private static Point FindAssemblyVerticalMemberNearestEndHole(
+            List<Point> endHoles,
+            bool isTopEnd,
+            double tol)
+        {
+            if (endHoles == null || endHoles.Count == 0)
+                return null;
+
+            double representativeY = isTopEnd
+                ? GetMaxYFromPointList(endHoles, endHoles[0].Y)
+                : GetMinYFromPointList(endHoles, endHoles[0].Y);
+            Point representative = FindRightmostHoleOnRow(endHoles, representativeY, tol);
+            return representative != null ? Clone2DWithDiameter(representative) : null;
+        }
+
+        private static void SplitAssemblyFrontHolesByY(
+            List<Point> holes,
+            double minY,
+            double maxY,
+            out List<Point> bottomEndHoles,
+            out List<Point> topEndHoles)
+        {
+            bottomEndHoles = new List<Point>();
+            topEndHoles = new List<Point>();
+
+            try
+            {
+                List<List<Point>> clusters = SplitFrontHolesIntoYClusters(
+                    holes,
+                    FRONT_HOLE_CLUSTER_SPLIT_GAP);
+                if (clusters.Count == 0)
+                    return;
+
+                if (clusters.Count == 1)
+                {
+                    double centerY =
+                        (GetMinYFromPointList(clusters[0], minY) +
+                         GetMaxYFromPointList(clusters[0], maxY)) * 0.5;
+                    List<Point> target =
+                        Math.Abs(centerY - minY) <= Math.Abs(maxY - centerY)
+                            ? bottomEndHoles
+                            : topEndHoles;
+                    AddPointListUnique(target, clusters[0]);
+                    return;
+                }
+
+                AddPointListUnique(bottomEndHoles, clusters[0]);
+                AddPointListUnique(topEndHoles, clusters[clusters.Count - 1]);
+            }
+            catch
+            {
+            }
+        }
+
+        private static List<List<Point>> SplitFrontHolesIntoYClusters(
+            List<Point> holes,
+            double splitGap)
+        {
+            List<List<Point>> clusters = new List<List<Point>>();
+            if (holes == null || holes.Count == 0)
+                return clusters;
+
+            List<Point> sorted = SortByY(holes);
+            List<Point> current = new List<Point>();
+            current.Add(Clone2DWithZ(sorted[0]));
+
+            for (int i = 1; i < sorted.Count; i++)
+            {
+                Point previous = sorted[i - 1];
+                Point now = sorted[i];
+                if (previous == null || now == null)
+                    continue;
+
+                if (Math.Abs(now.Y - previous.Y) > splitGap)
+                {
+                    if (current.Count > 0)
+                        clusters.Add(current);
+                    current = new List<Point>();
+                }
+
+                current.Add(Clone2DWithZ(now));
+            }
+
+            if (current.Count > 0)
+                clusters.Add(current);
+            return clusters;
+        }
+
+        private static double GetMinYFromPointList(List<Point> points, double fallback)
+        {
+            double value = fallback;
+            bool found = false;
+            if (points != null)
+            {
+                foreach (Point point in points)
+                {
+                    if (point == null)
+                        continue;
+                    if (!found || point.Y < value)
+                        value = point.Y;
+                    found = true;
+                }
+            }
+            return value;
+        }
+
+        private static double GetMaxYFromPointList(List<Point> points, double fallback)
+        {
+            double value = fallback;
+            bool found = false;
+            if (points != null)
+            {
+                foreach (Point point in points)
+                {
+                    if (point == null)
+                        continue;
+                    if (!found || point.Y > value)
+                        value = point.Y;
+                    found = true;
+                }
+            }
+            return value;
+        }
+
+        private static int CreateAssemblyFrontVerticalMemberBottomTotalDim(
+            StraightDimensionSetHandler handler,
+            View view,
+            ChamferEdgeAnchors edgeAnchors,
+            DimOffsetAnchor4 offsetAnchors,
+            double horizontalTotalOffset)
+        {
+            try
+            {
+                if (handler == null || view == null ||
+                    edgeAnchors.BottomLeft == null || edgeAnchors.BottomRight == null)
+                    return 0;
+
+                PointList widthPts = new PointList();
+                widthPts.Add(Clone2D(edgeAnchors.BottomLeft));
+                widthPts.Add(Clone2D(edgeAnchors.BottomRight));
+
+                Vector direction = new Vector(0, -1, 0);
+                double realOffset = ResolveDimDistanceByAnchor4(
+                    widthPts,
+                    direction,
+                    offsetAnchors,
+                    horizontalTotalOffset);
+
+                return handler.CreateDimensionSet(view, widthPts, direction, realOffset) != null
+                    ? 1
+                    : 0;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        private static int CreateAssemblyFrontNearestEdgeHoleDimsByPhiAndM(
+            StraightDimensionSetHandler handler,
+            View view,
+            List<Point> holes,
+            List<HHoleCandidate> holeCandidates,
+            double minX,
+            double maxX,
+            double maxY,
+            ChamferEdgeAnchors edgeAnchors,
+            DimOffsetAnchor4 offsetAnchors,
+            int horizontalFirstTier,
+            int horizontalReservedTier,
+            int leftStartTier,
+            int rightStartTier,
+            out int usedHorizontalTierCount,
+            out int highestHorizontalTier,
+            out int usedLeftVerticalTierCount,
+            out int usedRightVerticalTierCount)
+        {
+            int count = 0;
+            usedHorizontalTierCount = 0;
+            highestHorizontalTier = -1;
+            usedLeftVerticalTierCount = 0;
+            usedRightVerticalTierCount = 0;
+
+            try
+            {
+                List<HHoleTechnicalFamily> families =
+                    GroupHHoleCandidatesByPhiAndM(holeCandidates);
+
+                if (families.Count == 0 && holes != null && holes.Count > 0)
+                {
+                    return CreateAssemblyFrontNearestEdgeHoleDims(
+                        handler,
+                        view,
+                        holes,
+                        minX,
+                        maxX,
+                        maxY,
+                        edgeAnchors,
+                        offsetAnchors,
+                        horizontalFirstTier,
+                        horizontalReservedTier,
+                        leftStartTier,
+                        rightStartTier,
+                        out usedHorizontalTierCount,
+                        out highestHorizontalTier,
+                        out usedLeftVerticalTierCount,
+                        out usedRightVerticalTierCount);
+                }
+
+                foreach (HHoleTechnicalFamily family in families)
+                {
+                    if (family == null || family.Holes == null || family.Holes.Count == 0)
+                        continue;
+
+                    List<Point> familyPoints =
+                        ConvertHHoleCandidatesToDimPoints(family.Holes);
+                    int localHorizontalUsed;
+                    int localHorizontalHighest;
+                    int localLeftUsed;
+                    int localRightUsed;
+
+                    count += CreateAssemblyFrontNearestEdgeHoleDims(
+                        handler,
+                        view,
+                        familyPoints,
+                        minX,
+                        maxX,
+                        maxY,
+                        edgeAnchors,
+                        offsetAnchors,
+                        horizontalFirstTier + usedHorizontalTierCount,
+                        horizontalReservedTier,
+                        leftStartTier + usedLeftVerticalTierCount,
+                        rightStartTier + usedRightVerticalTierCount,
+                        out localHorizontalUsed,
+                        out localHorizontalHighest,
+                        out localLeftUsed,
+                        out localRightUsed);
+
+                    usedHorizontalTierCount += localHorizontalUsed;
+                    usedLeftVerticalTierCount += localLeftUsed;
+                    usedRightVerticalTierCount += localRightUsed;
+                    highestHorizontalTier = Math.Max(
+                        highestHorizontalTier,
+                        localHorizontalHighest);
+                }
+            }
+            catch
+            {
             }
 
             return count;
@@ -15048,6 +16876,7 @@ namespace Tekla.Technology.Akit.UserScript
         private class HoleColumnYPatternFamily
         {
             public double HoleKey;
+            public double BoltSize;
             public List<double> YPattern = new List<double>();
             public List<Point> Holes = new List<Point>();
             public List<List<Point>> Clusters = new List<List<Point>>();
@@ -15057,6 +16886,7 @@ namespace Tekla.Technology.Akit.UserScript
             StraightDimensionSetHandler handler,
             View view,
             List<Point> holes,
+            List<HHoleCandidate> holeCandidates,
             double minX,
             double maxX,
             double maxY,
@@ -15081,7 +16911,10 @@ namespace Tekla.Technology.Akit.UserScript
 
                 double tol = Math.Max(2.0, TOL + 1.0);
                 List<HoleColumnYPatternFamily> families =
-                    BuildHoleFamiliesByColumnYPattern(holes, tol);
+                    BuildHoleFamiliesByColumnYPattern(
+                        holes,
+                        holeCandidates,
+                        tol);
 
                 families.Sort(delegate (HoleColumnYPatternFamily a, HoleColumnYPatternFamily b)
                 {
@@ -15226,6 +17059,71 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static List<HoleColumnYPatternFamily> BuildHoleFamiliesByColumnYPattern(
             List<Point> holes,
+            List<HHoleCandidate> holeCandidates,
+            double tol)
+        {
+            List<HoleColumnYPatternFamily> result =
+                new List<HoleColumnYPatternFamily>();
+
+            try
+            {
+                Dictionary<double, List<Point>> legacyDiameterGroups =
+                    GroupTopViewHolesByDiameter(holes);
+                List<HHoleTechnicalFamily> technicalFamilies =
+                    GroupHHoleCandidatesByPhiAndM(holeCandidates);
+
+                if (technicalFamilies.Count == 0)
+                    return BuildHoleFamiliesByColumnYPattern(holes, tol);
+
+                foreach (KeyValuePair<double, List<Point>> legacyPair in legacyDiameterGroups)
+                {
+                    bool addedTechnicalFamily = false;
+
+                    foreach (HHoleTechnicalFamily technicalFamily in technicalFamilies)
+                    {
+                        if (technicalFamily == null || technicalFamily.Holes == null)
+                            continue;
+                        if (Math.Abs(
+                                GetHHoleLegacyDiameterKey(technicalFamily.HoleDiameter) -
+                                legacyPair.Key) > 0.001)
+                            continue;
+
+                        List<Point> familyPoints =
+                            ConvertHHoleCandidatesToDimPoints(technicalFamily.Holes);
+                        List<HoleColumnYPatternFamily> geometryFamilies =
+                            BuildHoleFamiliesByColumnYPattern(familyPoints, tol);
+
+                        foreach (HoleColumnYPatternFamily family in geometryFamilies)
+                        {
+                            if (family == null)
+                                continue;
+                            family.BoltSize = technicalFamily.BoltSize;
+                            result.Add(family);
+                            addedTechnicalFamily = true;
+                        }
+                    }
+
+                    if (!addedTechnicalFamily)
+                    {
+                        List<HoleColumnYPatternFamily> legacyFamilies =
+                            BuildHoleFamiliesByColumnYPattern(legacyPair.Value, tol);
+                        foreach (HoleColumnYPatternFamily family in legacyFamilies)
+                        {
+                            if (family != null)
+                                result.Add(family);
+                        }
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            return result;
+        }
+
+        private static List<HoleColumnYPatternFamily> BuildHoleFamiliesByColumnYPattern(
+            List<Point> holes,
             double tol)
         {
             List<HoleColumnYPatternFamily> result =
@@ -15353,8 +17251,10 @@ namespace Tekla.Technology.Akit.UserScript
                     second.Clusters[0] == null || second.Clusters[0].Count == 0)
                     return false;
 
-                // Chi ap dung cho hai family cung loai lo, bi tach do mau vi tri Y khac nhau.
-                if (Math.Abs(first.HoleKey - second.HoleKey) > 0.001)
+                // Chỉ áp dụng cho hai family cùng loại kỹ thuật (cùng phi + cùng M),
+                // bị tách do mẫu vị trí Y khác nhau.
+                if (Math.Abs(first.HoleKey - second.HoleKey) > 0.001 ||
+                    !AreSameHHoleTechnicalValue(first.BoltSize, second.BoltSize))
                     return false;
 
                 double firstCenterX = GetAverageX(first.Clusters[0]);
@@ -15737,6 +17637,7 @@ namespace Tekla.Technology.Akit.UserScript
             StraightDimensionSetHandler handler,
             View view,
             List<Point> holes,
+            List<HHoleCandidate> holeCandidates,
             double minX,
             double maxX,
             double minY,
@@ -15773,7 +17674,10 @@ namespace Tekla.Technology.Akit.UserScript
                     1);
 
                 List<HoleColumnYPatternFamily> families =
-                    BuildHoleFamiliesByColumnYPattern(holes, tol);
+                    BuildHoleFamiliesByColumnYPattern(
+                        holes,
+                        holeCandidates,
+                        tol);
 
                 foreach (HoleColumnYPatternFamily family in families)
                 {
@@ -16230,7 +18134,7 @@ namespace Tekla.Technology.Akit.UserScript
             return best;
         }
 
-        private static List<Point> GetVisibleFrontWebBoltCentersFromView(
+        private static List<HHoleCandidate> GetVisibleFrontWebHoleCandidatesFromView(
             Model model,
             View view,
             double minX,
@@ -16249,7 +18153,20 @@ namespace Tekla.Technology.Akit.UserScript
             );
 
             HHoleClassification classified = ClassifyHHoleCandidates(holes);
-            return ConvertHHoleCandidatesToDimPoints(classified.FrontCandidates);
+            return classified.FrontCandidates ?? new List<HHoleCandidate>();
+        }
+
+        private static List<Point> GetVisibleFrontWebBoltCentersFromView(
+            Model model,
+            View view,
+            double minX,
+            double maxX,
+            double minY,
+            double maxY)
+        {
+            return ConvertHHoleCandidatesToDimPoints(
+                GetVisibleFrontWebHoleCandidatesFromView(
+                    model, view, minX, maxX, minY, maxY));
         }
 
         private static void SplitFrontHolesByX(
