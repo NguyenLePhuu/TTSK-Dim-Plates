@@ -8927,6 +8927,10 @@ namespace Tekla.Technology.Akit.UserScript
                 //    chỉ DIM 2 cụm ngoài cùng để tránh lặp kích thước giống nhau.
                 cols = FilterLVerticalColumnsForShortSamePattern(cols, minX, maxX, minY, maxY, beamLength);
 
+                // Một cột đại diện của rule Shape L có thể trỏ vào cùng một cụm X.
+                // Chỉ dựng một chain cho mỗi cụm, đúng cách Shape C xử lý cluster.
+                List<double> processedVerticalClusterMinXs = new List<double>();
+
                 foreach (List<Point> col in cols)
                 {
                     if (col == null || col.Count == 0)
@@ -8935,53 +8939,150 @@ namespace Tekla.Technology.Akit.UserScript
                     col.Sort(delegate (Point a, Point b) { return a.Y.CompareTo(b.Y); });
 
                     double colX = col[0].X;
-                    double distToLeft = Math.Abs(colX - minX);
-                    double distToRight = Math.Abs(maxX - colX);
+
+                    // Chỉ dùng cho THÉP L NẰM NGANG. Giữ nguyên rule chọn cột DIM của Shape L,
+                    // nhưng lấy toàn bộ cụm X chứa cột đại diện để dựng chân DIM giống Shape C.
+                    List<Point> verticalFootCluster =
+                        GetLHorizontalMemberVerticalDimFootCluster(
+                            unique,
+                            colX,
+                            200.0,
+                            3.0);
+
+                    if (verticalFootCluster == null || verticalFootCluster.Count == 0)
+                        verticalFootCluster = col;
+
+                    double clusterMinHoleX = 999999999.0;
+                    foreach (Point clusterHole in verticalFootCluster)
+                    {
+                        if (clusterHole != null && clusterHole.X < clusterMinHoleX)
+                            clusterMinHoleX = clusterHole.X;
+                    }
+
+                    bool clusterAlreadyProcessed = false;
+                    foreach (double processedMinX in processedVerticalClusterMinXs)
+                    {
+                        if (Math.Abs(processedMinX - clusterMinHoleX) <= 3.0)
+                        {
+                            clusterAlreadyProcessed = true;
+                            break;
+                        }
+                    }
+
+                    if (clusterAlreadyProcessed)
+                        continue;
+
+                    if (clusterMinHoleX < 900000000.0)
+                        processedVerticalClusterMinXs.Add(clusterMinHoleX);
+
+                    double clusterAvgX = GetLHorizontalMemberAverageX(verticalFootCluster);
+                    double distToLeft = Math.Abs(clusterAvgX - minX);
+                    double distToRight = Math.Abs(maxX - clusterAvgX);
 
                     bool nearLeftEdge = distToLeft <= FRONT_END_HOLE_ZONE;
                     bool nearRightEdge = distToRight <= FRONT_END_HOLE_ZONE;
                     bool isNearOuterEdge = nearLeftEdge || nearRightEdge;
 
-                    bool useLeftEdge = distToLeft <= distToRight;
+                    // Đồng bộ Shape C:
+                    // - cụm gần phải -> DIM bên phải -> mỗi hàng lấy lỗ trái nhất;
+                    // - cụm gần trái -> DIM bên trái -> mỗi hàng lấy lỗ phải nhất;
+                    // - cụm giữa     -> DIM bên trái -> mỗi hàng lấy lỗ phải nhất,
+                    //   sau đó cộng coveredWidth để đường DIM nằm ngoài toàn bộ cụm.
+                    bool dimOnRight =
+                        isNearOuterEdge &&
+                        nearRightEdge &&
+                        (!nearLeftEdge || distToRight < distToLeft);
+
+                    List<List<Point>> clusterRows =
+                        GroupPointsByY(verticalFootCluster, 3.0);
+                    List<Point> rowFeet = new List<Point>();
+
+                    foreach (List<Point> clusterRow in clusterRows)
+                    {
+                        if (clusterRow == null || clusterRow.Count == 0)
+                            continue;
+
+                        Point refHole =
+                            FindLHorizontalMemberFarthestHoleOnRowFromVerticalDim(
+                                clusterRow,
+                                dimOnRight);
+
+                        if (refHole == null)
+                            continue;
+
+                        double gap =
+                            GetLHorizontalMemberClusterHoleDimGap(
+                                refHole,
+                                verticalFootCluster);
+                        double holeFootX = dimOnRight
+                            ? refHole.X + gap
+                            : refHole.X - gap;
+
+                        rowFeet.Add(new Point(holeFootX, refHole.Y, 0));
+                    }
+
+                    if (rowFeet.Count == 0)
+                        continue;
+
                     double verticalEdgeX;
                     Vector verticalDirection;
                     double verticalOffset;
 
                     if (isNearOuterEdge)
                     {
-                        // Lỗ gần mép: DIM ra mép gần nhất như bản đang chạy ổn.
-                        verticalEdgeX = useLeftEdge ? minX : maxX;
-                        verticalDirection = useLeftEdge ? new Vector(-1, 0, 0) : new Vector(1, 0, 0);
+                        verticalEdgeX = dimOnRight ? maxX : minX;
+                        verticalDirection = dimOnRight
+                            ? new Vector(1, 0, 0)
+                            : new Vector(-1, 0, 0);
                         verticalOffset = GetSteelDimOffsetByTier(
-                            useLeftEdge ? tierManager.ReserveLeft() : tierManager.ReserveRight());
+                            dimOnRight
+                                ? tierManager.ReserveRight()
+                                : tierManager.ReserveLeft());
                     }
                     else
                     {
-                        // Lỗ bên trong: không kéo về mép trái/phải của thanh nữa.
-                        // Chân mép đặt thẳng theo cột lỗ, đường DIM theo middle offset của scale.
-                        verticalEdgeX = colX;
-                        useLeftEdge = true;
+                        // Shape C middle rule: baseline của chain lấy ngay tại chân trong cùng
+                        // của cụm, không neo về mép thật của thanh.
+                        verticalEdgeX = 999999999.0;
+                        foreach (Point rowFoot in rowFeet)
+                        {
+                            if (rowFoot != null && rowFoot.X < verticalEdgeX)
+                                verticalEdgeX = rowFoot.X;
+                        }
+
+                        if (verticalEdgeX > 900000000.0)
+                            verticalEdgeX = colX;
+
                         verticalDirection = new Vector(-1, 0, 0);
                         verticalOffset = CurrentMiddleVerticalDimOffset;
                     }
 
                     PointList pts = new PointList();
                     pts.Add(new Point(verticalEdgeX, minY, 0));
-                    foreach (Point h in col)
+                    foreach (Point rowFoot in rowFeet)
                     {
-                        double gap = GetHoleDimGap(h);
-                        double holeFootX = useLeftEdge ? h.X - gap : h.X + gap;
-                        pts.Add(new Point(holeFootX, h.Y, 0));
+                        if (rowFoot != null)
+                            pts.Add(new Point(rowFoot.X, rowFoot.Y, 0));
                     }
                     pts.Add(new Point(verticalEdgeX, maxY, 0));
 
-                    double resolvedVerticalOffset = isNearOuterEdge
-                        ? ResolveDimDistanceByAnchor4(
+                    double resolvedVerticalOffset;
+                    if (isNearOuterEdge)
+                    {
+                        resolvedVerticalOffset = ResolveDimDistanceByAnchor4(
                             pts,
                             verticalDirection,
                             offsetAnchors,
-                            verticalOffset)
-                        : verticalOffset;
+                            verticalOffset);
+                    }
+                    else
+                    {
+                        resolvedVerticalOffset =
+                            GetLHorizontalMemberMiddleVerticalDimOffsetCoveringCluster(
+                                verticalFootCluster,
+                                verticalEdgeX,
+                                verticalOffset);
+                    }
 
                     if (handler.CreateDimensionSet(
                         view,
@@ -9005,6 +9106,235 @@ namespace Tekla.Technology.Akit.UserScript
 
             return count;
         }
+
+        // Chỉ dùng cho THÉP L NẰM NGANG, phần DIM dọc vị trí lỗ.
+        // Tách cụm theo X giống Shape C: khoảng hở cột >= splitGap là cụm mới.
+        private static List<Point> GetLHorizontalMemberVerticalDimFootCluster(
+            List<Point> holes,
+            double referenceX,
+            double splitGap,
+            double tol)
+        {
+            List<Point> result = new List<Point>();
+
+            try
+            {
+                if (holes == null || holes.Count == 0)
+                    return result;
+
+                List<double> xs = new List<double>();
+                foreach (Point hole in holes)
+                {
+                    if (hole == null)
+                        continue;
+
+                    bool found = false;
+                    foreach (double x in xs)
+                    {
+                        if (Math.Abs(x - hole.X) <= tol)
+                        {
+                            found = true;
+                            break;
+                        }
+                    }
+
+                    if (!found)
+                        xs.Add(hole.X);
+                }
+
+                xs.Sort();
+                if (xs.Count == 0)
+                    return result;
+
+                int referenceIndex = 0;
+                double bestReferenceDistance = Math.Abs(xs[0] - referenceX);
+                for (int i = 1; i < xs.Count; i++)
+                {
+                    double distance = Math.Abs(xs[i] - referenceX);
+                    if (distance < bestReferenceDistance)
+                    {
+                        bestReferenceDistance = distance;
+                        referenceIndex = i;
+                    }
+                }
+
+                int firstIndex = referenceIndex;
+                while (firstIndex > 0 &&
+                       xs[firstIndex] - xs[firstIndex - 1] < splitGap)
+                {
+                    firstIndex--;
+                }
+
+                int lastIndex = referenceIndex;
+                while (lastIndex < xs.Count - 1 &&
+                       xs[lastIndex + 1] - xs[lastIndex] < splitGap)
+                {
+                    lastIndex++;
+                }
+
+                foreach (Point hole in holes)
+                {
+                    if (hole == null)
+                        continue;
+
+                    for (int i = firstIndex; i <= lastIndex; i++)
+                    {
+                        if (Math.Abs(hole.X - xs[i]) <= tol)
+                        {
+                            result.Add(hole);
+                            break;
+                        }
+                    }
+                }
+
+                if (result.Count == 0)
+                    result.AddRange(holes);
+            }
+            catch
+            {
+                result.Clear();
+                if (holes != null)
+                    result.AddRange(holes);
+            }
+
+            return result;
+        }
+
+
+        // Chỉ dùng cho THÉP L NẰM NGANG.
+        // DIM bên phải lấy lỗ trái nhất; DIM bên trái lấy lỗ phải nhất.
+        private static Point FindLHorizontalMemberFarthestHoleOnRowFromVerticalDim(
+            List<Point> row,
+            bool dimOnRight)
+        {
+            Point best = null;
+
+            try
+            {
+                if (row == null)
+                    return null;
+
+                foreach (Point hole in row)
+                {
+                    if (hole == null)
+                        continue;
+
+                    if (best == null ||
+                        (dimOnRight && hole.X < best.X) ||
+                        (!dimOnRight && hole.X > best.X))
+                    {
+                        best = hole;
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            return best;
+        }
+
+
+        // Giữ rule phi lỗ thật của Shape L; nếu lỗ đại diện thiếu Z thì lấy phi hợp lệ
+        // từ chính cụm, tương đương fallback đang dùng trong Shape C.
+        private static double GetLHorizontalMemberClusterHoleDimGap(
+            Point hole,
+            List<Point> cluster)
+        {
+            double gap = GetHoleDimGap(hole);
+            if (gap > MIN_VALID_HOLE_DIM_GAP)
+                return gap;
+
+            try
+            {
+                if (cluster != null)
+                {
+                    foreach (Point p in cluster)
+                    {
+                        double candidate = GetHoleDimGap(p);
+                        if (candidate > MIN_VALID_HOLE_DIM_GAP)
+                            return candidate;
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            return gap;
+        }
+
+
+        // Shape C middle rule:
+        // offset thực = middle offset hiện tại của Shape L + bề rộng cụm mà chain phải bao phủ.
+        private static double GetLHorizontalMemberMiddleVerticalDimOffsetCoveringCluster(
+            List<Point> cluster,
+            double innerDimFootX,
+            double currentMiddleOffset)
+        {
+            try
+            {
+                if (cluster == null || cluster.Count == 0 ||
+                    double.IsNaN(innerDimFootX) ||
+                    double.IsInfinity(innerDimFootX))
+                    return currentMiddleOffset;
+
+                double leftOuterFootX = 999999999.0;
+
+                foreach (Point hole in cluster)
+                {
+                    if (hole == null)
+                        continue;
+
+                    double gap =
+                        GetLHorizontalMemberClusterHoleDimGap(hole, cluster);
+                    double outerFootX = hole.X - gap;
+                    if (outerFootX < leftOuterFootX)
+                        leftOuterFootX = outerFootX;
+                }
+
+                if (leftOuterFootX > 900000000.0)
+                    return currentMiddleOffset;
+
+                double coveredWidth = innerDimFootX - leftOuterFootX;
+                return coveredWidth > 0.0
+                    ? currentMiddleOffset + coveredWidth
+                    : currentMiddleOffset;
+            }
+            catch
+            {
+                return currentMiddleOffset;
+            }
+        }
+
+
+        private static double GetLHorizontalMemberAverageX(List<Point> holes)
+        {
+            try
+            {
+                if (holes == null || holes.Count == 0)
+                    return 0.0;
+
+                double sum = 0.0;
+                int count = 0;
+
+                foreach (Point hole in holes)
+                {
+                    if (hole == null)
+                        continue;
+
+                    sum += hole.X;
+                    count++;
+                }
+
+                return count > 0 ? sum / count : 0.0;
+            }
+            catch
+            {
+                return 0.0;
+            }
+        }
+
 
         private static List<Point> BuildLHorizontalRepresentativeHoles(
             List<Point> unique)
