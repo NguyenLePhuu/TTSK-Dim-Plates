@@ -15,6 +15,8 @@ namespace TTSK_AutoDim_Plates
     {
         private const string GridVisibilityMacroFileName = "Phu_Macro_GridVisibility.cs";
         private const string GridVisibilityCommandFileName = "TTSK_GridVisibility.command";
+        private const int DATA_CENTER_GRID_AXIS_COUNT = 1;
+        private const double DATA_CENTER_FIT_PADDING = 20.0;
 
         private readonly List<Drawing> _selectedDrawings = new List<Drawing>();
 
@@ -28,6 +30,10 @@ namespace TTSK_AutoDim_Plates
         private bool? _batchGridDimEnabledSnapshot = null;
         private bool? _batchGridDimBeamSnapshot = null;
         private int? _batchGridDimAxisCountSnapshot = null;
+        private double? _batchManualScaleSnapshot = null;
+        private bool _batchManualScaleSnapshotCaptured = false;
+        private bool _dataCenterModeEnabled = false;
+        private bool? _batchDataCenterModeSnapshot = null;
         private bool _syncingAutoSectionSwitch = false;
 
         private RadioButton rbActive;
@@ -101,6 +107,9 @@ namespace TTSK_AutoDim_Plates
         private Label gridResultLabel;
         private Label arrangeResultLabel;
         private Label autoDimResultLabel;
+        private Panel dataCenterSlotTile;
+        private Label dataCenterSlotTitle;
+        private Label dataCenterSlotDescription;
         private readonly List<Panel> autoDimPages = new List<Panel>();
         private readonly List<SafeRoundedButton> autoDimPageButtons = new List<SafeRoundedButton>();
         private int selectedAutoDimPage = 0;
@@ -150,7 +159,8 @@ namespace TTSK_AutoDim_Plates
             IntPtr hwnd,
             int attr,
             ref int attrValue,
-            int attrSize);
+            int attrSize
+        );
 
         private const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
 
@@ -178,34 +188,24 @@ namespace TTSK_AutoDim_Plates
                     Handle,
                     DWMWA_USE_IMMERSIVE_DARK_MODE,
                     ref useDark,
-                    sizeof(int));
+                    sizeof(int)
+                );
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private string ThemeFile
         {
-            get
-            {
-                return System.IO.Path.Combine(
-                    Application.StartupPath,
-                    "theme.cfg");
-            }
+            get { return System.IO.Path.Combine(Application.StartupPath, "theme.cfg"); }
         }
 
         private void SaveTheme()
         {
             try
             {
-                System.IO.File.WriteAllText(
-                    ThemeFile,
-                    _darkMode ? "DARK" : "LIGHT");
+                System.IO.File.WriteAllText(ThemeFile, _darkMode ? "DARK" : "LIGHT");
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private void LoadTheme()
@@ -215,18 +215,11 @@ namespace TTSK_AutoDim_Plates
                 if (!System.IO.File.Exists(ThemeFile))
                     return;
 
-                string text =
-                    System.IO.File.ReadAllText(ThemeFile).Trim();
+                string text = System.IO.File.ReadAllText(ThemeFile).Trim();
 
-                _darkMode =
-                    string.Equals(
-                        text,
-                        "DARK",
-                        StringComparison.OrdinalIgnoreCase);
+                _darkMode = string.Equals(text, "DARK", StringComparison.OrdinalIgnoreCase);
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private void SetFormIconFromLogo()
@@ -244,9 +237,7 @@ namespace TTSK_AutoDim_Plates
                     Icon = Icon.FromHandle(hIcon);
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private void BuildUi()
@@ -267,7 +258,8 @@ namespace TTSK_AutoDim_Plates
 
             PictureBox logo = new PictureBox();
             logo.Image = System.Drawing.Image.FromFile(
-                Application.StartupPath + @"\Resources\logo.png");
+                Application.StartupPath + @"\Resources\logo.png"
+            );
             logo.Location = new Point(18, 18);
             logo.Size = new System.Drawing.Size(70, 70);
             logo.SizeMode = PictureBoxSizeMode.Zoom;
@@ -280,7 +272,6 @@ namespace TTSK_AutoDim_Plates
             title.Location = new Point(86, 20);
             title.Size = new System.Drawing.Size(520, 42);
             header.Controls.Add(title);
-
 
             Label sub = new Label();
             sub.Text = "Plate Auto Dimension for Tekla Structures 2025 SP7";
@@ -335,8 +326,14 @@ namespace TTSK_AutoDim_Plates
             rbActive.Checked = true;
             rbActive.Visible = false;
             rbBatch.Visible = false;
-            rbActive.CheckedChanged += delegate { UpdateModeUi(); };
-            rbBatch.CheckedChanged += delegate { UpdateModeUi(); };
+            rbActive.CheckedChanged += delegate
+            {
+                UpdateModeUi();
+            };
+            rbBatch.CheckedChanged += delegate
+            {
+                UpdateModeUi();
+            };
 
             Panel modePanel = MakePanel(18, 132, 944, 90);
             Controls.Add(modePanel);
@@ -344,6 +341,15 @@ namespace TTSK_AutoDim_Plates
             btnModeActive = MakeModeButton("🗎  ACTIVE", "Bản vẽ hiện hành", 95, 20, 350, 50);
             EventHandler activeModeClick = delegate
             {
+                if (_dataCenterModeEnabled)
+                {
+                    SetMainStatus(
+                        "Data Center chỉ chạy trong Batch. Hãy click Slot09 lần nữa để tắt mode.",
+                        MainStatusKind.Warning
+                    );
+                    return;
+                }
+
                 rbActive.Checked = true;
                 rbBatch.Checked = false;
                 UpdateModeUi();
@@ -411,9 +417,21 @@ namespace TTSK_AutoDim_Plates
 
             dgvDrawings.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(248, 250, 252);
             dgvDrawings.ColumnHeadersDefaultCellStyle.ForeColor = Color.FromArgb(15, 23, 42);
-            dgvDrawings.ColumnHeadersDefaultCellStyle.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
-            dgvDrawings.ColumnHeadersDefaultCellStyle.SelectionBackColor = Color.FromArgb(248, 250, 252);
-            dgvDrawings.ColumnHeadersDefaultCellStyle.SelectionForeColor = Color.FromArgb(15, 23, 42);
+            dgvDrawings.ColumnHeadersDefaultCellStyle.Font = new Font(
+                "Segoe UI",
+                9F,
+                FontStyle.Bold
+            );
+            dgvDrawings.ColumnHeadersDefaultCellStyle.SelectionBackColor = Color.FromArgb(
+                248,
+                250,
+                252
+            );
+            dgvDrawings.ColumnHeadersDefaultCellStyle.SelectionForeColor = Color.FromArgb(
+                15,
+                23,
+                42
+            );
             dgvDrawings.ColumnHeadersHeight = 28;
             dgvDrawings.ColumnHeadersDefaultCellStyle.Alignment =
                 DataGridViewContentAlignment.MiddleCenter;
@@ -434,8 +452,7 @@ namespace TTSK_AutoDim_Plates
 
             foreach (DataGridViewColumn col in dgvDrawings.Columns)
             {
-                col.HeaderCell.Style.Alignment =
-                    DataGridViewContentAlignment.MiddleCenter;
+                col.HeaderCell.Style.Alignment = DataGridViewContentAlignment.MiddleCenter;
             }
             foreach (DataGridViewColumn col in dgvDrawings.Columns)
             {
@@ -455,12 +472,18 @@ namespace TTSK_AutoDim_Plates
             dgvDrawings.Columns["RESULT"].MinimumWidth = 150;
             dgvDrawings.Columns["RESULT"].AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
 
-            dgvDrawings.Columns["STT"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
-            dgvDrawings.Columns["REV"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
-            dgvDrawings.Columns["CHANGES"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
-            dgvDrawings.Columns["STATUS"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
-            dgvDrawings.Columns["RESULT"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
-            dgvDrawings.Columns["MARK"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+            dgvDrawings.Columns["STT"].DefaultCellStyle.Alignment =
+                DataGridViewContentAlignment.MiddleCenter;
+            dgvDrawings.Columns["REV"].DefaultCellStyle.Alignment =
+                DataGridViewContentAlignment.MiddleCenter;
+            dgvDrawings.Columns["CHANGES"].DefaultCellStyle.Alignment =
+                DataGridViewContentAlignment.MiddleCenter;
+            dgvDrawings.Columns["STATUS"].DefaultCellStyle.Alignment =
+                DataGridViewContentAlignment.MiddleCenter;
+            dgvDrawings.Columns["RESULT"].DefaultCellStyle.Alignment =
+                DataGridViewContentAlignment.MiddleCenter;
+            dgvDrawings.Columns["MARK"].DefaultCellStyle.Alignment =
+                DataGridViewContentAlignment.MiddleCenter;
 
             dgvDrawings.ClearSelection();
             dgvDrawings.CellDoubleClick += dgvDrawings_CellDoubleClick;
@@ -520,7 +543,8 @@ namespace TTSK_AutoDim_Plates
             autoSectionToolTip.ShowAlways = true;
             autoSectionToolTip.SetToolTip(
                 autoSectionSwitch,
-                "Auto Section: tu dong tao mat cat ON/OFF");
+                "Auto Section: tu dong tao mat cat ON/OFF"
+            );
             status.Controls.Add(autoSectionSwitch);
 
             lblManualScalePrefix = new Label();
@@ -538,8 +562,7 @@ namespace TTSK_AutoDim_Plates
             manualScaleInputHost.Cursor = Cursors.IBeam;
             manualScaleInputHost.Click += delegate
             {
-                if (txtManualScaleDenominator != null &&
-                    txtManualScaleDenominator.Enabled)
+                if (txtManualScaleDenominator != null && txtManualScaleDenominator.Enabled)
                     txtManualScaleDenominator.Focus();
             };
             status.Controls.Add(manualScaleInputHost);
@@ -560,10 +583,10 @@ namespace TTSK_AutoDim_Plates
             manualScaleToolTip.AutoPopDelay = 8000;
             manualScaleToolTip.ShowAlways = true;
             string manualScaleTip =
-                "Để trống: dùng Auto Scale hiện tại.\r\n" +
-                "Nhập mẫu số, ví dụ 20 tương ứng tỷ lệ 1:20.\r\n" +
-                "Chỉ giữ trong phiên hiện tại; mở lại TTSK sẽ trở về Auto Scale.\r\n" +
-                "Chỉ áp dụng cho Active Drawing khi chạy CREATE DRAWING.";
+                "Để trống: dùng Auto Scale hiện tại.\r\n"
+                + "Nhập mẫu số, ví dụ 20 tương ứng tỷ lệ 1:20.\r\n"
+                + "Chỉ giữ trong phiên hiện tại; mở lại TTSK sẽ trở về Auto Scale.\r\n"
+                + "Áp dụng cho Active Drawing hoặc toàn bộ Batch khi chạy CREATE DRAWING.";
             manualScaleToolTip.SetToolTip(lblManualScalePrefix, manualScaleTip);
             manualScaleToolTip.SetToolTip(manualScaleInputHost, manualScaleTip);
             manualScaleToolTip.SetToolTip(txtManualScaleDenominator, manualScaleTip);
@@ -578,21 +601,37 @@ namespace TTSK_AutoDim_Plates
             btnPrint.Location = new Point(statusActionButtonStartX, 2);
             btnPrint.Size = new System.Drawing.Size(statusActionButtonWidth, 25);
             btnPrint.Click += btnPrint_Click;
-            btnPrint.MouseHover += delegate { ShowPrintMenu(); };
-            btnPrint.MouseEnter += delegate { CancelPrintMenuClose(); };
-            btnPrint.MouseLeave += delegate { SchedulePrintMenuClose(); };
+            btnPrint.MouseHover += delegate
+            {
+                ShowPrintMenu();
+            };
+            btnPrint.MouseEnter += delegate
+            {
+                CancelPrintMenuClose();
+            };
+            btnPrint.MouseLeave += delegate
+            {
+                SchedulePrintMenuClose();
+            };
             status.Controls.Add(btnPrint);
 
             printMergeDropDownHost = new Panel();
             printMergeDropDownHost.Size = new System.Drawing.Size(
                 btnPrint.Width,
-                btnPrint.Height * 2);
+                btnPrint.Height * 2
+            );
             printMergeDropDownHost.Padding = Padding.Empty;
             printMergeDropDownHost.Margin = Padding.Empty;
             printMergeDropDownHost.BackColor = status.BackColor;
             printMergeDropDownHost.Visible = false;
-            printMergeDropDownHost.MouseEnter += delegate { CancelPrintMenuClose(); };
-            printMergeDropDownHost.MouseLeave += delegate { SchedulePrintMenuClose(); };
+            printMergeDropDownHost.MouseEnter += delegate
+            {
+                CancelPrintMenuClose();
+            };
+            printMergeDropDownHost.MouseLeave += delegate
+            {
+                SchedulePrintMenuClose();
+            };
             Controls.Add(printMergeDropDownHost);
 
             btnMergeDropDown = new SafeRoundedButton();
@@ -602,8 +641,14 @@ namespace TTSK_AutoDim_Plates
             btnMergeDropDown.Margin = Padding.Empty;
             btnMergeDropDown.TabStop = false;
             btnMergeDropDown.Click += btnMerge_Click;
-            btnMergeDropDown.MouseEnter += delegate { CancelPrintMenuClose(); };
-            btnMergeDropDown.MouseLeave += delegate { SchedulePrintMenuClose(); };
+            btnMergeDropDown.MouseEnter += delegate
+            {
+                CancelPrintMenuClose();
+            };
+            btnMergeDropDown.MouseLeave += delegate
+            {
+                SchedulePrintMenuClose();
+            };
             printMergeDropDownHost.Controls.Add(btnMergeDropDown);
 
             btnMergeFileDropDown = new SafeRoundedButton();
@@ -613,8 +658,14 @@ namespace TTSK_AutoDim_Plates
             btnMergeFileDropDown.Margin = Padding.Empty;
             btnMergeFileDropDown.TabStop = false;
             btnMergeFileDropDown.Click += btnMergeFile_Click;
-            btnMergeFileDropDown.MouseEnter += delegate { CancelPrintMenuClose(); };
-            btnMergeFileDropDown.MouseLeave += delegate { SchedulePrintMenuClose(); };
+            btnMergeFileDropDown.MouseEnter += delegate
+            {
+                CancelPrintMenuClose();
+            };
+            btnMergeFileDropDown.MouseLeave += delegate
+            {
+                SchedulePrintMenuClose();
+            };
             printMergeDropDownHost.Controls.Add(btnMergeFileDropDown);
 
             printMenuCloseTimer = new System.Windows.Forms.Timer();
@@ -624,38 +675,41 @@ namespace TTSK_AutoDim_Plates
                 if (printMenuCloseTimer != null)
                     printMenuCloseTimer.Stop();
 
-                if (!IsCursorInsideControl(btnPrint) &&
-                    !IsCursorInsideControl(printMergeDropDownHost))
+                if (
+                    !IsCursorInsideControl(btnPrint)
+                    && !IsCursorInsideControl(printMergeDropDownHost)
+                )
                 {
                     HidePrintMenu();
                 }
             };
 
-            Deactivate += delegate { HidePrintMenu(); };
+            Deactivate += delegate
+            {
+                HidePrintMenu();
+            };
             btnDictionary = new SafeRoundedButton();
             btnDictionary.Text = "Dict";
             btnDictionary.Font = new Font("Segoe UI", 8.5F, FontStyle.Bold);
             btnDictionary.Location = new Point(
-                statusActionButtonStartX +
-                statusActionButtonWidth +
-                statusActionButtonGap,
-                2);
-            btnDictionary.Size = new System.Drawing.Size(
-                statusActionButtonWidth,
-                25);
-            btnDictionary.Click += delegate { ToggleDictionaryPanel(); };
+                statusActionButtonStartX + statusActionButtonWidth + statusActionButtonGap,
+                2
+            );
+            btnDictionary.Size = new System.Drawing.Size(statusActionButtonWidth, 25);
+            btnDictionary.Click += delegate
+            {
+                ToggleDictionaryPanel();
+            };
             status.Controls.Add(btnDictionary);
 
             btnClear = new SafeRoundedButton();
             btnClear.Text = "Clear Log";
             btnClear.Font = new Font("Segoe UI", 8.5F);
             btnClear.Location = new Point(
-                statusActionButtonStartX +
-                ((statusActionButtonWidth + statusActionButtonGap) * 2),
-                2);
-            btnClear.Size = new System.Drawing.Size(
-                statusActionButtonWidth,
-                25);
+                statusActionButtonStartX + ((statusActionButtonWidth + statusActionButtonGap) * 2),
+                2
+            );
+            btnClear.Size = new System.Drawing.Size(statusActionButtonWidth, 25);
             btnClear.Click += delegate
             {
                 _resumeIndex = 0;
@@ -671,13 +725,12 @@ namespace TTSK_AutoDim_Plates
             mainFooter = new Panel();
             mainFooter.BackColor = Blue;
             mainFooter.Location = new Point(0, 600);
-            mainFooter.Size = new System.Drawing.Size(
-                MainBaseWidth + SlideHandleWidth,
-                40);
+            mainFooter.Size = new System.Drawing.Size(MainBaseWidth + SlideHandleWidth, 40);
             Controls.Add(mainFooter);
 
             Label foot = new Label();
-            foot.Text = "ⓘ  Optimized for Tekla Structures 2025 SP7                                      ♥  Developed by TTSK VN BIM TEAM                                                    ⌬  富";
+            foot.Text =
+                "ⓘ  Optimized for Tekla Structures 2025 SP7                                      ♥  Developed by TTSK VN BIM TEAM                                                    ⌬  富";
             foot.ForeColor = Color.White;
             foot.Font = new Font("Segoe UI", 10F);
             foot.Location = new Point(30, 9);
@@ -700,7 +753,10 @@ namespace TTSK_AutoDim_Plates
             slideHandle.Location = new Point(MainBaseWidth - 8, 292);
             slideHandle.Size = new System.Drawing.Size(20, 62);
             slideHandle.Cursor = Cursors.Hand;
-            slideHandle.Click += delegate { ToggleSlideTools(); };
+            slideHandle.Click += delegate
+            {
+                ToggleSlideTools();
+            };
             Controls.Add(slideHandle);
 
             slideHandleLabel = new Label();
@@ -709,7 +765,10 @@ namespace TTSK_AutoDim_Plates
             slideHandleLabel.Font = new Font("Segoe UI", 11F, FontStyle.Bold);
             slideHandleLabel.Dock = DockStyle.Fill;
             slideHandleLabel.Cursor = Cursors.Hand;
-            slideHandleLabel.Click += delegate { ToggleSlideTools(); };
+            slideHandleLabel.Click += delegate
+            {
+                ToggleSlideTools();
+            };
             slideHandle.Controls.Add(slideHandleLabel);
 
             slideToolsPanel = new RoundedPanel();
@@ -733,7 +792,10 @@ namespace TTSK_AutoDim_Plates
             closeTools.Location = new Point(SlideToolsWidth - 42, 16);
             closeTools.Size = new System.Drawing.Size(26, 28);
             closeTools.Cursor = Cursors.Hand;
-            closeTools.Click += delegate { CloseSlideTools(); };
+            closeTools.Click += delegate
+            {
+                CloseSlideTools();
+            };
             slideToolsPanel.Controls.Add(closeTools);
 
             slideAutoDimTool = MakeSlideToolButton(
@@ -741,76 +803,71 @@ namespace TTSK_AutoDim_Plates
                 "Auto Dimension",
                 "By Selected Part",
                 18,
-                62);
-            WireClickToAll(slideAutoDimTool, delegate
-            {
-                if (slideAutoDimOpen)
-                    CloseAutoDimensionPanel();
-                else
-                    OpenAutoDimensionPanel();
-            });
+                62
+            );
+            WireClickToAll(
+                slideAutoDimTool,
+                delegate
+                {
+                    if (slideAutoDimOpen)
+                        CloseAutoDimensionPanel();
+                    else
+                        OpenAutoDimensionPanel();
+                }
+            );
             slideToolsPanel.Controls.Add(slideAutoDimTool);
 
-            slideDimTool = MakeSlideToolButton(
-                "↔",
-                "Dimension Spacing",
-                "",
-                18,
-                62);
-            WireClickToAll(slideDimTool, delegate
-            {
-                if (slideDimOpen)
-                    CloseDimSpacingPanel();
-                else
-                    OpenDimSpacingPanel();
-            });
+            slideDimTool = MakeSlideToolButton("↔", "Dimension Spacing", "", 18, 62);
+            WireClickToAll(
+                slideDimTool,
+                delegate
+                {
+                    if (slideDimOpen)
+                        CloseDimSpacingPanel();
+                    else
+                        OpenDimSpacingPanel();
+                }
+            );
             slideToolsPanel.Controls.Add(slideDimTool);
 
-            slideLineTool = MakeSlideToolButton(
-                "─",
-                "Line Distance",
-                "",
-                18,
-                124);
-            WireClickToAll(slideLineTool, delegate
-            {
-                if (slideLineOpen)
-                    CloseLineDistancePanel();
-                else
-                    OpenLineDistancePanel();
-            });
+            slideLineTool = MakeSlideToolButton("─", "Line Distance", "", 18, 124);
+            WireClickToAll(
+                slideLineTool,
+                delegate
+                {
+                    if (slideLineOpen)
+                        CloseLineDistancePanel();
+                    else
+                        OpenLineDistancePanel();
+                }
+            );
             slideToolsPanel.Controls.Add(slideLineTool);
 
-            slideGridTool = MakeSlideToolButton(
-                "⌗",
-                "Open Grid View",
-                "",
-                18,
-                186);
-            WireClickToAll(slideGridTool, delegate
-            {
-                if (slideGridOpen)
-                    CloseOpenGridPanel();
-                else
-                    OpenOpenGridPanel();
-            });
+            slideGridTool = MakeSlideToolButton("⌗", "Open Grid View", "", 18, 186);
+            WireClickToAll(
+                slideGridTool,
+                delegate
+                {
+                    if (slideGridOpen)
+                        CloseOpenGridPanel();
+                    else
+                        OpenOpenGridPanel();
+                }
+            );
             slideToolsPanel.Controls.Add(slideGridTool);
 
-            slideArrangeTool = MakeSlideToolButton(
-                "◫",
-                "Arrange View",
-                "",
-                18,
-                248);
-            WireClickToAll(slideArrangeTool, delegate
-            {
-                if (slideArrangeOpen)
-                    CloseArrangeViewPanel();
-                else
-                    OpenArrangeViewPanel();
-            });
+            slideArrangeTool = MakeSlideToolButton("◫", "Arrange View", "", 18, 248);
+            WireClickToAll(
+                slideArrangeTool,
+                delegate
+                {
+                    if (slideArrangeOpen)
+                        CloseArrangeViewPanel();
+                    else
+                        OpenArrangeViewPanel();
+                }
+            );
             slideToolsPanel.Controls.Add(slideArrangeTool);
-
 
             SafeRoundedButton shortcutSettings = new SafeRoundedButton();
             shortcutSettings.Text = "⌨  Shortcut Settings";
@@ -843,7 +900,10 @@ namespace TTSK_AutoDim_Plates
 
             slideGridPanel = new RoundedPanel();
             slideGridPanel.Location = new Point(18, 188);
-            slideGridPanel.Size = new System.Drawing.Size(SlideToolsWidth - 36, GridDetailPanelHeight);
+            slideGridPanel.Size = new System.Drawing.Size(
+                SlideToolsWidth - 36,
+                GridDetailPanelHeight
+            );
             ((RoundedPanel)slideGridPanel).BorderRadius = 12;
             slideGridPanel.Visible = false;
             slideToolsPanel.Controls.Add(slideGridPanel);
@@ -862,7 +922,6 @@ namespace TTSK_AutoDim_Plates
             slideArrangePanel.Visible = false;
             slideToolsPanel.Controls.Add(slideArrangePanel);
 
-
             slideAutoDimPanel = new RoundedPanel();
             slideAutoDimPanel.Location = new Point(18, 130);
             slideAutoDimPanel.Size = new System.Drawing.Size(SlideToolsWidth - 36, 410);
@@ -871,9 +930,13 @@ namespace TTSK_AutoDim_Plates
             slideToolsPanel.Controls.Add(slideAutoDimPanel);
 
             japaneseDictionaryPanel = new JapaneseDictionaryPanel(
-                System.IO.Path.Combine(Application.StartupPath, "Data", "JapaneseDictionary.tsv"));
+                System.IO.Path.Combine(Application.StartupPath, "Data", "JapaneseDictionary.tsv")
+            );
             japaneseDictionaryPanel.Location = new Point(18, 62);
-            japaneseDictionaryPanel.Size = new System.Drawing.Size(SlideToolsWidth - 36, MainBaseHeight - 168);
+            japaneseDictionaryPanel.Size = new System.Drawing.Size(
+                SlideToolsWidth - 36,
+                MainBaseHeight - 168
+            );
             japaneseDictionaryPanel.Visible = false;
             japaneseDictionaryPanel.StatusChanged += JapaneseDictionaryPanel_StatusChanged;
             slideToolsPanel.Controls.Add(japaneseDictionaryPanel);
@@ -917,10 +980,8 @@ namespace TTSK_AutoDim_Plates
             t.BackColor = Color.Transparent;
             p.Controls.Add(t);
 
-
             return p;
         }
-
 
         private void BuildAutoDimensionDetailPanel()
         {
@@ -968,7 +1029,11 @@ namespace TTSK_AutoDim_Plates
                 0,
                 boxW,
                 boxH,
-                delegate { RunSelectedMainPartAutoDim(); });
+                delegate
+                {
+                    RunSelectedMainPartAutoDim();
+                }
+            );
             page1.Controls.Add(slot1);
 
             Panel slot2 = MakeAutoDimImageSlotBox(
@@ -977,7 +1042,11 @@ namespace TTSK_AutoDim_Plates
                 0,
                 boxW,
                 boxH,
-                delegate { RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot02"); });
+                delegate
+                {
+                    RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot02");
+                }
+            );
             page1.Controls.Add(slot2);
 
             Panel slot3 = MakeAutoDimImageSlotBox(
@@ -986,7 +1055,11 @@ namespace TTSK_AutoDim_Plates
                 boxH + gap,
                 boxW,
                 boxH,
-                delegate { RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot03"); });
+                delegate
+                {
+                    RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot03");
+                }
+            );
             page1.Controls.Add(slot3);
 
             Panel slot4 = MakeAutoDimSlot04Box(
@@ -994,7 +1067,8 @@ namespace TTSK_AutoDim_Plates
                 innerMargin + boxW + gap,
                 boxH + gap,
                 boxW,
-                boxH);
+                boxH
+            );
             page1.Controls.Add(slot4);
 
             Panel slot5 = MakeAutoDimSlot05Box(
@@ -1002,7 +1076,8 @@ namespace TTSK_AutoDim_Plates
                 innerMargin,
                 (boxH + gap) * 2,
                 boxW,
-                boxH);
+                boxH
+            );
             page1.Controls.Add(slot5);
 
             Panel slot6 = MakeAutoDimSlotBox(
@@ -1013,7 +1088,13 @@ namespace TTSK_AutoDim_Plates
                 (boxH + gap) * 2,
                 boxW,
                 boxH,
-                delegate { RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_NishiAzabuAutoDim"); });
+                delegate
+                {
+                    RunExternalAutoDimSlot(
+                        "Tekla.Technology.Akit.UserScript.PHU_NishiAzabuAutoDim"
+                    );
+                }
+            );
             page1.Controls.Add(slot6);
 
             Panel slot7 = MakeAutoDimSlotBox(
@@ -1024,7 +1105,13 @@ namespace TTSK_AutoDim_Plates
                 0,
                 boxW,
                 boxH,
-                delegate { RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_NishiAzabuAutoDimSlot07"); });
+                delegate
+                {
+                    RunExternalAutoDimSlot(
+                        "Tekla.Technology.Akit.UserScript.PHU_NishiAzabuAutoDimSlot07"
+                    );
+                }
+            );
             page2.Controls.Add(slot7);
 
             Panel slot8 = MakeAutoDimSlotBox(
@@ -1035,10 +1122,34 @@ namespace TTSK_AutoDim_Plates
                 0,
                 boxW,
                 boxH,
-                delegate { RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot08"); });
+                delegate
+                {
+                    RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot08");
+                }
+            );
             page2.Controls.Add(slot8);
 
-            AddAutoDimPlaceholderSlots(page2, 9, 12, innerMargin, gap, boxW, boxH);
+            dataCenterSlotTile = MakeAutoDimSlotBox(
+                GetAutoDimCircledNumber(9),
+                "Data Center",
+                "1 Grid · Gap theo Grid · Center",
+                innerMargin,
+                boxH + gap,
+                boxW,
+                boxH,
+                delegate
+                {
+                    ToggleDataCenterMode();
+                }
+            );
+            page2.Controls.Add(dataCenterSlotTile);
+            if (dataCenterSlotTile.Controls.Count >= 3)
+            {
+                dataCenterSlotTitle = dataCenterSlotTile.Controls[1] as Label;
+                dataCenterSlotDescription = dataCenterSlotTile.Controls[2] as Label;
+            }
+
+            AddAutoDimPlaceholderSlots(page2, 10, 12, innerMargin, gap, boxW, boxH);
             AddAutoDimPlaceholderSlots(page3, 13, 17, innerMargin, gap, boxW, boxH);
 
             Panel slot18 = MakeAutoDimSlotBox(
@@ -1049,7 +1160,11 @@ namespace TTSK_AutoDim_Plates
                 (boxH + gap) * 2,
                 boxW,
                 boxH,
-                delegate { RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot06"); });
+                delegate
+                {
+                    RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot06");
+                }
+            );
             page3.Controls.Add(slot18);
 
             autoDimResultLabel = new Label();
@@ -1075,11 +1190,15 @@ namespace TTSK_AutoDim_Plates
                 pageButton.Font = new Font("Segoe UI", 8.5F, FontStyle.Bold);
                 pageButton.Location = new Point(
                     pageButtonX + (pageIndex * (pageButtonWidth + pageButtonGap)),
-                    pageButtonY);
+                    pageButtonY
+                );
                 pageButton.Size = new System.Drawing.Size(pageButtonWidth, pageButtonHeight);
                 pageButton.BorderRadius = 10;
                 pageButton.AccessibleName = "Trang Auto Dimension " + (pageIndex + 1).ToString();
-                pageButton.Click += delegate { SetAutoDimPage(targetPage); };
+                pageButton.Click += delegate
+                {
+                    SetAutoDimPage(targetPage);
+                };
                 autoDimPageButtons.Add(pageButton);
                 slideAutoDimPanel.Controls.Add(pageButton);
             }
@@ -1103,14 +1222,16 @@ namespace TTSK_AutoDim_Plates
             int innerMargin,
             int gap,
             int boxW,
-            int boxH)
+            int boxH
+        )
         {
             for (int slotNumber = firstSlot; slotNumber <= lastSlot; slotNumber++)
             {
                 int position = (slotNumber - 1) % 6;
                 int column = position % 2;
                 int row = position / 2;
-                string targetTypeName = "Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot" + slotNumber.ToString("00");
+                string targetTypeName =
+                    "Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot" + slotNumber.ToString("00");
 
                 Panel slot = MakeAutoDimSlotBox(
                     GetAutoDimCircledNumber(slotNumber),
@@ -1120,7 +1241,11 @@ namespace TTSK_AutoDim_Plates
                     row * (boxH + gap),
                     boxW,
                     boxH,
-                    delegate { RunExternalAutoDimSlot(targetTypeName); });
+                    delegate
+                    {
+                        RunExternalAutoDimSlot(targetTypeName);
+                    }
+                );
                 page.Controls.Add(slot);
             }
         }
@@ -1174,6 +1299,85 @@ namespace TTSK_AutoDim_Plates
             }
         }
 
+        private void ToggleDataCenterMode()
+        {
+            if (_isBatchRunning)
+            {
+                SetMainStatus(
+                    "Data Center đang bị khóa trong khi Batch chạy.",
+                    MainStatusKind.Warning
+                );
+                return;
+            }
+
+            _dataCenterModeEnabled = !_dataCenterModeEnabled;
+            _resumeIndex = 0;
+            _stopRequested = false;
+            _batchDataCenterModeSnapshot = null;
+            _selectedDrawings.Clear();
+            if (dgvDrawings != null)
+                dgvDrawings.Rows.Clear();
+            if (lblCount != null)
+                lblCount.Text = "Tổng số bản vẽ:  0";
+
+            if (_dataCenterModeEnabled)
+            {
+                if (rbBatch != null)
+                    rbBatch.Checked = true;
+                if (rbActive != null)
+                    rbActive.Checked = false;
+
+                SetAutoDimPage(1);
+                UpdateModeUi();
+                ApplyDataCenterModeUi();
+
+                SetMainStatus(
+                    "Data Center ON | Chọn drawing trong Document Manager → Load Selected → CREATE DRAWING.",
+                    MainStatusKind.Information
+                );
+            }
+            else
+            {
+                ApplyDataCenterModeUi();
+                SetMainStatus("Data Center OFF.", MainStatusKind.Information);
+            }
+        }
+
+        private void ApplyDataCenterModeUi()
+        {
+            RoundedPanel tile = dataCenterSlotTile as RoundedPanel;
+            if (tile == null)
+                return;
+
+            Color accent = _darkMode ? Color.FromArgb(201, 122, 64) : BrightBlue;
+            Color idleBack = _darkMode ? Color.FromArgb(24, 24, 24) : Color.White;
+            Color selectedText = _darkMode ? Color.FromArgb(20, 16, 14) : Color.White;
+            Color idleText = _darkMode ? Color.FromArgb(232, 224, 214) : Color.FromArgb(15, 23, 42);
+
+            tile.BackColor = _dataCenterModeEnabled ? accent : idleBack;
+            tile.BorderColor = accent;
+            tile.Cursor = _isBatchRunning ? Cursors.No : Cursors.Hand;
+
+            foreach (Control control in tile.Controls)
+            {
+                Label label = control as Label;
+                if (label != null)
+                    label.ForeColor = _dataCenterModeEnabled ? selectedText : idleText;
+            }
+
+            if (dataCenterSlotDescription != null)
+            {
+                dataCenterSlotDescription.Text = _dataCenterModeEnabled
+                    ? "ON · 1 Grid · Gap 15/50 · Center"
+                    : "1 Grid · Gap theo Grid · Center";
+            }
+
+            if (dataCenterSlotTitle != null)
+                dataCenterSlotTitle.Text = "Data Center";
+
+            tile.Invalidate(true);
+        }
+
         private Panel MakeAutoDimSlotBox(
             string icon,
             string title,
@@ -1182,7 +1386,8 @@ namespace TTSK_AutoDim_Plates
             int y,
             int w,
             int h,
-            EventHandler clickHandler)
+            EventHandler clickHandler
+        )
         {
             RoundedPanel p = new RoundedPanel();
             p.Location = new Point(x, y);
@@ -1227,7 +1432,8 @@ namespace TTSK_AutoDim_Plates
             int y,
             int w,
             int h,
-            EventHandler clickHandler)
+            EventHandler clickHandler
+        )
         {
             RoundedPanel p = new RoundedPanel();
             p.Location = new Point(x, y);
@@ -1253,12 +1459,7 @@ namespace TTSK_AutoDim_Plates
             return p;
         }
 
-        private Panel MakeAutoDimSlot04Box(
-            string imageFileName,
-            int x,
-            int y,
-            int w,
-            int h)
+        private Panel MakeAutoDimSlot04Box(string imageFileName, int x, int y, int w, int h)
         {
             RoundedPanel p = new RoundedPanel();
             p.Location = new Point(x, y);
@@ -1299,19 +1500,23 @@ namespace TTSK_AutoDim_Plates
             };
             p.Controls.Add(btnSlot04Auto);
 
-            WireClickToAll(pic, delegate { RunSlot04ByCurrentMode(); });
-            p.Click += delegate { RunSlot04ByCurrentMode(); };
+            WireClickToAll(
+                pic,
+                delegate
+                {
+                    RunSlot04ByCurrentMode();
+                }
+            );
+            p.Click += delegate
+            {
+                RunSlot04ByCurrentMode();
+            };
 
             ApplySlot04ModeUi();
             return p;
         }
 
-        private Panel MakeAutoDimSlot05Box(
-            string imageFileName,
-            int x,
-            int y,
-            int w,
-            int h)
+        private Panel MakeAutoDimSlot05Box(string imageFileName, int x, int y, int w, int h)
         {
             RoundedPanel p = new RoundedPanel();
             p.Location = new Point(x, y);
@@ -1341,8 +1546,17 @@ namespace TTSK_AutoDim_Plates
             p.Controls.Add(slot05ModeSwitch);
             slot05ModeSwitch.BringToFront();
 
-            WireClickToAll(pic, delegate { RunSlot05ByCurrentMode(); });
-            p.Click += delegate { RunSlot05ByCurrentMode(); };
+            WireClickToAll(
+                pic,
+                delegate
+                {
+                    RunSlot05ByCurrentMode();
+                }
+            );
+            p.Click += delegate
+            {
+                RunSlot05ByCurrentMode();
+            };
 
             ApplySlot05ModeUi();
             return p;
@@ -1350,19 +1564,27 @@ namespace TTSK_AutoDim_Plates
 
         private string ResolveAutoDimSlotImageFileName(string imageFileName)
         {
-            if (string.Equals(imageFileName, "Slot01_light.png", StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(imageFileName, "Slot01_light.png", StringComparison.OrdinalIgnoreCase)
+            )
                 return _darkMode ? "Slot01_dark.png" : "Slot01_light.png";
 
             if (string.Equals(imageFileName, "Slot02.png", StringComparison.OrdinalIgnoreCase))
                 return _darkMode ? "Slot02_dark.png" : "Slot02.png";
 
-            if (string.Equals(imageFileName, "Slot03_light.png", StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(imageFileName, "Slot03_light.png", StringComparison.OrdinalIgnoreCase)
+            )
                 return _darkMode ? "Slot03_dark.png" : "Slot03_light.png";
 
-            if (string.Equals(imageFileName, "Slot04_light.png", StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(imageFileName, "Slot04_light.png", StringComparison.OrdinalIgnoreCase)
+            )
                 return _darkMode ? "Slot04_dark.png" : "Slot04_light.png";
 
-            if (string.Equals(imageFileName, "Slot05_light.png", StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(imageFileName, "Slot05_light.png", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 if (slot05ModeSwitch != null && slot05ModeSwitch.SelectedMode == 1)
                     return _darkMode ? "Slot05.2_dark.png" : "Slot05.2_light.png";
@@ -1384,7 +1606,8 @@ namespace TTSK_AutoDim_Plates
                 string imagePath = System.IO.Path.Combine(
                     Application.StartupPath,
                     "Resources",
-                    resolvedFileName);
+                    resolvedFileName
+                );
 
                 if (System.IO.File.Exists(imagePath))
                 {
@@ -1495,7 +1718,9 @@ namespace TTSK_AutoDim_Plates
         {
             if (slot05ModeSwitch != null && slot05ModeSwitch.SelectedMode == 1)
             {
-                RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot05_TopBottomMode");
+                RunExternalAutoDimSlot(
+                    "Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot05_TopBottomMode"
+                );
                 return;
             }
 
@@ -1517,7 +1742,8 @@ namespace TTSK_AutoDim_Plates
                     SetAutoDimResult("Không tìm thấy: " + typeFullName);
                     SetMainStatus(
                         "Chưa gắn file CS cho chức năng này: " + typeFullName,
-                        MainStatusKind.Warning);
+                        MainStatusKind.Warning
+                    );
                     return;
                 }
 
@@ -1526,14 +1752,16 @@ namespace TTSK_AutoDim_Plates
                     BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static,
                     null,
                     Type.EmptyTypes,
-                    null);
+                    null
+                );
 
                 if (run == null)
                 {
                     SetAutoDimResult("Class thiếu hàm Run().");
                     SetMainStatus(
                         "Auto Dimension: class thiếu hàm public static void Run()",
-                        MainStatusKind.Warning);
+                        MainStatusKind.Warning
+                    );
                     return;
                 }
 
@@ -1541,7 +1769,8 @@ namespace TTSK_AutoDim_Plates
 
                 PropertyInfo successProperty = t.GetProperty(
                     "LastRunSucceeded",
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static
+                );
 
                 if (successProperty != null && successProperty.PropertyType == typeof(bool))
                 {
@@ -1555,7 +1784,8 @@ namespace TTSK_AutoDim_Plates
 
                 PropertyInfo messageProperty = t.GetProperty(
                     "LastRunMessage",
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static
+                );
                 if (messageProperty != null && messageProperty.PropertyType == typeof(string))
                 {
                     string message = messageProperty.GetValue(null, null) as string;
@@ -1573,9 +1803,7 @@ namespace TTSK_AutoDim_Plates
             {
                 Exception real = ex.InnerException != null ? ex.InnerException : ex;
                 SetAutoDimResult("ERROR: " + real.Message);
-                SetMainStatus(
-                    "Auto Dimension lỗi: " + real.Message,
-                    MainStatusKind.Error);
+                SetMainStatus("Auto Dimension lỗi: " + real.Message, MainStatusKind.Error);
             }
         }
 
@@ -1598,9 +1826,7 @@ namespace TTSK_AutoDim_Plates
                     if (t != null)
                         return t;
                 }
-                catch
-                {
-                }
+                catch { }
             }
 
             return null;
@@ -1615,15 +1841,15 @@ namespace TTSK_AutoDim_Plates
             autoDimResultLabel.Visible = true;
         }
 
-
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
             if (_shortcutManager != null)
             {
                 Keys normalized = ShortcutManager.NormalizeShortcut(keyData);
 
-                bool isBareTab = (normalized & Keys.KeyCode) == Keys.Tab &&
-                    (normalized & Keys.Modifiers) == Keys.None;
+                bool isBareTab =
+                    (normalized & Keys.KeyCode) == Keys.Tab
+                    && (normalized & Keys.Modifiers) == Keys.None;
 
                 if (isBareTab && !IsShortcutInputFocused())
                 {
@@ -1701,8 +1927,10 @@ namespace TTSK_AutoDim_Plates
                 e.SuppressKeyPress = true;
             }
 
-            if (_modifierShortcutCandidate != Keys.None &&
-                (ModifierKeys & Keys.Modifiers) == Keys.None)
+            if (
+                _modifierShortcutCandidate != Keys.None
+                && (ModifierKeys & Keys.Modifiers) == Keys.None
+            )
             {
                 Keys candidate = _modifierShortcutCandidate;
                 bool cancelled = _modifierShortcutCancelled;
@@ -1769,11 +1997,13 @@ namespace TTSK_AutoDim_Plates
 
             while (focus != null)
             {
-                if (focus is TextBoxBase ||
-                    focus is NumericUpDown ||
-                    focus is BorderNumericUpDown ||
-                    focus is BorderComboBox ||
-                    focus is ComboBox)
+                if (
+                    focus is TextBoxBase
+                    || focus is NumericUpDown
+                    || focus is BorderNumericUpDown
+                    || focus is BorderComboBox
+                    || focus is ComboBox
+                )
                     return true;
 
                 focus = focus.Parent;
@@ -1791,10 +2021,12 @@ namespace TTSK_AutoDim_Plates
 
             while (focus != null)
             {
-                if (focus is TextBoxBase ||
-                    focus is NumericUpDown ||
-                    focus is BorderNumericUpDown ||
-                    focus is BorderComboBox)
+                if (
+                    focus is TextBoxBase
+                    || focus is NumericUpDown
+                    || focus is BorderNumericUpDown
+                    || focus is BorderComboBox
+                )
                     return true;
 
                 ComboBox combo = focus as ComboBox;
@@ -1883,15 +2115,35 @@ namespace TTSK_AutoDim_Plates
             if (string.IsNullOrEmpty(actionId))
                 return;
 
-            if (string.Equals(actionId, ShortcutManager.ActionRepeatLast, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionRepeatLast,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
             {
                 RunRepeatLastShortcut();
                 return;
             }
 
-            if (string.Equals(actionId, ShortcutManager.ActionBatchCreate, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(actionId, ShortcutManager.ActionCheckScale, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(actionId, ShortcutManager.ActionAutoSection, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionBatchCreate,
+                    StringComparison.OrdinalIgnoreCase
+                )
+                || string.Equals(
+                    actionId,
+                    ShortcutManager.ActionCheckScale,
+                    StringComparison.OrdinalIgnoreCase
+                )
+                || string.Equals(
+                    actionId,
+                    ShortcutManager.ActionAutoSection,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
             {
                 _lastRepeatableShortcutActionId = null;
             }
@@ -1900,112 +2152,222 @@ namespace TTSK_AutoDim_Plates
                 _lastRepeatableShortcutActionId = actionId;
             }
 
-            if (string.Equals(actionId, ShortcutManager.ActionCreateDrawing, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionCreateDrawing,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
             {
                 if (btnRun != null && btnRun.Enabled)
                     btnRun.PerformClick();
                 return;
             }
 
-            if (string.Equals(actionId, ShortcutManager.ActionBatchCreate, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionBatchCreate,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
             {
                 RunBatchCreateShortcut();
                 return;
             }
 
-            if (string.Equals(actionId, ShortcutManager.ActionCheckScale, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionCheckScale,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
             {
                 RunCheckScaleShortcut();
                 return;
             }
 
-            if (string.Equals(actionId, ShortcutManager.ActionAutoSection, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionAutoSection,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
             {
                 ToggleAutoSection();
                 return;
             }
 
-            if (string.Equals(actionId, ShortcutManager.ActionLineDistance, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionLineDistance,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
             {
                 RunPickTwoPointsLine();
                 return;
             }
 
-            if (string.Equals(actionId, ShortcutManager.ActionOpenGrid, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionOpenGrid,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
             {
                 RunOpenGridView();
                 return;
             }
 
-            if (string.Equals(actionId, ShortcutManager.ActionFitView, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionFitView,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
             {
                 RunFitView();
                 return;
             }
 
-            if (string.Equals(actionId, ShortcutManager.ActionNeighborGrid, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionNeighborGrid,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
             {
                 RunNeighborGridMarkOffsets();
                 return;
             }
 
-            if (string.Equals(actionId, ShortcutManager.ActionArrangeView, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionArrangeView,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
             {
                 RunArrangeView();
                 return;
             }
 
-            if (string.Equals(actionId, ShortcutManager.ActionSlot01, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionSlot01,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
             {
                 RunSelectedMainPartAutoDim();
                 return;
             }
 
-            if (string.Equals(actionId, ShortcutManager.ActionSlot02, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionSlot02,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
             {
                 RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot02");
                 return;
             }
 
-            if (string.Equals(actionId, ShortcutManager.ActionSlot03, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionSlot03,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
             {
                 RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot03");
                 return;
             }
 
-            if (string.Equals(actionId, ShortcutManager.ActionSlot04, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionSlot04,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
             {
                 RunSlot04ByCurrentMode();
                 return;
             }
 
-            if (string.Equals(actionId, ShortcutManager.ActionSlot05, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionSlot05,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
             {
                 RunSlot05ByCurrentMode();
                 return;
             }
 
-            if (string.Equals(actionId, ShortcutManager.ActionSlot06, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionSlot06,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
             {
                 RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_NishiAzabuAutoDim");
                 return;
             }
 
-            if (string.Equals(actionId, ShortcutManager.ActionSlot07, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionSlot07,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
             {
-                RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_NishiAzabuAutoDimSlot07");
+                RunExternalAutoDimSlot(
+                    "Tekla.Technology.Akit.UserScript.PHU_NishiAzabuAutoDimSlot07"
+                );
                 return;
             }
 
-            if (string.Equals(actionId, ShortcutManager.ActionSlot08, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionSlot08,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
             {
                 RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot08");
                 return;
             }
 
-            if (string.Equals(actionId, ShortcutManager.ActionSlot09, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionSlot09,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
             {
-                RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot09");
+                ToggleDataCenterMode();
                 return;
             }
         }
@@ -2030,9 +2392,7 @@ namespace TTSK_AutoDim_Plates
             }
             catch (Exception ex)
             {
-                SetMainStatus(
-                    "Shortcut Check Scale lỗi: " + ex.Message,
-                    MainStatusKind.Error);
+                SetMainStatus("Shortcut Check Scale lỗi: " + ex.Message, MainStatusKind.Error);
             }
         }
 
@@ -2046,27 +2406,27 @@ namespace TTSK_AutoDim_Plates
                     _shortcutManager.Load();
                 }
 
-                using (ShortcutSettingsForm form = new ShortcutSettingsForm(
-                    _shortcutManager,
-                    _darkMode,
-                    _autoSectionEnabled,
-                    _isBatchRunning,
-                    delegate (bool enabled)
-                    {
-                        SetAutoSectionEnabled(enabled, true);
-                    }))
+                using (
+                    ShortcutSettingsForm form = new ShortcutSettingsForm(
+                        _shortcutManager,
+                        _darkMode,
+                        _autoSectionEnabled,
+                        _isBatchRunning,
+                        delegate(bool enabled)
+                        {
+                            SetAutoSectionEnabled(enabled, true);
+                        }
+                    )
+                )
                 {
                     form.ShowDialog(this);
                 }
             }
             catch (Exception ex)
             {
-                SetMainStatus(
-                    "Shortcut Settings lỗi: " + ex.Message,
-                    MainStatusKind.Error);
+                SetMainStatus("Shortcut Settings lỗi: " + ex.Message, MainStatusKind.Error);
             }
         }
-
 
         private void BuildDimSpacingDetailPanel()
         {
@@ -2123,7 +2483,10 @@ namespace TTSK_AutoDim_Plates
             apply.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
             apply.Location = new Point(innerMargin, 195);
             apply.Size = new System.Drawing.Size(innerWidth, 38);
-            apply.Click += delegate { RunDimSpacing(true); };
+            apply.Click += delegate
+            {
+                RunDimSpacing(true);
+            };
             slideDimPanel.Controls.Add(apply);
 
             dimResultLabel = new Label();
@@ -2150,7 +2513,10 @@ namespace TTSK_AutoDim_Plates
             pickTwoPoints.Location = new Point(innerMargin + innerWidth - 36, 8);
             pickTwoPoints.Size = new System.Drawing.Size(36, 36);
             pickTwoPoints.Paint += DrawPickTwoPointsIcon;
-            pickTwoPoints.Click += delegate { RunPickTwoPointsLine(); };
+            pickTwoPoints.Click += delegate
+            {
+                RunPickTwoPointsLine();
+            };
             slideLinePanel.Controls.Add(pickTwoPoints);
 
             Label lbDistance = new Label();
@@ -2175,7 +2541,10 @@ namespace TTSK_AutoDim_Plates
             apply.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
             apply.Location = new Point(innerMargin, 128);
             apply.Size = new System.Drawing.Size(innerWidth, 38);
-            apply.Click += delegate { RunLineDistance(); };
+            apply.Click += delegate
+            {
+                RunLineDistance();
+            };
             slideLinePanel.Controls.Add(apply);
 
             lineResultLabel = new Label();
@@ -2194,26 +2563,28 @@ namespace TTSK_AutoDim_Plates
             title.Text = "OPEN GRID VIEW";
             title.Font = new Font("Segoe UI", 11F, FontStyle.Bold);
             title.Location = new Point(innerMargin, 14);
-            title.Size = new System.Drawing.Size(
-                innerWidth - memberModeWidth - 10,
-                24);
+            title.Size = new System.Drawing.Size(innerWidth - memberModeWidth - 10, 24);
             slideGridPanel.Controls.Add(title);
 
             beamColumnModeSwitch = new BeamColumnModeSwitch();
             beamColumnModeSwitch.Location = new Point(
                 slideGridPanel.Width - innerMargin - memberModeWidth,
-                15);
-            beamColumnModeSwitch.Size =
-                new System.Drawing.Size(
-                    memberModeWidth,
-                    memberModeHeight);
-            beamColumnModeSwitch.Font =
-                new Font("Segoe UI", 8F, FontStyle.Bold);
+                15
+            );
+            beamColumnModeSwitch.Size = new System.Drawing.Size(memberModeWidth, memberModeHeight);
+            beamColumnModeSwitch.Font = new Font("Segoe UI", 8F, FontStyle.Bold);
             beamColumnModeSwitch.Checked = false;
             beamColumnModeSwitch.CheckedChanged += delegate
             {
-                fitArrangeColumnMode =
-                    beamColumnModeSwitch.Checked;
+                fitArrangeColumnMode = beamColumnModeSwitch.Checked;
+                if (fitArrangeColumnMode)
+                {
+                    fitGridAxisCount = 3;
+                    if (fitGridAxisCountBox != null)
+                        fitGridAxisCountBox.Value = 3;
+                }
+                if (fitGridAxisCountBox != null)
+                    fitGridAxisCountBox.Enabled = fitKeepGridAxes && !fitArrangeColumnMode;
             };
             slideGridPanel.Controls.Add(beamColumnModeSwitch);
 
@@ -2235,7 +2606,7 @@ namespace TTSK_AutoDim_Plates
             {
                 fitKeepGridAxes = fitViewModeSwitch.Checked;
                 if (fitGridAxisCountBox != null)
-                    fitGridAxisCountBox.Enabled = fitKeepGridAxes;
+                    fitGridAxisCountBox.Enabled = fitKeepGridAxes && !fitArrangeColumnMode;
             };
             slideGridPanel.Controls.Add(fitViewModeSwitch);
 
@@ -2266,7 +2637,10 @@ namespace TTSK_AutoDim_Plates
             apply.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
             apply.Location = new Point(innerMargin, 112);
             apply.Size = new System.Drawing.Size(buttonWidth, 38);
-            apply.Click += delegate { RunOpenGridView(); };
+            apply.Click += delegate
+            {
+                RunOpenGridView();
+            };
             slideGridPanel.Controls.Add(apply);
 
             fitViewButton = new SafeRoundedButton();
@@ -2274,7 +2648,10 @@ namespace TTSK_AutoDim_Plates
             fitViewButton.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
             fitViewButton.Location = new Point(innerMargin + buttonWidth + buttonGap, 112);
             fitViewButton.Size = new System.Drawing.Size(innerWidth - buttonWidth - buttonGap, 38);
-            fitViewButton.Click += delegate { RunFitView(); };
+            fitViewButton.Click += delegate
+            {
+                RunFitView();
+            };
             slideGridPanel.Controls.Add(fitViewButton);
 
             gridResultLabel = new Label();
@@ -2364,7 +2741,10 @@ namespace TTSK_AutoDim_Plates
             createNeighbor.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
             createNeighbor.Location = new Point(boxMargin, createY);
             createNeighbor.Size = new System.Drawing.Size(offsetBox.Width - (boxMargin * 2), 34);
-            createNeighbor.Click += delegate { RunNeighborGridMarkOffsets(); };
+            createNeighbor.Click += delegate
+            {
+                RunNeighborGridMarkOffsets();
+            };
             offsetBox.Controls.Add(createNeighbor);
         }
 
@@ -2409,22 +2789,35 @@ namespace TTSK_AutoDim_Plates
             int boxY = 84;
 
             arrangeSectionHorizontalBox = MakeArrangeOptionBox("▭▭▭", "●", innerMargin, boxY, true);
-            arrangeSectionVerticalBox = MakeArrangeOptionBox("▯▯\n▯▯", "○", innerMargin + boxW + boxGap, boxY, false);
+            arrangeSectionVerticalBox = MakeArrangeOptionBox(
+                "▯▯\n▯▯",
+                "○",
+                innerMargin + boxW + boxGap,
+                boxY,
+                false
+            );
             arrangeSectionHorizontalBox.Size = new System.Drawing.Size(boxW, boxH);
             arrangeSectionVerticalBox.Size = new System.Drawing.Size(boxW, boxH);
 
-            WireClickToAll(arrangeSectionHorizontalBox, delegate
-            {
-                arrangeSectionHorizontal = true;
-                arrangeVerticalBottomUp = false;
-                if (arrangeVerticalOrderSwitch != null) arrangeVerticalOrderSwitch.Checked = false;
-                ApplyArrangeOptionStyles();
-            });
-            WireClickToAll(arrangeSectionVerticalBox, delegate
-            {
-                arrangeSectionHorizontal = false;
-                ApplyArrangeOptionStyles();
-            });
+            WireClickToAll(
+                arrangeSectionHorizontalBox,
+                delegate
+                {
+                    arrangeSectionHorizontal = true;
+                    arrangeVerticalBottomUp = false;
+                    if (arrangeVerticalOrderSwitch != null)
+                        arrangeVerticalOrderSwitch.Checked = false;
+                    ApplyArrangeOptionStyles();
+                }
+            );
+            WireClickToAll(
+                arrangeSectionVerticalBox,
+                delegate
+                {
+                    arrangeSectionHorizontal = false;
+                    ApplyArrangeOptionStyles();
+                }
+            );
             slideArrangePanel.Controls.Add(arrangeSectionHorizontalBox);
             slideArrangePanel.Controls.Add(arrangeSectionVerticalBox);
 
@@ -2450,7 +2843,10 @@ namespace TTSK_AutoDim_Plates
             apply.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
             apply.Location = new Point(innerMargin, 238);
             apply.Size = new System.Drawing.Size(innerWidth, 38);
-            apply.Click += delegate { RunArrangeView(); };
+            apply.Click += delegate
+            {
+                RunArrangeView();
+            };
             slideArrangePanel.Controls.Add(apply);
 
             arrangeResultLabel = new Label();
@@ -2504,8 +2900,12 @@ namespace TTSK_AutoDim_Plates
                 arrangeVerticalOrderSwitch.Visible = true;
                 arrangeVerticalOrderSwitch.Enabled = showVerticalSwitch;
                 arrangeVerticalOrderSwitch.DarkMode = _darkMode;
-                arrangeVerticalOrderSwitch.AccentColor = _darkMode ? Color.FromArgb(224, 156, 96) : BrightBlue;
-                arrangeVerticalOrderSwitch.BackPanelColor = _darkMode ? Color.FromArgb(18, 18, 18) : Color.White;
+                arrangeVerticalOrderSwitch.AccentColor = _darkMode
+                    ? Color.FromArgb(224, 156, 96)
+                    : BrightBlue;
+                arrangeVerticalOrderSwitch.BackPanelColor = _darkMode
+                    ? Color.FromArgb(18, 18, 18)
+                    : Color.White;
 
                 if (!showVerticalSwitch && arrangeVerticalOrderSwitch.Checked)
                     arrangeVerticalOrderSwitch.Checked = false;
@@ -2549,7 +2949,13 @@ namespace TTSK_AutoDim_Plates
                 }
                 else
                 {
-                    l.ForeColor = selected ? accent : (_darkMode ? Color.FromArgb(160, 135, 112) : Color.FromArgb(100, 116, 139));
+                    l.ForeColor = selected
+                        ? accent
+                        : (
+                            _darkMode
+                                ? Color.FromArgb(160, 135, 112)
+                                : Color.FromArgb(100, 116, 139)
+                        );
                 }
             }
 
@@ -2566,12 +2972,7 @@ namespace TTSK_AutoDim_Plates
 
         private string AutoSectionSettingFile
         {
-            get
-            {
-                return System.IO.Path.Combine(
-                    Application.StartupPath,
-                    "auto_section.cfg");
-            }
+            get { return System.IO.Path.Combine(Application.StartupPath, "auto_section.cfg"); }
         }
 
         private void LoadAutoSectionSetting()
@@ -2588,11 +2989,10 @@ namespace TTSK_AutoDim_Plates
             {
                 System.IO.File.WriteAllText(
                     AutoSectionSettingFile,
-                    _autoSectionEnabled ? "ON" : "OFF");
+                    _autoSectionEnabled ? "ON" : "OFF"
+                );
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private void SetAutoSectionEnabled(bool enabled, bool persist)
@@ -2617,14 +3017,16 @@ namespace TTSK_AutoDim_Plates
             {
                 SetMainStatus(
                     "Auto Section dang bi khoa trong khi Batch chay.",
-                    MainStatusKind.Warning);
+                    MainStatusKind.Warning
+                );
                 return;
             }
 
             SetAutoSectionEnabled(!_autoSectionEnabled, true);
             SetMainStatus(
                 "Auto Section: " + (_autoSectionEnabled ? "ON" : "OFF"),
-                _autoSectionEnabled ? MainStatusKind.Success : MainStatusKind.Warning);
+                _autoSectionEnabled ? MainStatusKind.Success : MainStatusKind.Warning
+            );
         }
 
         private void ApplyAutoSectionSwitchUi()
@@ -2681,7 +3083,8 @@ namespace TTSK_AutoDim_Plates
 
         private void JapaneseDictionaryPanel_StatusChanged(
             object sender,
-            JapaneseDictionaryStatusEventArgs e)
+            JapaneseDictionaryStatusEventArgs e
+        )
         {
             MainStatusKind kind;
 
@@ -2920,7 +3323,6 @@ namespace TTSK_AutoDim_Plates
             LayoutSlidePanels();
         }
 
-
         private void OpenAutoDimensionPanel()
         {
             slideToolsOpen = true;
@@ -2962,7 +3364,6 @@ namespace TTSK_AutoDim_Plates
             LayoutSlidePanels();
         }
 
-
         private int GetSlideTargetWidth()
         {
             int width = MainBaseWidth + SlideHandleWidth;
@@ -2978,9 +3379,7 @@ namespace TTSK_AutoDim_Plates
             if (mainFooter == null)
                 return;
 
-            mainFooter.Width = slideToolsOpen
-                ? MainBaseWidth
-                : MainBaseWidth + SlideHandleWidth;
+            mainFooter.Width = slideToolsOpen ? MainBaseWidth : MainBaseWidth + SlideHandleWidth;
         }
 
         private void LayoutSlidePanels()
@@ -3012,7 +3411,6 @@ namespace TTSK_AutoDim_Plates
             StartSlideAnimation();
         }
 
-
         private void LayoutDrawingToolOrder()
         {
             const int x = 18;
@@ -3024,12 +3422,23 @@ namespace TTSK_AutoDim_Plates
 
             // Khi một module đang mở, chỉ giữ lại module đó và ẩn các module còn lại.
             // Nhìn đồng bộ hơn, đồng thời panel chi tiết có nhiều khoảng trống hơn.
-            bool anyToolOpen = slideDimOpen || slideLineOpen || slideGridOpen || slideArrangeOpen || slideAutoDimOpen || slideDictionaryOpen;
-            if (slideAutoDimTool != null) slideAutoDimTool.Visible = !anyToolOpen || slideAutoDimOpen;
-            if (slideDimTool != null) slideDimTool.Visible = !anyToolOpen || slideDimOpen;
-            if (slideLineTool != null) slideLineTool.Visible = !anyToolOpen || slideLineOpen;
-            if (slideGridTool != null) slideGridTool.Visible = !anyToolOpen || slideGridOpen;
-            if (slideArrangeTool != null) slideArrangeTool.Visible = !anyToolOpen || slideArrangeOpen;
+            bool anyToolOpen =
+                slideDimOpen
+                || slideLineOpen
+                || slideGridOpen
+                || slideArrangeOpen
+                || slideAutoDimOpen
+                || slideDictionaryOpen;
+            if (slideAutoDimTool != null)
+                slideAutoDimTool.Visible = !anyToolOpen || slideAutoDimOpen;
+            if (slideDimTool != null)
+                slideDimTool.Visible = !anyToolOpen || slideDimOpen;
+            if (slideLineTool != null)
+                slideLineTool.Visible = !anyToolOpen || slideLineOpen;
+            if (slideGridTool != null)
+                slideGridTool.Visible = !anyToolOpen || slideGridOpen;
+            if (slideArrangeTool != null)
+                slideArrangeTool.Visible = !anyToolOpen || slideArrangeOpen;
 
             if (slideTitleLabel != null)
                 slideTitleLabel.Text = slideDictionaryOpen
@@ -3038,79 +3447,116 @@ namespace TTSK_AutoDim_Plates
 
             if (slideAutoDimOpen)
             {
-                if (slideAutoDimTool != null) slideAutoDimTool.Location = new Point(x, y);
+                if (slideAutoDimTool != null)
+                    slideAutoDimTool.Location = new Point(x, y);
                 y += toolH + gap;
 
-                if (slideAutoDimPanel != null) slideAutoDimPanel.Location = new Point(x, y);
+                if (slideAutoDimPanel != null)
+                    slideAutoDimPanel.Location = new Point(x, y);
             }
             else if (slideArrangeOpen)
             {
-                if (slideArrangeTool != null) slideArrangeTool.Location = new Point(x, y);
+                if (slideArrangeTool != null)
+                    slideArrangeTool.Location = new Point(x, y);
                 y += toolH + gap;
 
-                if (slideArrangePanel != null) slideArrangePanel.Location = new Point(x, y);
+                if (slideArrangePanel != null)
+                    slideArrangePanel.Location = new Point(x, y);
             }
             else if (slideLineOpen)
             {
-                if (slideLineTool != null) slideLineTool.Location = new Point(x, y);
+                if (slideLineTool != null)
+                    slideLineTool.Location = new Point(x, y);
                 y += toolH + gap;
 
-                if (slideLinePanel != null) slideLinePanel.Location = new Point(x, y);
+                if (slideLinePanel != null)
+                    slideLinePanel.Location = new Point(x, y);
             }
             else if (slideDimOpen)
             {
-                if (slideDimTool != null) slideDimTool.Location = new Point(x, y);
+                if (slideDimTool != null)
+                    slideDimTool.Location = new Point(x, y);
                 y += toolH + gap;
 
-                if (slideDimPanel != null) slideDimPanel.Location = new Point(x, y);
+                if (slideDimPanel != null)
+                    slideDimPanel.Location = new Point(x, y);
             }
             else if (slideGridOpen)
             {
-                if (slideGridTool != null) slideGridTool.Location = new Point(x, y);
+                if (slideGridTool != null)
+                    slideGridTool.Location = new Point(x, y);
                 y += toolH + gap;
 
-                if (slideGridPanel != null) slideGridPanel.Location = new Point(x, y);
+                if (slideGridPanel != null)
+                    slideGridPanel.Location = new Point(x, y);
                 y += GridDetailPanelHeight + gap;
 
-                if (slideMarkOffsetsPanel != null) slideMarkOffsetsPanel.Location = new Point(x, y);
+                if (slideMarkOffsetsPanel != null)
+                    slideMarkOffsetsPanel.Location = new Point(x, y);
             }
             else
             {
-                if (slideAutoDimTool != null) slideAutoDimTool.Location = new Point(x, y);
+                if (slideAutoDimTool != null)
+                    slideAutoDimTool.Location = new Point(x, y);
                 y += toolH + gap;
 
-                if (slideArrangeTool != null) slideArrangeTool.Location = new Point(x, y);
+                if (slideArrangeTool != null)
+                    slideArrangeTool.Location = new Point(x, y);
                 y += toolH + gap;
 
-                if (slideLineTool != null) slideLineTool.Location = new Point(x, y);
+                if (slideLineTool != null)
+                    slideLineTool.Location = new Point(x, y);
                 y += toolH + gap;
 
-                if (slideDimTool != null) slideDimTool.Location = new Point(x, y);
+                if (slideDimTool != null)
+                    slideDimTool.Location = new Point(x, y);
                 y += toolH + gap;
 
-                if (slideGridTool != null) slideGridTool.Location = new Point(x, y);
+                if (slideGridTool != null)
+                    slideGridTool.Location = new Point(x, y);
 
-                if (slideAutoDimPanel != null) slideAutoDimPanel.Location = new Point(x, firstY + toolH + gap);
-                if (slideArrangePanel != null) slideArrangePanel.Location = new Point(x, firstY + toolH + gap);
-                if (slideLinePanel != null) slideLinePanel.Location = new Point(x, firstY + toolH + gap);
-                if (slideDimPanel != null) slideDimPanel.Location = new Point(x, firstY + toolH + gap);
-                if (slideGridPanel != null) slideGridPanel.Location = new Point(x, firstY + toolH + gap);
-                if (slideMarkOffsetsPanel != null) slideMarkOffsetsPanel.Location = new Point(x, firstY + toolH + gap + GridDetailPanelHeight + gap);
+                if (slideAutoDimPanel != null)
+                    slideAutoDimPanel.Location = new Point(x, firstY + toolH + gap);
+                if (slideArrangePanel != null)
+                    slideArrangePanel.Location = new Point(x, firstY + toolH + gap);
+                if (slideLinePanel != null)
+                    slideLinePanel.Location = new Point(x, firstY + toolH + gap);
+                if (slideDimPanel != null)
+                    slideDimPanel.Location = new Point(x, firstY + toolH + gap);
+                if (slideGridPanel != null)
+                    slideGridPanel.Location = new Point(x, firstY + toolH + gap);
+                if (slideMarkOffsetsPanel != null)
+                    slideMarkOffsetsPanel.Location = new Point(
+                        x,
+                        firstY + toolH + gap + GridDetailPanelHeight + gap
+                    );
             }
 
-            if (slideAutoDimTool != null) slideAutoDimTool.BringToFront();
-            if (slideArrangeTool != null) slideArrangeTool.BringToFront();
-            if (slideLineTool != null) slideLineTool.BringToFront();
-            if (slideDimTool != null) slideDimTool.BringToFront();
-            if (slideGridTool != null) slideGridTool.BringToFront();
+            if (slideAutoDimTool != null)
+                slideAutoDimTool.BringToFront();
+            if (slideArrangeTool != null)
+                slideArrangeTool.BringToFront();
+            if (slideLineTool != null)
+                slideLineTool.BringToFront();
+            if (slideDimTool != null)
+                slideDimTool.BringToFront();
+            if (slideGridTool != null)
+                slideGridTool.BringToFront();
 
-            if (slideAutoDimOpen && slideAutoDimPanel != null) slideAutoDimPanel.BringToFront();
-            if (slideArrangeOpen && slideArrangePanel != null) slideArrangePanel.BringToFront();
-            if (slideLineOpen && slideLinePanel != null) slideLinePanel.BringToFront();
-            if (slideDimOpen && slideDimPanel != null) slideDimPanel.BringToFront();
-            if (slideGridOpen && slideGridPanel != null) slideGridPanel.BringToFront();
-            if (slideGridOpen && slideMarkOffsetsPanel != null) slideMarkOffsetsPanel.BringToFront();
-            if (slideDictionaryOpen && japaneseDictionaryPanel != null) japaneseDictionaryPanel.BringToFront();
+            if (slideAutoDimOpen && slideAutoDimPanel != null)
+                slideAutoDimPanel.BringToFront();
+            if (slideArrangeOpen && slideArrangePanel != null)
+                slideArrangePanel.BringToFront();
+            if (slideLineOpen && slideLinePanel != null)
+                slideLinePanel.BringToFront();
+            if (slideDimOpen && slideDimPanel != null)
+                slideDimPanel.BringToFront();
+            if (slideGridOpen && slideGridPanel != null)
+                slideGridPanel.BringToFront();
+            if (slideGridOpen && slideMarkOffsetsPanel != null)
+                slideMarkOffsetsPanel.BringToFront();
+            if (slideDictionaryOpen && japaneseDictionaryPanel != null)
+                japaneseDictionaryPanel.BringToFront();
         }
 
         private void StartSlideAnimation()
@@ -3198,18 +3644,21 @@ namespace TTSK_AutoDim_Plates
                 double spacing = Convert.ToDouble(nudDimSpacing.Value);
                 string scope = cboDimScope.Text;
 
-                PHU_DimSpacingNormalize.Result result =
-                    PHU_DimSpacingNormalize.Run(spacing, scope, apply);
+                PHU_DimSpacingNormalize.Result result = PHU_DimSpacingNormalize.Run(
+                    spacing,
+                    scope,
+                    apply
+                );
 
                 if (dimResultLabel != null)
                 {
-                    dimResultLabel.Text = result == null
-                        ? "Không có kết quả."
-                        : result.ToDisplayText(apply);
+                    dimResultLabel.Text =
+                        result == null ? "Không có kết quả." : result.ToDisplayText(apply);
 
-                    dimResultLabel.ForeColor = result != null && result.FailedCount > 0
-                        ? Color.FromArgb(220, 38, 38)
-                        : Color.FromArgb(22, 163, 74);
+                    dimResultLabel.ForeColor =
+                        result != null && result.FailedCount > 0
+                            ? Color.FromArgb(220, 38, 38)
+                            : Color.FromArgb(22, 163, 74);
                 }
 
                 lblStatus.Text = apply
@@ -3240,22 +3689,24 @@ namespace TTSK_AutoDim_Plates
 
                 if (lineResultLabel != null)
                 {
-                    lineResultLabel.Text = result == null
-                        ? "Không có kết quả."
-                        : result.ToDisplayText();
+                    lineResultLabel.Text =
+                        result == null ? "Không có kết quả." : result.ToDisplayText();
 
-                    lineResultLabel.ForeColor = result != null && result.Success
-                        ? Color.FromArgb(22, 163, 74)
-                        : Color.FromArgb(220, 38, 38);
+                    lineResultLabel.ForeColor =
+                        result != null && result.Success
+                            ? Color.FromArgb(22, 163, 74)
+                            : Color.FromArgb(220, 38, 38);
                 }
 
-                lblStatus.Text = result != null && result.Success
-                    ? "✓  Line distance created"
-                    : "✗  Line distance lỗi";
+                lblStatus.Text =
+                    result != null && result.Success
+                        ? "✓  Line distance created"
+                        : "✗  Line distance lỗi";
 
-                lblStatus.ForeColor = result != null && result.Success
-                    ? Color.FromArgb(22, 163, 74)
-                    : Color.Firebrick;
+                lblStatus.ForeColor =
+                    result != null && result.Success
+                        ? Color.FromArgb(22, 163, 74)
+                        : Color.Firebrick;
             }
             catch (Exception ex)
             {
@@ -3265,9 +3716,7 @@ namespace TTSK_AutoDim_Plates
                     lineResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
                 }
 
-                SetMainStatus(
-                    "Line distance lỗi: " + ex.Message,
-                    MainStatusKind.Error);
+                SetMainStatus("Line distance lỗi: " + ex.Message, MainStatusKind.Error);
             }
         }
 
@@ -3279,13 +3728,9 @@ namespace TTSK_AutoDim_Plates
                     TTSK_AutoDim_Plates.PHU_LineDistance.RunPickTwoPointsLine();
 
                 bool success = result != null && result.Success;
-                string message = result == null
-                    ? "Không có kết quả."
-                    : result.ToDisplayText();
+                string message = result == null ? "Không có kết quả." : result.ToDisplayText();
 
-                SetMainStatus(
-                    message,
-                    success ? MainStatusKind.Success : MainStatusKind.Error);
+                SetMainStatus(message, success ? MainStatusKind.Success : MainStatusKind.Error);
             }
             catch (Exception ex)
             {
@@ -3324,9 +3769,7 @@ namespace TTSK_AutoDim_Plates
             }
             catch (Exception ex)
             {
-                SetMainStatus(
-                    "Shortcut Batch Create lỗi: " + ex.Message,
-                    MainStatusKind.Error);
+                SetMainStatus("Shortcut Batch Create lỗi: " + ex.Message, MainStatusKind.Error);
             }
         }
 
@@ -3375,20 +3818,12 @@ namespace TTSK_AutoDim_Plates
         {
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
 
-            Color background = _darkMode
-                ? Color.FromArgb(24, 24, 24)
-                : Color.White;
-            Color accent = _darkMode
-                ? Color.FromArgb(201, 122, 64)
-                : Blue;
+            Color background = _darkMode ? Color.FromArgb(24, 24, 24) : Color.White;
+            Color accent = _darkMode ? Color.FromArgb(201, 122, 64) : Blue;
 
             e.Graphics.Clear(background);
 
-            RectangleF buttonBorder = new RectangleF(
-                1.5F,
-                1.5F,
-                32.5F,
-                32.5F);
+            RectangleF buttonBorder = new RectangleF(1.5F, 1.5F, 32.5F, 32.5F);
 
             using (GraphicsPath borderPath = RoundedRectF(buttonBorder, 3.5F))
             using (Pen borderPen = new Pen(accent, 1.5F))
@@ -3440,7 +3875,9 @@ namespace TTSK_AutoDim_Plates
                         gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
                     }
 
-                    lblStatus.Text = "✗  Không bật được grid";
+                    lblStatus.Text = string.IsNullOrWhiteSpace(macroError)
+                        ? "✗  Không bật được grid"
+                        : "✗  " + macroError;
                     lblStatus.ForeColor = Color.Firebrick;
                     return;
                 }
@@ -3451,9 +3888,8 @@ namespace TTSK_AutoDim_Plates
                 {
                     if (gridResultLabel != null)
                     {
-                        gridResultLabel.Text = result == null
-                            ? "Không có kết quả."
-                            : result.ToDisplayText();
+                        gridResultLabel.Text =
+                            result == null ? "Không có kết quả." : result.ToDisplayText();
                         gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
                     }
 
@@ -3471,18 +3907,23 @@ namespace TTSK_AutoDim_Plates
                     }
 
                     lblStatus.Text =
-                        "⚠  Open Grid chỉ hoàn thành " +
-                        result.SuccessCount + "/" + result.ViewCount + " View.";
+                        "⚠  Open Grid chỉ hoàn thành "
+                        + result.SuccessCount
+                        + "/"
+                        + result.ViewCount
+                        + " View.";
                     lblStatus.ForeColor = Color.FromArgb(217, 119, 6);
                     return;
                 }
 
                 if (gridResultLabel != null)
                 {
-                    gridResultLabel.Text = result == null ? "Không có kết quả." : result.ToDisplayText();
-                    gridResultLabel.ForeColor = result != null && result.FailedCount > 0
-                        ? Color.FromArgb(220, 38, 38)
-                        : Color.FromArgb(22, 163, 74);
+                    gridResultLabel.Text =
+                        result == null ? "Không có kết quả." : result.ToDisplayText();
+                    gridResultLabel.ForeColor =
+                        result != null && result.FailedCount > 0
+                            ? Color.FromArgb(220, 38, 38)
+                            : Color.FromArgb(22, 163, 74);
                 }
 
                 lblStatus.Text = "✓  Open grid view applied";
@@ -3573,9 +4014,8 @@ namespace TTSK_AutoDim_Plates
                 {
                     if (gridResultLabel != null)
                     {
-                        gridResultLabel.Text = result == null
-                            ? "Không có kết quả."
-                            : result.Message;
+                        gridResultLabel.Text =
+                            result == null ? "Không có kết quả." : result.Message;
                         gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
                     }
 
@@ -3589,7 +4029,9 @@ namespace TTSK_AutoDim_Plates
                 {
                     if (gridResultLabel != null)
                     {
-                        gridResultLabel.Text = "Fit đã chạy nhưng chưa đặt được Collect By = 4: " + fitCompleteMacroError;
+                        gridResultLabel.Text =
+                            "Fit đã chạy nhưng chưa đặt được Collect By = 4: "
+                            + fitCompleteMacroError;
                         gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
                     }
 
@@ -3600,19 +4042,23 @@ namespace TTSK_AutoDim_Plates
 
                 if (gridResultLabel != null)
                 {
-                    gridResultLabel.Text = result == null ? "Không có kết quả." : result.ToDisplayText();
-                    gridResultLabel.ForeColor = result != null && result.FailedCount > 0
-                        ? Color.FromArgb(220, 38, 38)
-                        : Color.FromArgb(22, 163, 74);
+                    gridResultLabel.Text =
+                        result == null ? "Không có kết quả." : result.ToDisplayText();
+                    gridResultLabel.ForeColor =
+                        result != null && result.FailedCount > 0
+                            ? Color.FromArgb(220, 38, 38)
+                            : Color.FromArgb(22, 163, 74);
                 }
 
-                lblStatus.Text = result != null && result.FailedCount > 0
-                    ? "✗  Fit view lỗi"
-                    : "✓  Fit None Grid applied";
+                lblStatus.Text =
+                    result != null && result.FailedCount > 0
+                        ? "✗  Fit view lỗi"
+                        : "✓  Fit None Grid applied";
 
-                lblStatus.ForeColor = result != null && result.FailedCount > 0
-                    ? Color.Firebrick
-                    : Color.FromArgb(22, 163, 74);
+                lblStatus.ForeColor =
+                    result != null && result.FailedCount > 0
+                        ? Color.Firebrick
+                        : Color.FromArgb(22, 163, 74);
             }
             catch (Exception ex)
             {
@@ -3662,10 +4108,10 @@ namespace TTSK_AutoDim_Plates
                     return;
                 }
 
-                PHU_OpenGridView.Result result =
-                    PHU_OpenGridView.RunFitKeepNearestGridAxes(
-                        fitGridAxisCount,
-                        20.0);
+                PHU_OpenGridView.Result result = PHU_OpenGridView.RunFitKeepNearestGridAxes(
+                    fitArrangeColumnMode ? 3 : fitGridAxisCount,
+                    20.0
+                );
 
                 if (result == null || result.FailedCount > 0)
                 {
@@ -3673,9 +4119,8 @@ namespace TTSK_AutoDim_Plates
 
                     if (gridResultLabel != null)
                     {
-                        gridResultLabel.Text = result == null
-                            ? "Không có kết quả."
-                            : result.Message;
+                        gridResultLabel.Text =
+                            result == null ? "Không có kết quả." : result.Message;
                         gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
                     }
 
@@ -3685,8 +4130,7 @@ namespace TTSK_AutoDim_Plates
                 }
 
                 if (lblStatus != null)
-                    lblStatus.AccessibleDescription =
-                        result == null ? "" : result.SelectedGridAxes;
+                    lblStatus.AccessibleDescription = result == null ? "" : result.SelectedGridAxes;
 
                 string verifyMacroError;
                 if (!TryRunGridVisibilityMacro("FIT_KEEP_GRID", out verifyMacroError))
@@ -3710,8 +4154,8 @@ namespace TTSK_AutoDim_Plates
                     if (gridResultLabel != null)
                     {
                         gridResultLabel.Text =
-                            "Fit Grid đã chạy nhưng chưa bật được Neighbor: " +
-                            fitCompleteMacroError;
+                            "Fit Grid đã chạy nhưng chưa bật được Neighbor: "
+                            + fitCompleteMacroError;
                         gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
                     }
 
@@ -3722,43 +4166,35 @@ namespace TTSK_AutoDim_Plates
 
                 PHU_OpenGridView.FitGridOriginArrangeResult arrangeResult = null;
                 bool canArrangeTopFront =
-                    result != null &&
-                    result.FailedCount == 0 &&
-                    result.SuccessCount == result.ViewCount &&
-                    result.GridAxisNoGridViewCount == 0;
+                    result != null
+                    && result.FailedCount == 0
+                    && result.SuccessCount == result.ViewCount
+                    && result.GridAxisNoGridViewCount == 0;
 
-                if (canArrangeTopFront)
+                if (canArrangeTopFront && !fitArrangeColumnMode)
                 {
-                    arrangeResult = fitArrangeColumnMode
-                        ? PHU_OpenGridView
-                            .ArrangeTopFrontHorizontallyByOriginAfterGridFit()
-                        : PHU_OpenGridView
-                            .ArrangeTopFrontByOriginAfterGridFit();
+                    arrangeResult = PHU_OpenGridView.ArrangeTopFrontByOriginAfterGridFit();
                 }
 
                 if (gridResultLabel != null)
                 {
-                    gridResultLabel.Text = result == null
-                        ? "Không có kết quả."
-                        : result.Message;
+                    gridResultLabel.Text = result == null ? "Không có kết quả." : result.Message;
 
-                    if (arrangeResult != null &&
-                        !string.IsNullOrEmpty(arrangeResult.Message))
+                    if (arrangeResult != null && !string.IsNullOrEmpty(arrangeResult.Message))
                     {
                         gridResultLabel.Text += "\n" + arrangeResult.Message;
                     }
 
-                    gridResultLabel.ForeColor = arrangeResult != null &&
-                                                !arrangeResult.Success
-                        ? Color.FromArgb(217, 119, 6)
-                        : result != null &&
-                          result.FailedCount == 0 &&
-                          result.GridAxisNoGridViewCount == 0 &&
-                          result.GridAxesFoundCount >= result.GridAxesExpectedCount
+                    gridResultLabel.ForeColor =
+                        arrangeResult != null && !arrangeResult.Success
+                            ? Color.FromArgb(217, 119, 6)
+                        : result != null
+                        && result.FailedCount == 0
+                        && result.GridAxisNoGridViewCount == 0
+                        && result.GridAxesFoundCount >= result.GridAxesExpectedCount
                             ? Color.FromArgb(22, 163, 74)
-                            : result != null && result.FailedCount == 0
-                                ? Color.FromArgb(217, 119, 6)
-                                : Color.FromArgb(220, 38, 38);
+                        : result != null && result.FailedCount == 0 ? Color.FromArgb(217, 119, 6)
+                        : Color.FromArgb(220, 38, 38);
                 }
 
                 if (result == null || result.FailedCount > 0)
@@ -3772,19 +4208,22 @@ namespace TTSK_AutoDim_Plates
                 if (arrangeResult != null && !arrangeResult.Success)
                 {
                     bool multipleTopOrFront =
-                        !string.IsNullOrEmpty(arrangeResult.Message) &&
-                        arrangeResult.Message.StartsWith(
-                            "Có nhiều", StringComparison.OrdinalIgnoreCase);
+                        !string.IsNullOrEmpty(arrangeResult.Message)
+                        && arrangeResult.Message.StartsWith(
+                            "Có nhiều",
+                            StringComparison.OrdinalIgnoreCase
+                        );
 
                     lblStatus.Text = multipleTopOrFront
                         ? "⚠  Fit Grid hoàn tất nhưng không xác định được cặp Top/Front"
                         : "⚠  Fit Grid hoàn tất nhưng sắp xếp Origin thất bại";
                     lblStatus.ForeColor = Color.FromArgb(217, 119, 6);
-                    if (fitArrangeColumnMode &&
-                        arrangeResult != null &&
-                        !string.IsNullOrEmpty(arrangeResult.Message) &&
-                        arrangeResult.Message.StartsWith(
-                            "⚠", StringComparison.Ordinal))
+                    if (
+                        fitArrangeColumnMode
+                        && arrangeResult != null
+                        && !string.IsNullOrEmpty(arrangeResult.Message)
+                        && arrangeResult.Message.StartsWith("⚠", StringComparison.Ordinal)
+                    )
                     {
                         lblStatus.Text = arrangeResult.Message;
                     }
@@ -3793,10 +4232,10 @@ namespace TTSK_AutoDim_Plates
 
                 if (result.GridAxisNoGridViewCount == result.ViewCount)
                 {
-                    lblStatus.Text = result.GridAxesExpectedCount == 1 &&
-                                      !string.IsNullOrEmpty(result.Message)
-                        ? "⚠  " + result.Message
-                        : "⚠  Không tìm thấy grid để chạy chế độ Có trục.";
+                    lblStatus.Text =
+                        result.GridAxesExpectedCount == 1 && !string.IsNullOrEmpty(result.Message)
+                            ? "⚠  " + result.Message
+                            : "⚠  Không tìm thấy grid để chạy chế độ Có trục.";
                     lblStatus.ForeColor = Color.FromArgb(217, 119, 6);
                     return;
                 }
@@ -3804,25 +4243,23 @@ namespace TTSK_AutoDim_Plates
                 if (result.GridAxesFoundCount < result.GridAxesExpectedCount)
                 {
                     lblStatus.Text =
-                        "⚠  Fit có trục: chỉ tìm thấy " +
-                        result.GridAxesFoundCount +
-                        "/" +
-                        result.GridAxesExpectedCount +
-                        " grid gần main part.";
+                        "⚠  Fit có trục: chỉ tìm thấy "
+                        + result.GridAxesFoundCount
+                        + "/"
+                        + result.GridAxesExpectedCount
+                        + " grid gần main part.";
                     lblStatus.ForeColor = Color.FromArgb(217, 119, 6);
                     return;
                 }
 
-                lblStatus.Text = arrangeResult != null && arrangeResult.Applied
-                    ? "✓  Fit Grid applied | Top/Front aligned by Origin"
-                    : "✓  Fit Grid applied";
+                lblStatus.Text =
+                    arrangeResult != null && arrangeResult.Applied
+                        ? "✓  Fit Grid applied | Top/Front aligned by Origin"
+                        : "✓  Fit Grid applied";
                 lblStatus.ForeColor = Color.FromArgb(22, 163, 74);
-                if (fitArrangeColumnMode &&
-                    arrangeResult != null &&
-                    arrangeResult.Applied)
+                if (fitArrangeColumnMode)
                 {
-                    lblStatus.Text =
-                        "✓  Fit Grid applied | Column horizontal aligned by Origin";
+                    lblStatus.Text = "✓  Fit Grid applied | Column view order/positions preserved";
                 }
             }
             catch (Exception ex)
@@ -3850,27 +4287,38 @@ namespace TTSK_AutoDim_Plates
                 return false;
             }
 
-            if (!string.Equals(command, "OPEN", StringComparison.OrdinalIgnoreCase) &&
-                !string.Equals(command, "FIT", StringComparison.OrdinalIgnoreCase) &&
-                !string.Equals(command, "FIT_KEEP_GRID", StringComparison.OrdinalIgnoreCase) &&
-                !string.Equals(command, "FIT_GRID_COMPLETE", StringComparison.OrdinalIgnoreCase) &&
-                !string.Equals(command, "FIT_COMPLETE", StringComparison.OrdinalIgnoreCase) &&
-                !string.Equals(command, "MARK_OFFSET", StringComparison.OrdinalIgnoreCase))
+            if (
+                !string.Equals(command, "OPEN", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(command, "FIT", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(command, "FIT_KEEP_GRID", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(command, "FIT_GRID_COMPLETE", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(command, "FIT_COMPLETE", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(command, "MARK_OFFSET", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 error = "Lệnh Grid Visibility không hợp lệ.";
                 return false;
             }
 
-            string macroPath = ResolveGridVisibilityMacroPath();
-            if (string.IsNullOrEmpty(macroPath))
+            string macroSourcePath = ResolveGridVisibilityMacroPath();
+            if (string.IsNullOrEmpty(macroSourcePath))
             {
                 error = "Không tìm thấy macro " + GridVisibilityMacroFileName + ".";
                 return false;
             }
 
+            string macroRunPath;
+            string macroPreparationWarning;
+            PrepareGridVisibilityMacroForTekla(
+                macroSourcePath,
+                out macroRunPath,
+                out macroPreparationWarning
+            );
+
             string commandPath = System.IO.Path.Combine(
                 System.IO.Path.GetTempPath(),
-                GridVisibilityCommandFileName);
+                GridVisibilityCommandFileName
+            );
 
             _gridVisibilityMacroRunning = true;
 
@@ -3878,14 +4326,30 @@ namespace TTSK_AutoDim_Plates
             {
                 System.IO.File.WriteAllText(commandPath, command);
 
-                bool started = Tekla.Structures.Model.Operations.Operation.RunMacro(macroPath);
+                bool started = Tekla.Structures.Model.Operations.Operation.RunMacro(macroRunPath);
+                if (
+                    !started
+                    && !string.Equals(
+                        macroRunPath,
+                        macroSourcePath,
+                        StringComparison.OrdinalIgnoreCase
+                    )
+                )
+                {
+                    // Fallback cho môi trường Tekla cũ từng chấp nhận đường dẫn tuyệt đối.
+                    started = Tekla.Structures.Model.Operations.Operation.RunMacro(macroSourcePath);
+                }
+
                 if (!started)
                 {
                     error = "Tekla không khởi chạy được macro Grid Visibility.";
+                    if (!string.IsNullOrEmpty(macroPreparationWarning))
+                        error += " " + macroPreparationWarning;
                     return false;
                 }
 
-                const int timeoutMilliseconds = 5000;
+                // Chừa thời gian cho macro compile lần đầu sau rebuild.
+                const int timeoutMilliseconds = 10000;
                 const int pollMilliseconds = 50;
                 int elapsedMilliseconds = 0;
 
@@ -3918,7 +4382,7 @@ namespace TTSK_AutoDim_Plates
                     }
                 }
 
-                error = "Macro Grid Visibility không hoàn tất trong 5 giây.";
+                error = "Macro Grid Visibility không hoàn tất trong 10 giây.";
                 return false;
             }
             catch (Exception ex)
@@ -3936,9 +4400,7 @@ namespace TTSK_AutoDim_Plates
                     if (System.IO.File.Exists(commandPath))
                         System.IO.File.Delete(commandPath);
                 }
-                catch
-                {
-                }
+                catch { }
             }
         }
 
@@ -3950,7 +4412,8 @@ namespace TTSK_AutoDim_Plates
             {
                 string directPath = System.IO.Path.Combine(
                     currentDirectory,
-                    GridVisibilityMacroFileName);
+                    GridVisibilityMacroFileName
+                );
 
                 if (System.IO.File.Exists(directPath))
                     return directPath;
@@ -3958,16 +4421,19 @@ namespace TTSK_AutoDim_Plates
                 string drawingsPath = System.IO.Path.Combine(
                     System.IO.Path.Combine(
                         System.IO.Path.Combine(currentDirectory, "macros"),
-                        "drawings"),
-                    GridVisibilityMacroFileName);
+                        "drawings"
+                    ),
+                    GridVisibilityMacroFileName
+                );
 
                 if (System.IO.File.Exists(drawingsPath))
                     return drawingsPath;
 
                 try
                 {
-                    System.IO.DirectoryInfo parent =
-                        System.IO.Directory.GetParent(currentDirectory);
+                    System.IO.DirectoryInfo parent = System.IO.Directory.GetParent(
+                        currentDirectory
+                    );
 
                     currentDirectory = parent == null ? null : parent.FullName;
                 }
@@ -3980,6 +4446,57 @@ namespace TTSK_AutoDim_Plates
             return null;
         }
 
+        private static void PrepareGridVisibilityMacroForTekla(
+            string sourcePath,
+            out string runPath,
+            out string warning
+        )
+        {
+            runPath = sourcePath;
+            warning = string.Empty;
+
+            try
+            {
+                // Không ghi macro vào model/project. Dùng cache cục bộ để loại
+                // bỏ ảnh hưởng của OneDrive và ký tự Unicode trong đường dẫn app.
+                string localApplicationData = Environment.GetFolderPath(
+                    Environment.SpecialFolder.LocalApplicationData
+                );
+                string macroCacheDirectory = System.IO.Path.Combine(
+                    System.IO.Path.Combine(localApplicationData, "TTSK_Dim_Plates"),
+                    "Macros"
+                );
+                System.IO.Directory.CreateDirectory(macroCacheDirectory);
+
+                string stagedPath = System.IO.Path.Combine(
+                    macroCacheDirectory,
+                    GridVisibilityMacroFileName
+                );
+
+                bool copyRequired = !System.IO.File.Exists(stagedPath);
+                if (!copyRequired)
+                {
+                    string sourceText = System.IO.File.ReadAllText(sourcePath);
+                    string stagedText = System.IO.File.ReadAllText(stagedPath);
+                    copyRequired = !string.Equals(sourceText, stagedText, StringComparison.Ordinal);
+                }
+
+                if (copyRequired)
+                    System.IO.File.Copy(sourcePath, stagedPath, true);
+
+                runPath = stagedPath;
+            }
+            catch (Exception ex)
+            {
+                warning =
+                    "Không tạo được cache macro cục bộ ("
+                    + ex.GetType().Name
+                    + ": "
+                    + ex.Message
+                    + ").";
+                runPath = sourcePath;
+            }
+        }
 
         private void RunNeighborGridMarkOffsets()
         {
@@ -4013,8 +4530,10 @@ namespace TTSK_AutoDim_Plates
                     return;
                 }
 
-                double xOffset = nudNeighborGridX == null ? 30.0 : Convert.ToDouble(nudNeighborGridX.Value);
-                double yOffset = nudNeighborGridY == null ? 0.0 : Convert.ToDouble(nudNeighborGridY.Value);
+                double xOffset =
+                    nudNeighborGridX == null ? 30.0 : Convert.ToDouble(nudNeighborGridX.Value);
+                double yOffset =
+                    nudNeighborGridY == null ? 0.0 : Convert.ToDouble(nudNeighborGridY.Value);
 
                 PHU_OpenGridView.Result result = null;
 
@@ -4022,31 +4541,32 @@ namespace TTSK_AutoDim_Plates
 
                 MethodInfo run2 = openGridType.GetMethod(
                     "RunNeighborGrid",
-                    new Type[] { typeof(double), typeof(double) });
+                    new Type[] { typeof(double), typeof(double) }
+                );
 
                 if (run2 != null)
                 {
-                    result = (PHU_OpenGridView.Result)run2.Invoke(
-                        null,
-                        new object[] { xOffset, yOffset });
+                    result = (PHU_OpenGridView.Result)
+                        run2.Invoke(null, new object[] { xOffset, yOffset });
                 }
                 else
                 {
                     MethodInfo run1 = openGridType.GetMethod(
                         "RunNeighborGrid",
-                        new Type[] { typeof(double) });
+                        new Type[] { typeof(double) }
+                    );
 
                     if (run1 != null)
                     {
-                        result = (PHU_OpenGridView.Result)run1.Invoke(
-                            null,
-                            new object[] { xOffset });
+                        result = (PHU_OpenGridView.Result)
+                            run1.Invoke(null, new object[] { xOffset });
                     }
                     else
                     {
                         MethodInfo runDefault = openGridType.GetMethod(
                             "RunNeighborGrid30",
-                            Type.EmptyTypes);
+                            Type.EmptyTypes
+                        );
 
                         if (runDefault != null)
                             result = (PHU_OpenGridView.Result)runDefault.Invoke(null, null);
@@ -4055,19 +4575,23 @@ namespace TTSK_AutoDim_Plates
 
                 if (gridResultLabel != null)
                 {
-                    gridResultLabel.Text = result == null ? "Không có kết quả." : result.ToDisplayText();
-                    gridResultLabel.ForeColor = result != null && result.FailedCount > 0
-                        ? Color.FromArgb(220, 38, 38)
-                        : Color.FromArgb(22, 163, 74);
+                    gridResultLabel.Text =
+                        result == null ? "Không có kết quả." : result.ToDisplayText();
+                    gridResultLabel.ForeColor =
+                        result != null && result.FailedCount > 0
+                            ? Color.FromArgb(220, 38, 38)
+                            : Color.FromArgb(22, 163, 74);
                 }
 
-                lblStatus.Text = result != null && result.FailedCount > 0
-                    ? "✗  Neighbor grid lỗi"
-                    : "✓  Neighbor grid created";
+                lblStatus.Text =
+                    result != null && result.FailedCount > 0
+                        ? "✗  Neighbor grid lỗi"
+                        : "✓  Neighbor grid created";
 
-                lblStatus.ForeColor = result != null && result.FailedCount > 0
-                    ? Color.Firebrick
-                    : Color.FromArgb(22, 163, 74);
+                lblStatus.ForeColor =
+                    result != null && result.FailedCount > 0
+                        ? Color.Firebrick
+                        : Color.FromArgb(22, 163, 74);
             }
             catch (Exception ex)
             {
@@ -4082,7 +4606,11 @@ namespace TTSK_AutoDim_Plates
             }
         }
 
-        private PHU_ArrangeView.Result RunArrangeViewWithVerticalOrder(bool sectionHorizontal, double gap, bool verticalBottomUp)
+        private PHU_ArrangeView.Result RunArrangeViewWithVerticalOrder(
+            bool sectionHorizontal,
+            double gap,
+            bool verticalBottomUp
+        )
         {
             try
             {
@@ -4092,26 +4620,30 @@ namespace TTSK_AutoDim_Plates
 
                     MethodInfo run3 = arrangeType.GetMethod(
                         "Run",
-                        new Type[] { typeof(bool), typeof(double), typeof(bool) });
+                        new Type[] { typeof(bool), typeof(double), typeof(bool) }
+                    );
 
                     if (run3 != null)
-                        return (PHU_ArrangeView.Result)run3.Invoke(
-                            null,
-                            new object[] { sectionHorizontal, gap, verticalBottomUp });
+                        return (PHU_ArrangeView.Result)
+                            run3.Invoke(
+                                null,
+                                new object[] { sectionHorizontal, gap, verticalBottomUp }
+                            );
 
                     MethodInfo run4 = arrangeType.GetMethod(
                         "Run",
-                        new Type[] { typeof(bool), typeof(bool), typeof(double), typeof(bool) });
+                        new Type[] { typeof(bool), typeof(bool), typeof(double), typeof(bool) }
+                    );
 
                     if (run4 != null)
-                        return (PHU_ArrangeView.Result)run4.Invoke(
-                            null,
-                            new object[] { false, sectionHorizontal, gap, verticalBottomUp });
+                        return (PHU_ArrangeView.Result)
+                            run4.Invoke(
+                                null,
+                                new object[] { false, sectionHorizontal, gap, verticalBottomUp }
+                            );
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return PHU_ArrangeView.Run(sectionHorizontal, gap);
         }
@@ -4125,23 +4657,28 @@ namespace TTSK_AutoDim_Plates
                 PHU_ArrangeView.Result result = RunArrangeViewWithVerticalOrder(
                     arrangeSectionHorizontal,
                     gap,
-                    arrangeVerticalBottomUp);
+                    arrangeVerticalBottomUp
+                );
 
                 if (arrangeResultLabel != null)
                 {
-                    arrangeResultLabel.Text = result == null ? "Không có kết quả." : result.ToDisplayText();
-                    arrangeResultLabel.ForeColor = result != null && result.Success
-                        ? Color.FromArgb(22, 163, 74)
-                        : Color.FromArgb(220, 38, 38);
+                    arrangeResultLabel.Text =
+                        result == null ? "Không có kết quả." : result.ToDisplayText();
+                    arrangeResultLabel.ForeColor =
+                        result != null && result.Success
+                            ? Color.FromArgb(22, 163, 74)
+                            : Color.FromArgb(220, 38, 38);
                 }
 
-                lblStatus.Text = result != null && result.Success
-                    ? "✓  Arrange view applied"
-                    : "✗  Arrange view lỗi";
+                lblStatus.Text =
+                    result != null && result.Success
+                        ? "✓  Arrange view applied"
+                        : "✗  Arrange view lỗi";
 
-                lblStatus.ForeColor = result != null && result.Success
-                    ? Color.FromArgb(22, 163, 74)
-                    : Color.Firebrick;
+                lblStatus.ForeColor =
+                    result != null && result.Success
+                        ? Color.FromArgb(22, 163, 74)
+                        : Color.Firebrick;
             }
             catch (Exception ex)
             {
@@ -4177,17 +4714,63 @@ namespace TTSK_AutoDim_Plates
             if (handlePanel != null)
                 handlePanel.BorderColor = _darkMode ? Color.FromArgb(73, 56, 43) : PanelBorder;
 
-            slideHandleLabel.ForeColor = _darkMode
-                ? Color.FromArgb(210, 170, 120)
-                : Blue;
+            slideHandleLabel.ForeColor = _darkMode ? Color.FromArgb(210, 170, 120) : Blue;
 
-            StyleSlidePanelRecursive(slideToolsPanel, panelBg, panelBg2, text, muted, border, accent);
+            StyleSlidePanelRecursive(
+                slideToolsPanel,
+                panelBg,
+                panelBg2,
+                text,
+                muted,
+                border,
+                accent
+            );
             StyleSlidePanelRecursive(slideDimPanel, panelBg, panelBg2, text, muted, border, accent);
-            StyleSlidePanelRecursive(slideLinePanel, panelBg, panelBg2, text, muted, border, accent);
-            StyleSlidePanelRecursive(slideGridPanel, panelBg, panelBg2, text, muted, border, accent);
-            StyleSlidePanelRecursive(slideMarkOffsetsPanel, panelBg, panelBg2, text, muted, border, accent);
-            StyleSlidePanelRecursive(slideArrangePanel, panelBg, panelBg2, text, muted, border, accent);
-            StyleSlidePanelRecursive(slideAutoDimPanel, panelBg, panelBg2, text, muted, border, accent);
+            StyleSlidePanelRecursive(
+                slideLinePanel,
+                panelBg,
+                panelBg2,
+                text,
+                muted,
+                border,
+                accent
+            );
+            StyleSlidePanelRecursive(
+                slideGridPanel,
+                panelBg,
+                panelBg2,
+                text,
+                muted,
+                border,
+                accent
+            );
+            StyleSlidePanelRecursive(
+                slideMarkOffsetsPanel,
+                panelBg,
+                panelBg2,
+                text,
+                muted,
+                border,
+                accent
+            );
+            StyleSlidePanelRecursive(
+                slideArrangePanel,
+                panelBg,
+                panelBg2,
+                text,
+                muted,
+                border,
+                accent
+            );
+            StyleSlidePanelRecursive(
+                slideAutoDimPanel,
+                panelBg,
+                panelBg2,
+                text,
+                muted,
+                border,
+                accent
+            );
             if (fitViewModeSwitch != null)
             {
                 fitViewModeSwitch.DarkMode = _darkMode;
@@ -4210,9 +4793,18 @@ namespace TTSK_AutoDim_Plates
                 japaneseDictionaryPanel.ApplyTheme(_darkMode);
             ApplyArrangeOptionStyles();
             ApplyAutoDimPageButtonStyles();
+            ApplyDataCenterModeUi();
         }
 
-        private void StyleSlidePanelRecursive(Control root, Color panelBg, Color panelBg2, Color text, Color muted, Color border, Color accent)
+        private void StyleSlidePanelRecursive(
+            Control root,
+            Color panelBg,
+            Color panelBg2,
+            Color text,
+            Color muted,
+            Color border,
+            Color accent
+        )
         {
             if (root == null)
                 return;
@@ -4257,7 +4849,6 @@ namespace TTSK_AutoDim_Plates
                     ? Color.FromArgb(245, 186, 126)
                     : Color.FromArgb(30, 58, 138);
                 cb.FlatStyle = FlatStyle.Flat;
-
             }
             else if (root is BorderNumericUpDown)
             {
@@ -4380,7 +4971,9 @@ namespace TTSK_AutoDim_Plates
             bool activeMode = rbActive != null && rbActive.Checked;
             if (txtManualScaleDenominator != null)
             {
-                SetManualScaleInputEnabled(activeMode && !_isBatchRunning);
+                // Tỷ lệ thủ công là input chung của CREATE DRAWING. Trong Batch,
+                // giá trị được snapshot trước vòng lặp và áp dụng cho từng drawing.
+                SetManualScaleInputEnabled(!_isBatchRunning);
             }
 
             if (btnModeActive != null && btnModeBatch != null)
@@ -4405,8 +4998,7 @@ namespace TTSK_AutoDim_Plates
 
         private void ApplyManualScaleInputTheme()
         {
-            if (manualScaleInputHost == null ||
-                txtManualScaleDenominator == null)
+            if (manualScaleInputHost == null || txtManualScaleDenominator == null)
                 return;
 
             bool enabled = txtManualScaleDenominator.Enabled;
@@ -4416,27 +5008,17 @@ namespace TTSK_AutoDim_Plates
 
             if (_darkMode)
             {
-                backColor = enabled
-                    ? Color.FromArgb(30, 24, 20)
-                    : Color.FromArgb(18, 18, 18);
-                borderColor = enabled
-                    ? Color.FromArgb(201, 122, 64)
-                    : Color.FromArgb(73, 56, 43);
-                textColor = enabled
-                    ? Color.FromArgb(226, 232, 240)
-                    : Color.FromArgb(92, 82, 72);
+                backColor = enabled ? Color.FromArgb(30, 24, 20) : Color.FromArgb(18, 18, 18);
+                borderColor = enabled ? Color.FromArgb(201, 122, 64) : Color.FromArgb(73, 56, 43);
+                textColor = enabled ? Color.FromArgb(226, 232, 240) : Color.FromArgb(92, 82, 72);
             }
             else
             {
-                backColor = enabled
-                    ? Color.White
-                    : Color.FromArgb(245, 247, 250);
+                backColor = enabled ? Color.White : Color.FromArgb(245, 247, 250);
                 borderColor = enabled
                     ? Color.FromArgb(147, 197, 253)
                     : Color.FromArgb(203, 213, 225);
-                textColor = enabled
-                    ? Color.FromArgb(15, 23, 42)
-                    : Color.FromArgb(148, 163, 184);
+                textColor = enabled ? Color.FromArgb(15, 23, 42) : Color.FromArgb(148, 163, 184);
             }
 
             manualScaleInputHost.BackColor = backColor;
@@ -4559,7 +5141,6 @@ namespace TTSK_AutoDim_Plates
             }
         }
 
-
         private void ApplyTheme()
         {
             if (_darkMode)
@@ -4590,6 +5171,7 @@ namespace TTSK_AutoDim_Plates
             ApplySlideTheme();
             ApplySlot04ModeUi();
             ApplySlot05ModeUi();
+            ApplyDataCenterModeUi();
             RefreshAutoDimSlotImages(slideAutoDimPanel);
             ApplyAutoSectionSwitchUi();
             Invalidate(true);
@@ -4604,7 +5186,8 @@ namespace TTSK_AutoDim_Plates
                 pinTopMostButton,
                 pinTopMostButton.Pinned
                     ? "Bỏ ghim cửa sổ TTSK"
-                    : "Ghim TTSK luôn hiển thị trên các cửa sổ khác");
+                    : "Ghim TTSK luôn hiển thị trên các cửa sổ khác"
+            );
         }
 
         private void ApplyDarkThemeToControl(Control root)
@@ -4639,9 +5222,10 @@ namespace TTSK_AutoDim_Plates
             }
             else if (root is Panel)
             {
-                root.BackColor = (root.Location.Y >= 598 && root.Width >= 900)
-                    ? Color.FromArgb(18, 18, 18)
-                    : panelBg2;
+                root.BackColor =
+                    (root.Location.Y >= 598 && root.Width >= 900)
+                        ? Color.FromArgb(18, 18, 18)
+                        : panelBg2;
             }
             else if (root is TextBox)
             {
@@ -4707,9 +5291,7 @@ namespace TTSK_AutoDim_Plates
             }
             else if (root is Panel)
             {
-                root.BackColor = (root.Location.Y >= 598 && root.Width >= 900)
-                    ? Blue
-                    : Color.White;
+                root.BackColor = (root.Location.Y >= 598 && root.Width >= 900) ? Blue : Color.White;
             }
             else if (root is TextBox)
             {
@@ -4764,8 +5346,16 @@ namespace TTSK_AutoDim_Plates
 
             dgvDrawings.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(22, 22, 22);
             dgvDrawings.ColumnHeadersDefaultCellStyle.ForeColor = Color.FromArgb(224, 156, 96);
-            dgvDrawings.ColumnHeadersDefaultCellStyle.SelectionBackColor = Color.FromArgb(22, 22, 22);
-            dgvDrawings.ColumnHeadersDefaultCellStyle.SelectionForeColor = Color.FromArgb(224, 156, 96);
+            dgvDrawings.ColumnHeadersDefaultCellStyle.SelectionBackColor = Color.FromArgb(
+                22,
+                22,
+                22
+            );
+            dgvDrawings.ColumnHeadersDefaultCellStyle.SelectionForeColor = Color.FromArgb(
+                224,
+                156,
+                96
+            );
 
             dgvDrawings.DefaultCellStyle.BackColor = Color.FromArgb(16, 16, 16);
             dgvDrawings.DefaultCellStyle.ForeColor = Color.FromArgb(203, 213, 225);
@@ -4780,13 +5370,12 @@ namespace TTSK_AutoDim_Plates
                 try
                 {
                     object revValue = row.Cells["REV"].Value;
-                    isRev = revValue != null &&
-                            !string.IsNullOrWhiteSpace(revValue.ToString()) &&
-                            revValue.ToString() != "-";
+                    isRev =
+                        revValue != null
+                        && !string.IsNullOrWhiteSpace(revValue.ToString())
+                        && revValue.ToString() != "-";
                 }
-                catch
-                {
-                }
+                catch { }
 
                 ApplyDrawingGridRowStyle(row.Index, isRev);
             }
@@ -4816,8 +5405,16 @@ namespace TTSK_AutoDim_Plates
 
             dgvDrawings.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(248, 250, 252);
             dgvDrawings.ColumnHeadersDefaultCellStyle.ForeColor = Color.FromArgb(15, 23, 42);
-            dgvDrawings.ColumnHeadersDefaultCellStyle.SelectionBackColor = Color.FromArgb(248, 250, 252);
-            dgvDrawings.ColumnHeadersDefaultCellStyle.SelectionForeColor = Color.FromArgb(15, 23, 42);
+            dgvDrawings.ColumnHeadersDefaultCellStyle.SelectionBackColor = Color.FromArgb(
+                248,
+                250,
+                252
+            );
+            dgvDrawings.ColumnHeadersDefaultCellStyle.SelectionForeColor = Color.FromArgb(
+                15,
+                23,
+                42
+            );
 
             dgvDrawings.DefaultCellStyle.BackColor = Color.White;
             dgvDrawings.DefaultCellStyle.ForeColor = Color.FromArgb(15, 23, 42);
@@ -4832,13 +5429,12 @@ namespace TTSK_AutoDim_Plates
                 try
                 {
                     object revValue = row.Cells["REV"].Value;
-                    isRev = revValue != null &&
-                            !string.IsNullOrWhiteSpace(revValue.ToString()) &&
-                            revValue.ToString() != "-";
+                    isRev =
+                        revValue != null
+                        && !string.IsNullOrWhiteSpace(revValue.ToString())
+                        && revValue.ToString() != "-";
                 }
-                catch
-                {
-                }
+                catch { }
 
                 ApplyDrawingGridRowStyle(row.Index, isRev);
             }
@@ -4915,7 +5511,6 @@ namespace TTSK_AutoDim_Plates
             b.Invalidate();
         }
 
-
         private void btnLoad_Click(object sender, EventArgs e)
         {
             _resumeIndex = 0;
@@ -4928,7 +5523,9 @@ namespace TTSK_AutoDim_Plates
                 DrawingHandler dh = new DrawingHandler();
                 object selector = InvokeNoArg(dh, "GetDrawingSelector");
                 if (selector == null)
-                    throw new Exception("Không lấy được DrawingSelector. Hãy chọn drawing trong Document Manager rồi thử lại.");
+                    throw new Exception(
+                        "Không lấy được DrawingSelector. Hãy chọn drawing trong Document Manager rồi thử lại."
+                    );
 
                 object enumerator = InvokeNoArg(selector, "GetSelected");
                 if (enumerator == null)
@@ -4951,34 +5548,42 @@ namespace TTSK_AutoDim_Plates
                     AddDrawingGridRow(count, mark, rev, changes);
                 }
 
-                if (count == 0)
-                {
-                    lblStatus.Text = "✓  Loaded    |    0 bản vẽ";
-                    lblStatus.ForeColor = Color.FromArgb(22, 163, 74);
-                }
-
                 dgvDrawings.ClearSelection();
 
                 lblCount.Text = "Tổng số bản vẽ:  " + count;
-                lblStatus.Text = "✓  Loaded    |    " + count + " bản vẽ";
-                lblStatus.ForeColor = Color.FromArgb(22, 163, 74);
+                if (count == 0)
+                {
+                    lblStatus.Text = _dataCenterModeEnabled
+                        ? "⚠  Data Center | Chưa có drawing nào được Load Selected"
+                        : "⚠  Loaded    |    0 bản vẽ";
+                    lblStatus.ForeColor = Color.DarkOrange;
+                }
+                else
+                {
+                    lblStatus.Text = _dataCenterModeEnabled
+                        ? "✓  Data Center | Loaded Selected: "
+                            + count
+                            + " bản vẽ | Chờ CREATE DRAWING"
+                        : "✓  Loaded    |    " + count + " bản vẽ";
+                    lblStatus.ForeColor = Color.FromArgb(22, 163, 74);
+                }
             }
             catch (Exception ex)
             {
                 dgvDrawings.Rows.Clear();
-                SetMainStatus(
-                    "Load Selected Drawings lỗi: " + ex.Message,
-                    MainStatusKind.Error);
+                SetMainStatus("Load Selected Drawings lỗi: " + ex.Message, MainStatusKind.Error);
             }
         }
 
         private void ShowPrintMenu()
         {
-            if (btnPrint == null ||
-                printMergeDropDownHost == null ||
-                btnMergeDropDown == null ||
-                btnMergeFileDropDown == null ||
-                !btnPrint.Enabled)
+            if (
+                btnPrint == null
+                || printMergeDropDownHost == null
+                || btnMergeDropDown == null
+                || btnMergeFileDropDown == null
+                || !btnPrint.Enabled
+            )
             {
                 return;
             }
@@ -4986,8 +5591,7 @@ namespace TTSK_AutoDim_Plates
             CancelPrintMenuClose();
             ApplyPrintMenuTheme();
 
-            Point screenLocation = btnPrint.PointToScreen(
-                new Point(0, btnPrint.Height));
+            Point screenLocation = btnPrint.PointToScreen(new Point(0, btnPrint.Height));
 
             printMergeDropDownHost.Location = PointToClient(screenLocation);
             printMergeDropDownHost.Visible = true;
@@ -5007,9 +5611,11 @@ namespace TTSK_AutoDim_Plates
 
         private void SchedulePrintMenuClose()
         {
-            if (printMenuCloseTimer == null ||
-                printMergeDropDownHost == null ||
-                !printMergeDropDownHost.Visible)
+            if (
+                printMenuCloseTimer == null
+                || printMergeDropDownHost == null
+                || !printMergeDropDownHost.Visible
+            )
             {
                 return;
             }
@@ -5042,17 +5648,20 @@ namespace TTSK_AutoDim_Plates
 
         private void ApplyPrintMenuTheme()
         {
-            if (btnPrint == null ||
-                printMergeDropDownHost == null ||
-                btnMergeDropDown == null ||
-                btnMergeFileDropDown == null)
+            if (
+                btnPrint == null
+                || printMergeDropDownHost == null
+                || btnMergeDropDown == null
+                || btnMergeFileDropDown == null
+            )
             {
                 return;
             }
 
             printMergeDropDownHost.Size = new System.Drawing.Size(
                 btnPrint.Width,
-                btnPrint.Height * 2);
+                btnPrint.Height * 2
+            );
 
             btnMergeDropDown.Location = new Point(0, 0);
             btnMergeFileDropDown.Location = new Point(0, btnPrint.Height);
@@ -5094,9 +5703,7 @@ namespace TTSK_AutoDim_Plates
 
         private void SetPrintMenuConnectedEdges(bool menuVisible)
         {
-            if (btnPrint == null ||
-                btnMergeDropDown == null ||
-                btnMergeFileDropDown == null)
+            if (btnPrint == null || btnMergeDropDown == null || btnMergeFileDropDown == null)
             {
                 return;
             }
@@ -5116,9 +5723,7 @@ namespace TTSK_AutoDim_Plates
             btnMergeFileDropDown.Invalidate();
         }
 
-        private static void ApplyRoundedControlRegion(
-            Control control,
-            float radius)
+        private static void ApplyRoundedControlRegion(Control control, float radius)
         {
             if (control == null || control.Width <= 0 || control.Height <= 0)
                 return;
@@ -5127,7 +5732,8 @@ namespace TTSK_AutoDim_Plates
                 0f,
                 0f,
                 Math.Max(1f, control.Width - 1f),
-                Math.Max(1f, control.Height - 1f));
+                Math.Max(1f, control.Height - 1f)
+            );
 
             using (GraphicsPath path = RoundedRectF(bounds, radius))
             {
@@ -5164,7 +5770,8 @@ namespace TTSK_AutoDim_Plates
                 {
                     SetMainStatus(
                         "Không thể Merge File khi Batch Create đang chạy.",
-                        MainStatusKind.Warning);
+                        MainStatusKind.Warning
+                    );
                     return;
                 }
 
@@ -5177,19 +5784,14 @@ namespace TTSK_AutoDim_Plates
                 if (btnMergeFileDropDown != null)
                     btnMergeFileDropDown.Enabled = false;
 
-                SetMainStatus(
-                    "Chọn các file PDF bên ngoài cần gộp...",
-                    MainStatusKind.Information);
+                SetMainStatus("Chọn các file PDF bên ngoài cần gộp...", MainStatusKind.Information);
                 Application.DoEvents();
 
-                ExternalPdfMergeResult result =
-                    ExternalPdfFileMerger.MergeSelectedFiles(this);
+                ExternalPdfMergeResult result = ExternalPdfFileMerger.MergeSelectedFiles(this);
 
                 if (result.Cancelled)
                 {
-                    SetMainStatus(
-                        "Đã hủy Merge File.",
-                        MainStatusKind.Information);
+                    SetMainStatus("Đã hủy Merge File.", MainStatusKind.Information);
                     return;
                 }
 
@@ -5205,16 +5807,13 @@ namespace TTSK_AutoDim_Plates
 
                     if (!string.IsNullOrWhiteSpace(result.OutputFilePath))
                     {
-                        errorDetails +=
-                            "\r\n\r\nPDF tổng:\r\n" +
-                            result.OutputFilePath;
+                        errorDetails += "\r\n\r\nPDF tổng:\r\n" + result.OutputFilePath;
                     }
 
                     if (!string.IsNullOrWhiteSpace(result.CleanupDetails))
                     {
                         errorDetails +=
-                            "\r\n\r\nChi tiết xóa file nguồn:\r\n" +
-                            result.CleanupDetails;
+                            "\r\n\r\nChi tiết xóa file nguồn:\r\n" + result.CleanupDetails;
                     }
 
                     MessageBox.Show(
@@ -5224,31 +5823,31 @@ namespace TTSK_AutoDim_Plates
                             ? "TTSK Merge File - PARTIAL"
                             : "TTSK Merge File - ERROR",
                         MessageBoxButtons.OK,
-                        result.PartialSuccess
-                            ? MessageBoxIcon.Warning
-                            : MessageBoxIcon.Error);
+                        result.PartialSuccess ? MessageBoxIcon.Warning : MessageBoxIcon.Error
+                    );
                     return;
                 }
 
                 SetMainStatus(
-                    "Đã tạo PDF tổng: " +
-                    System.IO.Path.GetFileName(result.OutputFilePath) +
-                    " | Đã xóa " + result.DeletedSourceFileCount +
-                    " PDF nguồn đã chọn.",
-                    MainStatusKind.Success);
+                    "Đã tạo PDF tổng: "
+                        + System.IO.Path.GetFileName(result.OutputFilePath)
+                        + " | Đã xóa "
+                        + result.DeletedSourceFileCount
+                        + " PDF nguồn đã chọn.",
+                    MainStatusKind.Success
+                );
             }
             catch (Exception ex)
             {
-                SetMainStatus(
-                    "Merge File lỗi: " + ex.Message,
-                    MainStatusKind.Error);
+                SetMainStatus("Merge File lỗi: " + ex.Message, MainStatusKind.Error);
 
                 MessageBox.Show(
                     this,
                     "Merge File lỗi:\r\n\r\n" + ex,
                     "TTSK Merge File - ERROR",
                     MessageBoxButtons.OK,
-                    MessageBoxIcon.Error);
+                    MessageBoxIcon.Error
+                );
             }
             finally
             {
@@ -5277,7 +5876,8 @@ namespace TTSK_AutoDim_Plates
                 {
                     SetMainStatus(
                         "Không thể " + commandName + " khi Batch Create đang chạy.",
-                        MainStatusKind.Warning);
+                        MainStatusKind.Warning
+                    );
                     return;
                 }
 
@@ -5303,7 +5903,8 @@ namespace TTSK_AutoDim_Plates
 
                 SetMainStatus(
                     "Đang đọc drawing được chọn trong Document Manager...",
-                    MainStatusKind.Information);
+                    MainStatusKind.Information
+                );
 
                 btnLoad_Click(btnLoad, EventArgs.Empty);
                 Application.DoEvents();
@@ -5311,25 +5912,27 @@ namespace TTSK_AutoDim_Plates
                 if (_selectedDrawings.Count == 0)
                 {
                     string noDrawingMessage =
-                        "Không tìm thấy drawing đang được chọn trong Document Manager.\r\n\r\n" +
-                        "Hãy chọn ít nhất một drawing trong Document Manager rồi bấm " +
-                        commandName + " lại.";
+                        "Không tìm thấy drawing đang được chọn trong Document Manager.\r\n\r\n"
+                        + "Hãy chọn ít nhất một drawing trong Document Manager rồi bấm "
+                        + commandName
+                        + " lại.";
 
                     SetMainStatus(
                         "Không có drawing được chọn trong Document Manager.",
-                        MainStatusKind.Warning);
+                        MainStatusKind.Warning
+                    );
 
                     MessageBox.Show(
                         this,
                         noDrawingMessage,
                         "TTSK " + commandName + " PDF",
                         MessageBoxButtons.OK,
-                        MessageBoxIcon.Warning);
+                        MessageBoxIcon.Warning
+                    );
                     return;
                 }
 
-                List<DrawingPdfPrintJob> printJobs =
-                    new List<DrawingPdfPrintJob>();
+                List<DrawingPdfPrintJob> printJobs = new List<DrawingPdfPrintJob>();
 
                 for (int i = 0; i < _selectedDrawings.Count; i++)
                 {
@@ -5337,54 +5940,56 @@ namespace TTSK_AutoDim_Plates
                     if (drawing == null)
                         continue;
 
-                    printJobs.Add(new DrawingPdfPrintJob
-                    {
-                        Drawing = drawing,
-                        Mark = SafeDrawingMark(drawing),
-                        Revision = SafeDrawingRevision(drawing),
-                        DrawnBy = DrawingPdfPrinter.GetDrawingDrawnBy(drawing)
-                    });
+                    printJobs.Add(
+                        new DrawingPdfPrintJob
+                        {
+                            Drawing = drawing,
+                            Mark = SafeDrawingMark(drawing),
+                            Revision = SafeDrawingRevision(drawing),
+                            DrawnBy = DrawingPdfPrinter.GetDrawingDrawnBy(drawing)
+                        }
+                    );
 
                     SetGridStatusAndResult(
                         i,
                         mergeAndDeleteChildren ? "MERGING" : "PRINTING",
                         Color.FromArgb(59, 130, 246),
                         "WAITING",
-                        Color.FromArgb(59, 130, 246));
+                        Color.FromArgb(59, 130, 246)
+                    );
                 }
 
                 if (printJobs.Count == 0)
                 {
                     SetMainStatus(
                         "Danh sách drawing không có phần tử hợp lệ để " + commandName + ".",
-                        MainStatusKind.Warning);
+                        MainStatusKind.Warning
+                    );
                     return;
                 }
 
                 if (mergeAndDeleteChildren)
                 {
                     SetMainStatus(
-                        "Đang xuất " + printJobs.Count +
-                        " PDF con, gộp thành PDF tổng và xóa PDF con của phiên này...",
-                        MainStatusKind.Information);
+                        "Đang xuất "
+                            + printJobs.Count
+                            + " PDF con, gộp thành PDF tổng và xóa PDF con của phiên này...",
+                        MainStatusKind.Information
+                    );
                 }
                 else
                 {
                     SetMainStatus(
-                        "Đang xuất " + printJobs.Count +
-                        " drawing thành các file PDF riêng...",
-                        MainStatusKind.Information);
+                        "Đang xuất " + printJobs.Count + " drawing thành các file PDF riêng...",
+                        MainStatusKind.Information
+                    );
                 }
 
                 Application.DoEvents();
 
                 DrawingPdfPrintResult result = mergeAndDeleteChildren
-                    ? DrawingPdfPrinter.PrintAndMergePdfs(
-                        printJobs,
-                        this)
-                    : DrawingPdfPrinter.PrintToSeparatePdfs(
-                        printJobs,
-                        this);
+                    ? DrawingPdfPrinter.PrintAndMergePdfs(printJobs, this)
+                    : DrawingPdfPrinter.PrintToSeparatePdfs(printJobs, this);
 
                 if (result.Cancelled)
                 {
@@ -5395,12 +6000,11 @@ namespace TTSK_AutoDim_Plates
                             "READY",
                             Color.FromArgb(22, 163, 74),
                             "CANCELLED",
-                            Color.FromArgb(201, 122, 64));
+                            Color.FromArgb(201, 122, 64)
+                        );
                     }
 
-                    SetMainStatus(
-                        "Đã hủy lệnh " + commandName + ".",
-                        MainStatusKind.Information);
+                    SetMainStatus("Đã hủy lệnh " + commandName + ".", MainStatusKind.Information);
                     return;
                 }
 
@@ -5416,9 +6020,11 @@ namespace TTSK_AutoDim_Plates
                             string statusText = "PDF OK";
                             string resultText = "SAVED";
 
-                            if (mergeAndDeleteChildren &&
-                                result.MergeSuccess &&
-                                item.ChildFileDeleted)
+                            if (
+                                mergeAndDeleteChildren
+                                && result.MergeSuccess
+                                && item.ChildFileDeleted
+                            )
                             {
                                 statusText = "MERGED";
                                 resultText = "CLEANED";
@@ -5429,7 +6035,8 @@ namespace TTSK_AutoDim_Plates
                                 statusText,
                                 Color.FromArgb(22, 163, 74),
                                 resultText,
-                                Color.FromArgb(22, 163, 74));
+                                Color.FromArgb(22, 163, 74)
+                            );
                         }
                         else
                         {
@@ -5438,7 +6045,8 @@ namespace TTSK_AutoDim_Plates
                                 "PRINT FAIL",
                                 Color.FromArgb(220, 38, 38),
                                 "ERROR",
-                                Color.FromArgb(220, 38, 38));
+                                Color.FromArgb(220, 38, 38)
+                            );
                         }
                     }
                 }
@@ -5455,9 +6063,7 @@ namespace TTSK_AutoDim_Plates
 
                     if (!string.IsNullOrWhiteSpace(result.OutputDirectory))
                     {
-                        errorDetails +=
-                            "\r\n\r\nThư mục PDF:\r\n" +
-                            result.OutputDirectory;
+                        errorDetails += "\r\n\r\nThư mục PDF:\r\n" + result.OutputDirectory;
                     }
 
                     if (result.ItemResults != null)
@@ -5470,9 +6076,12 @@ namespace TTSK_AutoDim_Plates
                                 continue;
 
                             errorDetails +=
-                                "\r\n\r\nLỗi drawing " +
-                                (item.Index + 1) + " - " + item.Mark +
-                                ":\r\n" + item.Message;
+                                "\r\n\r\nLỗi drawing "
+                                + (item.Index + 1)
+                                + " - "
+                                + item.Mark
+                                + ":\r\n"
+                                + item.Message;
 
                             shownFailures++;
                             if (shownFailures >= 5)
@@ -5486,25 +6095,22 @@ namespace TTSK_AutoDim_Plates
                     if (mergeAndDeleteChildren && result.MergeAttempted)
                     {
                         errorDetails +=
-                            "\r\n\r\nKết quả gộp PDF:\r\n" +
-                            (string.IsNullOrWhiteSpace(result.MergeMessage)
-                                ? (result.MergeSuccess ? "Thành công" : "Không thành công")
-                                : result.MergeMessage);
+                            "\r\n\r\nKết quả gộp PDF:\r\n"
+                            + (
+                                string.IsNullOrWhiteSpace(result.MergeMessage)
+                                    ? (result.MergeSuccess ? "Thành công" : "Không thành công")
+                                    : result.MergeMessage
+                            );
                     }
 
-                    if (mergeAndDeleteChildren &&
-                        !string.IsNullOrWhiteSpace(result.MergedFilePath))
+                    if (mergeAndDeleteChildren && !string.IsNullOrWhiteSpace(result.MergedFilePath))
                     {
-                        errorDetails +=
-                            "\r\n\r\nPDF tổng:\r\n" +
-                            result.MergedFilePath;
+                        errorDetails += "\r\n\r\nPDF tổng:\r\n" + result.MergedFilePath;
                     }
 
                     if (mergeAndDeleteChildren && result.CleanupAttempted)
                     {
-                        errorDetails +=
-                            "\r\n\r\nKết quả xóa PDF con:\r\n" +
-                            result.CleanupMessage;
+                        errorDetails += "\r\n\r\nKết quả xóa PDF con:\r\n" + result.CleanupMessage;
                     }
 
                     if (!string.IsNullOrWhiteSpace(result.DiagnosticFilePath))
@@ -5517,27 +6123,31 @@ namespace TTSK_AutoDim_Plates
                             ? "TTSK " + commandName + " PDF - PARTIAL"
                             : "TTSK " + commandName + " PDF - ERROR",
                         MessageBoxButtons.OK,
-                        result.PartialSuccess
-                            ? MessageBoxIcon.Warning
-                            : MessageBoxIcon.Error);
+                        result.PartialSuccess ? MessageBoxIcon.Warning : MessageBoxIcon.Error
+                    );
                     return;
                 }
 
                 if (mergeAndDeleteChildren)
                 {
                     SetMainStatus(
-                        "Đã tạo PDF tổng: " +
-                        System.IO.Path.GetFileName(result.MergedFilePath) +
-                        " | Đã xóa " + result.DeletedChildFileCount +
-                        " PDF con của phiên này.",
-                        MainStatusKind.Success);
+                        "Đã tạo PDF tổng: "
+                            + System.IO.Path.GetFileName(result.MergedFilePath)
+                            + " | Đã xóa "
+                            + result.DeletedChildFileCount
+                            + " PDF con của phiên này.",
+                        MainStatusKind.Success
+                    );
                 }
                 else
                 {
                     SetMainStatus(
-                        "Đã tạo " + result.SuccessfulDrawingCount +
-                        " file PDF riêng tại: " + result.OutputDirectory,
-                        MainStatusKind.Success);
+                        "Đã tạo "
+                            + result.SuccessfulDrawingCount
+                            + " file PDF riêng tại: "
+                            + result.OutputDirectory,
+                        MainStatusKind.Success
+                    );
                 }
 
                 // Không hiện popup thành công. Kết quả được hiển thị trên status bar
@@ -5552,19 +6162,19 @@ namespace TTSK_AutoDim_Plates
                         "PRINT FAIL",
                         Color.FromArgb(220, 38, 38),
                         "ERROR",
-                        Color.FromArgb(220, 38, 38));
+                        Color.FromArgb(220, 38, 38)
+                    );
                 }
 
-                SetMainStatus(
-                    commandName + " PDF lỗi: " + ex.Message,
-                    MainStatusKind.Error);
+                SetMainStatus(commandName + " PDF lỗi: " + ex.Message, MainStatusKind.Error);
 
                 MessageBox.Show(
                     this,
                     commandName + " PDF lỗi:\r\n\r\n" + ex,
                     "TTSK " + commandName + " PDF - ERROR",
                     MessageBoxButtons.OK,
-                    MessageBoxIcon.Error);
+                    MessageBoxIcon.Error
+                );
             }
             finally
             {
@@ -5656,8 +6266,11 @@ namespace TTSK_AutoDim_Plates
 
             dgvDrawings.Rows[rowIndex].Cells["RESULT"].Value = text;
             dgvDrawings.Rows[rowIndex].Cells["RESULT"].Style.ForeColor = color;
-            dgvDrawings.Rows[rowIndex].Cells["RESULT"].Style.Font =
-                new Font("Segoe UI", 9F, FontStyle.Bold);
+            dgvDrawings.Rows[rowIndex].Cells["RESULT"].Style.Font = new Font(
+                "Segoe UI",
+                9F,
+                FontStyle.Bold
+            );
 
             dgvDrawings.ClearSelection();
             dgvDrawings.Rows[rowIndex].Selected = true;
@@ -5676,7 +6289,8 @@ namespace TTSK_AutoDim_Plates
             string statusText,
             Color statusColor,
             string resultText,
-            Color resultColor)
+            Color resultColor
+        )
         {
             if (dgvDrawings == null)
                 return;
@@ -5686,13 +6300,19 @@ namespace TTSK_AutoDim_Plates
 
             dgvDrawings.Rows[rowIndex].Cells["STATUS"].Value = statusText;
             dgvDrawings.Rows[rowIndex].Cells["STATUS"].Style.ForeColor = statusColor;
-            dgvDrawings.Rows[rowIndex].Cells["STATUS"].Style.Font =
-                new Font("Segoe UI", 9F, FontStyle.Bold);
+            dgvDrawings.Rows[rowIndex].Cells["STATUS"].Style.Font = new Font(
+                "Segoe UI",
+                9F,
+                FontStyle.Bold
+            );
 
             dgvDrawings.Rows[rowIndex].Cells["RESULT"].Value = resultText;
             dgvDrawings.Rows[rowIndex].Cells["RESULT"].Style.ForeColor = resultColor;
-            dgvDrawings.Rows[rowIndex].Cells["RESULT"].Style.Font =
-                new Font("Segoe UI", 9F, FontStyle.Bold);
+            dgvDrawings.Rows[rowIndex].Cells["RESULT"].Style.Font = new Font(
+                "Segoe UI",
+                9F,
+                FontStyle.Bold
+            );
 
             dgvDrawings.ClearSelection();
             dgvDrawings.Rows[rowIndex].Selected = true;
@@ -5701,9 +6321,7 @@ namespace TTSK_AutoDim_Plates
             {
                 dgvDrawings.FirstDisplayedScrollingRowIndex = rowIndex;
             }
-            catch
-            {
-            }
+            catch { }
 
             Application.DoEvents();
         }
@@ -5731,13 +6349,9 @@ namespace TTSK_AutoDim_Plates
             }
             catch (Exception ex)
             {
-                SetMainStatus(
-                    "Open drawing lỗi: " + ex.Message,
-                    MainStatusKind.Error);
+                SetMainStatus("Open drawing lỗi: " + ex.Message, MainStatusKind.Error);
             }
         }
-
-
 
         private void MakeWholeBoxSelectable(Control root, RadioButton radio)
         {
@@ -5757,8 +6371,6 @@ namespace TTSK_AutoDim_Plates
                 MakeWholeBoxSelectable(child, radio);
             }
         }
-
-
 
         private void btnCheckScale_Click(object sender, EventArgs e)
         {
@@ -5822,7 +6434,8 @@ namespace TTSK_AutoDim_Plates
                     string rev = SafeDrawingRevision(dr);
                     string changes = SafeDrawingChanges(dr);
 
-                    lblStatus.Text = "▶  Checking scale " + (i + 1) + "/" + sourceDrawings.Count + " : " + mark;
+                    lblStatus.Text =
+                        "▶  Checking scale " + (i + 1) + "/" + sourceDrawings.Count + " : " + mark;
                     lblStatus.ForeColor = Blue;
 
                     SetGridStatusAndResult(
@@ -5830,7 +6443,8 @@ namespace TTSK_AutoDim_Plates
                         "CHECKING",
                         Color.FromArgb(59, 130, 246),
                         "RUNNING",
-                        Color.FromArgb(59, 130, 246));
+                        Color.FromArgb(59, 130, 246)
+                    );
 
                     ScaleCheckResult result = CheckDrawingScale(dh, dr, mark, rev);
                     result.Changes = changes;
@@ -5844,7 +6458,8 @@ namespace TTSK_AutoDim_Plates
                             "SCALE ERROR",
                             Color.FromArgb(220, 38, 38),
                             BuildScaleErrorResultText(result),
-                            Color.FromArgb(220, 38, 38));
+                            Color.FromArgb(220, 38, 38)
+                        );
                     }
                     else
                     {
@@ -5853,7 +6468,8 @@ namespace TTSK_AutoDim_Plates
                             "SCALE OK",
                             Color.FromArgb(22, 163, 74),
                             "OK",
-                            Color.FromArgb(22, 163, 74));
+                            Color.FromArgb(22, 163, 74)
+                        );
                     }
                 }
 
@@ -5878,14 +6494,13 @@ namespace TTSK_AutoDim_Plates
                 dgvDrawings.ClearSelection();
 
                 lblCount.Text = "Sai tỉ lệ:  " + errors.Count + "/" + sourceDrawings.Count;
-                lblStatus.Text = "✗  Scale Error: " + errors.Count + "/" + sourceDrawings.Count + " bản vẽ";
+                lblStatus.Text =
+                    "✗  Scale Error: " + errors.Count + "/" + sourceDrawings.Count + " bản vẽ";
                 lblStatus.ForeColor = Color.FromArgb(220, 38, 38);
             }
             catch (Exception ex)
             {
-                SetMainStatus(
-                    "Check Scale lỗi: " + ex.Message,
-                    MainStatusKind.Error);
+                SetMainStatus("Check Scale lỗi: " + ex.Message, MainStatusKind.Error);
             }
             finally
             {
@@ -5922,20 +6537,28 @@ namespace TTSK_AutoDim_Plates
             if (error == null)
                 return "SCALE ERROR";
 
-            string titleText = string.IsNullOrWhiteSpace(error.TitleScale) ? "?" : NormalizeScaleText(error.TitleScale);
+            string titleText = string.IsNullOrWhiteSpace(error.TitleScale)
+                ? "?"
+                : NormalizeScaleText(error.TitleScale);
 
-            if (error.ViewScaleLabels != null &&
-                error.ViewScales != null &&
-                error.ViewScaleLabels.Count == error.ViewScales.Count &&
-                error.ViewScales.Count > 0)
+            if (
+                error.ViewScaleLabels != null
+                && error.ViewScales != null
+                && error.ViewScaleLabels.Count == error.ViewScales.Count
+                && error.ViewScales.Count > 0
+            )
             {
                 List<string> wrongViews = new List<string>();
                 List<string> allViewScaleValues = new List<string>();
 
                 for (int i = 0; i < error.ViewScales.Count; i++)
                 {
-                    string label = string.IsNullOrWhiteSpace(error.ViewScaleLabels[i]) ? "VIEW" : error.ViewScaleLabels[i];
-                    string scale = string.IsNullOrWhiteSpace(error.ViewScales[i]) ? "?" : NormalizeScaleText(error.ViewScales[i]);
+                    string label = string.IsNullOrWhiteSpace(error.ViewScaleLabels[i])
+                        ? "VIEW"
+                        : error.ViewScaleLabels[i];
+                    string scale = string.IsNullOrWhiteSpace(error.ViewScales[i])
+                        ? "?"
+                        : NormalizeScaleText(error.ViewScales[i]);
 
                     AddUniqueScale(allViewScaleValues, scale);
 
@@ -5951,18 +6574,20 @@ namespace TTSK_AutoDim_Plates
                 if (wrongViews.Count == 0)
                     return "SCALE ERROR";
 
-                if (allViewScaleValues.Count == 1 &&
-                    allViewScaleValues[0] != titleText)
+                if (allViewScaleValues.Count == 1 && allViewScaleValues[0] != titleText)
                     return "VIEW " + allViewScaleValues[0] + " / TITLE " + titleText;
 
                 return string.Join(" / ", wrongViews.ToArray()) + " / TITLE " + titleText;
             }
 
-
             if (error.ViewScales == null || error.ViewScales.Count <= 2)
             {
-                string topText = string.IsNullOrWhiteSpace(error.TopScale) ? "?" : NormalizeScaleText(error.TopScale);
-                string frontText = string.IsNullOrWhiteSpace(error.FrontScale) ? "?" : NormalizeScaleText(error.FrontScale);
+                string topText = string.IsNullOrWhiteSpace(error.TopScale)
+                    ? "?"
+                    : NormalizeScaleText(error.TopScale);
+                string frontText = string.IsNullOrWhiteSpace(error.FrontScale)
+                    ? "?"
+                    : NormalizeScaleText(error.FrontScale);
 
                 bool topError = topText != titleText;
                 bool frontError = frontText != titleText;
@@ -5984,12 +6609,13 @@ namespace TTSK_AutoDim_Plates
                 return "SCALE ERROR";
             }
 
-
             List<string> wrongScales = new List<string>();
 
             foreach (string viewScale in error.ViewScales)
             {
-                string scale = string.IsNullOrWhiteSpace(viewScale) ? "?" : NormalizeScaleText(viewScale);
+                string scale = string.IsNullOrWhiteSpace(viewScale)
+                    ? "?"
+                    : NormalizeScaleText(viewScale);
 
                 if (scale != titleText)
                     AddUniqueScale(wrongScales, scale);
@@ -6017,7 +6643,6 @@ namespace TTSK_AutoDim_Plates
 
             string titleScale = NormalizeScaleText(result.TitleScale);
 
-
             foreach (string viewScale in result.ViewScales)
             {
                 if (string.IsNullOrWhiteSpace(viewScale))
@@ -6030,7 +6655,12 @@ namespace TTSK_AutoDim_Plates
             return false;
         }
 
-        private static ScaleCheckResult CheckDrawingScale(DrawingHandler dh, Drawing dr, string mark, string rev)
+        private static ScaleCheckResult CheckDrawingScale(
+            DrawingHandler dh,
+            Drawing dr,
+            string mark,
+            string rev
+        )
         {
             ScaleCheckResult result = new ScaleCheckResult();
             result.Drawing = dr;
@@ -6056,9 +6686,13 @@ namespace TTSK_AutoDim_Plates
                     throw new Exception("Không mở lại được drawing để Check Scale.");
 
                 string activeMark = SafeDrawingMark(activeDrawing);
-                if (activeDrawing.GetType() != dr.GetType() ||
-                    (!string.IsNullOrWhiteSpace(mark) &&
-                     !string.Equals(activeMark, mark, StringComparison.OrdinalIgnoreCase)))
+                if (
+                    activeDrawing.GetType() != dr.GetType()
+                    || (
+                        !string.IsNullOrWhiteSpace(mark)
+                        && !string.Equals(activeMark, mark, StringComparison.OrdinalIgnoreCase)
+                    )
+                )
                 {
                     throw new Exception("Drawing đang mở không đúng drawing cần Check Scale.");
                 }
@@ -6080,7 +6714,6 @@ namespace TTSK_AutoDim_Plates
             }
             finally
             {
-
                 if (openedForCheck)
                 {
                     try
@@ -6088,16 +6721,18 @@ namespace TTSK_AutoDim_Plates
                         CloseActiveDrawingSafe(dh);
                         Thread.Sleep(80);
                     }
-                    catch
-                    {
-                    }
+                    catch { }
                 }
             }
 
             return result;
         }
 
-        private static List<string> GetMainViewScales(DrawingHandler dh, Drawing drawing, List<string> viewLabels)
+        private static List<string> GetMainViewScales(
+            DrawingHandler dh,
+            Drawing drawing,
+            List<string> viewLabels
+        )
         {
             List<string> scales = new List<string>();
 
@@ -6150,9 +6785,7 @@ namespace TTSK_AutoDim_Plates
                         viewLabels.Add(viewLabel);
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return scales;
         }
@@ -6178,44 +6811,54 @@ namespace TTSK_AutoDim_Plates
                 if (string.IsNullOrWhiteSpace(text))
                     return "";
 
-                if (string.Equals(text, "FrontView", StringComparison.OrdinalIgnoreCase) ||
-                    text.IndexOf("Front", StringComparison.OrdinalIgnoreCase) >= 0)
+                if (
+                    string.Equals(text, "FrontView", StringComparison.OrdinalIgnoreCase)
+                    || text.IndexOf("Front", StringComparison.OrdinalIgnoreCase) >= 0
+                )
                     return "FRONT";
 
-                if (string.Equals(text, "BottomView", StringComparison.OrdinalIgnoreCase) ||
-                    text.IndexOf("Bottom", StringComparison.OrdinalIgnoreCase) >= 0)
+                if (
+                    string.Equals(text, "BottomView", StringComparison.OrdinalIgnoreCase)
+                    || text.IndexOf("Bottom", StringComparison.OrdinalIgnoreCase) >= 0
+                )
                     return "BOTTOM";
 
-                if (string.Equals(text, "TopView", StringComparison.OrdinalIgnoreCase) ||
-                    text.IndexOf("Top", StringComparison.OrdinalIgnoreCase) >= 0)
+                if (
+                    string.Equals(text, "TopView", StringComparison.OrdinalIgnoreCase)
+                    || text.IndexOf("Top", StringComparison.OrdinalIgnoreCase) >= 0
+                )
                     return "TOP";
 
-                if (string.Equals(text, "BackView", StringComparison.OrdinalIgnoreCase) ||
-                    text.IndexOf("Back", StringComparison.OrdinalIgnoreCase) >= 0)
+                if (
+                    string.Equals(text, "BackView", StringComparison.OrdinalIgnoreCase)
+                    || text.IndexOf("Back", StringComparison.OrdinalIgnoreCase) >= 0
+                )
                     return "BACK";
 
-                if (string.Equals(text, "SectionView", StringComparison.OrdinalIgnoreCase) ||
-                    text.IndexOf("Section", StringComparison.OrdinalIgnoreCase) >= 0)
+                if (
+                    string.Equals(text, "SectionView", StringComparison.OrdinalIgnoreCase)
+                    || text.IndexOf("Section", StringComparison.OrdinalIgnoreCase) >= 0
+                )
                     return "SECTION";
             }
-            catch
-            {
-            }
+            catch { }
 
             return "";
         }
 
         private static bool ViewContainsMainPart(
             Tekla.Structures.Drawing.View view,
-            SinglePartDrawing spDrawing)
+            SinglePartDrawing spDrawing
+        )
         {
             try
             {
                 if (view == null || spDrawing == null)
                     return false;
 
-                DrawingObjectEnumerator parts =
-                    view.GetAllObjects(typeof(Tekla.Structures.Drawing.Part));
+                DrawingObjectEnumerator parts = view.GetAllObjects(
+                    typeof(Tekla.Structures.Drawing.Part)
+                );
 
                 while (parts.MoveNext())
                 {
@@ -6229,9 +6872,7 @@ namespace TTSK_AutoDim_Plates
                         return true;
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return false;
         }
@@ -6243,8 +6884,9 @@ namespace TTSK_AutoDim_Plates
                 if (view == null)
                     return false;
 
-                DrawingObjectEnumerator parts =
-                    view.GetAllObjects(typeof(Tekla.Structures.Drawing.Part));
+                DrawingObjectEnumerator parts = view.GetAllObjects(
+                    typeof(Tekla.Structures.Drawing.Part)
+                );
 
                 while (parts.MoveNext())
                 {
@@ -6255,13 +6897,10 @@ namespace TTSK_AutoDim_Plates
                         return true;
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return false;
         }
-
 
         private static string GetViewInfoText(Tekla.Structures.Drawing.View view)
         {
@@ -6275,9 +6914,7 @@ namespace TTSK_AutoDim_Plates
                 if (!string.IsNullOrWhiteSpace(view.Name))
                     result += " " + view.Name;
             }
-            catch
-            {
-            }
+            catch { }
 
             try
             {
@@ -6285,22 +6922,16 @@ namespace TTSK_AutoDim_Plates
                 if (attributes != null)
                     result += " " + attributes.ToString();
             }
-            catch
-            {
-            }
+            catch { }
 
             try
             {
                 result += " " + view.GetType().FullName;
             }
-            catch
-            {
-            }
+            catch { }
 
             return result;
         }
-
-
 
         private static double GetViewBoxHeight(Tekla.Structures.Drawing.View view)
         {
@@ -6348,8 +6979,6 @@ namespace TTSK_AutoDim_Plates
             }
         }
 
-
-
         private static void SelectDrawingObjectSafe(DrawingHandler dh, DrawingObject obj)
         {
             if (dh == null || obj == null)
@@ -6361,8 +6990,9 @@ namespace TTSK_AutoDim_Plates
                 if (selector == null)
                     return;
 
-                MethodInfo[] methods = selector.GetType().GetMethods(
-                    BindingFlags.Public | BindingFlags.Instance);
+                MethodInfo[] methods = selector
+                    .GetType()
+                    .GetMethods(BindingFlags.Public | BindingFlags.Instance);
 
                 foreach (MethodInfo m in methods)
                 {
@@ -6371,8 +7001,10 @@ namespace TTSK_AutoDim_Plates
 
                     ParameterInfo[] ps = m.GetParameters();
 
-                    if (ps.Length == 1 &&
-                        ps[0].ParameterType.IsAssignableFrom(typeof(DrawingObject)))
+                    if (
+                        ps.Length == 1
+                        && ps[0].ParameterType.IsAssignableFrom(typeof(DrawingObject))
+                    )
                     {
                         m.Invoke(selector, new object[] { obj });
                         return;
@@ -6395,9 +7027,7 @@ namespace TTSK_AutoDim_Plates
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static string GetScaleFromSelectedView(Tekla.Structures.Drawing.View view)
@@ -6429,7 +7059,8 @@ namespace TTSK_AutoDim_Plates
             Type type = obj.GetType();
 
             PropertyInfo[] props = type.GetProperties(
-                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+            );
 
             foreach (PropertyInfo prop in props)
             {
@@ -6461,12 +7092,14 @@ namespace TTSK_AutoDim_Plates
 
                     Type valueType = value.GetType();
 
-                    if (valueType == typeof(string) ||
-                        valueType == typeof(int) ||
-                        valueType == typeof(double) ||
-                        valueType == typeof(float) ||
-                        valueType == typeof(decimal) ||
-                        valueType == typeof(bool))
+                    if (
+                        valueType == typeof(string)
+                        || valueType == typeof(int)
+                        || valueType == typeof(double)
+                        || valueType == typeof(float)
+                        || valueType == typeof(decimal)
+                        || valueType == typeof(bool)
+                    )
                     {
                         continue;
                     }
@@ -6476,9 +7109,7 @@ namespace TTSK_AutoDim_Plates
                     if (!string.IsNullOrWhiteSpace(nested))
                         return nested;
                 }
-                catch
-                {
-                }
+                catch { }
             }
 
             return "";
@@ -6500,13 +7131,19 @@ namespace TTSK_AutoDim_Plates
             scales.Add(normalized);
         }
 
-        private static void CollectViews(object container, List<object> views, HashSet<string> visited)
+        private static void CollectViews(
+            object container,
+            List<object> views,
+            HashSet<string> visited
+        )
         {
             if (container == null)
                 return;
 
-            string key = container.GetType().FullName + ":" +
-                System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(container).ToString();
+            string key =
+                container.GetType().FullName
+                + ":"
+                + System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(container).ToString();
 
             if (visited.Contains(key))
                 return;
@@ -6559,12 +7196,7 @@ namespace TTSK_AutoDim_Plates
             if (obj == null)
                 return "";
 
-            string[] names = new string[]
-            {
-                "Scale",
-                "ViewScale",
-                "DrawingScale"
-            };
+            string[] names = new string[] { "Scale", "ViewScale", "DrawingScale" };
 
             foreach (string name in names)
             {
@@ -6619,24 +7251,20 @@ namespace TTSK_AutoDim_Plates
                 "TITLE3_TEXT"
             };
 
-
             try
             {
-                PropertyInfo pi = dr.GetType().GetProperty(
-                    "Identifier",
-                    BindingFlags.Instance | BindingFlags.NonPublic);
+                PropertyInfo pi = dr.GetType()
+                    .GetProperty("Identifier", BindingFlags.Instance | BindingFlags.NonPublic);
 
                 if (pi != null)
                 {
                     object rawId = pi.GetValue(dr, null);
 
-                    Tekla.Structures.Identifier identifier =
-                        rawId as Tekla.Structures.Identifier;
+                    Tekla.Structures.Identifier identifier = rawId as Tekla.Structures.Identifier;
 
                     if (identifier != null)
                     {
-                        Tekla.Structures.Model.Beam dummy =
-                            new Tekla.Structures.Model.Beam();
+                        Tekla.Structures.Model.Beam dummy = new Tekla.Structures.Model.Beam();
 
                         dummy.Identifier = identifier;
 
@@ -6654,16 +7282,12 @@ namespace TTSK_AutoDim_Plates
                                         return scale;
                                 }
                             }
-                            catch
-                            {
-                            }
+                            catch { }
                         }
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return "";
         }
@@ -6676,27 +7300,26 @@ namespace TTSK_AutoDim_Plates
             text = text.Trim();
 
             System.Text.RegularExpressions.Match ratioMatch =
-                System.Text.RegularExpressions.Regex.Match(
-                    text,
-                    @"\b\d+\s*:\s*\d+\b");
+                System.Text.RegularExpressions.Regex.Match(text, @"\b\d+\s*:\s*\d+\b");
 
             if (ratioMatch.Success)
                 return NormalizeScaleText(ratioMatch.Value);
 
             System.Text.RegularExpressions.Match numberMatch =
-                System.Text.RegularExpressions.Regex.Match(
-                    text,
-                    @"\b\d+(\.\d+)?\b");
+                System.Text.RegularExpressions.Regex.Match(text, @"\b\d+(\.\d+)?\b");
 
             if (numberMatch.Success)
             {
                 double number = 0.0;
 
-                if (double.TryParse(
-                    numberMatch.Value,
-                    System.Globalization.NumberStyles.Any,
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    out number))
+                if (
+                    double.TryParse(
+                        numberMatch.Value,
+                        System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out number
+                    )
+                )
                 {
                     if (number > 0.0)
                         return FormatScaleNumber(number);
@@ -6713,10 +7336,7 @@ namespace TTSK_AutoDim_Plates
 
             try
             {
-                if (value is int ||
-                    value is double ||
-                    value is float ||
-                    value is decimal)
+                if (value is int || value is double || value is float || value is decimal)
                 {
                     double number = Convert.ToDouble(value);
 
@@ -6724,9 +7344,7 @@ namespace TTSK_AutoDim_Plates
                         return FormatScaleNumber(number);
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return ExtractScaleText(value.ToString());
         }
@@ -6753,11 +7371,14 @@ namespace TTSK_AutoDim_Plates
 
             double number = 0.0;
 
-            if (double.TryParse(
-                scale,
-                System.Globalization.NumberStyles.Any,
-                System.Globalization.CultureInfo.InvariantCulture,
-                out number))
+            if (
+                double.TryParse(
+                    scale,
+                    System.Globalization.NumberStyles.Any,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out number
+                )
+            )
             {
                 if (number > 0.0)
                     return FormatScaleNumber(number);
@@ -6773,7 +7394,8 @@ namespace TTSK_AutoDim_Plates
             if (Math.Abs(rounded - Math.Round(rounded)) < 0.001)
                 return "1:" + ((int)Math.Round(rounded)).ToString();
 
-            return "1:" + rounded.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+            return "1:"
+                + rounded.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
         }
 
         private static object GetPropertyValue(object obj, string propName)
@@ -6783,16 +7405,16 @@ namespace TTSK_AutoDim_Plates
 
             try
             {
-                PropertyInfo p = obj.GetType().GetProperty(
-                    propName,
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                PropertyInfo p = obj.GetType()
+                    .GetProperty(
+                        propName,
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    );
 
                 if (p != null && p.GetIndexParameters().Length == 0)
                     return p.GetValue(obj, null);
             }
-            catch
-            {
-            }
+            catch { }
 
             return null;
         }
@@ -6804,9 +7426,8 @@ namespace TTSK_AutoDim_Plates
 
             try
             {
-                MethodInfo m = obj.GetType().GetMethod(
-                    methodName,
-                    BindingFlags.Public | BindingFlags.Instance);
+                MethodInfo m = obj.GetType()
+                    .GetMethod(methodName, BindingFlags.Public | BindingFlags.Instance);
 
                 if (m == null)
                     return false;
@@ -6832,31 +7453,46 @@ namespace TTSK_AutoDim_Plates
                 return;
             }
 
-            if (rbActive.Checked)
+            double? manualScale;
+            bool resumeBatchWithSnapshot =
+                rbBatch != null
+                && rbBatch.Checked
+                && _resumeIndex > 0
+                && _batchManualScaleSnapshotCaptured;
+
+            if (resumeBatchWithSnapshot)
             {
-                double? manualScale;
-                if (!ManualDrawingScaleOverride.TryParseInput(
-                        txtManualScaleDenominator != null
-                            ? txtManualScaleDenominator.Text
-                            : string.Empty,
-                        out manualScale))
+                // STOP/Resume phải tiếp tục đúng một batch với cùng cấu hình.
+                manualScale = _batchManualScaleSnapshot;
+            }
+            else if (
+                !ManualDrawingScaleOverride.TryParseInput(
+                    txtManualScaleDenominator != null
+                        ? txtManualScaleDenominator.Text
+                        : string.Empty,
+                    out manualScale
+                )
+            )
+            {
+                MessageBox.Show(
+                    this,
+                    "Tỷ lệ không hợp lệ. Hãy nhập Tỉ lệ theo tiêu chuẩn",
+                    "TTSK AutoDim",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning
+                );
+
+                if (txtManualScaleDenominator != null)
                 {
-                    MessageBox.Show(
-                        this,
-                        "Tỷ lệ không hợp lệ. Hãy nhập Tỉ lệ theo tiêu chuẩn",
-                        "TTSK AutoDim",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Warning);
-
-                    if (txtManualScaleDenominator != null)
-                    {
-                        txtManualScaleDenominator.Focus();
-                        txtManualScaleDenominator.SelectAll();
-                    }
-
-                    return;
+                    txtManualScaleDenominator.Focus();
+                    txtManualScaleDenominator.SelectAll();
                 }
 
+                return;
+            }
+
+            if (rbActive.Checked)
+            {
                 btnRun.Enabled = false;
                 btnLoad.Enabled = false;
                 if (txtManualScaleDenominator != null)
@@ -6876,7 +7512,7 @@ namespace TTSK_AutoDim_Plates
                 return;
             }
 
-            RunBatchDrawings();
+            RunBatchDrawings(manualScale);
         }
 
         private enum AutoDimPartType
@@ -6914,7 +7550,34 @@ namespace TTSK_AutoDim_Plates
             public bool GridDimensionRequested = false;
             public bool GridDimensionApplied = false;
             public string GridDimensionMessage = "";
+            public int ReferenceConnectorCount = 0;
+            public string ReferenceConnectorMessage = "";
             public bool CanSaveDrawing = true;
+        }
+
+        private sealed class DataCenterStageResult
+        {
+            public bool Success;
+            public string Message = string.Empty;
+        }
+
+        private sealed class DataCenterExecutionResult
+        {
+            public bool Success;
+            public string ResultCode = "DC DIM ERR";
+            public string FailedStage = string.Empty;
+            public string Message = string.Empty;
+            public bool OpenGridApplied;
+            public bool FitApplied;
+            public int GridAxisCount = DATA_CENTER_GRID_AXIS_COUNT;
+            public bool ArrangeApplied;
+            public bool DimApplied;
+            public bool ReferenceConnectorsApplied;
+            public bool Slot04Applied;
+            public int Slot04TargetCount;
+            public int Slot04DimensionCount;
+            public bool TopNeighborGridMarksApplied;
+            public AutoDimExecutionResult DimResult;
         }
 
         private enum ShapeProfileType
@@ -6933,11 +7596,13 @@ namespace TTSK_AutoDim_Plates
             try
             {
                 Type t = FindTypeInLoadedAssemblies(
-                    "Tekla.Technology.Akit.UserScript.PHU_LoadStandardService");
+                    "Tekla.Technology.Akit.UserScript.PHU_LoadStandardService"
+                );
 
                 if (t == null)
                 {
-                    message = "Không tìm thấy service load tiêu chuẩn: Tekla.Technology.Akit.UserScript.PHU_LoadStandardService";
+                    message =
+                        "Không tìm thấy service load tiêu chuẩn: Tekla.Technology.Akit.UserScript.PHU_LoadStandardService";
                     return false;
                 }
 
@@ -6946,7 +7611,8 @@ namespace TTSK_AutoDim_Plates
                     BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static,
                     null,
                     Type.EmptyTypes,
-                    null);
+                    null
+                );
 
                 if (run == null)
                 {
@@ -6960,7 +7626,8 @@ namespace TTSK_AutoDim_Plates
 
                 PropertyInfo messageProperty = t.GetProperty(
                     "LastRunMessage",
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static
+                );
 
                 if (messageProperty != null && messageProperty.PropertyType == typeof(string))
                 {
@@ -6971,13 +7638,12 @@ namespace TTSK_AutoDim_Plates
 
                 PropertyInfo successProperty = t.GetProperty(
                     "LastRunSucceeded",
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static
+                );
 
-                if (successProperty == null ||
-                    successProperty.PropertyType != typeof(bool))
+                if (successProperty == null || successProperty.PropertyType != typeof(bool))
                 {
-                    message =
-                        "Load Geometry Standard khong tra trang thai xac nhan.";
+                    message = "Load Geometry Standard khong tra trang thai xac nhan.";
                     return false;
                 }
 
@@ -7010,6 +7676,10 @@ namespace TTSK_AutoDim_Plates
         {
             AutoDimExecutionResult execution = new AutoDimExecutionResult();
             Tekla.Technology.Akit.UserScript.PHU_BeamGridDimensionEngine.Reset();
+            Tekla.Technology.Akit.UserScript.PHU_ColumnGridDimensionEngine.Reset();
+            Tekla.Technology.Akit.UserScript.PHU_InzaiColumnNeighborDimensionEngine.Reset();
+            Tekla.Technology.Akit.UserScript.PHU_ColumnDimensionTierContext.Reset();
+            Tekla.Technology.Akit.UserScript.PHU_VerticalShapeViewLayoutContext.Reset();
             AutoDimPartType partType = DetectActiveDrawingAutoDimPartType();
 
             if (partType == AutoDimPartType.Unknown)
@@ -7018,27 +7688,54 @@ namespace TTSK_AutoDim_Plates
                     "Không tự nhận diện được loại bản vẽ. Hiện hỗ trợ Plate, I/H, C, L, thép hộp.",
                     "TTSK AutoDim Auto Detect",
                     MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning);
-                execution.SectionMessage =
-                    "Khong xac dinh duoc ModelPart can AutoDim.";
+                    MessageBoxIcon.Warning
+                );
+                execution.SectionMessage = "Khong xac dinh duoc ModelPart can AutoDim.";
                 execution.CanSaveDrawing = false;
                 return execution;
             }
 
             int resolvedMainPartId = 0;
-            if (partType == AutoDimPartType.ShapeIH ||
-                partType == AutoDimPartType.ShapeC ||
-                partType == AutoDimPartType.ShapeL ||
-                partType == AutoDimPartType.ShapeBox ||
-                partType == AutoDimPartType.ShapeUnknown)
+            Tekla.Structures.Model.Part resolvedMainPart = null;
+            if (
+                partType == AutoDimPartType.ShapeIH
+                || partType == AutoDimPartType.ShapeC
+                || partType == AutoDimPartType.ShapeL
+                || partType == AutoDimPartType.ShapeBox
+                || partType == AutoDimPartType.ShapeUnknown
+            )
             {
-                Tekla.Structures.Model.Part resolvedMainPart =
-                    GetActiveDrawingMainModelPart();
-                if (resolvedMainPart != null &&
-                    resolvedMainPart.Identifier != null)
+                resolvedMainPart = GetActiveDrawingMainModelPart();
+                if (resolvedMainPart != null && resolvedMainPart.Identifier != null)
                 {
                     resolvedMainPartId = resolvedMainPart.Identifier.ID;
                 }
+            }
+
+            // Capture the user's sheet placement before AutoSection or any
+            // Shape operation can move a vertical H/C/L view.
+            DrawingHandler shapeDrawingHandler = null;
+            Drawing shapeDrawing = null;
+            Model shapeModel = null;
+            bool verticalShapeLayoutCaptured = false;
+            if (
+                (
+                    partType == AutoDimPartType.ShapeIH
+                    || partType == AutoDimPartType.ShapeC
+                    || partType == AutoDimPartType.ShapeL
+                )
+                && resolvedMainPart != null
+            )
+            {
+                shapeDrawingHandler = new DrawingHandler();
+                shapeDrawing = shapeDrawingHandler.GetActiveDrawing();
+                shapeModel = new Model();
+                verticalShapeLayoutCaptured =
+                    Tekla.Technology.Akit.UserScript.PHU_VerticalShapeViewLayoutContext.Begin(
+                        shapeModel,
+                        shapeDrawing,
+                        resolvedMainPart
+                    );
             }
 
             bool runAutoSection = ShouldRunAutoSection(partType);
@@ -7053,9 +7750,10 @@ namespace TTSK_AutoDim_Plates
 
             // MainPart identity is preserved by model ID; drawing selection is not restored.
 
-            if ((partType == AutoDimPartType.ShapeIH ||
-                 partType == AutoDimPartType.ShapeC) &&
-                !runAutoSection)
+            if (
+                (partType == AutoDimPartType.ShapeIH || partType == AutoDimPartType.ShapeC)
+                && !runAutoSection
+            )
                 execution.SectionStatus = AutoSectionStatus.Disabled;
 
             if (runAutoSection)
@@ -7066,28 +7764,26 @@ namespace TTSK_AutoDim_Plates
                 Tekla.Structures.Model.Part part = ResolveAutoSectionModelPart(
                     drawing,
                     model,
-                    resolvedMainPartId);
+                    resolvedMainPartId
+                );
                 bool useLegacyAutoSectionPrecheck =
-                    partType == AutoDimPartType.ShapeIH ||
-                    (partType == AutoDimPartType.ShapeC &&
-                     IsBracketShapeProfile(part));
+                    partType == AutoDimPartType.ShapeIH
+                    || (partType == AutoDimPartType.ShapeC && IsBracketShapeProfile(part));
 
                 Tekla.Technology.Akit.UserScript.HShapeAutoSectionPrecheckResult precheck =
                     useLegacyAutoSectionPrecheck
-                        ? Tekla.Technology.Akit.UserScript.ShapeScript
-                            .PrepareAutoSectionPrecheck(
-                                drawing,
-                                model,
-                                part)
-                        : Tekla.Technology.Akit.UserScript.ShapeCScript
-                            .PrepareAutoSectionPrecheck(
-                                drawing,
-                                model,
-                                part);
+                        ? Tekla.Technology.Akit.UserScript.ShapeScript.PrepareAutoSectionPrecheck(
+                            drawing,
+                            model,
+                            part
+                        )
+                        : Tekla.Technology.Akit.UserScript.ShapeCScript.PrepareAutoSectionPrecheck(
+                            drawing,
+                            model,
+                            part
+                        );
 
-                execution.OriginalHoleResult = precheck != null
-                    ? precheck.HoleResult
-                    : -1;
+                execution.OriginalHoleResult = precheck != null ? precheck.HoleResult : -1;
 
                 if (precheck == null)
                 {
@@ -7097,11 +7793,12 @@ namespace TTSK_AutoDim_Plates
                 else if (precheck.HasPartialSectionLayout)
                 {
                     execution.SectionStatus = AutoSectionStatus.PartialLayout;
-                    execution.SectionMessage =
-                        "Section layout dang co mot phan; khong tu repair.";
+                    execution.SectionMessage = "Section layout dang co mot phan; khong tu repair.";
                 }
-                else if ((drawing is SinglePartDrawing && precheck.HasCompleteSingleLayout) ||
-                         (drawing is AssemblyDrawing && precheck.HasCompleteAssemblyLayout))
+                else if (
+                    (drawing is SinglePartDrawing && precheck.HasCompleteSingleLayout)
+                    || (drawing is AssemblyDrawing && precheck.HasCompleteAssemblyLayout)
+                )
                 {
                     execution.SectionStatus = AutoSectionStatus.ExistingLayout;
                     execution.SectionMessage = "Section layout da ton tai.";
@@ -7118,31 +7815,35 @@ namespace TTSK_AutoDim_Plates
                 }
                 else
                 {
-                    Tekla.Technology.Akit.UserScript
-                        .SectionViewAttributeResolution sectionAttributeResolution =
-                            Tekla.Technology.Akit.UserScript
-                                .SectionViewAttributeResolver.Resolve(
-                                    drawing,
-                                    model);
+                    Tekla.Technology.Akit.UserScript.SectionViewAttributeResolution sectionAttributeResolution =
+                        Tekla.Technology.Akit.UserScript.SectionViewAttributeResolver.Resolve(
+                            drawing,
+                            model
+                        );
                     Tekla.Technology.Akit.UserScript.AutoSectionWorkerResult workerResult;
 
-                    if (sectionAttributeResolution == null ||
-                        !sectionAttributeResolution.Success ||
-                        string.IsNullOrWhiteSpace(
-                            sectionAttributeResolution.AttributeName))
+                    if (
+                        sectionAttributeResolution == null
+                        || !sectionAttributeResolution.Success
+                        || string.IsNullOrWhiteSpace(sectionAttributeResolution.AttributeName)
+                    )
                     {
                         workerResult =
-                            new Tekla.Technology.Akit.UserScript
-                                .AutoSectionWorkerResult();
-                        workerResult.Status =
-                            Tekla.Technology.Akit.UserScript
-                                .AutoSectionWorkerStatus.PreflightFailed;
+                            new Tekla.Technology.Akit.UserScript.AutoSectionWorkerResult();
+                        workerResult.Status = Tekla
+                            .Technology
+                            .Akit
+                            .UserScript
+                            .AutoSectionWorkerStatus
+                            .PreflightFailed;
                         workerResult.Message =
-                            "Khong xac dinh duoc Section view property sau " +
-                            "khi precheck ket luan can tao Section. " +
-                            (sectionAttributeResolution == null
-                                ? "Resolver did not run."
-                                : sectionAttributeResolution.Error);
+                            "Khong xac dinh duoc Section view property sau "
+                            + "khi precheck ket luan can tao Section. "
+                            + (
+                                sectionAttributeResolution == null
+                                    ? "Resolver did not run."
+                                    : sectionAttributeResolution.Error
+                            );
                     }
                     else if (drawing is SinglePartDrawing)
                     {
@@ -7152,38 +7853,60 @@ namespace TTSK_AutoDim_Plates
                             part,
                             precheck.TopView,
                             precheck.FrontView,
-                            sectionAttributeResolution.AttributeName);
+                            sectionAttributeResolution.AttributeName
+                        );
                     }
                     else if (drawing is AssemblyDrawing)
                     {
-                        workerResult = Tekla.Technology.Akit.UserScript.SectionScript.RunAssemblySafe(
-                            drawing,
-                            model,
-                            part,
-                            precheck.TopView,
-                            precheck.FrontView,
-                            sectionAttributeResolution.AttributeName);
+                        workerResult =
+                            Tekla.Technology.Akit.UserScript.SectionScript.RunAssemblySafe(
+                                drawing,
+                                model,
+                                part,
+                                precheck.TopView,
+                                precheck.FrontView,
+                                sectionAttributeResolution.AttributeName
+                            );
                     }
                     else
                     {
-                        workerResult = new Tekla.Technology.Akit.UserScript.AutoSectionWorkerResult();
-                        workerResult.Status =
-                            Tekla.Technology.Akit.UserScript.AutoSectionWorkerStatus.PreflightFailed;
+                        workerResult =
+                            new Tekla.Technology.Akit.UserScript.AutoSectionWorkerResult();
+                        workerResult.Status = Tekla
+                            .Technology
+                            .Akit
+                            .UserScript
+                            .AutoSectionWorkerStatus
+                            .PreflightFailed;
                         workerResult.Message = "Drawing khong phai Single Part hoac Assembly.";
                     }
 
                     ApplyAutoSectionWorkerResult(execution, workerResult);
 
-                    if (workerResult != null &&
-                        workerResult.Status ==
-                            Tekla.Technology.Akit.UserScript.AutoSectionWorkerStatus.CreatedSingle)
+                    if (
+                        workerResult != null
+                        && workerResult.Status
+                            == Tekla
+                                .Technology
+                                .Akit
+                                .UserScript
+                                .AutoSectionWorkerStatus
+                                .CreatedSingle
+                    )
                     {
                         autoSectionDimPassRequired = true;
                         autoSectionSingleLayout = true;
                     }
-                    else if (workerResult != null &&
-                             workerResult.Status ==
-                                Tekla.Technology.Akit.UserScript.AutoSectionWorkerStatus.CreatedAssemblyBottom)
+                    else if (
+                        workerResult != null
+                        && workerResult.Status
+                            == Tekla
+                                .Technology
+                                .Akit
+                                .UserScript
+                                .AutoSectionWorkerStatus
+                                .CreatedAssemblyBottom
+                    )
                     {
                         autoSectionDimPassRequired = true;
                     }
@@ -7191,33 +7914,80 @@ namespace TTSK_AutoDim_Plates
 
                 if (!execution.CanSaveDrawing)
                     return execution;
-
             }
 
             bool gridModeEnabled = IsGridDimensionModeEnabledForAutoDim();
             bool beamModeEnabled = IsBeamModeForAutoDimGrid();
+            int requestedGridAxisCount = GetGridDimensionAxisCountForAutoDim();
             bool shapeSupportsBeamGridDimensions =
-                partType == AutoDimPartType.ShapeIH ||
-                partType == AutoDimPartType.ShapeC ||
-                partType == AutoDimPartType.ShapeBox ||
-                partType == AutoDimPartType.ShapeUnknown;
+                partType == AutoDimPartType.ShapeIH
+                || partType == AutoDimPartType.ShapeC
+                || partType == AutoDimPartType.ShapeBox
+                || partType == AutoDimPartType.ShapeUnknown;
             bool runBeamGridDimensions =
-                gridModeEnabled && beamModeEnabled &&
-                shapeSupportsBeamGridDimensions;
+                gridModeEnabled && beamModeEnabled && shapeSupportsBeamGridDimensions;
+            bool shapeSupportsColumnGridDimensions =
+                partType == AutoDimPartType.ShapeIH
+                || partType == AutoDimPartType.ShapeC
+                || partType == AutoDimPartType.ShapeL;
+            bool runColumnGridDimensions =
+                gridModeEnabled
+                && !beamModeEnabled
+                && requestedGridAxisCount == 3
+                && shapeSupportsColumnGridDimensions;
 
-            if (gridModeEnabled && !runBeamGridDimensions)
+            if (gridModeEnabled && !runBeamGridDimensions && !runColumnGridDimensions)
             {
                 execution.GridDimensionRequested = true;
-                execution.GridDimensionMessage = !beamModeEnabled
-                    ? "Grid DIM is currently supported for Beam only; Column AutoDim is unchanged."
+                execution.GridDimensionMessage =
+                    !beamModeEnabled && requestedGridAxisCount != 3
+                        ? "Column Grid DIM requires Grid=3."
+                    : !beamModeEnabled ? "Column Grid DIM supports vertical H/C/L only."
                     : partType == AutoDimPartType.ShapeL
                         ? "Grid DIM is disabled for Shape L; Shape L AutoDim and Open/Fit Grid are unchanged."
-                        : "Grid DIM requires a supported Beam Shape path (I/H, C, Box or Unknown); the current AutoDim is unchanged.";
+                    : "Grid DIM requires a supported Beam Shape path (I/H, C, Box or Unknown); the current AutoDim is unchanged.";
             }
 
             Tekla.Technology.Akit.UserScript.PHU_BeamGridDimensionEngine.Configure(
                 runBeamGridDimensions,
-                GetGridDimensionAxisCountForAutoDim());
+                requestedGridAxisCount
+            );
+            Tekla.Technology.Akit.UserScript.PHU_ColumnShapeFamily columnShapeFamily =
+                partType == AutoDimPartType.ShapeIH
+                    ? Tekla.Technology.Akit.UserScript.PHU_ColumnShapeFamily.ShapeIH
+                : partType == AutoDimPartType.ShapeC
+                    ? Tekla.Technology.Akit.UserScript.PHU_ColumnShapeFamily.ShapeC
+                : partType == AutoDimPartType.ShapeL
+                    ? Tekla.Technology.Akit.UserScript.PHU_ColumnShapeFamily.ShapeL
+                : Tekla.Technology.Akit.UserScript.PHU_ColumnShapeFamily.Unknown;
+            Tekla.Technology.Akit.UserScript.PHU_ColumnDimensionTierContext.Configure(
+                runColumnGridDimensions,
+                columnShapeFamily
+            );
+            Tekla.Technology.Akit.UserScript.PHU_ColumnGridDimensionEngine.Configure(
+                runColumnGridDimensions,
+                requestedGridAxisCount
+            );
+            Tekla.Technology.Akit.UserScript.PHU_InzaiColumnNeighborDimensionEngine.Configure(
+                runColumnGridDimensions
+            );
+
+            if (shapeSupportsColumnGridDimensions && resolvedMainPart != null)
+            {
+                if (runColumnGridDimensions)
+                {
+                    Tekla.Technology.Akit.UserScript.PHU_ColumnGridDimensionEngine.Begin(
+                        shapeModel,
+                        shapeDrawing,
+                        resolvedMainPart
+                    );
+                    Tekla.Technology.Akit.UserScript.PHU_InzaiColumnNeighborDimensionEngine.Begin(
+                        shapeModel,
+                        shapeDrawing,
+                        resolvedMainPart
+                    );
+                }
+            }
 
             try
             {
@@ -7230,10 +8000,10 @@ namespace TTSK_AutoDim_Plates
                     case AutoDimPartType.ShapeIH:
                         if (autoSectionDimPassRequired)
                         {
-                            Tekla.Technology.Akit.UserScript.ShapeScript
-                                .PrepareAutoSectionDimPass(
-                                    autoSectionSingleLayout,
-                                    resolvedMainPartId);
+                            Tekla.Technology.Akit.UserScript.ShapeScript.PrepareAutoSectionDimPass(
+                                autoSectionSingleLayout,
+                                resolvedMainPartId
+                            );
                         }
 
                         Tekla.Technology.Akit.UserScript.ShapeScript.Run(null);
@@ -7241,86 +8011,114 @@ namespace TTSK_AutoDim_Plates
 
                     case AutoDimPartType.ShapeC:
                         {
-                        if (autoSectionDimPassRequired)
-                        {
-                            Tekla.Technology.Akit.UserScript.ShapeCScript
-                                .PrepareAutoSectionDimPass(
+                            if (autoSectionDimPassRequired)
+                            {
+                                Tekla.Technology.Akit.UserScript.ShapeCScript.PrepareAutoSectionDimPass(
                                     autoSectionSingleLayout,
-                                    resolvedMainPartId);
-                        }
+                                    resolvedMainPartId
+                                );
+                            }
 
-                        string shapeError;
-                        if (!RunOptionalShapeScriptByClassName(
-                                "ShapeCScript",
-                                "Đã nhận diện profile thép C, nhưng thuật toán thép C chưa được build.",
-                                out shapeError))
-                        {
-                            execution.SectionMessage = shapeError;
-                            execution.CanSaveDrawing = false;
-                            return execution;
-                        }
+                            string shapeError;
+                            if (
+                                !RunOptionalShapeScriptByClassName(
+                                    "ShapeCScript",
+                                    "Đã nhận diện profile thép C, nhưng thuật toán thép C chưa được build.",
+                                    out shapeError
+                                )
+                            )
+                            {
+                                execution.SectionMessage = shapeError;
+                                execution.CanSaveDrawing = false;
+                                return execution;
+                            }
                         }
                         break;
 
                     case AutoDimPartType.ShapeL:
                         {
-                        string shapeError;
-                        if (!RunOptionalShapeScriptByClassName(
-                                "ShapeLScript",
-                                "Đã nhận diện profile thép L, nhưng thuật toán thép L chưa được build.",
-                                out shapeError))
-                        {
-                            execution.SectionMessage = shapeError;
-                            execution.CanSaveDrawing = false;
-                            return execution;
-                        }
+                            string shapeError;
+                            if (
+                                !RunOptionalShapeScriptByClassName(
+                                    "ShapeLScript",
+                                    "Đã nhận diện profile thép L, nhưng thuật toán thép L chưa được build.",
+                                    out shapeError
+                                )
+                            )
+                            {
+                                execution.SectionMessage = shapeError;
+                                execution.CanSaveDrawing = false;
+                                return execution;
+                            }
                         }
                         break;
 
                     case AutoDimPartType.ShapeBox:
                         {
-                        string shapeError;
-                        if (!RunOptionalShapeScriptByClassName(
-                                "ShapeBoxScript",
-                                "Đã nhận diện profile thép hộp, nhưng thuật toán thép hộp chưa được build.",
-                                out shapeError))
-                        {
-                            execution.SectionMessage = shapeError;
-                            execution.CanSaveDrawing = false;
-                            return execution;
-                        }
+                            string shapeError;
+                            if (
+                                !RunOptionalShapeScriptByClassName(
+                                    "ShapeBoxScript",
+                                    "Đã nhận diện profile thép hộp, nhưng thuật toán thép hộp chưa được build.",
+                                    out shapeError
+                                )
+                            )
+                            {
+                                execution.SectionMessage = shapeError;
+                                execution.CanSaveDrawing = false;
+                                return execution;
+                            }
                         }
                         break;
 
                     case AutoDimPartType.ShapeUnknown:
-                        {
+                    {
                         DrawingHandler unknownDrawingHandler = new DrawingHandler();
                         Drawing unknownDrawing = unknownDrawingHandler.GetActiveDrawing();
                         Model unknownModel = new Model();
-                        Tekla.Structures.Model.Part unknownPart =
-                            ResolveAutoSectionModelPart(
-                                unknownDrawing,
-                                unknownModel,
-                                resolvedMainPartId);
+                        Tekla.Structures.Model.Part unknownPart = ResolveAutoSectionModelPart(
+                            unknownDrawing,
+                            unknownModel,
+                            resolvedMainPartId
+                        );
 
                         Tekla.Technology.Akit.UserScript.ShapeUnknownRunResult unknownResult =
                             Tekla.Technology.Akit.UserScript.ShapeUnknownScript.RunSafe(
                                 unknownDrawing,
                                 unknownModel,
-                                unknownPart);
+                                unknownPart
+                            );
 
                         if (unknownResult == null || !unknownResult.Success)
                         {
-                            execution.SectionMessage = unknownResult != null
-                                ? unknownResult.Message
-                                : "Shape Unknown khong tra ket qua.";
+                            execution.SectionMessage =
+                                unknownResult != null
+                                    ? unknownResult.Message
+                                    : "Shape Unknown khong tra ket qua.";
                             execution.CanSaveDrawing = false;
                             return execution;
                         }
 
                         execution.SectionMessage = unknownResult.Message;
-                            break;
-                        }
+                        break;
+                    }
+                }
+
+                // One connected column flow: Shape H/C/L -> optional routed
+                // Inzai Neighbor DIM -> project-routed Grid DIM -> alignment.
+                // General non-Inzai models skip Neighbor. Existing Shape,
+                // Neighbor and Grid feet stay in their own engines; only the
+                // active PHU_Shape_X tier contract is handed off between them.
+                // The user's captured left/right order is preserved and the
+                // final horizontal alignment is performed exactly once.
+                if (runColumnGridDimensions)
+                {
+                    Tekla.Technology.Akit.UserScript.PHU_InzaiColumnNeighborDimensionEngine.ExecuteAfterShape();
+                    Tekla.Technology.Akit.UserScript.PHU_ColumnGridDimensionEngine.ExecuteAfterShape();
+                }
+                if (verticalShapeLayoutCaptured)
+                {
+                    Tekla.Technology.Akit.UserScript.PHU_VerticalShapeViewLayoutContext.AlignOnceAfterShape();
                 }
             }
             finally
@@ -7328,15 +8126,76 @@ namespace TTSK_AutoDim_Plates
                 if (runBeamGridDimensions)
                 {
                     execution.GridDimensionRequested = true;
+                    execution.GridDimensionApplied = Tekla
+                        .Technology
+                        .Akit
+                        .UserScript
+                        .PHU_BeamGridDimensionEngine
+                        .LastRunSucceeded;
+                    execution.GridDimensionMessage = Tekla
+                        .Technology
+                        .Akit
+                        .UserScript
+                        .PHU_BeamGridDimensionEngine
+                        .LastRunMessage;
+
+                    // The prepared TOP/FRONT geometry is still available here,
+                    // before Reset(). Create the REF connectors for both the
+                    // normal Beam Grid DIM flow and Slot09 Data Center.
+                    if (execution.GridDimensionApplied)
+                    {
+                        execution.ReferenceConnectorCount =
+                            Tekla.Technology.Akit.UserScript.PHU_BeamGridDimensionEngine.CreatePreparedTopFrontReferenceConnectors(
+                                out execution.ReferenceConnectorMessage
+                            );
+                    }
+                }
+                else if (runColumnGridDimensions)
+                {
+                    execution.GridDimensionRequested = true;
+                    bool layoutSucceeded =
+                        !verticalShapeLayoutCaptured
+                        || Tekla
+                            .Technology
+                            .Akit
+                            .UserScript
+                            .PHU_VerticalShapeViewLayoutContext
+                            .LastAlignmentApplied;
                     execution.GridDimensionApplied =
-                        Tekla.Technology.Akit.UserScript
-                            .PHU_BeamGridDimensionEngine.LastRunSucceeded;
+                        Tekla
+                            .Technology
+                            .Akit
+                            .UserScript
+                            .PHU_ColumnGridDimensionEngine
+                            .LastRunSucceeded && layoutSucceeded;
                     execution.GridDimensionMessage =
-                        Tekla.Technology.Akit.UserScript
-                            .PHU_BeamGridDimensionEngine.LastRunMessage;
+                        Tekla
+                            .Technology
+                            .Akit
+                            .UserScript
+                            .PHU_ColumnGridDimensionEngine
+                            .LastRunMessage
+                        + " "
+                        + Tekla
+                            .Technology
+                            .Akit
+                            .UserScript
+                            .PHU_InzaiColumnNeighborDimensionEngine
+                            .LastRunMessage
+                        + " "
+                        + Tekla
+                            .Technology
+                            .Akit
+                            .UserScript
+                            .PHU_VerticalShapeViewLayoutContext
+                            .LastMessage;
                 }
 
                 Tekla.Technology.Akit.UserScript.PHU_BeamGridDimensionEngine.Reset();
+                Tekla.Technology.Akit.UserScript.PHU_ColumnGridDimensionEngine.Reset();
+                Tekla.Technology.Akit.UserScript.PHU_InzaiColumnNeighborDimensionEngine.Reset();
+                Tekla.Technology.Akit.UserScript.PHU_ColumnDimensionTierContext.Reset();
+                Tekla.Technology.Akit.UserScript.PHU_VerticalShapeViewLayoutContext.Reset();
             }
 
             if (!runAutoSection)
@@ -7345,19 +8204,424 @@ namespace TTSK_AutoDim_Plates
             return execution;
         }
 
+        private DataCenterExecutionResult RunDataCenterCurrentDrawing()
+        {
+            DataCenterExecutionResult result = new DataCenterExecutionResult();
+
+            try
+            {
+                DrawingHandler drawingHandler = new DrawingHandler();
+                if (!drawingHandler.GetConnectionStatus())
+                    return FailDataCenter(
+                        result,
+                        "DC SKIP",
+                        "PREFLIGHT",
+                        "DrawingHandler chưa kết nối."
+                    );
+
+                Drawing drawing = drawingHandler.GetActiveDrawing();
+                if (drawing == null)
+                    return FailDataCenter(
+                        result,
+                        "DC SKIP",
+                        "PREFLIGHT",
+                        "Không có active drawing."
+                    );
+
+                AutoDimPartType actualPartType = DetectActiveDrawingAutoDimPartType();
+
+                if (!IsDataCenterSupportedPartType(actualPartType))
+                {
+                    return FailDataCenter(
+                        result,
+                        "DC SKIP",
+                        "PREFLIGHT",
+                        "Drawing đã chọn không thuộc Beam Shape hỗ trợ Data Center."
+                    );
+                }
+
+                Tekla.Technology.Akit.UserScript.PHU_Slot04_SelectedProfilePalletDim.Slot04Result preflight =
+                    Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot04.PreflightDataCenter();
+                if (preflight == null || !preflight.Success)
+                {
+                    return FailDataCenter(
+                        result,
+                        "DC SKIP",
+                        "PREFLIGHT",
+                        preflight == null
+                            ? "Slot04 Data Center preflight không trả kết quả."
+                            : preflight.Message
+                    );
+                }
+                bool hasSlot04PlateTargets = preflight.TargetCount > 0;
+
+                DataCenterStageResult openResult = RunDataCenterOpenGridCore();
+                if (!openResult.Success)
+                {
+                    return FailDataCenter(result, "DC OPEN ERR", "OPEN GRID", openResult.Message);
+                }
+                result.OpenGridApplied = true;
+
+                DataCenterStageResult fitResult = RunDataCenterFitGridCore();
+                if (!fitResult.Success)
+                {
+                    return FailDataCenter(result, "DC FIT ERR", "FIT 1 GRID", fitResult.Message);
+                }
+                result.FitApplied = true;
+
+                AutoDimExecutionResult dimExecution;
+                using (
+                    Tekla.Technology.Akit.UserScript.PHU_Slot09_DataCenterContext.Begin(
+                        hasSlot04PlateTargets
+                    )
+                )
+                {
+                    dimExecution = RunCurrentAutoDimScript();
+                }
+
+                result.DimResult = dimExecution;
+                string finalArrangeMessage;
+                bool finalArrangeSucceeded =
+                    Tekla.Technology.Akit.UserScript.PHU_Slot09_DataCenterContext.VerifyRegisteredTopFrontArrangement(
+                        out finalArrangeMessage
+                    );
+                bool gridDimSucceeded =
+                    dimExecution != null
+                    && dimExecution.CanSaveDrawing
+                    && dimExecution.GridDimensionRequested
+                    && dimExecution.GridDimensionApplied;
+                bool referenceConnectorsSucceeded =
+                    dimExecution != null && dimExecution.ReferenceConnectorCount == 2;
+                bool dimSucceeded =
+                    gridDimSucceeded
+                    && referenceConnectorsSucceeded
+                    && finalArrangeSucceeded
+                    && !IsBatchAutoDimFailure(dimExecution);
+                if (!dimSucceeded)
+                {
+                    string dimMessage =
+                        gridDimSucceeded
+                        && !referenceConnectorsSucceeded
+                        && dimExecution != null
+                        && !string.IsNullOrWhiteSpace(dimExecution.ReferenceConnectorMessage)
+                            ? dimExecution.ReferenceConnectorMessage
+                        : gridDimSucceeded
+                        && referenceConnectorsSucceeded
+                        && !finalArrangeSucceeded
+                        && !string.IsNullOrWhiteSpace(finalArrangeMessage)
+                            ? finalArrangeMessage
+                        : dimExecution == null ? "DIM không trả kết quả."
+                        : !string.IsNullOrWhiteSpace(dimExecution.GridDimensionMessage)
+                            ? dimExecution.GridDimensionMessage
+                        : dimExecution.SectionMessage;
+                    return FailDataCenter(result, "DC DIM ERR", "DIM", dimMessage);
+                }
+                result.ArrangeApplied = true;
+                result.DimApplied = true;
+                result.ReferenceConnectorsApplied = true;
+
+                if (hasSlot04PlateTargets)
+                {
+                    Tekla.Technology.Akit.UserScript.PHU_Slot04_SelectedProfilePalletDim.Slot04Result slot04 =
+                        Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot04.RunDataCenter();
+                    if (
+                        slot04 == null
+                        || !slot04.Success
+                        || !slot04.UsedAutomaticCaseB
+                        || slot04.CreatedCount <= 0
+                    )
+                    {
+                        return FailDataCenter(
+                            result,
+                            "DC S04 ERR",
+                            "SLOT04",
+                            slot04 == null
+                                ? "Slot04 Data Center không trả kết quả."
+                                : slot04.Message
+                        );
+                    }
+
+                    result.Slot04Applied = true;
+                    result.Slot04TargetCount = slot04.TargetCount;
+                    result.Slot04DimensionCount = slot04.CreatedCount;
+                }
+
+                DataCenterStageResult neighborGridResult = RunDataCenterTopNeighborGridMarkCore();
+                if (!neighborGridResult.Success)
+                {
+                    return FailDataCenter(
+                        result,
+                        "DC NG ERR",
+                        "TOP NEIGHBOR GRID",
+                        neighborGridResult.Message
+                    );
+                }
+                result.TopNeighborGridMarksApplied = true;
+
+                result.Success = true;
+                result.ResultCode = "DC OK";
+                result.FailedStage = string.Empty;
+                result.Message = hasSlot04PlateTargets
+                    ? "OPEN GRID → FIT 1 → DIM Grid → REF LINE L/R → S04 FRONT Center → TOP NEIGHBOR MARK OK."
+                    : "OPEN GRID → FIT 1 → DIM Grid → REF LINE L/R → TOP NEIGHBOR MARK OK; FRONT không có plate tùy chọn.";
+                return result;
+            }
+            catch (Exception ex)
+            {
+                return FailDataCenter(
+                    result,
+                    result.OpenGridApplied
+                        ? result.FitApplied
+                            ? result.DimApplied
+                                ? "DC S04 ERR"
+                                : "DC DIM ERR"
+                            : "DC FIT ERR"
+                        : "DC OPEN ERR",
+                    "EXCEPTION",
+                    ex.Message
+                );
+            }
+        }
+
+        private static DataCenterExecutionResult FailDataCenter(
+            DataCenterExecutionResult result,
+            string code,
+            string stage,
+            string message
+        )
+        {
+            if (result == null)
+                result = new DataCenterExecutionResult();
+
+            result.Success = false;
+            result.ResultCode = code;
+            result.FailedStage = stage ?? string.Empty;
+            result.Message = string.IsNullOrWhiteSpace(message)
+                ? "Data Center stage thất bại."
+                : message;
+            return result;
+        }
+
+        private DataCenterStageResult RunDataCenterOpenGridCore()
+        {
+            DataCenterStageResult stage = new DataCenterStageResult();
+
+            try
+            {
+                string selectionError;
+                if (!PHU_OpenGridView.PrepareTargetViewSelectionForMacro(out selectionError))
+                {
+                    stage.Message = selectionError;
+                    return stage;
+                }
+
+                string macroError;
+                if (!TryRunGridVisibilityMacro("OPEN", out macroError))
+                {
+                    stage.Message = macroError;
+                    return stage;
+                }
+
+                PHU_OpenGridView.Result open = PHU_OpenGridView.Run();
+                if (
+                    open == null
+                    || open.ViewCount <= 0
+                    || open.FailedCount > 0
+                    || open.SuccessCount != open.ViewCount
+                )
+                {
+                    stage.Message =
+                        open == null ? "OPEN GRID không trả kết quả." : open.ToDisplayText();
+                    return stage;
+                }
+
+                stage.Success = true;
+                stage.Message = open.Message;
+                return stage;
+            }
+            catch (Exception ex)
+            {
+                stage.Message = ex.Message;
+                return stage;
+            }
+        }
+
+        private DataCenterStageResult RunDataCenterFitGridCore()
+        {
+            DataCenterStageResult stage = new DataCenterStageResult();
+
+            try
+            {
+                string selectionError;
+                if (!PHU_OpenGridView.PrepareTargetViewSelectionForMacro(out selectionError))
+                {
+                    stage.Message = selectionError;
+                    return stage;
+                }
+
+                string prerequisiteMessage;
+                if (!PHU_OpenGridView.CanRunFitForCurrentTargets(out prerequisiteMessage))
+                {
+                    stage.Message = prerequisiteMessage;
+                    return stage;
+                }
+
+                string macroError;
+                if (!TryRunGridVisibilityMacro("FIT_KEEP_GRID", out macroError))
+                {
+                    PHU_OpenGridView.RestoreFitKeepGridRestrictionBoxes();
+                    stage.Message = macroError;
+                    return stage;
+                }
+
+                PHU_OpenGridView.Result fit = PHU_OpenGridView.RunFitKeepNearestGridAxes(
+                    DATA_CENTER_GRID_AXIS_COUNT,
+                    DATA_CENTER_FIT_PADDING
+                );
+                if (
+                    fit == null
+                    || fit.ViewCount <= 0
+                    || fit.FailedCount > 0
+                    || fit.SuccessCount != fit.ViewCount
+                    || fit.GridAxisNoGridViewCount == fit.ViewCount
+                    || fit.GridAxesFoundCount <= 0
+                )
+                {
+                    PHU_OpenGridView.RestoreFitKeepGridRestrictionBoxes();
+                    stage.Message = fit == null ? "FIT 1 GRID không trả kết quả." : fit.Message;
+                    return stage;
+                }
+
+                string verifyError;
+                if (!TryRunGridVisibilityMacro("FIT_KEEP_GRID", out verifyError))
+                {
+                    PHU_OpenGridView.RestoreFitKeepGridRestrictionBoxes();
+                    stage.Message = verifyError;
+                    return stage;
+                }
+
+                string completeError;
+                if (!TryRunGridVisibilityMacro("FIT_GRID_COMPLETE", out completeError))
+                {
+                    PHU_OpenGridView.RestoreFitKeepGridRestrictionBoxes();
+                    stage.Message = completeError;
+                    return stage;
+                }
+
+                PHU_OpenGridView.FitGridOriginArrangeResult arrange =
+                    PHU_OpenGridView.ArrangeTopFrontByOriginAfterGridFit();
+                if (arrange == null || !arrange.Success || !arrange.Applied)
+                {
+                    PHU_OpenGridView.RestoreFitKeepGridRestrictionBoxes();
+                    stage.Message =
+                        arrange == null ? "Không có kết quả sắp xếp TOP/FRONT." : arrange.Message;
+                    return stage;
+                }
+
+                stage.Success = true;
+                stage.Message = fit.Message + "\n" + arrange.Message;
+                return stage;
+            }
+            catch (Exception ex)
+            {
+                PHU_OpenGridView.RestoreFitKeepGridRestrictionBoxes();
+                stage.Message = ex.Message;
+                return stage;
+            }
+        }
+
+        private DataCenterStageResult RunDataCenterTopNeighborGridMarkCore()
+        {
+            DataCenterStageResult stage = new DataCenterStageResult();
+
+            try
+            {
+                if (_batchDataCenterModeSnapshot != true)
+                {
+                    stage.Message =
+                        "TOP Neighbor Grid chỉ được phép chạy trong Slot09 Data Center.";
+                    return stage;
+                }
+
+                string selectionMessage;
+                if (
+                    !Tekla.Technology.Akit.UserScript.PHU_Slot09_DataCenterContext.TrySelectSingleTopViewForNeighborGrid(
+                        out selectionMessage
+                    )
+                )
+                {
+                    stage.Message = selectionMessage;
+                    return stage;
+                }
+
+                string macroError;
+                if (!TryRunGridVisibilityMacro("MARK_OFFSET", out macroError))
+                {
+                    stage.Message = macroError;
+                    return stage;
+                }
+
+                double xOffset =
+                    nudNeighborGridX == null ? 30.0 : Convert.ToDouble(nudNeighborGridX.Value);
+                double yOffset =
+                    nudNeighborGridY == null ? 0.0 : Convert.ToDouble(nudNeighborGridY.Value);
+
+                string verificationMessage;
+                if (
+                    !Tekla.Technology.Akit.UserScript.PHU_Slot09_DataCenterContext.VerifySingleTopViewSelectionForNeighborGrid(
+                        out verificationMessage
+                    )
+                )
+                {
+                    stage.Message = verificationMessage;
+                    return stage;
+                }
+
+                PHU_OpenGridView.Result neighbor = PHU_OpenGridView.RunNeighborGrid(
+                    xOffset,
+                    yOffset
+                );
+                if (
+                    neighbor == null
+                    || neighbor.ViewCount != 1
+                    || neighbor.SuccessCount != 1
+                    || neighbor.FailedCount != 0
+                )
+                {
+                    stage.Message =
+                        neighbor == null
+                            ? "TOP Neighbor Grid không trả kết quả."
+                            : neighbor.Message;
+                    return stage;
+                }
+
+                stage.Success = true;
+                stage.Message = neighbor.Message;
+                return stage;
+            }
+            catch (Exception ex)
+            {
+                stage.Message = ex.Message;
+                return stage;
+            }
+        }
+
         private bool ShouldRunAutoSection(AutoDimPartType partType)
         {
-            bool enabled = _isBatchRunning && _batchAutoSectionEnabledSnapshot.HasValue
-                ? _batchAutoSectionEnabledSnapshot.Value
-                : _autoSectionEnabled;
+            bool enabled =
+                _isBatchRunning && _batchAutoSectionEnabledSnapshot.HasValue
+                    ? _batchAutoSectionEnabledSnapshot.Value
+                    : _autoSectionEnabled;
 
-            return enabled &&
-                (partType == AutoDimPartType.ShapeIH ||
-                  partType == AutoDimPartType.ShapeC);
+            return enabled
+                && (partType == AutoDimPartType.ShapeIH || partType == AutoDimPartType.ShapeC);
         }
 
         private bool IsGridDimensionModeEnabledForAutoDim()
         {
+            if (Tekla.Technology.Akit.UserScript.PHU_Slot09_DataCenterContext.IsActive)
+                return true;
+
             return _isBatchRunning && _batchGridDimEnabledSnapshot.HasValue
                 ? _batchGridDimEnabledSnapshot.Value
                 : fitKeepGridAxes;
@@ -7365,27 +8629,40 @@ namespace TTSK_AutoDim_Plates
 
         private bool IsBeamModeForAutoDimGrid()
         {
-            bool columnMode = _isBatchRunning && _batchGridDimBeamSnapshot.HasValue
-                ? !_batchGridDimBeamSnapshot.Value
-                : fitArrangeColumnMode;
+            if (Tekla.Technology.Akit.UserScript.PHU_Slot09_DataCenterContext.IsActive)
+                return true;
+
+            bool columnMode =
+                _isBatchRunning && _batchGridDimBeamSnapshot.HasValue
+                    ? !_batchGridDimBeamSnapshot.Value
+                    : fitArrangeColumnMode;
             return !columnMode;
         }
 
         private int GetGridDimensionAxisCountForAutoDim()
         {
-            int value = _isBatchRunning && _batchGridDimAxisCountSnapshot.HasValue
-                ? _batchGridDimAxisCountSnapshot.Value
-                : fitGridAxisCount;
+            if (Tekla.Technology.Akit.UserScript.PHU_Slot09_DataCenterContext.IsActive)
+                return DATA_CENTER_GRID_AXIS_COUNT;
+
+            bool columnMode =
+                _isBatchRunning && _batchGridDimBeamSnapshot.HasValue
+                    ? !_batchGridDimBeamSnapshot.Value
+                    : fitArrangeColumnMode;
+            if (columnMode)
+                return 3;
+
+            int value =
+                _isBatchRunning && _batchGridDimAxisCountSnapshot.HasValue
+                    ? _batchGridDimAxisCountSnapshot.Value
+                    : fitGridAxisCount;
             return Math.Max(1, Math.Min(3, value));
         }
 
-        private bool IsBracketShapeProfile(
-            Tekla.Structures.Model.Part part)
+        private bool IsBracketShapeProfile(Tekla.Structures.Model.Part part)
         {
             try
             {
-                string profile = NormalizeProfileText(
-                    GetShapeProfileText(part));
+                string profile = NormalizeProfileText(GetShapeProfileText(part));
                 return profile.StartsWith("[");
             }
             catch
@@ -7397,7 +8674,8 @@ namespace TTSK_AutoDim_Plates
         private Tekla.Structures.Model.Part ResolveAutoSectionModelPart(
             Drawing drawing,
             Model model,
-            int resolvedMainPartId)
+            int resolvedMainPartId
+        )
         {
             try
             {
@@ -7406,9 +8684,9 @@ namespace TTSK_AutoDim_Plates
 
                 if (resolvedMainPartId > 0)
                 {
-                    Tekla.Structures.Model.ModelObject resolvedObject =
-                        model.SelectModelObject(
-                            new Tekla.Structures.Identifier(resolvedMainPartId));
+                    Tekla.Structures.Model.ModelObject resolvedObject = model.SelectModelObject(
+                        new Tekla.Structures.Identifier(resolvedMainPartId)
+                    );
 
                     Tekla.Structures.Model.Part resolvedPart =
                         resolvedObject as Tekla.Structures.Model.Part;
@@ -7417,8 +8695,10 @@ namespace TTSK_AutoDim_Plates
                         return resolvedPart;
                 }
 
-                return Tekla.Technology.Akit.UserScript.PHU_MainPartResolver
-                    .Resolve(model, drawing);
+                return Tekla.Technology.Akit.UserScript.PHU_MainPartResolver.Resolve(
+                    model,
+                    drawing
+                );
             }
             catch
             {
@@ -7428,7 +8708,8 @@ namespace TTSK_AutoDim_Plates
 
         private void ApplyAutoSectionWorkerResult(
             AutoDimExecutionResult execution,
-            Tekla.Technology.Akit.UserScript.AutoSectionWorkerResult workerResult)
+            Tekla.Technology.Akit.UserScript.AutoSectionWorkerResult workerResult
+        )
         {
             if (execution == null || workerResult == null)
                 return;
@@ -7470,8 +8751,7 @@ namespace TTSK_AutoDim_Plates
                 execution.CanSaveDrawing = false;
         }
 
-        private void ApplyActiveAutoDimExecutionStatus(
-            AutoDimExecutionResult execution)
+        private void ApplyActiveAutoDimExecutionStatus(AutoDimExecutionResult execution)
         {
             if (execution == null)
             {
@@ -7480,8 +8760,10 @@ namespace TTSK_AutoDim_Plates
                 return;
             }
 
-            if (!execution.CanSaveDrawing ||
-                execution.SectionStatus == AutoSectionStatus.UnsafeRollbackFailed)
+            if (
+                !execution.CanSaveDrawing
+                || execution.SectionStatus == AutoSectionStatus.UnsafeRollbackFailed
+            )
             {
                 lblStatus.Text = !string.IsNullOrWhiteSpace(execution.SectionMessage)
                     ? "ERROR | " + execution.SectionMessage + " | KHONG SAVE"
@@ -7490,8 +8772,7 @@ namespace TTSK_AutoDim_Plates
                 return;
             }
 
-            if (execution.GridDimensionRequested &&
-                !execution.GridDimensionApplied)
+            if (execution.GridDimensionRequested && !execution.GridDimensionApplied)
             {
                 lblStatus.Text = !string.IsNullOrWhiteSpace(execution.GridDimensionMessage)
                     ? "Done | " + execution.GridDimensionMessage
@@ -7557,35 +8838,34 @@ namespace TTSK_AutoDim_Plates
                     break;
             }
 
-            lblStatus.Text = execution.GridDimensionRequested &&
-                execution.GridDimensionApplied
-                ? "Done | " + execution.GridDimensionMessage
-                : "Done active drawing";
+            lblStatus.Text =
+                execution.GridDimensionRequested && execution.GridDimensionApplied
+                    ? "Done | " + execution.GridDimensionMessage
+                    : "Done active drawing";
             lblStatus.ForeColor = Color.FromArgb(22, 163, 74);
         }
 
-        private string GetBatchAutoDimResultText(
-            AutoDimExecutionResult execution,
-            out Color color)
+        private string GetBatchAutoDimResultText(AutoDimExecutionResult execution, out Color color)
         {
             color = Color.FromArgb(22, 163, 74);
 
-            if (execution == null || !execution.CanSaveDrawing ||
-                execution.SectionStatus == AutoSectionStatus.UnsafeRollbackFailed)
+            if (
+                execution == null
+                || !execution.CanSaveDrawing
+                || execution.SectionStatus == AutoSectionStatus.UnsafeRollbackFailed
+            )
             {
                 color = Color.FromArgb(220, 38, 38);
                 return "ERROR";
             }
 
-            if (execution.GridDimensionRequested &&
-                !execution.GridDimensionApplied)
+            if (execution.GridDimensionRequested && !execution.GridDimensionApplied)
             {
                 color = Color.DarkOrange;
                 return "GRID FALLBACK";
             }
 
-            if (execution.GridDimensionRequested &&
-                execution.GridDimensionApplied)
+            if (execution.GridDimensionRequested && execution.GridDimensionApplied)
                 return "GRID OK";
 
             switch (execution.SectionStatus)
@@ -7636,11 +8916,11 @@ namespace TTSK_AutoDim_Plates
             if (execution == null || !execution.CanSaveDrawing)
                 return true;
 
-            return execution.SectionStatus == AutoSectionStatus.PartialLayout ||
-                   execution.SectionStatus == AutoSectionStatus.PreflightFailed ||
-                   execution.SectionStatus == AutoSectionStatus.CreateFailed ||
-                   execution.SectionStatus == AutoSectionStatus.RolledBack ||
-                   execution.SectionStatus == AutoSectionStatus.UnsafeRollbackFailed;
+            return execution.SectionStatus == AutoSectionStatus.PartialLayout
+                || execution.SectionStatus == AutoSectionStatus.PreflightFailed
+                || execution.SectionStatus == AutoSectionStatus.CreateFailed
+                || execution.SectionStatus == AutoSectionStatus.RolledBack
+                || execution.SectionStatus == AutoSectionStatus.UnsafeRollbackFailed;
         }
 
         private int GetTopBottomHoleCheckResult()
@@ -7652,57 +8932,87 @@ namespace TTSK_AutoDim_Plates
                 switch (partType)
                 {
                     case AutoDimPartType.ShapeIH:
-                        return Tekla.Technology.Akit.UserScript.ShapeScript.TopBottomHoleCheckResult;
+                        return Tekla
+                            .Technology
+                            .Akit
+                            .UserScript
+                            .ShapeScript
+                            .TopBottomHoleCheckResult;
 
                     case AutoDimPartType.ShapeC:
-                        return Tekla.Technology.Akit.UserScript.ShapeCScript.TopBottomHoleCheckResult;
+                        return Tekla
+                            .Technology
+                            .Akit
+                            .UserScript
+                            .ShapeCScript
+                            .TopBottomHoleCheckResult;
 
                     case AutoDimPartType.ShapeL:
-                        return Tekla.Technology.Akit.UserScript.ShapeLScript.TopBottomHoleCheckResult;
+                        return Tekla
+                            .Technology
+                            .Akit
+                            .UserScript
+                            .ShapeLScript
+                            .TopBottomHoleCheckResult;
 
                     case AutoDimPartType.ShapeBox:
-                        return Tekla.Technology.Akit.UserScript.ShapeBoxScript.TopBottomHoleCheckResult;
+                        return Tekla
+                            .Technology
+                            .Akit
+                            .UserScript
+                            .ShapeBoxScript
+                            .TopBottomHoleCheckResult;
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return 0;
         }
-
 
         private AutoDimPartType DetectActiveDrawingAutoDimPartType()
         {
             try
             {
                 Tekla.Structures.Model.Part part = GetActiveDrawingMainModelPart();
-                if (part == null)
-                    return AutoDimPartType.Unknown;
-
-                if (IsPlatePart(part))
-                    return AutoDimPartType.Plate;
-
-                ShapeProfileType shapeType = DetectShapeProfile(part);
-
-                if (shapeType == ShapeProfileType.IH)
-                    return AutoDimPartType.ShapeIH;
-
-                if (shapeType == ShapeProfileType.C)
-                    return AutoDimPartType.ShapeC;
-
-                if (shapeType == ShapeProfileType.L)
-                    return AutoDimPartType.ShapeL;
-
-                if (shapeType == ShapeProfileType.Box)
-                    return AutoDimPartType.ShapeBox;
-
-                return AutoDimPartType.ShapeUnknown;
+                return DetectAutoDimPartType(part);
             }
             catch
             {
                 return AutoDimPartType.Unknown;
             }
+        }
+
+        private AutoDimPartType DetectAutoDimPartType(Tekla.Structures.Model.Part part)
+        {
+            if (part == null)
+                return AutoDimPartType.Unknown;
+
+            if (IsPlatePart(part))
+                return AutoDimPartType.Plate;
+
+            ShapeProfileType shapeType = DetectShapeProfile(part);
+
+            if (shapeType == ShapeProfileType.IH)
+                return AutoDimPartType.ShapeIH;
+
+            if (shapeType == ShapeProfileType.C)
+                return AutoDimPartType.ShapeC;
+
+            if (shapeType == ShapeProfileType.L)
+                return AutoDimPartType.ShapeL;
+
+            if (shapeType == ShapeProfileType.Box)
+                return AutoDimPartType.ShapeBox;
+
+            return AutoDimPartType.ShapeUnknown;
+        }
+
+        private static bool IsDataCenterSupportedPartType(AutoDimPartType partType)
+        {
+            return partType == AutoDimPartType.ShapeIH
+                || partType == AutoDimPartType.ShapeC
+                || partType == AutoDimPartType.ShapeBox
+                || partType == AutoDimPartType.ShapeUnknown;
         }
 
         private Tekla.Structures.Model.Part GetActiveDrawingMainModelPart()
@@ -7733,8 +9043,10 @@ namespace TTSK_AutoDim_Plates
                 if (!model.GetConnectionStatus())
                     return null;
 
-                return Tekla.Technology.Akit.UserScript.PHU_MainPartResolver
-                    .Resolve(model, drawing);
+                return Tekla.Technology.Akit.UserScript.PHU_MainPartResolver.Resolve(
+                    model,
+                    drawing
+                );
             }
             catch
             {
@@ -7744,32 +9056,31 @@ namespace TTSK_AutoDim_Plates
 
         private Tekla.Structures.Model.Part TryGetAssemblyDrawingMainPart(
             Model model,
-            AssemblyDrawing assemblyDrawing)
+            AssemblyDrawing assemblyDrawing
+        )
         {
             try
             {
                 if (model == null || assemblyDrawing == null)
                     return null;
 
-                Tekla.Structures.Identifier assemblyIdentifier =
-                    GetDrawingIdentifierByReflection(
-                        assemblyDrawing,
-                        "AssemblyIdentifier");
+                Tekla.Structures.Identifier assemblyIdentifier = GetDrawingIdentifierByReflection(
+                    assemblyDrawing,
+                    "AssemblyIdentifier"
+                );
 
                 if (assemblyIdentifier == null)
-                    assemblyIdentifier =
-                        GetDrawingIdentifierByReflection(
-                            assemblyDrawing,
-                            "ModelIdentifier");
+                    assemblyIdentifier = GetDrawingIdentifierByReflection(
+                        assemblyDrawing,
+                        "ModelIdentifier"
+                    );
 
                 if (assemblyIdentifier == null)
                     return null;
 
-                Tekla.Structures.Model.ModelObject mo =
-                    model.SelectModelObject(assemblyIdentifier);
+                Tekla.Structures.Model.ModelObject mo = model.SelectModelObject(assemblyIdentifier);
 
-                Tekla.Structures.Model.Part directPart =
-                    mo as Tekla.Structures.Model.Part;
+                Tekla.Structures.Model.Part directPart = mo as Tekla.Structures.Model.Part;
 
                 if (directPart != null)
                     return directPart;
@@ -7789,28 +9100,27 @@ namespace TTSK_AutoDim_Plates
                         return mainPart;
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return null;
         }
 
         private static Tekla.Structures.Identifier GetDrawingIdentifierByReflection(
             object drawingObject,
-            string propertyName)
+            string propertyName
+        )
         {
             try
             {
                 if (drawingObject == null || string.IsNullOrEmpty(propertyName))
                     return null;
 
-                PropertyInfo prop =
-                    drawingObject.GetType().GetProperty(
+                PropertyInfo prop = drawingObject
+                    .GetType()
+                    .GetProperty(
                         propertyName,
-                        BindingFlags.Public |
-                        BindingFlags.NonPublic |
-                        BindingFlags.Instance);
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    );
 
                 if (prop == null || !prop.CanRead)
                     return null;
@@ -7827,7 +9137,8 @@ namespace TTSK_AutoDim_Plates
 
         private Tekla.Structures.Model.Part FindLargestModelPartVisibleInDrawing(
             Model model,
-            Drawing drawing)
+            Drawing drawing
+        )
         {
             try
             {
@@ -7851,8 +9162,9 @@ namespace TTSK_AutoDim_Plates
                     if (view == null)
                         continue;
 
-                    DrawingObjectEnumerator parts =
-                        view.GetAllObjects(typeof(Tekla.Structures.Drawing.Part));
+                    DrawingObjectEnumerator parts = view.GetAllObjects(
+                        typeof(Tekla.Structures.Drawing.Part)
+                    );
 
                     while (parts.MoveNext())
                     {
@@ -7862,11 +9174,11 @@ namespace TTSK_AutoDim_Plates
                         if (drawingPart == null || drawingPart.ModelIdentifier == null)
                             continue;
 
-                        Tekla.Structures.Model.ModelObject mo =
-                            model.SelectModelObject(drawingPart.ModelIdentifier);
+                        Tekla.Structures.Model.ModelObject mo = model.SelectModelObject(
+                            drawingPart.ModelIdentifier
+                        );
 
-                        Tekla.Structures.Model.Part modelPart =
-                            mo as Tekla.Structures.Model.Part;
+                        Tekla.Structures.Model.Part modelPart = mo as Tekla.Structures.Model.Part;
 
                         if (modelPart == null)
                             continue;
@@ -7908,9 +9220,7 @@ namespace TTSK_AutoDim_Plates
                 if (best != null)
                     return best.Part;
             }
-            catch
-            {
-            }
+            catch { }
 
             return null;
         }
@@ -7961,20 +9271,24 @@ namespace TTSK_AutoDim_Plates
                 string profileType = GetReportPropertyString(part, "PROFILE_TYPE");
                 string normalizedType = NormalizeProfileText(profileType);
 
-                if (normalizedType.Contains("PLATE") ||
-                    normalizedType.Contains("CONTOURPLATE") ||
-                    normalizedType == "B" ||
-                    normalizedType == "PL")
+                if (
+                    normalizedType.Contains("PLATE")
+                    || normalizedType.Contains("CONTOURPLATE")
+                    || normalizedType == "B"
+                    || normalizedType == "PL"
+                )
                 {
                     return true;
                 }
 
                 string profile = NormalizeProfileText(GetShapeProfileText(part));
 
-                if (profile.StartsWith("PL") ||
-                    profile.StartsWith("PLT") ||
-                    profile.StartsWith("FL") ||
-                    profile.StartsWith("FB"))
+                if (
+                    profile.StartsWith("PL")
+                    || profile.StartsWith("PLT")
+                    || profile.StartsWith("FL")
+                    || profile.StartsWith("FB")
+                )
                 {
                     return true;
                 }
@@ -7987,7 +9301,10 @@ namespace TTSK_AutoDim_Plates
             }
         }
 
-        private string GetReportPropertyString(Tekla.Structures.Model.Part part, string propertyName)
+        private string GetReportPropertyString(
+            Tekla.Structures.Model.Part part,
+            string propertyName
+        )
         {
             try
             {
@@ -8025,38 +9342,43 @@ namespace TTSK_AutoDim_Plates
 
                 // Chỉ cần chuỗi profile có ký tự □ thì nhận diện là thép hộp,
                 // không phụ thuộc chiều rộng, chiều cao hoặc chiều dày profile.
-                if (p.Contains("□") ||
-                    p.StartsWith("RHS") ||
-                    p.StartsWith("SHS") ||
-                    p.StartsWith("BOX"))
+                if (
+                    p.Contains("□")
+                    || p.StartsWith("RHS")
+                    || p.StartsWith("SHS")
+                    || p.StartsWith("BOX")
+                )
                 {
                     return ShapeProfileType.Box;
                 }
 
                 // I/H: để trước H/I thông thường và cả các profile built-up bắt đầu bằng BH.
-                if (p.StartsWith("BH") ||
-                    p.StartsWith("RH") ||
-                    p.StartsWith("HM") ||
-                    p.StartsWith("HN") ||
-                    p.StartsWith("HW") ||
-                    p.StartsWith("H") ||
-                    p.StartsWith("I"))
+                if (
+                    p.StartsWith("BH")
+                    || p.StartsWith("RH")
+                    || p.StartsWith("HM")
+                    || p.StartsWith("HN")
+                    || p.StartsWith("HW")
+                    || p.StartsWith("H")
+                    || p.StartsWith("I")
+                )
                 {
                     return ShapeProfileType.IH;
                 }
 
                 // C / Channel.
-                if (p.StartsWith("[") ||
-                    p.StartsWith("CH") ||
-                    p.StartsWith("CHANNEL") ||
-                    p.StartsWith("C"))
+                if (
+                    p.StartsWith("[")
+                    || p.StartsWith("CH")
+                    || p.StartsWith("CHANNEL")
+                    || p.StartsWith("C")
+                )
                 {
                     return ShapeProfileType.C;
                 }
 
                 // L / Angle.
-                if (p.StartsWith("L") ||
-                    p.StartsWith("ANGLE"))
+                if (p.StartsWith("L") || p.StartsWith("ANGLE"))
                 {
                     return ShapeProfileType.L;
                 }
@@ -8079,9 +9401,7 @@ namespace TTSK_AutoDim_Plates
                 if (!string.IsNullOrEmpty(profile))
                     return profile;
             }
-            catch
-            {
-            }
+            catch { }
 
             try
             {
@@ -8091,9 +9411,7 @@ namespace TTSK_AutoDim_Plates
                 if (profileString != null)
                     return profileString.ToString();
             }
-            catch
-            {
-            }
+            catch { }
 
             return "";
         }
@@ -8114,7 +9432,8 @@ namespace TTSK_AutoDim_Plates
         private bool RunOptionalShapeScriptByClassName(
             string className,
             string notReadyMessage,
-            out string error)
+            out string error
+        )
         {
             error = string.Empty;
 
@@ -8125,7 +9444,9 @@ namespace TTSK_AutoDim_Plates
 
                 if (scriptType == null)
                 {
-                    foreach (System.Reflection.Assembly asm in AppDomain.CurrentDomain.GetAssemblies())
+                    foreach (
+                        System.Reflection.Assembly asm in AppDomain.CurrentDomain.GetAssemblies()
+                    )
                     {
                         scriptType = asm.GetType(fullName);
                         if (scriptType != null)
@@ -8142,7 +9463,8 @@ namespace TTSK_AutoDim_Plates
 
                 MethodInfo runMethod = scriptType.GetMethod(
                     "Run",
-                    BindingFlags.Public | BindingFlags.Static);
+                    BindingFlags.Public | BindingFlags.Static
+                );
 
                 if (runMethod == null)
                 {
@@ -8161,18 +9483,12 @@ namespace TTSK_AutoDim_Plates
             }
             catch (Exception ex)
             {
-                Exception real = ex.InnerException != null
-                    ? ex.InnerException
-                    : ex;
-                error = "Không chạy được thuật toán Shape tương ứng: " +
-                    real.Message;
-                SetMainStatus(
-                    error,
-                    MainStatusKind.Error);
+                Exception real = ex.InnerException != null ? ex.InnerException : ex;
+                error = "Không chạy được thuật toán Shape tương ứng: " + real.Message;
+                SetMainStatus(error, MainStatusKind.Error);
                 return false;
             }
         }
-
 
         private void RunActiveDrawing(double? manualScale)
         {
@@ -8182,7 +9498,9 @@ namespace TTSK_AutoDim_Plates
                 Drawing activeDrawing = dh.GetActiveDrawing();
 
                 if (activeDrawing == null)
-                    throw new Exception("Không có bản vẽ active. Hãy mở drawing trong Tekla Drawing Editor rồi chạy lại.");
+                    throw new Exception(
+                        "Không có bản vẽ active. Hãy mở drawing trong Tekla Drawing Editor rồi chạy lại."
+                    );
 
                 string activeMark = SafeDrawingMark(activeDrawing);
                 string activeChanges = SafeDrawingChanges(activeDrawing);
@@ -8203,7 +9521,9 @@ namespace TTSK_AutoDim_Plates
 
                     bool savedDeleted = SaveActiveDrawingSafe(dh);
                     if (!savedDeleted)
-                        throw new Exception("Không save được drawing sau khi tạo dấu X All Parts Deleted.");
+                        throw new Exception(
+                            "Không save được drawing sau khi tạo dấu X All Parts Deleted."
+                        );
 
                     lblStatus.Text = "✓  All Parts Deleted marked";
                     lblStatus.ForeColor = Color.FromArgb(22, 163, 74);
@@ -8238,18 +9558,17 @@ namespace TTSK_AutoDim_Plates
             }
             catch (Exception ex)
             {
-                SetMainStatus(
-                    "Active drawing lỗi: " + ex.Message,
-                    MainStatusKind.Error);
-
+                SetMainStatus("Active drawing lỗi: " + ex.Message, MainStatusKind.Error);
             }
         }
+
         private static bool IsAllPartsDeletedChanges(string changes)
         {
             return string.Equals(
                 (changes ?? string.Empty).Trim(),
                 "All Parts Deleted",
-                StringComparison.OrdinalIgnoreCase);
+                StringComparison.OrdinalIgnoreCase
+            );
         }
 
         private static bool TryRunAllPartsDeletedMarker(string mark, out string error)
@@ -8276,7 +9595,14 @@ namespace TTSK_AutoDim_Plates
                         Type[] types = asm.GetTypes();
                         foreach (Type t in types)
                         {
-                            if (t != null && string.Equals(t.Name, "PHU_AllPartsDeletedMarker", StringComparison.Ordinal))
+                            if (
+                                t != null
+                                && string.Equals(
+                                    t.Name,
+                                    "PHU_AllPartsDeletedMarker",
+                                    StringComparison.Ordinal
+                                )
+                            )
                             {
                                 markerType = t;
                                 break;
@@ -8286,9 +9612,7 @@ namespace TTSK_AutoDim_Plates
                         if (markerType != null)
                             break;
                     }
-                    catch
-                    {
-                    }
+                    catch { }
                 }
 
                 if (markerType == null)
@@ -8302,7 +9626,8 @@ namespace TTSK_AutoDim_Plates
                     BindingFlags.Public | BindingFlags.Static,
                     null,
                     new Type[] { typeof(string) },
-                    null);
+                    null
+                );
 
                 if (runMethod == null)
                 {
@@ -8324,47 +9649,62 @@ namespace TTSK_AutoDim_Plates
             }
         }
 
-        private void RunBatchDrawings()
+        private void RunBatchDrawings(double? manualScale)
         {
-            ManualDrawingScaleOverride.Clear();
-
             if (_selectedDrawings.Count == 0)
             {
-                MessageBox.Show("Chưa load drawing. Hãy chọn drawing trong Document Manager rồi bấm Load Selected Drawings.", "TTSK AutoDim");
+                MessageBox.Show(
+                    "Chưa load drawing. Hãy chọn drawing trong Document Manager rồi bấm Load Selected Drawings.",
+                    "TTSK AutoDim"
+                );
                 return;
             }
 
             if (_resumeIndex < 0 || _resumeIndex >= _selectedDrawings.Count)
                 _resumeIndex = 0;
 
+            if (_resumeIndex == 0 || !_batchManualScaleSnapshotCaptured)
+            {
+                _batchManualScaleSnapshot = manualScale;
+                _batchManualScaleSnapshotCaptured = true;
+            }
+
+            double? batchManualScale = _batchManualScaleSnapshot;
+
             if (_resumeIndex == 0 || !_batchAutoSectionEnabledSnapshot.HasValue)
                 _batchAutoSectionEnabledSnapshot = _autoSectionEnabled;
 
-            if (_resumeIndex == 0 ||
-                !_batchGridDimEnabledSnapshot.HasValue ||
-                !_batchGridDimBeamSnapshot.HasValue ||
-                !_batchGridDimAxisCountSnapshot.HasValue)
+            if (_resumeIndex == 0 || !_batchDataCenterModeSnapshot.HasValue)
+                _batchDataCenterModeSnapshot = _dataCenterModeEnabled;
+
+            if (
+                _resumeIndex == 0
+                || !_batchGridDimEnabledSnapshot.HasValue
+                || !_batchGridDimBeamSnapshot.HasValue
+                || !_batchGridDimAxisCountSnapshot.HasValue
+            )
             {
                 _batchGridDimEnabledSnapshot = fitKeepGridAxes;
                 _batchGridDimBeamSnapshot = !fitArrangeColumnMode;
-                _batchGridDimAxisCountSnapshot = Math.Max(
-                    1,
-                    Math.Min(3, fitGridAxisCount));
+                _batchGridDimAxisCountSnapshot = Math.Max(1, Math.Min(3, fitGridAxisCount));
             }
 
             _isBatchRunning = true;
             _stopRequested = false;
             ApplyAutoSectionSwitchUi();
+            ApplyDataCenterModeUi();
 
             btnRun.Enabled = true;
             btnRun.Text = "■  STOP";
             btnLoad.Enabled = false;
             btnCheckScale.Enabled = false;
+            SetManualScaleInputEnabled(false);
 
             DrawingHandler dh = new DrawingHandler();
             int ok = 0;
             int fail = 0;
             int skippedRevision = 0;
+            int skippedDataCenterPreflight = 0;
             bool paused = false;
 
             try
@@ -8390,7 +9730,13 @@ namespace TTSK_AutoDim_Plates
                     {
                         try
                         {
-                            lblStatus.Text = "▶  Mark deleted drawing " + (i + 1) + "/" + _selectedDrawings.Count + " : " + name;
+                            lblStatus.Text =
+                                "▶  Mark deleted drawing "
+                                + (i + 1)
+                                + "/"
+                                + _selectedDrawings.Count
+                                + " : "
+                                + name;
                             lblStatus.ForeColor = Blue;
 
                             SetGridStatusAndResult(
@@ -8398,7 +9744,8 @@ namespace TTSK_AutoDim_Plates
                                 "DELETE",
                                 Color.FromArgb(201, 122, 64),
                                 "RUNNING",
-                                Color.FromArgb(59, 130, 246));
+                                Color.FromArgb(59, 130, 246)
+                            );
 
                             Application.DoEvents();
 
@@ -8413,7 +9760,9 @@ namespace TTSK_AutoDim_Plates
 
                             bool savedDeleted = SaveActiveDrawingSafe(dh);
                             if (!savedDeleted)
-                                throw new Exception("Không save được drawing sau khi tạo dấu X All Parts Deleted.");
+                                throw new Exception(
+                                    "Không save được drawing sau khi tạo dấu X All Parts Deleted."
+                                );
 
                             Thread.Sleep(100);
                             CloseActiveDrawingSafe(dh);
@@ -8425,7 +9774,8 @@ namespace TTSK_AutoDim_Plates
                                 "DELETE",
                                 Color.FromArgb(201, 122, 64),
                                 "MARKED",
-                                Color.FromArgb(22, 163, 74));
+                                Color.FromArgb(22, 163, 74)
+                            );
 
                             _resumeIndex = i + 1;
 
@@ -8445,9 +9795,14 @@ namespace TTSK_AutoDim_Plates
                                 "DELETE",
                                 Color.FromArgb(201, 122, 64),
                                 "ERROR",
-                                Color.FromArgb(220, 38, 38));
+                                Color.FromArgb(220, 38, 38)
+                            );
 
-                            try { CloseActiveDrawingSafe(dh); } catch { }
+                            try
+                            {
+                                CloseActiveDrawingSafe(dh);
+                            }
+                            catch { }
 
                             _resumeIndex = i + 1;
 
@@ -8464,14 +9819,20 @@ namespace TTSK_AutoDim_Plates
                     if (!string.IsNullOrWhiteSpace(rev))
                     {
                         skippedRevision++;
-                        SetGridResult(i, "SKIP", Color.FromArgb(201, 122, 64));
+                        SetGridResult(
+                            i,
+                            _batchDataCenterModeSnapshot == true ? "DC SKIP" : "SKIP",
+                            Color.FromArgb(201, 122, 64)
+                        );
                         _resumeIndex = i + 1;
                         continue;
                     }
 
+                    DataCenterExecutionResult dataCenterExecution = null;
                     try
                     {
-                        lblStatus.Text = "▶  Running " + (i + 1) + "/" + _selectedDrawings.Count + " : " + name;
+                        lblStatus.Text =
+                            "▶  Running " + (i + 1) + "/" + _selectedDrawings.Count + " : " + name;
                         lblStatus.ForeColor = Blue;
                         SetGridResult(i, "RUNNING", Color.FromArgb(59, 130, 246));
                         Application.DoEvents();
@@ -8479,12 +9840,63 @@ namespace TTSK_AutoDim_Plates
                         SetActiveDrawingSafe(dh, dr);
                         Thread.Sleep(100);
 
-                        AutoDimExecutionResult execution = RunCurrentAutoDimScript();
+                        AutoDimExecutionResult execution;
+                        using (ManualDrawingScaleOverride.BeginRun(batchManualScale))
+                        {
+                            if (_batchDataCenterModeSnapshot == true)
+                            {
+                                dataCenterExecution = RunDataCenterCurrentDrawing();
+                                execution =
+                                    dataCenterExecution == null
+                                        ? null
+                                        : dataCenterExecution.DimResult;
+
+                                if (dataCenterExecution == null || !dataCenterExecution.Success)
+                                {
+                                    if (
+                                        dataCenterExecution != null
+                                        && dataCenterExecution.ResultCode == "DC SKIP"
+                                    )
+                                        skippedDataCenterPreflight++;
+                                    else
+                                        fail++;
+                                    SetGridResult(
+                                        i,
+                                        dataCenterExecution == null
+                                            ? "DC DIM ERR"
+                                            : dataCenterExecution.ResultCode,
+                                        dataCenterExecution != null
+                                        && dataCenterExecution.ResultCode == "DC SKIP"
+                                            ? Color.FromArgb(201, 122, 64)
+                                            : Color.FromArgb(220, 38, 38)
+                                    );
+                                    CloseActiveDrawingWithoutSaveSafe(dh);
+
+                                    _resumeIndex = i + 1;
+
+                                    if (_stopRequested)
+                                    {
+                                        paused = true;
+                                        break;
+                                    }
+
+                                    continue;
+                                }
+                            }
+                            else
+                            {
+                                execution = RunCurrentAutoDimScript();
+                            }
+                        }
 
                         if (execution == null || !execution.CanSaveDrawing)
                         {
                             fail++;
-                            SetGridResult(i, "ERROR", Color.FromArgb(220, 38, 38));
+                            SetGridResult(
+                                i,
+                                _batchDataCenterModeSnapshot == true ? "DC DIM ERR" : "ERROR",
+                                Color.FromArgb(220, 38, 38)
+                            );
                             CloseActiveDrawingWithoutSaveSafe(dh);
 
                             _resumeIndex = i + 1;
@@ -8519,8 +9931,19 @@ namespace TTSK_AutoDim_Plates
                         if (!saved)
                         {
                             fail++;
-                            SetGridResult(i, "ERROR", Color.FromArgb(220, 38, 38));
-                            try { CloseActiveDrawingSafe(dh); } catch { }
+                            SetGridResult(
+                                i,
+                                _batchDataCenterModeSnapshot == true ? "DC DIM ERR" : "ERROR",
+                                Color.FromArgb(220, 38, 38)
+                            );
+                            try
+                            {
+                                if (_batchDataCenterModeSnapshot == true)
+                                    CloseActiveDrawingWithoutSaveSafe(dh);
+                                else
+                                    CloseActiveDrawingSafe(dh);
+                            }
+                            catch { }
 
                             _resumeIndex = i + 1;
 
@@ -8538,30 +9961,34 @@ namespace TTSK_AutoDim_Plates
                         CloseActiveDrawingSafe(dh);
                         Thread.Sleep(100);
 
-                        if (IsBatchAutoDimFailure(execution))
+                        if (_batchDataCenterModeSnapshot == true)
+                            ok++;
+                        else if (IsBatchAutoDimFailure(execution))
                             fail++;
                         else
                             ok++;
 
-                        Color batchResultColor;
-                        string batchResultText = GetBatchAutoDimResultText(
-                            execution,
-                            out batchResultColor);
-                        SetGridResult(i, batchResultText, batchResultColor);
-
-                        if (execution == null && holeResult == 1)
+                        if (_batchDataCenterModeSnapshot == true)
                         {
-                            SetGridResult(
-                                i,
-                                "⚠ TOP/BOTTOM KHÁC",
-                                Color.DarkOrange);
+                            SetGridResult(i, "DC OK", Color.FromArgb(22, 163, 74));
                         }
-                        else if (execution == null)
+                        else
                         {
-                            SetGridResult(
-                                i,
-                                "OK",
-                                Color.FromArgb(22, 163, 74));
+                            Color batchResultColor;
+                            string batchResultText = GetBatchAutoDimResultText(
+                                execution,
+                                out batchResultColor
+                            );
+                            SetGridResult(i, batchResultText, batchResultColor);
+
+                            if (execution == null && holeResult == 1)
+                            {
+                                SetGridResult(i, "⚠ TOP/BOTTOM KHÁC", Color.DarkOrange);
+                            }
+                            else if (execution == null)
+                            {
+                                SetGridResult(i, "OK", Color.FromArgb(22, 163, 74));
+                            }
                         }
 
                         _resumeIndex = i + 1;
@@ -8575,8 +10002,23 @@ namespace TTSK_AutoDim_Plates
                     catch (Exception)
                     {
                         fail++;
-                        SetGridResult(i, "ERROR", Color.FromArgb(220, 38, 38));
-                        try { CloseActiveDrawingSafe(dh); } catch { }
+                        SetGridResult(
+                            i,
+                            _batchDataCenterModeSnapshot == true
+                                ? dataCenterExecution == null
+                                    ? "DC DIM ERR"
+                                    : dataCenterExecution.ResultCode
+                                : "ERROR",
+                            Color.FromArgb(220, 38, 38)
+                        );
+                        try
+                        {
+                            if (_batchDataCenterModeSnapshot == true)
+                                CloseActiveDrawingWithoutSaveSafe(dh);
+                            else
+                                CloseActiveDrawingSafe(dh);
+                        }
+                        catch { }
 
                         _resumeIndex = i + 1;
 
@@ -8598,6 +10040,7 @@ namespace TTSK_AutoDim_Plates
                 btnRun.Text = "▶  CREATE DRAWING";
                 btnCheckScale.Enabled = true;
                 UpdateModeUi();
+                ApplyDataCenterModeUi();
 
                 dgvDrawings.ClearSelection();
             }
@@ -8605,23 +10048,41 @@ namespace TTSK_AutoDim_Plates
             if (paused)
             {
                 lblStatus.Text =
-                    "■  Paused at " + _resumeIndex + "/" + _selectedDrawings.Count +
-                    " | Bấm CREATE DRAWING để chạy tiếp";
+                    "■  Paused at "
+                    + _resumeIndex
+                    + "/"
+                    + _selectedDrawings.Count
+                    + " | Bấm CREATE DRAWING để chạy tiếp";
                 lblStatus.ForeColor = Color.DarkOrange;
 
                 return;
             }
+
+            bool completedDataCenterBatch = _batchDataCenterModeSnapshot == true;
 
             _resumeIndex = 0;
             _batchAutoSectionEnabledSnapshot = null;
             _batchGridDimEnabledSnapshot = null;
             _batchGridDimBeamSnapshot = null;
             _batchGridDimAxisCountSnapshot = null;
+            _batchManualScaleSnapshot = null;
+            _batchManualScaleSnapshotCaptured = false;
+            _batchDataCenterModeSnapshot = null;
 
-            lblStatus.Text = "✓  Batch done: " + ok + " OK, Revision skipped: " + skippedRevision + ", Error: " + fail;
+            lblStatus.Text =
+                "✓  Batch done: "
+                + ok
+                + " OK, Revision skipped: "
+                + skippedRevision
+                + (
+                    completedDataCenterBatch
+                        ? ", DC preflight skipped: " + skippedDataCenterPreflight
+                        : ""
+                )
+                + ", Error: "
+                + fail;
             lblStatus.ForeColor = fail == 0 ? Color.FromArgb(22, 163, 74) : Color.DarkOrange;
         }
-
 
         private static string SafeDrawingMark(Drawing dr)
         {
@@ -8635,7 +10096,9 @@ namespace TTSK_AutoDim_Plates
                 SinglePartDrawing sp = dr as SinglePartDrawing;
                 if (sp != null)
                 {
-                    Tekla.Structures.Model.ModelObject obj = model.SelectModelObject(sp.PartIdentifier);
+                    Tekla.Structures.Model.ModelObject obj = model.SelectModelObject(
+                        sp.PartIdentifier
+                    );
                     string mark = GetModelObjectReportString(obj, "PART_POS");
                     if (!string.IsNullOrWhiteSpace(mark))
                         return CleanDrawingMarkText(mark);
@@ -8648,22 +10111,29 @@ namespace TTSK_AutoDim_Plates
                 AssemblyDrawing ad = dr as AssemblyDrawing;
                 if (ad != null)
                 {
-                    Tekla.Structures.Identifier assemblyId = GetDrawingIdentifierByReflection(ad, "AssemblyIdentifier");
+                    Tekla.Structures.Identifier assemblyId = GetDrawingIdentifierByReflection(
+                        ad,
+                        "AssemblyIdentifier"
+                    );
                     if (assemblyId == null)
                         assemblyId = GetDrawingIdentifierByReflection(ad, "ModelIdentifier");
 
                     if (assemblyId != null)
                     {
-                        Tekla.Structures.Model.ModelObject obj = model.SelectModelObject(assemblyId);
+                        Tekla.Structures.Model.ModelObject obj = model.SelectModelObject(
+                            assemblyId
+                        );
 
                         string mark = GetModelObjectReportString(obj, "ASSEMBLY_POS");
                         if (!string.IsNullOrWhiteSpace(mark))
                             return CleanDrawingMarkText(mark);
 
-                        Tekla.Structures.Model.Assembly ass = obj as Tekla.Structures.Model.Assembly;
+                        Tekla.Structures.Model.Assembly ass =
+                            obj as Tekla.Structures.Model.Assembly;
                         if (ass != null)
                         {
-                            Tekla.Structures.Model.ModelObject mainObj = ass.GetMainPart() as Tekla.Structures.Model.ModelObject;
+                            Tekla.Structures.Model.ModelObject mainObj =
+                                ass.GetMainPart() as Tekla.Structures.Model.ModelObject;
 
                             mark = GetModelObjectReportString(mainObj, "ASSEMBLY_POS");
                             if (!string.IsNullOrWhiteSpace(mark))
@@ -8703,9 +10173,7 @@ namespace TTSK_AutoDim_Plates
                         return CleanDrawingMarkText(text);
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return CleanDrawingMarkText(SafeDrawingName(dr));
         }
@@ -8717,9 +10185,7 @@ namespace TTSK_AutoDim_Plates
 
             mark = mark.Trim();
 
-            while (mark.Length >= 2 &&
-                   mark.StartsWith("[") &&
-                   mark.EndsWith("]"))
+            while (mark.Length >= 2 && mark.StartsWith("[") && mark.EndsWith("]"))
             {
                 mark = mark.Substring(1, mark.Length - 2).Trim();
             }
@@ -8727,8 +10193,10 @@ namespace TTSK_AutoDim_Plates
             return mark;
         }
 
-
-        private static string GetModelObjectReportString(Tekla.Structures.Model.ModelObject obj, string reportName)
+        private static string GetModelObjectReportString(
+            Tekla.Structures.Model.ModelObject obj,
+            string reportName
+        )
         {
             try
             {
@@ -8742,9 +10210,7 @@ namespace TTSK_AutoDim_Plates
                         return value.Trim();
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return "";
         }
@@ -8758,11 +10224,11 @@ namespace TTSK_AutoDim_Plates
 
                 if (dr is SinglePartDrawing sp)
                 {
-                    Tekla.Structures.Model.Model model =
-                        new Tekla.Structures.Model.Model();
+                    Tekla.Structures.Model.Model model = new Tekla.Structures.Model.Model();
 
-                    Tekla.Structures.Model.ModelObject obj =
-                        model.SelectModelObject(sp.PartIdentifier);
+                    Tekla.Structures.Model.ModelObject obj = model.SelectModelObject(
+                        sp.PartIdentifier
+                    );
 
                     if (obj != null)
                     {
@@ -8780,39 +10246,46 @@ namespace TTSK_AutoDim_Plates
                 if (!string.IsNullOrEmpty(name))
                     return name;
             }
-            catch
-            {
-            }
+            catch { }
 
             return dr.GetType().Name;
         }
 
         private static object InvokeNoArg(object obj, string methodName)
         {
-            if (obj == null) return null;
-            MethodInfo m = obj.GetType().GetMethod(methodName, BindingFlags.Public | BindingFlags.Instance);
-            if (m == null) return null;
+            if (obj == null)
+                return null;
+            MethodInfo m = obj.GetType()
+                .GetMethod(methodName, BindingFlags.Public | BindingFlags.Instance);
+            if (m == null)
+                return null;
             return m.Invoke(obj, null);
         }
 
         private static bool MoveNext(object enumerator)
         {
-            MethodInfo m = enumerator.GetType().GetMethod("MoveNext", BindingFlags.Public | BindingFlags.Instance);
+            MethodInfo m = enumerator
+                .GetType()
+                .GetMethod("MoveNext", BindingFlags.Public | BindingFlags.Instance);
             return m != null && (bool)m.Invoke(enumerator, null);
         }
 
         private static object GetCurrent(object enumerator)
         {
-            PropertyInfo p = enumerator.GetType().GetProperty("Current", BindingFlags.Public | BindingFlags.Instance);
+            PropertyInfo p = enumerator
+                .GetType()
+                .GetProperty("Current", BindingFlags.Public | BindingFlags.Instance);
             return p == null ? null : p.GetValue(enumerator, null);
         }
 
         private static void SetActiveDrawingSafe(DrawingHandler dh, Drawing dr)
         {
-            MethodInfo[] methods = dh.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance);
+            MethodInfo[] methods = dh.GetType()
+                .GetMethods(BindingFlags.Public | BindingFlags.Instance);
             foreach (MethodInfo m in methods)
             {
-                if (m.Name != "SetActiveDrawing") continue;
+                if (m.Name != "SetActiveDrawing")
+                    continue;
                 ParameterInfo[] ps = m.GetParameters();
                 if (ps.Length >= 1 && ps[0].ParameterType.IsAssignableFrom(typeof(Drawing)))
                 {
@@ -8820,8 +10293,10 @@ namespace TTSK_AutoDim_Plates
                     args[0] = dr;
                     for (int i = 1; i < ps.Length; i++)
                     {
-                        if (ps[i].ParameterType == typeof(bool)) args[i] = true;
-                        else args[i] = Type.Missing;
+                        if (ps[i].ParameterType == typeof(bool))
+                            args[i] = true;
+                        else
+                            args[i] = Type.Missing;
                     }
                     m.Invoke(dh, args);
                     return;
@@ -8837,10 +10312,8 @@ namespace TTSK_AutoDim_Plates
                 if (dh == null)
                     return false;
 
-                MethodInfo m = dh.GetType().GetMethod(
-                    "SaveActiveDrawing",
-                    BindingFlags.Public | BindingFlags.Instance
-                );
+                MethodInfo m = dh.GetType()
+                    .GetMethod("SaveActiveDrawing", BindingFlags.Public | BindingFlags.Instance);
 
                 if (m == null)
                     return false;
@@ -8893,8 +10366,10 @@ namespace TTSK_AutoDim_Plates
                 // Mục tiêu là bắt đúng cột Changes trong Document Manager nếu Tekla trả bằng enum/text.
                 try
                 {
-                    PropertyInfo[] props = dr.GetType().GetProperties(
-                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                    PropertyInfo[] props = dr.GetType()
+                        .GetProperties(
+                            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                        );
 
                     foreach (PropertyInfo prop in props)
                     {
@@ -8907,9 +10382,9 @@ namespace TTSK_AutoDim_Plates
                         string name = prop.Name ?? "";
 
                         bool looksLikeChanges =
-                            name.IndexOf("Change", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                            name.IndexOf("Status", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                            name.IndexOf("UpToDate", StringComparison.OrdinalIgnoreCase) >= 0;
+                            name.IndexOf("Change", StringComparison.OrdinalIgnoreCase) >= 0
+                            || name.IndexOf("Status", StringComparison.OrdinalIgnoreCase) >= 0
+                            || name.IndexOf("UpToDate", StringComparison.OrdinalIgnoreCase) >= 0;
 
                         if (!looksLikeChanges)
                             continue;
@@ -8922,33 +10397,26 @@ namespace TTSK_AutoDim_Plates
                             if (!string.IsNullOrWhiteSpace(normalized))
                                 return normalized;
                         }
-                        catch
-                        {
-                        }
+                        catch { }
                     }
                 }
-                catch
-                {
-                }
+                catch { }
 
                 // 3) Fallback cuối: thử report property qua Identifier.
-                PropertyInfo pi = dr.GetType().GetProperty(
-                    "Identifier",
-                    BindingFlags.Instance | BindingFlags.NonPublic);
+                PropertyInfo pi = dr.GetType()
+                    .GetProperty("Identifier", BindingFlags.Instance | BindingFlags.NonPublic);
 
                 if (pi == null)
                     return "";
 
                 object rawId = pi.GetValue(dr, null);
 
-                Tekla.Structures.Identifier identifier =
-                    rawId as Tekla.Structures.Identifier;
+                Tekla.Structures.Identifier identifier = rawId as Tekla.Structures.Identifier;
 
                 if (identifier == null)
                     return "";
 
-                Tekla.Structures.Model.Beam dummy =
-                    new Tekla.Structures.Model.Beam();
+                Tekla.Structures.Model.Beam dummy = new Tekla.Structures.Model.Beam();
 
                 dummy.Identifier = identifier;
 
@@ -8986,9 +10454,7 @@ namespace TTSK_AutoDim_Plates
                                 return normalized;
                         }
                     }
-                    catch
-                    {
-                    }
+                    catch { }
                 }
 
                 int intValue = 0;
@@ -9017,14 +10483,10 @@ namespace TTSK_AutoDim_Plates
                                 return normalized;
                         }
                     }
-                    catch
-                    {
-                    }
+                    catch { }
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return "";
         }
@@ -9039,10 +10501,12 @@ namespace TTSK_AutoDim_Plates
                 if (rawValue is bool)
                     return ((bool)rawValue) ? "Changed" : "";
 
-                if (rawValue is int ||
-                    rawValue is double ||
-                    rawValue is float ||
-                    rawValue is decimal)
+                if (
+                    rawValue is int
+                    || rawValue is double
+                    || rawValue is float
+                    || rawValue is decimal
+                )
                 {
                     double number = Convert.ToDouble(rawValue);
 
@@ -9052,9 +10516,7 @@ namespace TTSK_AutoDim_Plates
                     return rawValue.ToString();
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             string text = rawValue.ToString();
 
@@ -9063,18 +10525,22 @@ namespace TTSK_AutoDim_Plates
 
             text = text.Trim();
 
-            if (text == "0" ||
-                text == "-" ||
-                string.Equals(text, "False", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(text, "None", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(text, "No", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(text, "Unknown", StringComparison.OrdinalIgnoreCase))
+            if (
+                text == "0"
+                || text == "-"
+                || string.Equals(text, "False", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(text, "None", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(text, "No", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(text, "Unknown", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 return "";
             }
 
-            if (string.Equals(text, "True", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(text, "Yes", StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(text, "True", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(text, "Yes", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 return "Changed";
             }
@@ -9101,10 +10567,7 @@ namespace TTSK_AutoDim_Plates
             text = text.Replace("notUpToDate", "Not up to date");
 
             // Tách CamelCase để dễ đọc hơn: PartsModified -> Parts Modified
-            text = System.Text.RegularExpressions.Regex.Replace(
-                text,
-                "(?<=[a-z])(?=[A-Z])",
-                " ");
+            text = System.Text.RegularExpressions.Regex.Replace(text, "(?<=[a-z])(?=[A-Z])", " ");
 
             text = text.Replace("_", " ");
             text = System.Text.RegularExpressions.Regex.Replace(text, "\\s+", " ").Trim();
@@ -9119,23 +10582,20 @@ namespace TTSK_AutoDim_Plates
                 if (dr == null)
                     return "";
 
-                PropertyInfo pi = dr.GetType().GetProperty(
-                    "Identifier",
-                    BindingFlags.Instance | BindingFlags.NonPublic);
+                PropertyInfo pi = dr.GetType()
+                    .GetProperty("Identifier", BindingFlags.Instance | BindingFlags.NonPublic);
 
                 if (pi == null)
                     return "";
 
                 object rawId = pi.GetValue(dr, null);
 
-                Tekla.Structures.Identifier identifier =
-                    rawId as Tekla.Structures.Identifier;
+                Tekla.Structures.Identifier identifier = rawId as Tekla.Structures.Identifier;
 
                 if (identifier == null)
                     return "";
 
-                Tekla.Structures.Model.Beam dummy =
-                    new Tekla.Structures.Model.Beam();
+                Tekla.Structures.Model.Beam dummy = new Tekla.Structures.Model.Beam();
 
                 dummy.Identifier = identifier;
 
@@ -9143,10 +10603,10 @@ namespace TTSK_AutoDim_Plates
 
                 string[] intReportNames = new string[]
                 {
-            "REVISION.LAST_NUMBER",
-            "REVISION.NUMBER",
-            "LAST_REVISION_NUMBER",
-            "DRAWING.REVISION.NUMBER"
+                    "REVISION.LAST_NUMBER",
+                    "REVISION.NUMBER",
+                    "LAST_REVISION_NUMBER",
+                    "DRAWING.REVISION.NUMBER"
                 };
 
                 foreach (string reportName in intReportNames)
@@ -9161,21 +10621,19 @@ namespace TTSK_AutoDim_Plates
                                 return revNo.ToString();
                         }
                     }
-                    catch
-                    {
-                    }
+                    catch { }
                 }
 
                 string value = "";
 
                 string[] stringReportNames = new string[]
                 {
-            "REVISION.LAST_NUMBER",
-            "REVISION.NUMBER",
-            "REVISION.LAST",
-            "REVISION.MARK",
-            "REVISION.LAST_MARK",
-            "REVISION"
+                    "REVISION.LAST_NUMBER",
+                    "REVISION.NUMBER",
+                    "REVISION.LAST",
+                    "REVISION.MARK",
+                    "REVISION.LAST_MARK",
+                    "REVISION"
                 };
 
                 foreach (string reportName in stringReportNames)
@@ -9195,30 +10653,30 @@ namespace TTSK_AutoDim_Plates
                             }
                         }
                     }
-                    catch
-                    {
-                    }
+                    catch { }
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return "";
         }
 
         private static void CloseActiveDrawingSafe(DrawingHandler dh)
         {
-            MethodInfo[] methods = dh.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance);
+            MethodInfo[] methods = dh.GetType()
+                .GetMethods(BindingFlags.Public | BindingFlags.Instance);
             foreach (MethodInfo m in methods)
             {
-                if (m.Name != "CloseActiveDrawing") continue;
+                if (m.Name != "CloseActiveDrawing")
+                    continue;
                 ParameterInfo[] ps = m.GetParameters();
                 object[] args = new object[ps.Length];
                 for (int i = 0; i < ps.Length; i++)
                 {
-                    if (ps[i].ParameterType == typeof(bool)) args[i] = true;
-                    else args[i] = Type.Missing;
+                    if (ps[i].ParameterType == typeof(bool))
+                        args[i] = true;
+                    else
+                        args[i] = Type.Missing;
                 }
                 m.Invoke(dh, args);
                 return;
@@ -9230,8 +10688,8 @@ namespace TTSK_AutoDim_Plates
             if (dh == null)
                 return;
 
-            MethodInfo[] methods = dh.GetType().GetMethods(
-                BindingFlags.Public | BindingFlags.Instance);
+            MethodInfo[] methods = dh.GetType()
+                .GetMethods(BindingFlags.Public | BindingFlags.Instance);
 
             foreach (MethodInfo method in methods)
             {
@@ -9239,8 +10697,7 @@ namespace TTSK_AutoDim_Plates
                     continue;
 
                 ParameterInfo[] parameters = method.GetParameters();
-                if (parameters.Length == 1 &&
-                    parameters[0].ParameterType == typeof(bool))
+                if (parameters.Length == 1 && parameters[0].ParameterType == typeof(bool))
                 {
                     method.Invoke(dh, new object[] { false });
                     return;
@@ -9295,9 +10752,7 @@ namespace TTSK_AutoDim_Plates
                     if (RowCount > 0)
                         FirstDisplayedScrollingRowIndex = next;
                 }
-                catch
-                {
-                }
+                catch { }
 
                 Invalidate();
                 base.OnMouseWheel(e);
@@ -9313,17 +10768,10 @@ namespace TTSK_AutoDim_Plates
                     {
                         using (Pen borderPen = new Pen(SoftOuterBorderColor, 1.0f))
                         {
-                            e.Graphics.DrawRectangle(
-                                borderPen,
-                                0,
-                                0,
-                                Width - 1,
-                                Height - 1);
+                            e.Graphics.DrawRectangle(borderPen, 0, 0, Width - 1, Height - 1);
                         }
                     }
-                    catch
-                    {
-                    }
+                    catch { }
                 }
 
                 try
@@ -9336,7 +10784,8 @@ namespace TTSK_AutoDim_Plates
                         Width - scrollWidth - 2,
                         0,
                         scrollWidth + 2,
-                        Height);
+                        Height
+                    );
 
                     Color trackColor = DarkMode
                         ? Color.FromArgb(18, 18, 18)
@@ -9352,7 +10801,10 @@ namespace TTSK_AutoDim_Plates
 
                     int visibleRows = Math.Max(1, DisplayedRowCount(false));
                     int totalRows = Math.Max(1, RowCount);
-                    int thumbHeight = Math.Max(34, (int)(Height * (visibleRows / (double)totalRows)));
+                    int thumbHeight = Math.Max(
+                        34,
+                        (int)(Height * (visibleRows / (double)totalRows))
+                    );
 
                     int first = 0;
                     try
@@ -9372,21 +10824,23 @@ namespace TTSK_AutoDim_Plates
                         Width - scrollWidth + 1,
                         thumbY,
                         7,
-                        thumbHeight);
+                        thumbHeight
+                    );
 
                     e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
 
-                    using (GraphicsPath path = RoundedRectF(
-                        new RectangleF(thumb.X, thumb.Y, thumb.Width, thumb.Height),
-                        5f))
+                    using (
+                        GraphicsPath path = RoundedRectF(
+                            new RectangleF(thumb.X, thumb.Y, thumb.Width, thumb.Height),
+                            5f
+                        )
+                    )
                     using (SolidBrush thumbBrush = new SolidBrush(thumbColor))
                     {
                         e.Graphics.FillPath(thumbBrush, path);
                     }
                 }
-                catch
-                {
-                }
+                catch { }
             }
 
             protected override void OnScroll(ScrollEventArgs e)
@@ -9407,7 +10861,6 @@ namespace TTSK_AutoDim_Plates
                 Invalidate();
             }
         }
-
 
         private class SafeRoundedButton : Control
         {
@@ -9570,12 +11023,10 @@ namespace TTSK_AutoDim_Plates
                     left,
                     top,
                     Math.Max(1f, right - left),
-                    Math.Max(1f, bottom - top));
+                    Math.Max(1f, bottom - top)
+                );
 
-                using (GraphicsPath path = CreateButtonPath(
-                    rect,
-                    !ConnectedTop,
-                    !ConnectedBottom))
+                using (GraphicsPath path = CreateButtonPath(rect, !ConnectedTop, !ConnectedBottom))
                 {
                     using (SolidBrush brush = new SolidBrush(fill))
                         e.Graphics.FillPath(brush, path);
@@ -9591,8 +11042,12 @@ namespace TTSK_AutoDim_Plates
                         Font,
                         System.Drawing.Rectangle.Round(rect),
                         text,
-                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
-                        TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
+                        TextFormatFlags.HorizontalCenter
+                            | TextFormatFlags.VerticalCenter
+                            | TextFormatFlags.EndEllipsis
+                            | TextFormatFlags.NoPadding
+                            | TextFormatFlags.SingleLine
+                    );
                     e.Graphics.Restore(state);
                 }
             }
@@ -9608,7 +11063,8 @@ namespace TTSK_AutoDim_Plates
             private GraphicsPath CreateButtonPath(
                 RectangleF bounds,
                 bool roundTop,
-                bool roundBottom)
+                bool roundBottom
+            )
             {
                 if (roundTop && roundBottom)
                     return RoundedRectF(bounds, BorderRadius);
@@ -9623,7 +11079,8 @@ namespace TTSK_AutoDim_Plates
 
                 float radius = Math.Min(
                     Math.Max(0f, BorderRadius),
-                    Math.Min(bounds.Width, bounds.Height) / 2f);
+                    Math.Min(bounds.Width, bounds.Height) / 2f
+                );
                 float diameter = radius * 2f;
 
                 if (radius <= 0f)
@@ -9638,7 +11095,12 @@ namespace TTSK_AutoDim_Plates
                 {
                     path.AddLine(bounds.Left, bounds.Bottom, bounds.Left, bounds.Top + radius);
                     path.AddArc(bounds.Left, bounds.Top, diameter, diameter, 180f, 90f);
-                    path.AddLine(bounds.Left + radius, bounds.Top, bounds.Right - radius, bounds.Top);
+                    path.AddLine(
+                        bounds.Left + radius,
+                        bounds.Top,
+                        bounds.Right - radius,
+                        bounds.Top
+                    );
                     path.AddArc(bounds.Right - diameter, bounds.Top, diameter, diameter, 270f, 90f);
                     path.AddLine(bounds.Right, bounds.Top + radius, bounds.Right, bounds.Bottom);
                     path.AddLine(bounds.Right, bounds.Bottom, bounds.Left, bounds.Bottom);
@@ -9647,9 +11109,28 @@ namespace TTSK_AutoDim_Plates
                 {
                     path.AddLine(bounds.Left, bounds.Top, bounds.Right, bounds.Top);
                     path.AddLine(bounds.Right, bounds.Top, bounds.Right, bounds.Bottom - radius);
-                    path.AddArc(bounds.Right - diameter, bounds.Bottom - diameter, diameter, diameter, 0f, 90f);
-                    path.AddLine(bounds.Right - radius, bounds.Bottom, bounds.Left + radius, bounds.Bottom);
-                    path.AddArc(bounds.Left, bounds.Bottom - diameter, diameter, diameter, 90f, 90f);
+                    path.AddArc(
+                        bounds.Right - diameter,
+                        bounds.Bottom - diameter,
+                        diameter,
+                        diameter,
+                        0f,
+                        90f
+                    );
+                    path.AddLine(
+                        bounds.Right - radius,
+                        bounds.Bottom,
+                        bounds.Left + radius,
+                        bounds.Bottom
+                    );
+                    path.AddArc(
+                        bounds.Left,
+                        bounds.Bottom - diameter,
+                        diameter,
+                        diameter,
+                        90f,
+                        90f
+                    );
                     path.AddLine(bounds.Left, bounds.Bottom - radius, bounds.Left, bounds.Top);
                 }
 
@@ -9657,7 +11138,6 @@ namespace TTSK_AutoDim_Plates
                 return path;
             }
         }
-
 
         private class PinTopMostButton : Control
         {
@@ -9784,8 +11264,7 @@ namespace TTSK_AutoDim_Plates
 
             protected override void OnKeyUp(KeyEventArgs e)
             {
-                if (_keyboardPressed &&
-                    (e.KeyCode == Keys.Space || e.KeyCode == Keys.Enter))
+                if (_keyboardPressed && (e.KeyCode == Keys.Space || e.KeyCode == Keys.Enter))
                 {
                     _keyboardPressed = false;
                     Invalidate();
@@ -9822,27 +11301,21 @@ namespace TTSK_AutoDim_Plates
                 {
                     fill = _pinned
                         ? Color.FromArgb(201, 122, 64)
-                        : (_hovered
-                            ? Color.FromArgb(47, 38, 32)
-                            : Color.FromArgb(30, 30, 30));
-                    border = _pinned || _hovered
-                        ? Color.FromArgb(224, 156, 96)
-                        : Color.FromArgb(73, 56, 43);
-                    icon = _pinned
-                        ? Color.FromArgb(20, 16, 14)
-                        : Color.FromArgb(203, 213, 225);
+                        : (_hovered ? Color.FromArgb(47, 38, 32) : Color.FromArgb(30, 30, 30));
+                    border =
+                        _pinned || _hovered
+                            ? Color.FromArgb(224, 156, 96)
+                            : Color.FromArgb(73, 56, 43);
+                    icon = _pinned ? Color.FromArgb(20, 16, 14) : Color.FromArgb(203, 213, 225);
                 }
                 else
                 {
-                    fill = _pinned
-                        ? Color.FromArgb(235, 242, 255)
-                        : Color.White;
-                    border = _pinned || _hovered
-                        ? Color.FromArgb(37, 99, 235)
-                        : Color.FromArgb(147, 197, 253);
-                    icon = _pinned
-                        ? Color.FromArgb(30, 58, 138)
-                        : Color.FromArgb(71, 85, 105);
+                    fill = _pinned ? Color.FromArgb(235, 242, 255) : Color.White;
+                    border =
+                        _pinned || _hovered
+                            ? Color.FromArgb(37, 99, 235)
+                            : Color.FromArgb(147, 197, 253);
+                    icon = _pinned ? Color.FromArgb(30, 58, 138) : Color.FromArgb(71, 85, 105);
                 }
 
                 if (activePress)
@@ -9852,10 +11325,12 @@ namespace TTSK_AutoDim_Plates
                     0.8f,
                     0.8f,
                     Math.Max(1f, Width - 1.6f),
-                    Math.Max(1f, Height - 1.6f));
+                    Math.Max(1f, Height - 1.6f)
+                );
                 float radius = Math.Min(
                     10.5f,
-                    Math.Min(buttonBounds.Width, buttonBounds.Height) / 2f);
+                    Math.Min(buttonBounds.Width, buttonBounds.Height) / 2f
+                );
 
                 using (GraphicsPath buttonPath = RoundedRectF(buttonBounds, radius))
                 using (SolidBrush fillBrush = new SolidBrush(fill))
@@ -9870,17 +11345,19 @@ namespace TTSK_AutoDim_Plates
 
                 using (GraphicsPath pinHead = new GraphicsPath())
                 {
-                    pinHead.AddPolygon(new[]
-                    {
-                        new PointF(cx - 5.5f, cy - 8.0f),
-                        new PointF(cx + 5.5f, cy - 8.0f),
-                        new PointF(cx + 3.6f, cy - 4.4f),
-                        new PointF(cx + 3.6f, cy + 0.2f),
-                        new PointF(cx + 6.2f, cy + 2.8f),
-                        new PointF(cx - 6.2f, cy + 2.8f),
-                        new PointF(cx - 3.6f, cy + 0.2f),
-                        new PointF(cx - 3.6f, cy - 4.4f)
-                    });
+                    pinHead.AddPolygon(
+                        new[]
+                        {
+                            new PointF(cx - 5.5f, cy - 8.0f),
+                            new PointF(cx + 5.5f, cy - 8.0f),
+                            new PointF(cx + 3.6f, cy - 4.4f),
+                            new PointF(cx + 3.6f, cy + 0.2f),
+                            new PointF(cx + 6.2f, cy + 2.8f),
+                            new PointF(cx - 6.2f, cy + 2.8f),
+                            new PointF(cx - 3.6f, cy + 0.2f),
+                            new PointF(cx - 3.6f, cy - 4.4f)
+                        }
+                    );
 
                     using (SolidBrush iconBrush = new SolidBrush(icon))
                         e.Graphics.FillPath(iconBrush, pinHead);
@@ -9894,7 +11371,6 @@ namespace TTSK_AutoDim_Plates
                 }
             }
         }
-
 
         private class ThemeButton : Button
         {
@@ -10028,12 +11504,12 @@ namespace TTSK_AutoDim_Plates
                     Font,
                     ClientRectangle,
                     text,
-                    TextFormatFlags.HorizontalCenter |
-                    TextFormatFlags.VerticalCenter |
-                    TextFormatFlags.EndEllipsis);
+                    TextFormatFlags.HorizontalCenter
+                        | TextFormatFlags.VerticalCenter
+                        | TextFormatFlags.EndEllipsis
+                );
             }
         }
-
 
         private class GridAxisCountBox : BorderNumericUpDown
         {
@@ -10111,12 +11587,10 @@ namespace TTSK_AutoDim_Plates
 
             protected override void OnKeyDown(KeyEventArgs e)
             {
-                if (Enabled &&
-                    (e.KeyCode == Keys.Left || e.KeyCode == Keys.Right))
+                if (Enabled && (e.KeyCode == Keys.Left || e.KeyCode == Keys.Right))
                 {
-                    int next = e.KeyCode == Keys.Right
-                        ? Math.Min(3, Value + 1)
-                        : Math.Max(1, Value - 1);
+                    int next =
+                        e.KeyCode == Keys.Right ? Math.Min(3, Value + 1) : Math.Max(1, Value - 1);
                     Value = next;
                     e.Handled = true;
                     e.SuppressKeyPress = true;
@@ -10132,13 +11606,9 @@ namespace TTSK_AutoDim_Plates
 
             private void ApplyThemeColors()
             {
-                Color panel = _darkMode
-                    ? Color.FromArgb(30, 24, 20)
-                    : Color.White;
+                Color panel = _darkMode ? Color.FromArgb(30, 24, 20) : Color.White;
                 Color border = _accentColor.IsEmpty
-                    ? (_darkMode
-                        ? Color.FromArgb(201, 122, 64)
-                        : Color.FromArgb(37, 99, 235))
+                    ? (_darkMode ? Color.FromArgb(201, 122, 64) : Color.FromArgb(37, 99, 235))
                     : _accentColor;
                 Color text = _darkMode
                     ? Color.FromArgb(245, 186, 126)
@@ -10209,10 +11679,12 @@ namespace TTSK_AutoDim_Plates
 
             protected override void OnKeyDown(KeyEventArgs e)
             {
-                if (Enabled &&
-                    (e.KeyCode == Keys.Space ||
-                     e.KeyCode == Keys.Left ||
-                     e.KeyCode == Keys.Right))
+                if (
+                    Enabled
+                    && (
+                        e.KeyCode == Keys.Space || e.KeyCode == Keys.Left || e.KeyCode == Keys.Right
+                    )
+                )
                 {
                     if (e.KeyCode == Keys.Left)
                         Checked = false;
@@ -10240,31 +11712,22 @@ namespace TTSK_AutoDim_Plates
                     1.5f,
                     1.5f,
                     Math.Max(1f, Width - 3f),
-                    Math.Max(1f, Height - 3f));
+                    Math.Max(1f, Height - 3f)
+                );
 
                 Color trackBack = DarkMode
                     ? Color.FromArgb(30, 24, 20)
                     : Color.FromArgb(239, 246, 255);
                 Color border = Enabled
                     ? AccentColor
-                    : (DarkMode
-                        ? Color.FromArgb(73, 56, 43)
-                        : Color.FromArgb(203, 213, 225));
+                    : (DarkMode ? Color.FromArgb(73, 56, 43) : Color.FromArgb(203, 213, 225));
                 Color selectedBack = Enabled
                     ? AccentColor
-                    : (DarkMode
-                        ? Color.FromArgb(92, 82, 72)
-                        : Color.FromArgb(148, 163, 184));
+                    : (DarkMode ? Color.FromArgb(92, 82, 72) : Color.FromArgb(148, 163, 184));
                 Color normalText = Enabled
-                    ? (DarkMode
-                        ? Color.FromArgb(245, 186, 126)
-                        : Color.FromArgb(30, 58, 138))
-                    : (DarkMode
-                        ? Color.FromArgb(92, 82, 72)
-                        : Color.FromArgb(148, 163, 184));
-                Color selectedText = DarkMode
-                    ? Color.FromArgb(20, 16, 14)
-                    : Color.White;
+                    ? (DarkMode ? Color.FromArgb(245, 186, 126) : Color.FromArgb(30, 58, 138))
+                    : (DarkMode ? Color.FromArgb(92, 82, 72) : Color.FromArgb(148, 163, 184));
+                Color selectedText = DarkMode ? Color.FromArgb(20, 16, 14) : Color.White;
 
                 using (GraphicsPath path = RoundedRectF(track, track.Height / 2f))
                 using (SolidBrush brush = new SolidBrush(trackBack))
@@ -10280,15 +11743,11 @@ namespace TTSK_AutoDim_Plates
                         track.X + halfWidth + 1f,
                         track.Y + 2f,
                         halfWidth - 3f,
-                        track.Height - 4f)
-                    : new RectangleF(
-                        track.X + 2f,
-                        track.Y + 2f,
-                        halfWidth - 3f,
-                        track.Height - 4f);
+                        track.Height - 4f
+                    )
+                    : new RectangleF(track.X + 2f, track.Y + 2f, halfWidth - 3f, track.Height - 4f);
 
-                using (GraphicsPath selectedPath =
-                    RoundedRectF(selected, selected.Height / 2f))
+                using (GraphicsPath selectedPath = RoundedRectF(selected, selected.Height / 2f))
                 using (SolidBrush brush = new SolidBrush(selectedBack))
                 {
                     e.Graphics.FillPath(brush, selectedPath);
@@ -10303,14 +11762,12 @@ namespace TTSK_AutoDim_Plates
                     format.Alignment = StringAlignment.Center;
                     format.LineAlignment = StringAlignment.Center;
 
-                    using (SolidBrush brush =
-                        new SolidBrush(_checked ? normalText : selectedText))
+                    using (SolidBrush brush = new SolidBrush(_checked ? normalText : selectedText))
                     {
                         e.Graphics.DrawString("None", font, brush, noneRect, format);
                     }
 
-                    using (SolidBrush brush =
-                        new SolidBrush(_checked ? selectedText : normalText))
+                    using (SolidBrush brush = new SolidBrush(_checked ? selectedText : normalText))
                     {
                         e.Graphics.DrawString("Grid", font, brush, gridRect, format);
                     }
@@ -10373,13 +11830,10 @@ namespace TTSK_AutoDim_Plates
                 base.OnMouseDown(e);
             }
 
-            protected override bool ProcessCmdKey(
-                ref Message msg,
-                Keys keyData)
+            protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
             {
                 Keys keyCode = keyData & Keys.KeyCode;
-                if (Enabled &&
-                    (keyData & Keys.Modifiers) == Keys.None)
+                if (Enabled && (keyData & Keys.Modifiers) == Keys.None)
                 {
                     if (keyCode == Keys.Left)
                     {
@@ -10418,9 +11872,7 @@ namespace TTSK_AutoDim_Plates
             protected override bool IsInputKey(Keys keyData)
             {
                 Keys keyCode = keyData & Keys.KeyCode;
-                if (keyCode == Keys.Left ||
-                    keyCode == Keys.Right ||
-                    keyCode == Keys.Space)
+                if (keyCode == Keys.Left || keyCode == Keys.Right || keyCode == Keys.Space)
                     return true;
 
                 return base.IsInputKey(keyData);
@@ -10428,10 +11880,12 @@ namespace TTSK_AutoDim_Plates
 
             protected override void OnKeyDown(KeyEventArgs e)
             {
-                if (Enabled &&
-                    (e.KeyCode == Keys.Space ||
-                     e.KeyCode == Keys.Left ||
-                     e.KeyCode == Keys.Right))
+                if (
+                    Enabled
+                    && (
+                        e.KeyCode == Keys.Space || e.KeyCode == Keys.Left || e.KeyCode == Keys.Right
+                    )
+                )
                 {
                     if (e.KeyCode == Keys.Left)
                         Checked = false;
@@ -10466,43 +11920,27 @@ namespace TTSK_AutoDim_Plates
                     1.5f,
                     1.5f,
                     Math.Max(1f, Width - 3f),
-                    Math.Max(1f, Height - 3f));
+                    Math.Max(1f, Height - 3f)
+                );
 
-                Color accent = AccentColor.IsEmpty
-                    ? Color.FromArgb(37, 99, 235)
-                    : AccentColor;
+                Color accent = AccentColor.IsEmpty ? Color.FromArgb(37, 99, 235) : AccentColor;
                 Color trackBack = Enabled
-                    ? (DarkMode
-                        ? Color.FromArgb(30, 24, 20)
-                        : Color.FromArgb(239, 246, 255))
-                    : (DarkMode
-                        ? Color.FromArgb(16, 16, 16)
-                        : Color.FromArgb(245, 247, 250));
+                    ? (DarkMode ? Color.FromArgb(30, 24, 20) : Color.FromArgb(239, 246, 255))
+                    : (DarkMode ? Color.FromArgb(16, 16, 16) : Color.FromArgb(245, 247, 250));
                 Color border = Enabled
                     ? accent
-                    : (DarkMode
-                        ? Color.FromArgb(73, 56, 43)
-                        : Color.FromArgb(203, 213, 225));
+                    : (DarkMode ? Color.FromArgb(73, 56, 43) : Color.FromArgb(203, 213, 225));
                 Color selectedBack = Enabled
                     ? accent
-                    : (DarkMode
-                        ? Color.FromArgb(92, 82, 72)
-                        : Color.FromArgb(148, 163, 184));
+                    : (DarkMode ? Color.FromArgb(92, 82, 72) : Color.FromArgb(148, 163, 184));
                 Color normalText = Enabled
-                    ? (DarkMode
-                        ? Color.FromArgb(245, 186, 126)
-                        : Color.FromArgb(30, 58, 138))
-                    : (DarkMode
-                        ? Color.FromArgb(92, 82, 72)
-                        : Color.FromArgb(148, 163, 184));
+                    ? (DarkMode ? Color.FromArgb(245, 186, 126) : Color.FromArgb(30, 58, 138))
+                    : (DarkMode ? Color.FromArgb(92, 82, 72) : Color.FromArgb(148, 163, 184));
                 Color selectedText = Enabled
                     ? (DarkMode ? Color.FromArgb(20, 16, 14) : Color.White)
-                    : (DarkMode
-                        ? Color.FromArgb(210, 210, 210)
-                        : Color.White);
+                    : (DarkMode ? Color.FromArgb(210, 210, 210) : Color.White);
 
-                using (GraphicsPath path =
-                    RoundedRectF(track, track.Height / 2f))
+                using (GraphicsPath path = RoundedRectF(track, track.Height / 2f))
                 using (SolidBrush brush = new SolidBrush(trackBack))
                 using (Pen pen = new Pen(border, Focused ? 1.8f : 1.2f))
                 {
@@ -10516,24 +11954,18 @@ namespace TTSK_AutoDim_Plates
                         track.X + halfWidth + 1f,
                         track.Y + 2f,
                         halfWidth - 3f,
-                        track.Height - 4f)
-                    : new RectangleF(
-                        track.X + 2f,
-                        track.Y + 2f,
-                        halfWidth - 3f,
-                        track.Height - 4f);
+                        track.Height - 4f
+                    )
+                    : new RectangleF(track.X + 2f, track.Y + 2f, halfWidth - 3f, track.Height - 4f);
 
-                using (GraphicsPath selectedPath =
-                    RoundedRectF(selected, selected.Height / 2f))
+                using (GraphicsPath selectedPath = RoundedRectF(selected, selected.Height / 2f))
                 using (SolidBrush brush = new SolidBrush(selectedBack))
                 {
                     e.Graphics.FillPath(brush, selectedPath);
                 }
 
-                RectangleF beamRect =
-                    new RectangleF(2f, 0f, Width / 2f - 2f, Height);
-                RectangleF columnRect =
-                    new RectangleF(Width / 2f, 0f, Width / 2f - 2f, Height);
+                RectangleF beamRect = new RectangleF(2f, 0f, Width / 2f - 2f, Height);
+                RectangleF columnRect = new RectangleF(Width / 2f, 0f, Width / 2f - 2f, Height);
 
                 using (Font font = new Font("Segoe UI", 8F, FontStyle.Bold))
                 using (StringFormat format = new StringFormat())
@@ -10541,26 +11973,14 @@ namespace TTSK_AutoDim_Plates
                     format.Alignment = StringAlignment.Center;
                     format.LineAlignment = StringAlignment.Center;
 
-                    using (SolidBrush brush =
-                        new SolidBrush(_checked ? normalText : selectedText))
+                    using (SolidBrush brush = new SolidBrush(_checked ? normalText : selectedText))
                     {
-                        e.Graphics.DrawString(
-                            "Dầm",
-                            font,
-                            brush,
-                            beamRect,
-                            format);
+                        e.Graphics.DrawString("Dầm", font, brush, beamRect, format);
                     }
 
-                    using (SolidBrush brush =
-                        new SolidBrush(_checked ? selectedText : normalText))
+                    using (SolidBrush brush = new SolidBrush(_checked ? selectedText : normalText))
                     {
-                        e.Graphics.DrawString(
-                            "Cột",
-                            font,
-                            brush,
-                            columnRect,
-                            format);
+                        e.Graphics.DrawString("Cột", font, brush, columnRect, format);
                     }
                 }
             }
@@ -10580,8 +12000,10 @@ namespace TTSK_AutoDim_Plates
                 set
                 {
                     int next = value;
-                    if (next < 0) next = 0;
-                    if (next > 2) next = 2;
+                    if (next < 0)
+                        next = 0;
+                    if (next > 2)
+                        next = 2;
 
                     if (_selectedMode == next)
                         return;
@@ -10639,10 +12061,18 @@ namespace TTSK_AutoDim_Plates
                 e.Graphics.PixelOffsetMode = PixelOffsetMode.Half;
                 e.Graphics.CompositingQuality = CompositingQuality.HighQuality;
 
-                Color trackBack = DarkMode ? Color.FromArgb(25, 20, 16) : Color.FromArgb(239, 246, 255);
-                Color border = Enabled ? AccentColor : (DarkMode ? Color.FromArgb(73, 56, 43) : Color.FromArgb(203, 213, 225));
-                Color knob = Enabled ? AccentColor : (DarkMode ? Color.FromArgb(92, 82, 72) : Color.FromArgb(148, 163, 184));
-                Color text = Enabled ? (DarkMode ? Color.FromArgb(245, 186, 126) : Color.FromArgb(30, 58, 138)) : (DarkMode ? Color.FromArgb(92, 82, 72) : Color.FromArgb(148, 163, 184));
+                Color trackBack = DarkMode
+                    ? Color.FromArgb(25, 20, 16)
+                    : Color.FromArgb(239, 246, 255);
+                Color border = Enabled
+                    ? AccentColor
+                    : (DarkMode ? Color.FromArgb(73, 56, 43) : Color.FromArgb(203, 213, 225));
+                Color knob = Enabled
+                    ? AccentColor
+                    : (DarkMode ? Color.FromArgb(92, 82, 72) : Color.FromArgb(148, 163, 184));
+                Color text = Enabled
+                    ? (DarkMode ? Color.FromArgb(245, 186, 126) : Color.FromArgb(30, 58, 138))
+                    : (DarkMode ? Color.FromArgb(92, 82, 72) : Color.FromArgb(148, 163, 184));
 
                 RectangleF rect = new RectangleF(1.5f, 1.5f, Width - 3f, Height - 3f);
                 using (GraphicsPath path = RoundedRectF(rect, rect.Height / 2f))
@@ -10671,13 +12101,18 @@ namespace TTSK_AutoDim_Plates
                     for (int i = 0; i < 3; i++)
                     {
                         RectangleF cellRect = new RectangleF(3f + cell * i, 0f, cell, Height);
-                        using (SolidBrush brush = new SolidBrush(i == _selectedMode ? (DarkMode ? Color.FromArgb(20, 16, 14) : Color.White) : text))
+                        using (
+                            SolidBrush brush = new SolidBrush(
+                                i == _selectedMode
+                                    ? (DarkMode ? Color.FromArgb(20, 16, 14) : Color.White)
+                                    : text
+                            )
+                        )
                             e.Graphics.DrawString(labels[i], f, brush, cellRect, sf);
                     }
                 }
             }
         }
-
 
         private class Slot05ModeSwitch : Control
         {
@@ -10693,8 +12128,10 @@ namespace TTSK_AutoDim_Plates
                 set
                 {
                     int next = value;
-                    if (next < 0) next = 0;
-                    if (next > 1) next = 1;
+                    if (next < 0)
+                        next = 0;
+                    if (next > 1)
+                        next = 1;
 
                     if (_selectedMode == next)
                         return;
@@ -10746,8 +12183,16 @@ namespace TTSK_AutoDim_Plates
                 float radius = rect.Height / 2f;
 
                 Color trackBack = Enabled
-                    ? (DarkMode ? Color.FromArgb(210, 24, 20, 17) : Color.FromArgb(225, 255, 255, 255))
-                    : (DarkMode ? Color.FromArgb(170, 16, 16, 16) : Color.FromArgb(210, 245, 247, 250));
+                    ? (
+                        DarkMode
+                            ? Color.FromArgb(210, 24, 20, 17)
+                            : Color.FromArgb(225, 255, 255, 255)
+                    )
+                    : (
+                        DarkMode
+                            ? Color.FromArgb(170, 16, 16, 16)
+                            : Color.FromArgb(210, 245, 247, 250)
+                    );
 
                 Color trackBorder = Enabled
                     ? AccentColor
@@ -10761,9 +12206,7 @@ namespace TTSK_AutoDim_Plates
                     ? AccentColor
                     : (DarkMode ? Color.FromArgb(92, 82, 72) : Color.FromArgb(148, 163, 184));
 
-                Color selectedText = DarkMode
-                    ? Color.FromArgb(20, 16, 14)
-                    : Color.White;
+                Color selectedText = DarkMode ? Color.FromArgb(20, 16, 14) : Color.White;
 
                 using (GraphicsPath path = RoundedRectF(rect, radius))
                 {
@@ -10780,11 +12223,23 @@ namespace TTSK_AutoDim_Plates
 
                 RectangleF selectedRect;
                 if (_selectedMode == 0)
-                    selectedRect = new RectangleF(rect.X + 2f, rect.Y + 2f, (rect.Width / 2f) - 2.5f, rect.Height - 4f);
+                    selectedRect = new RectangleF(
+                        rect.X + 2f,
+                        rect.Y + 2f,
+                        (rect.Width / 2f) - 2.5f,
+                        rect.Height - 4f
+                    );
                 else
-                    selectedRect = new RectangleF(rect.X + (rect.Width / 2f) + 0.5f, rect.Y + 2f, (rect.Width / 2f) - 2.5f, rect.Height - 4f);
+                    selectedRect = new RectangleF(
+                        rect.X + (rect.Width / 2f) + 0.5f,
+                        rect.Y + 2f,
+                        (rect.Width / 2f) - 2.5f,
+                        rect.Height - 4f
+                    );
 
-                using (GraphicsPath selectedPath = RoundedRectF(selectedRect, selectedRect.Height / 2f))
+                using (
+                    GraphicsPath selectedPath = RoundedRectF(selectedRect, selectedRect.Height / 2f)
+                )
                 using (SolidBrush brush = new SolidBrush(selectedBack))
                 {
                     e.Graphics.FillPath(brush, selectedPath);
@@ -10799,19 +12254,26 @@ namespace TTSK_AutoDim_Plates
                     sf.Alignment = StringAlignment.Center;
                     sf.LineAlignment = StringAlignment.Center;
 
-                    using (SolidBrush brush = new SolidBrush(_selectedMode == 0 ? selectedText : normalText))
+                    using (
+                        SolidBrush brush = new SolidBrush(
+                            _selectedMode == 0 ? selectedText : normalText
+                        )
+                    )
                     {
                         e.Graphics.DrawString("1", f, brush, leftTextRect, sf);
                     }
 
-                    using (SolidBrush brush = new SolidBrush(_selectedMode == 1 ? selectedText : normalText))
+                    using (
+                        SolidBrush brush = new SolidBrush(
+                            _selectedMode == 1 ? selectedText : normalText
+                        )
+                    )
                     {
                         e.Graphics.DrawString("2", f, brush, rightTextRect, sf);
                     }
                 }
             }
         }
-
 
         private class ArrangeOrderSwitch : Control
         {
@@ -10928,7 +12390,6 @@ namespace TTSK_AutoDim_Plates
             }
         }
 
-
         private class AutoSectionSwitch : Control
         {
             private bool _checked;
@@ -10994,16 +12455,18 @@ namespace TTSK_AutoDim_Plates
                 Color disabledBack = DarkMode
                     ? Color.FromArgb(28, 28, 28)
                     : Color.FromArgb(241, 245, 249);
-                Color fill = Enabled
-                    ? (Checked ? AccentColor : offBack)
-                    : disabledBack;
+                Color fill = Enabled ? (Checked ? AccentColor : offBack) : disabledBack;
                 Color border = Enabled
-                    ? (Checked ? AccentColor : (DarkMode
-                        ? Color.FromArgb(92, 82, 72)
-                        : Color.FromArgb(147, 197, 253)))
-                    : (DarkMode
-                        ? Color.FromArgb(73, 56, 43)
-                        : Color.FromArgb(203, 213, 225));
+                    ? (
+                        Checked
+                            ? AccentColor
+                            : (
+                                DarkMode
+                                    ? Color.FromArgb(92, 82, 72)
+                                    : Color.FromArgb(147, 197, 253)
+                            )
+                    )
+                    : (DarkMode ? Color.FromArgb(73, 56, 43) : Color.FromArgb(203, 213, 225));
 
                 using (GraphicsPath path = RoundedRectF(track, track.Height / 2f))
                 {
@@ -11018,9 +12481,7 @@ namespace TTSK_AutoDim_Plates
                 float knobY = (Height - knobSize) / 2f;
                 Color knob = Enabled
                     ? Color.White
-                    : (DarkMode
-                        ? Color.FromArgb(92, 82, 72)
-                        : Color.FromArgb(148, 163, 184));
+                    : (DarkMode ? Color.FromArgb(92, 82, 72) : Color.FromArgb(148, 163, 184));
 
                 using (SolidBrush brush = new SolidBrush(knob))
                     e.Graphics.FillEllipse(brush, knobX, knobY, knobSize, knobSize);
@@ -11078,17 +12539,13 @@ namespace TTSK_AutoDim_Plates
                 RectangleF rect = new RectangleF(1, 1, Width - 2, Height - 2);
                 float radius = rect.Height / 2f;
 
-                Color back = Checked
-                    ? Color.FromArgb(32, 28, 24)
-                    : Color.FromArgb(235, 242, 255);
+                Color back = Checked ? Color.FromArgb(32, 28, 24) : Color.FromArgb(235, 242, 255);
 
                 Color border = Checked
                     ? Color.FromArgb(201, 122, 64)
                     : Color.FromArgb(147, 197, 253);
 
-                Color knob = Checked
-                    ? Color.FromArgb(201, 122, 64)
-                    : Color.White;
+                Color knob = Checked ? Color.FromArgb(201, 122, 64) : Color.White;
 
                 using (GraphicsPath path = RoundedRectF(rect, radius))
                 {
@@ -11118,7 +12575,11 @@ namespace TTSK_AutoDim_Plates
                     : new RectangleF(Width - 34, 4, 26, Height - 8);
 
                 using (Font f = new Font("Segoe UI Symbol", 12F, FontStyle.Bold))
-                using (SolidBrush brush = new SolidBrush(Checked ? Color.FromArgb(224, 156, 96) : Color.FromArgb(30, 58, 138)))
+                using (
+                    SolidBrush brush = new SolidBrush(
+                        Checked ? Color.FromArgb(224, 156, 96) : Color.FromArgb(30, 58, 138)
+                    )
+                )
                 using (StringFormat sf = new StringFormat())
                 {
                     sf.Alignment = StringAlignment.Center;
@@ -11127,7 +12588,6 @@ namespace TTSK_AutoDim_Plates
                 }
             }
         }
-
 
         private class BorderNumericUpDown : Control
         {
@@ -11152,8 +12612,10 @@ namespace TTSK_AutoDim_Plates
                 set
                 {
                     decimal next = value;
-                    if (next < _minimum) next = _minimum;
-                    if (next > _maximum) next = _maximum;
+                    if (next < _minimum)
+                        next = _minimum;
+                    if (next > _maximum)
+                        next = _maximum;
                     next = decimal.Round(next, _decimalPlaces);
 
                     if (_value == next)
@@ -11260,17 +12722,14 @@ namespace TTSK_AutoDim_Plates
                     1.0f,
                     1.0f,
                     Math.Max(1f, Width - 2f),
-                    Math.Max(1f, Height - 2f));
+                    Math.Max(1f, Height - 2f)
+                );
 
-                Color fill = Enabled
-                    ? BackColor
-                    : MixColor(BackColor, Color.Gray, 0.20);
+                Color fill = Enabled ? BackColor : MixColor(BackColor, Color.Gray, 0.20);
                 Color border = Enabled
                     ? CustomBorderColor
                     : MixColor(CustomBorderColor, Color.Gray, 0.35);
-                Color textColor = Enabled
-                    ? ForeColor
-                    : Color.FromArgb(148, 163, 184);
+                Color textColor = Enabled ? ForeColor : Color.FromArgb(148, 163, 184);
 
                 float radius = Math.Min(7f, Math.Min(box.Width, box.Height) * 0.5f);
                 using (GraphicsPath path = RoundedRectF(box, radius))
@@ -11284,12 +12743,7 @@ namespace TTSK_AutoDim_Plates
                     float arrowLeft = Width - arrowAreaWidth - 1f;
 
                     using (Pen separator = new Pen(Color.FromArgb(110, border), 1f))
-                        e.Graphics.DrawLine(
-                            separator,
-                            arrowLeft,
-                            6f,
-                            arrowLeft,
-                            Height - 6f);
+                        e.Graphics.DrawLine(separator, arrowLeft, 6f, arrowLeft, Height - 6f);
 
                     float arrowCenterX = arrowLeft + arrowAreaWidth * 0.5f;
                     PointF[] upArrow =
@@ -11315,7 +12769,8 @@ namespace TTSK_AutoDim_Plates
                         6f,
                         0f,
                         Math.Max(1f, arrowLeft - 10f),
-                        Height);
+                        Height
+                    );
 
                     using (SolidBrush textBrush = new SolidBrush(textColor))
                     using (StringFormat format = new StringFormat())
@@ -11323,15 +12778,15 @@ namespace TTSK_AutoDim_Plates
                         format.LineAlignment = StringAlignment.Center;
                         format.FormatFlags = StringFormatFlags.NoWrap;
                         format.Trimming = StringTrimming.EllipsisCharacter;
-                        format.Alignment = TextAlign == HorizontalAlignment.Left
-                            ? StringAlignment.Near
-                            : TextAlign == HorizontalAlignment.Right
-                                ? StringAlignment.Far
-                                : StringAlignment.Center;
+                        format.Alignment =
+                            TextAlign == HorizontalAlignment.Left ? StringAlignment.Near
+                            : TextAlign == HorizontalAlignment.Right ? StringAlignment.Far
+                            : StringAlignment.Center;
 
-                        string displayText = Focused && !string.IsNullOrEmpty(_editText)
-                            ? _editText
-                            : FormatValue(_value);
+                        string displayText =
+                            Focused && !string.IsNullOrEmpty(_editText)
+                                ? _editText
+                                : FormatValue(_value);
 
                         e.Graphics.DrawString(displayText, Font, textBrush, valueRect, format);
                     }
@@ -11376,11 +12831,10 @@ namespace TTSK_AutoDim_Plates
 
             protected override void OnMouseMove(MouseEventArgs e)
             {
-                Cursor = !Enabled
-                    ? Cursors.Default
-                    : e.X >= Width - 21
-                        ? Cursors.Hand
-                        : Cursors.IBeam;
+                Cursor =
+                    !Enabled ? Cursors.Default
+                    : e.X >= Width - 21 ? Cursors.Hand
+                    : Cursors.IBeam;
                 base.OnMouseMove(e);
             }
 
@@ -11464,14 +12918,20 @@ namespace TTSK_AutoDim_Plates
                     return;
                 }
 
-                string decimalSeparator =
-                    System.Globalization.CultureInfo.CurrentCulture.NumberFormat.NumberDecimalSeparator;
+                string decimalSeparator = System
+                    .Globalization
+                    .CultureInfo
+                    .CurrentCulture
+                    .NumberFormat
+                    .NumberDecimalSeparator;
                 bool isDigit = char.IsDigit(e.KeyChar);
                 bool isDecimal =
-                    _decimalPlaces > 0 &&
-                    (e.KeyChar == '.' ||
-                     e.KeyChar == ',' ||
-                     e.KeyChar.ToString() == decimalSeparator);
+                    _decimalPlaces > 0
+                    && (
+                        e.KeyChar == '.'
+                        || e.KeyChar == ','
+                        || e.KeyChar.ToString() == decimalSeparator
+                    );
                 bool isMinus = e.KeyChar == '-' && _minimum < 0M;
 
                 if (isDigit || isDecimal || isMinus)
@@ -11497,15 +12957,14 @@ namespace TTSK_AutoDim_Plates
                     {
                         int separatorIndex = _editText.IndexOf(
                             decimalSeparator,
-                            StringComparison.Ordinal);
-                        int decimalDigitCount = separatorIndex < 0
-                            ? 0
-                            : _editText.Length -
-                              separatorIndex -
-                              decimalSeparator.Length;
+                            StringComparison.Ordinal
+                        );
+                        int decimalDigitCount =
+                            separatorIndex < 0
+                                ? 0
+                                : _editText.Length - separatorIndex - decimalSeparator.Length;
 
-                        if (separatorIndex < 0 ||
-                            decimalDigitCount < _decimalPlaces)
+                        if (separatorIndex < 0 || decimalDigitCount < _decimalPlaces)
                             _editText += input;
                     }
 
@@ -11539,7 +12998,8 @@ namespace TTSK_AutoDim_Plates
             {
                 return value.ToString(
                     "F" + _decimalPlaces,
-                    System.Globalization.CultureInfo.CurrentCulture);
+                    System.Globalization.CultureInfo.CurrentCulture
+                );
             }
 
             private void CommitEditText()
@@ -11550,7 +13010,8 @@ namespace TTSK_AutoDim_Plates
                     text,
                     System.Globalization.NumberStyles.Number,
                     System.Globalization.CultureInfo.CurrentCulture,
-                    out parsed);
+                    out parsed
+                );
 
                 if (!parsedOk)
                 {
@@ -11559,7 +13020,8 @@ namespace TTSK_AutoDim_Plates
                         normalized,
                         System.Globalization.NumberStyles.Number,
                         System.Globalization.CultureInfo.InvariantCulture,
-                        out parsed);
+                        out parsed
+                    );
                 }
 
                 if (parsedOk)
@@ -11574,8 +13036,10 @@ namespace TTSK_AutoDim_Plates
                 CommitEditText();
 
                 decimal next = up ? Value + Increment : Value - Increment;
-                if (next > Maximum) next = Maximum;
-                if (next < Minimum) next = Minimum;
+                if (next > Maximum)
+                    next = Maximum;
+                if (next < Minimum)
+                    next = Minimum;
                 Value = next;
             }
 
@@ -11593,9 +13057,7 @@ namespace TTSK_AutoDim_Plates
 
                 return Color.FromArgb(r, g, bl);
             }
-
         }
-
 
         private class BorderComboBox : Control
         {
@@ -11622,15 +13084,15 @@ namespace TTSK_AutoDim_Plates
                 set
                 {
                     int next = value;
-                    if (next < -1) next = -1;
-                    if (next >= _items.Count) next = _items.Count - 1;
+                    if (next < -1)
+                        next = -1;
+                    if (next >= _items.Count)
+                        next = _items.Count - 1;
                     if (_selectedIndex == next)
                         return;
 
                     _selectedIndex = next;
-                    Text = _selectedIndex >= 0
-                        ? Convert.ToString(_items[_selectedIndex])
-                        : "";
+                    Text = _selectedIndex >= 0 ? Convert.ToString(_items[_selectedIndex]) : "";
                     Invalidate();
 
                     if (SelectedIndexChanged != null)
@@ -11683,17 +13145,14 @@ namespace TTSK_AutoDim_Plates
                     1.0f,
                     1.0f,
                     Math.Max(1f, Width - 2f),
-                    Math.Max(1f, Height - 2f));
+                    Math.Max(1f, Height - 2f)
+                );
 
-                Color fill = Enabled
-                    ? BackColor
-                    : MixColor(BackColor, Color.Gray, 0.20);
+                Color fill = Enabled ? BackColor : MixColor(BackColor, Color.Gray, 0.20);
                 Color border = Enabled
                     ? CustomBorderColor
                     : MixColor(CustomBorderColor, Color.Gray, 0.35);
-                Color textColor = Enabled
-                    ? ForeColor
-                    : Color.FromArgb(148, 163, 184);
+                Color textColor = Enabled ? ForeColor : Color.FromArgb(148, 163, 184);
 
                 float radius = Math.Min(7f, Math.Min(box.Width, box.Height) * 0.5f);
                 using (GraphicsPath path = RoundedRectF(box, radius))
@@ -11707,18 +13166,14 @@ namespace TTSK_AutoDim_Plates
                     float arrowLeft = Width - arrowAreaWidth - 1f;
 
                     using (Pen separator = new Pen(Color.FromArgb(110, border), 1f))
-                        e.Graphics.DrawLine(
-                            separator,
-                            arrowLeft,
-                            6f,
-                            arrowLeft,
-                            Height - 6f);
+                        e.Graphics.DrawLine(separator, arrowLeft, 6f, arrowLeft, Height - 6f);
 
                     RectangleF textRect = new RectangleF(
                         8f,
                         0f,
                         Math.Max(1f, arrowLeft - 12f),
-                        Height);
+                        Height
+                    );
 
                     using (SolidBrush textBrush = new SolidBrush(textColor))
                     using (StringFormat format = new StringFormat())
@@ -11739,8 +13194,11 @@ namespace TTSK_AutoDim_Plates
                         new PointF(arrowCenterX, arrowCenterY + 3f)
                     };
 
-                    using (SolidBrush arrowBrush = new SolidBrush(
-                        Enabled ? ArrowColor : Color.FromArgb(148, 163, 184)))
+                    using (
+                        SolidBrush arrowBrush = new SolidBrush(
+                            Enabled ? ArrowColor : Color.FromArgb(148, 163, 184)
+                        )
+                    )
                         e.Graphics.FillPolygon(arrowBrush, arrow);
 
                     using (Pen borderPen = new Pen(border, Focused ? 1.8f : 1.4f))
@@ -11778,9 +13236,7 @@ namespace TTSK_AutoDim_Plates
 
             protected override void OnKeyDown(KeyEventArgs e)
             {
-                if (Enabled &&
-                    (e.KeyCode == Keys.Up || e.KeyCode == Keys.Down) &&
-                    _items.Count > 0)
+                if (Enabled && (e.KeyCode == Keys.Up || e.KeyCode == Keys.Down) && _items.Count > 0)
                 {
                     int next = _selectedIndex;
                     if (e.KeyCode == Keys.Up)
@@ -11792,10 +13248,10 @@ namespace TTSK_AutoDim_Plates
                     e.Handled = true;
                     e.SuppressKeyPress = true;
                 }
-                else if (Enabled &&
-                         (e.KeyCode == Keys.Enter ||
-                          e.KeyCode == Keys.Space ||
-                          e.KeyCode == Keys.F4))
+                else if (
+                    Enabled
+                    && (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Space || e.KeyCode == Keys.F4)
+                )
                 {
                     ShowDropDown();
                     e.Handled = true;
@@ -11836,11 +13292,13 @@ namespace TTSK_AutoDim_Plates
 
             private void ShowDropDown()
             {
-                if (_dropDownOpening ||
-                    _items.Count == 0 ||
-                    IsDisposed ||
-                    Disposing ||
-                    !IsHandleCreated)
+                if (
+                    _dropDownOpening
+                    || _items.Count == 0
+                    || IsDisposed
+                    || Disposing
+                    || !IsHandleCreated
+                )
                     return;
 
                 EnsureDropDownMenu();
@@ -11882,8 +13340,7 @@ namespace TTSK_AutoDim_Plates
                     for (int i = 0; i < _items.Count; i++)
                     {
                         int index = i;
-                        ToolStripMenuItem item = new ToolStripMenuItem(
-                            Convert.ToString(_items[i]));
+                        ToolStripMenuItem item = new ToolStripMenuItem(Convert.ToString(_items[i]));
                         item.AutoSize = false;
                         item.Height = 28;
                         item.Click += delegate
@@ -11924,16 +13381,18 @@ namespace TTSK_AutoDim_Plates
 
             private static Color MixColor(Color a, Color b, double amount)
             {
-                if (amount < 0.0) amount = 0.0;
-                if (amount > 1.0) amount = 1.0;
+                if (amount < 0.0)
+                    amount = 0.0;
+                if (amount > 1.0)
+                    amount = 1.0;
 
                 return Color.FromArgb(
                     (int)Math.Round(a.R + (b.R - a.R) * amount),
                     (int)Math.Round(a.G + (b.G - a.G) * amount),
-                    (int)Math.Round(a.B + (b.B - a.B) * amount));
+                    (int)Math.Round(a.B + (b.B - a.B) * amount)
+                );
             }
         }
-
 
         private class RoundedPanel : Panel
         {
@@ -11955,7 +13414,8 @@ namespace TTSK_AutoDim_Plates
 
             protected override void OnPaintBackground(PaintEventArgs e)
             {
-                Color parentColor = Parent != null ? Parent.BackColor : Color.FromArgb(248, 250, 252);
+                Color parentColor =
+                    Parent != null ? Parent.BackColor : Color.FromArgb(248, 250, 252);
 
                 using (SolidBrush brush = new SolidBrush(parentColor))
                 {
@@ -12006,7 +13466,14 @@ namespace TTSK_AutoDim_Plates
 
             path.AddArc(bounds.Left, bounds.Top, diameter, diameter, 180, 90);
             path.AddArc(bounds.Right - diameter, bounds.Top, diameter, diameter, 270, 90);
-            path.AddArc(bounds.Right - diameter, bounds.Bottom - diameter, diameter, diameter, 0, 90);
+            path.AddArc(
+                bounds.Right - diameter,
+                bounds.Bottom - diameter,
+                diameter,
+                diameter,
+                0,
+                90
+            );
             path.AddArc(bounds.Left, bounds.Bottom - diameter, diameter, diameter, 90, 90);
             path.CloseFigure();
 
@@ -12026,12 +13493,18 @@ namespace TTSK_AutoDim_Plates
 
             path.AddArc(bounds.Left, bounds.Top, diameter, diameter, 180, 90);
             path.AddArc(bounds.Right - diameter, bounds.Top, diameter, diameter, 270, 90);
-            path.AddArc(bounds.Right - diameter, bounds.Bottom - diameter, diameter, diameter, 0, 90);
+            path.AddArc(
+                bounds.Right - diameter,
+                bounds.Bottom - diameter,
+                diameter,
+                diameter,
+                0,
+                90
+            );
             path.AddArc(bounds.Left, bounds.Bottom - diameter, diameter, diameter, 90, 90);
             path.CloseFigure();
 
             return path;
         }
-
     }
 }

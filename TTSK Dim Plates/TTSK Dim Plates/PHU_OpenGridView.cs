@@ -30,7 +30,13 @@ public static class PHU_OpenGridView
     // Bung lũy tiến để tránh lag:
     // mở ít trước, nếu chưa thấy đủ grid 4 hướng thì mới mở tiếp.
     private static readonly double[] TEMP_EXPAND_STEPS = new double[]
-    { 2000.0, 5000.0,10000.0,20000.0, 35000.0 };
+    {
+        2000.0,
+        5000.0,
+        10000.0,
+        20000.0,
+        35000.0
+    };
 
     // Cộng thêm để tránh grid / label / nét line bị hụt sát mép.
     private const double FINAL_EXTRA_MARGIN = 250.0;
@@ -51,17 +57,20 @@ public static class PHU_OpenGridView
 
     // Lưu vị trí khung xanh trước khi Open Grid bung view.
     // Fit View sẽ dùng lại vị trí này để quay về đúng layout ban đầu.
-    private static readonly Dictionary<string, ViewSheetBox> FIT_ORIGINAL_SHEET_BOXES = new Dictionary<string, ViewSheetBox>();
+    private static readonly Dictionary<string, ViewSheetBox> FIT_ORIGINAL_SHEET_BOXES =
+        new Dictionary<string, ViewSheetBox>();
 
     // Lưu RestrictionBox gốc trước khi Open Grid bung view.
     // Fit View sẽ restore đúng RestrictionBox ban đầu này.
-    private static readonly Dictionary<string, AABB> FIT_ORIGINAL_RESTRICTION_BOXES = new Dictionary<string, AABB>();
+    private static readonly Dictionary<string, AABB> FIT_ORIGINAL_RESTRICTION_BOXES =
+        new Dictionary<string, AABB>();
 
     // Session prerequisite for Fit.  A view is Fit-ready only after the
     // current Open Grid pass has completed ProcessView successfully and both
     // original snapshots are present for the same Drawing + View pair.
-    private static readonly HashSet<string> OPEN_GRID_READY_VIEW_KEYS =
-        new HashSet<string>(StringComparer.Ordinal);
+    private static readonly HashSet<string> OPEN_GRID_READY_VIEW_KEYS = new HashSet<string>(
+        StringComparer.Ordinal
+    );
 
     private static string OPEN_GRID_READY_DRAWING_KEY = "";
 
@@ -131,9 +140,12 @@ public static class PHU_OpenGridView
             get
             {
                 int count = 0;
-                if (Vertical != null) count++;
-                if (Bottom != null) count++;
-                if (Top != null) count++;
+                if (Vertical != null)
+                    count++;
+                if (Bottom != null)
+                    count++;
+                if (Top != null)
+                    count++;
                 return count;
             }
         }
@@ -189,7 +201,6 @@ public static class PHU_OpenGridView
 
         try
         {
-
             DrawingHandler dh = new DrawingHandler();
             if (!dh.GetConnectionStatus())
             {
@@ -251,20 +262,32 @@ public static class PHU_OpenGridView
 
             if (views.Count > 1)
             {
-                try { drawing.CommitChanges(); }
-                catch (Exception exCommit) {; }
+                try
+                {
+                    drawing.CommitChanges();
+                }
+                catch (Exception exCommit)
+                {
+                    ;
+                }
 
                 KeepSelectedViewsNonOverlapping(views, 20.0);
             }
 
-            try { drawing.CommitChanges(); }
-            catch (Exception exCommit) {; }
+            try
+            {
+                drawing.CommitChanges();
+            }
+            catch (Exception exCommit)
+            {
+                ;
+            }
 
             if (result.SuccessCount > 0 && result.FailedCount == 0)
                 result.Message = "Done.";
             else if (result.SuccessCount > 0)
-                result.Message = "Open Grid partial: " +
-                    result.SuccessCount + "/" + result.ViewCount + " View.";
+                result.Message =
+                    "Open Grid partial: " + result.SuccessCount + "/" + result.ViewCount + " View.";
             else
                 result.Message = "Open Grid failed.";
 
@@ -281,7 +304,6 @@ public static class PHU_OpenGridView
 
     private static bool ProcessView(View view, Drawing drawing)
     {
-
         if (view == null)
         {
             return false;
@@ -303,7 +325,6 @@ public static class PHU_OpenGridView
         double oldMinZ = Math.Min(oldBox.MinPoint.Z, oldBox.MaxPoint.Z);
         double oldMaxZ = Math.Max(oldBox.MinPoint.Z, oldBox.MaxPoint.Z);
 
-
         // PASS 1 + 2: bung lũy tiến, đọc grid, dừng ngay khi đủ grid 4 hướng.
         List<GridSeg> segs = null;
         double usedExpand = 0.0;
@@ -311,10 +332,15 @@ public static class PHU_OpenGridView
         bool enough = ProgressiveExpandUntilEnoughGrid(
             view,
             drawing,
-            oldMinX, oldMaxX, oldMinY, oldMaxY, oldMinZ, oldMaxZ,
+            oldMinX,
+            oldMaxX,
+            oldMinY,
+            oldMaxY,
+            oldMinZ,
+            oldMaxZ,
             out segs,
-            out usedExpand);
-
+            out usedExpand
+        );
 
         if (segs == null || segs.Count == 0)
         {
@@ -323,9 +349,18 @@ public static class PHU_OpenGridView
             return false;
         }
 
-        bool hasLeft = false, hasRight = false, hasBottom = false, hasTop = false;
-        double left = 0, right = 0, bottom = 0, top = 0;
-        double leftLineX = 0, rightLineX = 0, bottomLineY = 0, topLineY = 0;
+        bool hasLeft = false,
+            hasRight = false,
+            hasBottom = false,
+            hasTop = false;
+        double left = 0,
+            right = 0,
+            bottom = 0,
+            top = 0;
+        double leftLineX = 0,
+            rightLineX = 0,
+            bottomLineY = 0,
+            topLineY = 0;
 
         double allMinX = double.PositiveInfinity;
         double allMaxX = double.NegativeInfinity;
@@ -344,10 +379,14 @@ public static class PHU_OpenGridView
             double gyMin = g.VisualMinY;
             double gyMax = g.VisualMaxY;
 
-            if (gxMin < allMinX) allMinX = gxMin;
-            if (gxMax > allMaxX) allMaxX = gxMax;
-            if (gyMin < allMinY) allMinY = gyMin;
-            if (gyMax > allMaxY) allMaxY = gyMax;
+            if (gxMin < allMinX)
+                allMinX = gxMin;
+            if (gxMax > allMaxX)
+                allMaxX = gxMax;
+            if (gyMin < allMinY)
+                allMinY = gyMin;
+            if (gyMax > allMaxY)
+                allMaxY = gyMax;
 
             if (g.IsVertical)
             {
@@ -413,10 +452,18 @@ public static class PHU_OpenGridView
             return false;
         }
 
-        double finalMinX = hasLeft ? left - FINAL_EXTRA_MARGIN : (KEEP_OLD_SIDE_IF_NO_GRID_FOUND ? oldMinX : allMinX - FINAL_EXTRA_MARGIN);
-        double finalMaxX = hasRight ? right + FINAL_EXTRA_MARGIN : (KEEP_OLD_SIDE_IF_NO_GRID_FOUND ? oldMaxX : allMaxX + FINAL_EXTRA_MARGIN);
-        double finalMinY = hasBottom ? bottom - FINAL_EXTRA_MARGIN : (KEEP_OLD_SIDE_IF_NO_GRID_FOUND ? oldMinY : allMinY - FINAL_EXTRA_MARGIN);
-        double finalMaxY = hasTop ? top + FINAL_EXTRA_MARGIN : (KEEP_OLD_SIDE_IF_NO_GRID_FOUND ? oldMaxY : allMaxY + FINAL_EXTRA_MARGIN);
+        double finalMinX = hasLeft
+            ? left - FINAL_EXTRA_MARGIN
+            : (KEEP_OLD_SIDE_IF_NO_GRID_FOUND ? oldMinX : allMinX - FINAL_EXTRA_MARGIN);
+        double finalMaxX = hasRight
+            ? right + FINAL_EXTRA_MARGIN
+            : (KEEP_OLD_SIDE_IF_NO_GRID_FOUND ? oldMaxX : allMaxX + FINAL_EXTRA_MARGIN);
+        double finalMinY = hasBottom
+            ? bottom - FINAL_EXTRA_MARGIN
+            : (KEEP_OLD_SIDE_IF_NO_GRID_FOUND ? oldMinY : allMinY - FINAL_EXTRA_MARGIN);
+        double finalMaxY = hasTop
+            ? top + FINAL_EXTRA_MARGIN
+            : (KEEP_OLD_SIDE_IF_NO_GRID_FOUND ? oldMaxY : allMaxY + FINAL_EXTRA_MARGIN);
 
         // Bảo vệ: nếu cạnh bị đảo hoặc quá nhỏ thì giữ cũ.
         if (finalMaxX <= finalMinX + 1.0)
@@ -431,10 +478,10 @@ public static class PHU_OpenGridView
             finalMaxY = oldMaxY;
         }
 
-
         AABB finalBox = new AABB(
             new Point(finalMinX, finalMinY, oldMinZ),
-            new Point(finalMaxX, finalMaxY, oldMaxZ));
+            new Point(finalMaxX, finalMaxY, oldMaxZ)
+        );
 
         view.RestrictionBox = finalBox;
         SafeModify(view, "final box");
@@ -464,7 +511,8 @@ public static class PHU_OpenGridView
         double oldMinZ,
         double oldMaxZ,
         out List<GridSeg> bestSegs,
-        out double usedExpand)
+        out double usedExpand
+    )
     {
         bestSegs = new List<GridSeg>();
         usedExpand = 0.0;
@@ -498,21 +546,24 @@ public static class PHU_OpenGridView
             }
             else
             {
-                if (!lockLeft) curMinX = oldMinX - step;
-                if (!lockRight) curMaxX = oldMaxX + step;
+                if (!lockLeft)
+                    curMinX = oldMinX - step;
+                if (!lockRight)
+                    curMaxX = oldMaxX + step;
 
                 if (!lockBottom)
                     curMinY = oldMinY - step;
 
-                if (!lockTop) curMaxY = oldMaxY + step;
+                if (!lockTop)
+                    curMaxY = oldMaxY + step;
             }
-
 
             // Chỉ mở X min/max và Y min/max.
             // Tuyệt đối giữ nguyên Depth up/down (Z min/max) để tránh Tekla regenerate sâu gây lag.
             AABB tempBox = new AABB(
                 new Point(curMinX, curMinY, oldMinZ),
-                new Point(curMaxX, curMaxY, oldMaxZ));
+                new Point(curMaxX, curMaxY, oldMaxZ)
+            );
 
             view.RestrictionBox = tempBox;
             SafeModify(view, "directional expand " + R(step));
@@ -524,20 +575,24 @@ public static class PHU_OpenGridView
                     drawing.CommitChanges();
                 }
             }
-            catch (Exception exCommit)
-            {
-            }
+            catch (Exception exCommit) { }
 
             List<GridSeg> segs = ReadGridSegments(view);
             DirectionStatus st = AnalyzeDirections(segs, oldMinX, oldMaxX, oldMinY, oldMaxY);
 
+            if (st.HasLeft)
+                lockLeft = true;
+            if (st.HasRight)
+                lockRight = true;
+            if (st.HasBottom && st.BottomDistance <= step + LINE_AXIS_TOLERANCE)
+                lockBottom = true;
+            if (st.HasTop)
+                lockTop = true;
 
-            if (st.HasLeft) lockLeft = true;
-            if (st.HasRight) lockRight = true;
-            if (st.HasBottom && st.BottomDistance <= step + LINE_AXIS_TOLERANCE) lockBottom = true;
-            if (st.HasTop) lockTop = true;
-
-            if (st.Score > bestScore || (st.Score == bestScore && (bestSegs == null || segs.Count < bestSegs.Count)))
+            if (
+                st.Score > bestScore
+                || (st.Score == bestScore && (bestSegs == null || segs.Count < bestSegs.Count))
+            )
             {
                 bestScore = st.Score;
                 bestSegs = segs;
@@ -577,7 +632,8 @@ public static class PHU_OpenGridView
         double oldMinX,
         double oldMaxX,
         double oldMinY,
-        double oldMaxY)
+        double oldMaxY
+    )
     {
         DirectionStatus st = new DirectionStatus();
         st.BottomDistance = double.PositiveInfinity;
@@ -592,15 +648,18 @@ public static class PHU_OpenGridView
 
         foreach (GridSeg g in segs)
         {
-            if (g == null) continue;
+            if (g == null)
+                continue;
 
             if (g.IsVertical)
             {
                 double x = g.ConstX;
                 // Hai huong doi dien bat buoc phai la hai grid khac nhau.
                 // Grid nam trong dai tolerance quanh tam khong khoa huong nao.
-                if (x < oldCenterX - LINE_AXIS_TOLERANCE) st.HasLeft = true;
-                if (x > oldCenterX + LINE_AXIS_TOLERANCE) st.HasRight = true;
+                if (x < oldCenterX - LINE_AXIS_TOLERANCE)
+                    st.HasLeft = true;
+                if (x > oldCenterX + LINE_AXIS_TOLERANCE)
+                    st.HasRight = true;
             }
 
             if (g.IsHorizontal)
@@ -612,19 +671,26 @@ public static class PHU_OpenGridView
                     st.HasBottom = true;
 
                     double d = oldMinY - y;
-                    if (d < 0.0) d = 0.0;
-                    if (d < st.BottomDistance) st.BottomDistance = d;
+                    if (d < 0.0)
+                        d = 0.0;
+                    if (d < st.BottomDistance)
+                        st.BottomDistance = d;
                 }
 
-                if (y > oldCenterY + LINE_AXIS_TOLERANCE) st.HasTop = true;
+                if (y > oldCenterY + LINE_AXIS_TOLERANCE)
+                    st.HasTop = true;
             }
         }
 
         st.Score = 0;
-        if (st.HasLeft) st.Score++;
-        if (st.HasRight) st.Score++;
-        if (st.HasBottom) st.Score++;
-        if (st.HasTop) st.Score++;
+        if (st.HasLeft)
+            st.Score++;
+        if (st.HasRight)
+            st.Score++;
+        if (st.HasBottom)
+            st.Score++;
+        if (st.HasTop)
+            st.Score++;
         st.IsEnough = st.Score >= 4;
 
         return st;
@@ -641,7 +707,8 @@ public static class PHU_OpenGridView
             while (e != null && e.MoveNext())
             {
                 object o = e.Current;
-                if (o == null) continue;
+                if (o == null)
+                    continue;
 
                 string tn = TypeName(o);
 
@@ -659,9 +726,7 @@ public static class PHU_OpenGridView
                 }
             }
         }
-        catch (Exception ex)
-        {
-        }
+        catch (Exception ex) { }
 
         try
         {
@@ -670,12 +735,14 @@ public static class PHU_OpenGridView
             Type gridLineType = typeof(Tekla.Structures.Drawing.GridLine);
             Type[] types = new Type[] { gridType, gridLineType };
 
-            MethodInfo m = view.GetType().GetMethod(
-                "GetObjects",
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-                null,
-                new Type[] { typeof(Type[]) },
-                null);
+            MethodInfo m = view.GetType()
+                .GetMethod(
+                    "GetObjects",
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                    null,
+                    new Type[] { typeof(Type[]) },
+                    null
+                );
 
             if (m != null)
             {
@@ -693,16 +760,15 @@ public static class PHU_OpenGridView
                 }
             }
         }
-        catch (Exception ex)
-        {
-        }
+        catch (Exception ex) { }
 
         return list;
     }
 
     private static void ReadGridObject(object grid, List<GridSeg> list)
     {
-        if (grid == null) return;
+        if (grid == null)
+            return;
 
         if (IGNORE_HIDDEN_GRID && IsHidden(grid))
         {
@@ -735,7 +801,8 @@ public static class PHU_OpenGridView
 
     private static GridSeg MakeSegFromGridLine(object gl)
     {
-        if (gl == null) return null;
+        if (gl == null)
+            return null;
 
         if (IGNORE_HIDDEN_GRID && IsHidden(gl))
             return null;
@@ -749,8 +816,10 @@ public static class PHU_OpenGridView
         string label = "";
         object l1 = GetProp(startLabel, "GridLabelText");
         object l2 = GetProp(endLabel, "GridLabelText");
-        if (l1 != null) label = l1.ToString();
-        else if (l2 != null) label = l2.ToString();
+        if (l1 != null)
+            label = l1.ToString();
+        else if (l2 != null)
+            label = l2.ToString();
 
         if (p1 == null || p2 == null)
             return null;
@@ -762,8 +831,12 @@ public static class PHU_OpenGridView
         g.X2 = p2.X;
         g.Y2 = p2.Y;
 
-        g.IsVertical = Math.Abs(g.X1 - g.X2) <= LINE_AXIS_TOLERANCE && Math.Abs(g.Y1 - g.Y2) > LINE_AXIS_TOLERANCE;
-        g.IsHorizontal = Math.Abs(g.Y1 - g.Y2) <= LINE_AXIS_TOLERANCE && Math.Abs(g.X1 - g.X2) > LINE_AXIS_TOLERANCE;
+        g.IsVertical =
+            Math.Abs(g.X1 - g.X2) <= LINE_AXIS_TOLERANCE
+            && Math.Abs(g.Y1 - g.Y2) > LINE_AXIS_TOLERANCE;
+        g.IsHorizontal =
+            Math.Abs(g.Y1 - g.Y2) <= LINE_AXIS_TOLERANCE
+            && Math.Abs(g.X1 - g.X2) > LINE_AXIS_TOLERANCE;
 
         g.ConstX = (g.X1 + g.X2) * 0.5;
         g.ConstY = (g.Y1 + g.Y2) * 0.5;
@@ -818,13 +891,44 @@ public static class PHU_OpenGridView
         return g;
     }
 
-    private static void ExpandByLabelVisual(object labelObj, ref double minX, ref double maxX, ref double minY, ref double maxY)
+    private static void ExpandByLabelVisual(
+        object labelObj,
+        ref double minX,
+        ref double maxX,
+        ref double minY,
+        ref double maxY
+    )
     {
-        if (labelObj == null) return;
+        if (labelObj == null)
+            return;
 
-        ExpandByPoint(GetPoint(GetProp(labelObj, "GridPoint")), ref minX, ref maxX, ref minY, ref maxY, 0, 0);
-        ExpandByPoint(GetPoint(GetProp(labelObj, "GridLabelPoint")), ref minX, ref maxX, ref minY, ref maxY, 0, 0);
-        ExpandByPoint(GetPoint(GetProp(labelObj, "OffsetGridPoint")), ref minX, ref maxX, ref minY, ref maxY, 0, 0);
+        ExpandByPoint(
+            GetPoint(GetProp(labelObj, "GridPoint")),
+            ref minX,
+            ref maxX,
+            ref minY,
+            ref maxY,
+            0,
+            0
+        );
+        ExpandByPoint(
+            GetPoint(GetProp(labelObj, "GridLabelPoint")),
+            ref minX,
+            ref maxX,
+            ref minY,
+            ref maxY,
+            0,
+            0
+        );
+        ExpandByPoint(
+            GetPoint(GetProp(labelObj, "OffsetGridPoint")),
+            ref minX,
+            ref maxX,
+            ref minY,
+            ref maxY,
+            0,
+            0
+        );
 
         Point center = GetPoint(GetProp(labelObj, "CenterPoint"));
         double frameW = ToDouble(GetProp(labelObj, "FrameWidth"), 0.0);
@@ -839,26 +943,40 @@ public static class PHU_OpenGridView
         ExpandByPoint(center, ref minX, ref maxX, ref minY, ref maxY, halfW + 10.0, halfH + 10.0);
     }
 
-    private static void ExpandByPoint(Point p, ref double minX, ref double maxX, ref double minY, ref double maxY, double halfW, double halfH)
+    private static void ExpandByPoint(
+        Point p,
+        ref double minX,
+        ref double maxX,
+        ref double minY,
+        ref double maxY,
+        double halfW,
+        double halfH
+    )
     {
-        if (p == null) return;
+        if (p == null)
+            return;
 
         double a = p.X - halfW;
         double b = p.X + halfW;
         double c = p.Y - halfH;
         double d = p.Y + halfH;
 
-        if (a < minX) minX = a;
-        if (b > maxX) maxX = b;
-        if (c < minY) minY = c;
-        if (d > maxY) maxY = d;
+        if (a < minX)
+            minX = a;
+        if (b > maxX)
+            maxX = b;
+        if (c < minY)
+            minY = c;
+        if (d > maxY)
+            maxY = d;
     }
 
     private static double ToDouble(object obj, double fallback)
     {
         try
         {
-            if (obj == null) return fallback;
+            if (obj == null)
+                return fallback;
             return Convert.ToDouble(obj);
         }
         catch
@@ -869,17 +987,22 @@ public static class PHU_OpenGridView
 
     private static void AddUnique(List<GridSeg> list, GridSeg seg)
     {
-        if (seg == null) return;
-        if (!seg.IsVertical && !seg.IsHorizontal) return;
+        if (seg == null)
+            return;
+        if (!seg.IsVertical && !seg.IsHorizontal)
+            return;
 
         foreach (GridSeg old in list)
         {
-            if (old == null) continue;
-            if (old.Label == seg.Label &&
-                Math.Abs(old.X1 - seg.X1) < 0.5 &&
-                Math.Abs(old.Y1 - seg.Y1) < 0.5 &&
-                Math.Abs(old.X2 - seg.X2) < 0.5 &&
-                Math.Abs(old.Y2 - seg.Y2) < 0.5)
+            if (old == null)
+                continue;
+            if (
+                old.Label == seg.Label
+                && Math.Abs(old.X1 - seg.X1) < 0.5
+                && Math.Abs(old.Y1 - seg.Y1) < 0.5
+                && Math.Abs(old.X2 - seg.X2) < 0.5
+                && Math.Abs(old.Y2 - seg.Y2) < 0.5
+            )
                 return;
         }
 
@@ -892,7 +1015,8 @@ public static class PHU_OpenGridView
         {
             object hideable = GetProp(drawingObject, "Hideable");
             object isHidden = GetProp(hideable, "IsHidden");
-            if (isHidden is bool) return (bool)isHidden;
+            if (isHidden is bool)
+                return (bool)isHidden;
         }
         catch { }
 
@@ -935,8 +1059,7 @@ public static class PHU_OpenGridView
 
             // Không có View được chọn: GetTargetViews chỉ trả về
             // Front/Top/Bottom/Back và không tự động đưa Section vào.
-            System.Collections.ArrayList viewsToSelect =
-                new System.Collections.ArrayList();
+            System.Collections.ArrayList viewsToSelect = new System.Collections.ArrayList();
 
             foreach (View view in targetViews)
                 viewsToSelect.Add(view);
@@ -981,10 +1104,7 @@ public static class PHU_OpenGridView
         }
     }
 
-    private static bool ValidateFitTargets(
-        Drawing drawing,
-        List<View> views,
-        out string message)
+    private static bool ValidateFitTargets(Drawing drawing, List<View> views, out string message)
     {
         message = FIT_PREREQUISITE_MESSAGE;
 
@@ -1000,12 +1120,14 @@ public static class PHU_OpenGridView
             string readyKey = GetOpenGridReadyViewKey(drawing, view);
             string snapshotKey = GetSessionViewKey(view);
 
-            bool ready = !string.IsNullOrEmpty(readyKey) &&
-                OPEN_GRID_READY_VIEW_KEYS.Contains(readyKey);
-            bool hasSheetSnapshot = !string.IsNullOrEmpty(snapshotKey) &&
-                FIT_ORIGINAL_SHEET_BOXES.ContainsKey(snapshotKey);
-            bool hasRestrictionSnapshot = !string.IsNullOrEmpty(snapshotKey) &&
-                FIT_ORIGINAL_RESTRICTION_BOXES.ContainsKey(snapshotKey);
+            bool ready =
+                !string.IsNullOrEmpty(readyKey) && OPEN_GRID_READY_VIEW_KEYS.Contains(readyKey);
+            bool hasSheetSnapshot =
+                !string.IsNullOrEmpty(snapshotKey)
+                && FIT_ORIGINAL_SHEET_BOXES.ContainsKey(snapshotKey);
+            bool hasRestrictionSnapshot =
+                !string.IsNullOrEmpty(snapshotKey)
+                && FIT_ORIGINAL_RESTRICTION_BOXES.ContainsKey(snapshotKey);
 
             if (!ready || !hasSheetSnapshot || !hasRestrictionSnapshot)
             {
@@ -1023,8 +1145,7 @@ public static class PHU_OpenGridView
         }
 
         message = FIT_PREREQUISITE_MESSAGE;
-        message += "\nView chưa Open Grid: " +
-            string.Join(", ", missingViews.ToArray());
+        message += "\nView chưa Open Grid: " + string.Join(", ", missingViews.ToArray());
         return false;
     }
 
@@ -1060,15 +1181,25 @@ public static class PHU_OpenGridView
 
     private static bool IsAutomaticGridViewType(View view)
     {
-        return ViewTypeMatches(view, "FrontView", "Front") ||
-               ViewTypeMatches(view, "TopView", "Top") ||
-               ViewTypeMatches(view, "BottomView", "Bottom") ||
-               ViewTypeMatches(view, "BackView", "Back");
+        return ViewTypeMatches(view, "FrontView", "Front")
+            || ViewTypeMatches(view, "TopView", "Top")
+            || ViewTypeMatches(view, "BottomView", "Bottom")
+            || ViewTypeMatches(view, "BackView", "Back");
     }
 
     private static bool IsSectionViewType(View view)
     {
         return ViewTypeMatches(view, "SectionView", "Section");
+    }
+
+    /// <summary>
+    /// Shared semantic FRONT test for features that must target the same view
+    /// as OPEN GRID / FIT GRID. This reads Tekla ViewType only; it never infers
+    /// the role from sheet position, view size, part count or drawing mark.
+    /// </summary>
+    public static bool IsFrontView(View view)
+    {
+        return ViewTypeMatches(view, "FrontView", "Front");
     }
 
     // Cung cach xet ViewType dang dung trong PHU_Shape_L:
@@ -1081,15 +1212,23 @@ public static class PHU_OpenGridView
                 return false;
 
             string text = "";
-            try { text = view.ViewType.ToString(); }
-            catch { text = ""; }
+            try
+            {
+                text = view.ViewType.ToString();
+            }
+            catch
+            {
+                text = "";
+            }
 
-            if (!string.IsNullOrEmpty(exactViewTypeName) &&
-                string.Equals(text, exactViewTypeName, StringComparison.OrdinalIgnoreCase))
+            if (
+                !string.IsNullOrEmpty(exactViewTypeName)
+                && string.Equals(text, exactViewTypeName, StringComparison.OrdinalIgnoreCase)
+            )
                 return true;
 
-            return !string.IsNullOrEmpty(fallbackText) &&
-                   text.IndexOf(fallbackText, StringComparison.OrdinalIgnoreCase) >= 0;
+            return !string.IsNullOrEmpty(fallbackText)
+                && text.IndexOf(fallbackText, StringComparison.OrdinalIgnoreCase) >= 0;
         }
         catch
         {
@@ -1171,23 +1310,26 @@ public static class PHU_OpenGridView
         {
             bool ok = view.Modify();
         }
-        catch (Exception ex)
-        {
-        }
+        catch (Exception ex) { }
     }
 
     private static object GetProp(object obj, string name)
     {
-        if (obj == null) return null;
+        if (obj == null)
+            return null;
 
         try
         {
-            PropertyInfo p = obj.GetType().GetProperty(
-                name,
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            PropertyInfo p = obj.GetType()
+                .GetProperty(
+                    name,
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic
+                );
 
-            if (p == null) return null;
-            if (p.GetIndexParameters().Length > 0) return null;
+            if (p == null)
+                return null;
+            if (p.GetIndexParameters().Length > 0)
+                return null;
 
             return p.GetValue(obj, null);
         }
@@ -1199,18 +1341,22 @@ public static class PHU_OpenGridView
 
     private static object Invoke0(object obj, string name)
     {
-        if (obj == null) return null;
+        if (obj == null)
+            return null;
 
         try
         {
-            MethodInfo m = obj.GetType().GetMethod(
-                name,
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-                null,
-                Type.EmptyTypes,
-                null);
+            MethodInfo m = obj.GetType()
+                .GetMethod(
+                    name,
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                    null,
+                    Type.EmptyTypes,
+                    null
+                );
 
-            if (m == null) return null;
+            if (m == null)
+                return null;
             return m.Invoke(obj, null);
         }
         catch (Exception ex)
@@ -1222,16 +1368,19 @@ public static class PHU_OpenGridView
     private static Point GetPoint(object obj)
     {
         Point p = obj as Point;
-        if (p != null) return p;
+        if (p != null)
+            return p;
 
         try
         {
-            if (obj == null) return null;
+            if (obj == null)
+                return null;
             object ox = GetProp(obj, "X");
             object oy = GetProp(obj, "Y");
             object oz = GetProp(obj, "Z");
 
-            if (ox == null || oy == null) return null;
+            if (ox == null || oy == null)
+                return null;
 
             double x = Convert.ToDouble(ox);
             double y = Convert.ToDouble(oy);
@@ -1248,8 +1397,10 @@ public static class PHU_OpenGridView
     {
         try
         {
-            if (v == null) return "";
-            if (!string.IsNullOrEmpty(v.Name)) return v.Name;
+            if (v == null)
+                return "";
+            if (!string.IsNullOrEmpty(v.Name))
+                return v.Name;
         }
         catch { }
 
@@ -1258,16 +1409,30 @@ public static class PHU_OpenGridView
 
     private static string SafeValue(object o)
     {
-        if (o == null) return "";
-        try { return o.ToString(); }
-        catch { return ""; }
+        if (o == null)
+            return "";
+        try
+        {
+            return o.ToString();
+        }
+        catch
+        {
+            return "";
+        }
     }
 
     private static string TypeName(object o)
     {
-        if (o == null) return "";
-        try { return o.GetType().FullName; }
-        catch { return ""; }
+        if (o == null)
+            return "";
+        try
+        {
+            return o.GetType().FullName;
+        }
+        catch
+        {
+            return "";
+        }
     }
 
     private static bool IsFinite(double v)
@@ -1279,7 +1444,6 @@ public static class PHU_OpenGridView
     {
         return Math.Round(v, 3).ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
-
 
     // =================================================
     // PHU KEEP VIEW POSITION / GAP 20
@@ -1379,9 +1543,10 @@ public static class PHU_OpenGridView
             // Identifier.ID is available in normal Tekla sessions.  The
             // reference hash is only a session-local fallback; unlike a View
             // name it cannot alias two Drawing objects in this process.
-            return "DRAWING_REF:" +
-                System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(drawing).ToString(
-                    System.Globalization.CultureInfo.InvariantCulture);
+            return "DRAWING_REF:"
+                + System
+                    .Runtime.CompilerServices.RuntimeHelpers.GetHashCode(drawing)
+                    .ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
         catch
         {
@@ -1400,9 +1565,11 @@ public static class PHU_OpenGridView
             string viewKey = GetViewStableKey(view);
             if (string.IsNullOrEmpty(viewKey))
             {
-                viewKey = "VIEW_REF:" +
-                    System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(view).ToString(
-                        System.Globalization.CultureInfo.InvariantCulture);
+                viewKey =
+                    "VIEW_REF:"
+                    + System
+                        .Runtime.CompilerServices.RuntimeHelpers.GetHashCode(view)
+                        .ToString(System.Globalization.CultureInfo.InvariantCulture);
             }
 
             return drawingKey + "::" + viewKey;
@@ -1423,9 +1590,11 @@ public static class PHU_OpenGridView
         {
             try
             {
-                viewKey = "VIEW_REF:" +
-                    System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(view).ToString(
-                        System.Globalization.CultureInfo.InvariantCulture);
+                viewKey =
+                    "VIEW_REF:"
+                    + System
+                        .Runtime.CompilerServices.RuntimeHelpers.GetHashCode(view)
+                        .ToString(System.Globalization.CultureInfo.InvariantCulture);
             }
             catch
             {
@@ -1433,9 +1602,7 @@ public static class PHU_OpenGridView
             }
         }
 
-        return string.IsNullOrEmpty(viewKey)
-            ? ""
-            : OPEN_GRID_READY_DRAWING_KEY + "::" + viewKey;
+        return string.IsNullOrEmpty(viewKey) ? "" : OPEN_GRID_READY_DRAWING_KEY + "::" + viewKey;
     }
 
     private static void EnsureOpenGridSessionForDrawing(Drawing drawing)
@@ -1451,10 +1618,7 @@ public static class PHU_OpenGridView
             return;
         }
 
-        if (!string.Equals(
-                OPEN_GRID_READY_DRAWING_KEY,
-                drawingKey,
-                StringComparison.Ordinal))
+        if (!string.Equals(OPEN_GRID_READY_DRAWING_KEY, drawingKey, StringComparison.Ordinal))
         {
             OPEN_GRID_READY_VIEW_KEYS.Clear();
             FIT_ORIGINAL_SHEET_BOXES.Clear();
@@ -1470,17 +1634,16 @@ public static class PHU_OpenGridView
         if (string.IsNullOrEmpty(readyKey) || string.IsNullOrEmpty(snapshotKey))
             return;
 
-        if (FIT_ORIGINAL_SHEET_BOXES.ContainsKey(snapshotKey) &&
-            FIT_ORIGINAL_RESTRICTION_BOXES.ContainsKey(snapshotKey))
+        if (
+            FIT_ORIGINAL_SHEET_BOXES.ContainsKey(snapshotKey)
+            && FIT_ORIGINAL_RESTRICTION_BOXES.ContainsKey(snapshotKey)
+        )
         {
             OPEN_GRID_READY_VIEW_KEYS.Add(readyKey);
         }
     }
 
-    private static void InvalidateOpenGridReady(
-        Drawing drawing,
-        View view,
-        bool removeSnapshots)
+    private static void InvalidateOpenGridReady(Drawing drawing, View view, bool removeSnapshots)
     {
         string readyKey = GetOpenGridReadyViewKey(drawing, view);
         if (!string.IsNullOrEmpty(readyKey))
@@ -1522,9 +1685,7 @@ public static class PHU_OpenGridView
                     FIT_ORIGINAL_RESTRICTION_BOXES[key] = rb;
             }
         }
-        catch
-        {
-        }
+        catch { }
     }
 
     private static bool TryGetFitOriginalSheetBox(View view, out ViewSheetBox box)
@@ -1557,7 +1718,12 @@ public static class PHU_OpenGridView
                 return false;
 
             AABB saved;
-            if (!FIT_ORIGINAL_RESTRICTION_BOXES.TryGetValue(key, out saved) || saved == null || saved.MinPoint == null || saved.MaxPoint == null)
+            if (
+                !FIT_ORIGINAL_RESTRICTION_BOXES.TryGetValue(key, out saved)
+                || saved == null
+                || saved.MinPoint == null
+                || saved.MaxPoint == null
+            )
                 return false;
 
             Point min = new Point(saved.MinPoint.X, saved.MinPoint.Y, saved.MinPoint.Z);
@@ -1588,9 +1754,7 @@ public static class PHU_OpenGridView
             if (!string.IsNullOrEmpty(name))
                 return "NAME:" + name;
         }
-        catch
-        {
-        }
+        catch { }
 
         return "";
     }
@@ -1606,11 +1770,13 @@ public static class PHU_OpenGridView
             if (!TryGetViewSheetBox(view, out newBox))
                 return;
 
-            MoveViewBySheetDelta(view, originalBox.CenterX - newBox.CenterX, originalBox.CenterY - newBox.CenterY);
+            MoveViewBySheetDelta(
+                view,
+                originalBox.CenterX - newBox.CenterX,
+                originalBox.CenterY - newBox.CenterY
+            );
         }
-        catch
-        {
-        }
+        catch { }
     }
 
     private static void KeepSelectedViewsNonOverlapping(List<View> views, double gap)
@@ -1631,12 +1797,15 @@ public static class PHU_OpenGridView
                     boxes.Add(b);
             }
 
-            boxes.Sort(delegate (ViewSheetBox a, ViewSheetBox b)
-            {
-                int x = a.MinX.CompareTo(b.MinX);
-                if (x != 0) return x;
-                return b.MaxY.CompareTo(a.MaxY);
-            });
+            boxes.Sort(
+                delegate(ViewSheetBox a, ViewSheetBox b)
+                {
+                    int x = a.MinX.CompareTo(b.MinX);
+                    if (x != 0)
+                        return x;
+                    return b.MaxY.CompareTo(a.MaxY);
+                }
+            );
 
             for (int i = 0; i < boxes.Count; i++)
             {
@@ -1673,9 +1842,7 @@ public static class PHU_OpenGridView
                 }
             }
         }
-        catch
-        {
-        }
+        catch { }
     }
 
     private static void MoveViewBySheetDelta(View view, double dx, double dy)
@@ -1696,9 +1863,7 @@ public static class PHU_OpenGridView
             if (TrySetViewOrigin(view, newOrigin))
                 SafeModify(view, "move view");
         }
-        catch
-        {
-        }
+        catch { }
     }
 
     private static bool TrySetViewOrigin(View view, Point origin)
@@ -1708,9 +1873,8 @@ public static class PHU_OpenGridView
             if (view == null || origin == null)
                 return false;
 
-            PropertyInfo prop = view.GetType().GetProperty(
-                "Origin",
-                BindingFlags.Public | BindingFlags.Instance);
+            PropertyInfo prop = view.GetType()
+                .GetProperty("Origin", BindingFlags.Public | BindingFlags.Instance);
 
             if (prop == null || !prop.CanWrite)
                 return false;
@@ -1801,8 +1965,10 @@ public static class PHU_OpenGridView
 
             ViewSheetBox topBox;
             ViewSheetBox frontBox;
-            if (!TryGetViewSheetBox(topView, out topBox) ||
-                !TryGetViewSheetBox(frontView, out frontBox))
+            if (
+                !TryGetViewSheetBox(topView, out topBox)
+                || !TryGetViewSheetBox(frontView, out frontBox)
+            )
             {
                 result.Success = false;
                 result.Applied = false;
@@ -1810,30 +1976,24 @@ public static class PHU_OpenGridView
                 return result;
             }
 
-            double topBottomOffset =
-                originalTopOrigin.Y - topBox.MinY;
-            double frontTopOffset =
-                frontBox.MaxY - originalFrontOrigin.Y;
+            double topBottomOffset = originalTopOrigin.Y - topBox.MinY;
+            double frontTopOffset = frontBox.MaxY - originalFrontOrigin.Y;
 
             double desiredFrontOriginX = originalTopOrigin.X;
             double desiredFrontOriginY =
-                originalTopOrigin.Y -
-                topBottomOffset -
-                FIT_GRID_TOP_FRONT_GAP -
-                frontTopOffset;
+                originalTopOrigin.Y - topBottomOffset - FIT_GRID_TOP_FRONT_GAP - frontTopOffset;
 
             Point desiredFrontOrigin = new Point(
                 desiredFrontOriginX,
                 desiredFrontOriginY,
-                originalFrontOrigin.Z);
+                originalFrontOrigin.Z
+            );
 
             double currentGap = topBox.MinY - frontBox.MaxY;
             bool originXAlreadyCorrect =
-                Math.Abs(originalFrontOrigin.X - originalTopOrigin.X) <=
-                FIT_GRID_ORIGIN_TOLERANCE;
+                Math.Abs(originalFrontOrigin.X - originalTopOrigin.X) <= FIT_GRID_ORIGIN_TOLERANCE;
             bool gapAlreadyCorrect =
-                Math.Abs(currentGap - FIT_GRID_TOP_FRONT_GAP) <=
-                FIT_GRID_GAP_TOLERANCE;
+                Math.Abs(currentGap - FIT_GRID_TOP_FRONT_GAP) <= FIT_GRID_GAP_TOLERANCE;
             bool orderAlreadyCorrect = frontBox.MaxY < topBox.MinY;
 
             if (originXAlreadyCorrect && gapAlreadyCorrect && orderAlreadyCorrect)
@@ -1862,10 +2022,10 @@ public static class PHU_OpenGridView
             ViewSheetBox verifiedFrontBox = null;
 
             bool verifiedBoxes =
-                verifiedTopOrigin != null &&
-                verifiedFrontOrigin != null &&
-                TryGetViewSheetBox(topView, out verifiedTopBox) &&
-                TryGetViewSheetBox(frontView, out verifiedFrontBox);
+                verifiedTopOrigin != null
+                && verifiedFrontOrigin != null
+                && TryGetViewSheetBox(topView, out verifiedTopBox)
+                && TryGetViewSheetBox(frontView, out verifiedFrontBox);
 
             bool originXCorrect = false;
             bool gapCorrect = false;
@@ -1877,26 +2037,29 @@ public static class PHU_OpenGridView
             {
                 double actualGap = verifiedTopBox.MinY - verifiedFrontBox.MaxY;
                 originXCorrect =
-                    Math.Abs(verifiedFrontOrigin.X - verifiedTopOrigin.X) <=
-                    FIT_GRID_ORIGIN_TOLERANCE;
-                gapCorrect =
-                    Math.Abs(actualGap - FIT_GRID_TOP_FRONT_GAP) <=
-                    FIT_GRID_GAP_TOLERANCE;
+                    Math.Abs(verifiedFrontOrigin.X - verifiedTopOrigin.X)
+                    <= FIT_GRID_ORIGIN_TOLERANCE;
+                gapCorrect = Math.Abs(actualGap - FIT_GRID_TOP_FRONT_GAP) <= FIT_GRID_GAP_TOLERANCE;
                 orderCorrect = verifiedFrontBox.MaxY < verifiedTopBox.MinY;
                 topOriginUnchanged =
-                    Math.Abs(verifiedTopOrigin.X - originalTopOrigin.X) <=
-                    FIT_GRID_ORIGIN_TOLERANCE &&
-                    Math.Abs(verifiedTopOrigin.Y - originalTopOrigin.Y) <=
-                    FIT_GRID_ORIGIN_TOLERANCE &&
-                    Math.Abs(verifiedTopOrigin.Z - originalTopOrigin.Z) <=
-                    FIT_GRID_ORIGIN_TOLERANCE;
+                    Math.Abs(verifiedTopOrigin.X - originalTopOrigin.X) <= FIT_GRID_ORIGIN_TOLERANCE
+                    && Math.Abs(verifiedTopOrigin.Y - originalTopOrigin.Y)
+                        <= FIT_GRID_ORIGIN_TOLERANCE
+                    && Math.Abs(verifiedTopOrigin.Z - originalTopOrigin.Z)
+                        <= FIT_GRID_ORIGIN_TOLERANCE;
                 frontZUnchanged =
-                    Math.Abs(verifiedFrontOrigin.Z - originalFrontOrigin.Z) <=
-                    FIT_GRID_ORIGIN_TOLERANCE;
+                    Math.Abs(verifiedFrontOrigin.Z - originalFrontOrigin.Z)
+                    <= FIT_GRID_ORIGIN_TOLERANCE;
             }
 
-            if (verifiedBoxes && originXCorrect && gapCorrect && orderCorrect &&
-                topOriginUnchanged && frontZUnchanged)
+            if (
+                verifiedBoxes
+                && originXCorrect
+                && gapCorrect
+                && orderCorrect
+                && topOriginUnchanged
+                && frontZUnchanged
+            )
             {
                 result.Success = true;
                 result.Applied = true;
@@ -1904,10 +2067,7 @@ public static class PHU_OpenGridView
                 return result;
             }
 
-            RestoreFrontOriginAfterArrangeFailure(
-                drawing,
-                frontView,
-                originalFrontOrigin);
+            RestoreFrontOriginAfterArrangeFailure(drawing, frontView, originalFrontOrigin);
             frontOriginChanged = false;
 
             result.Success = false;
@@ -1919,10 +2079,7 @@ public static class PHU_OpenGridView
         {
             if (frontOriginChanged)
             {
-                RestoreFrontOriginAfterArrangeFailure(
-                    drawing,
-                    frontView,
-                    originalFrontOrigin);
+                RestoreFrontOriginAfterArrangeFailure(drawing, frontView, originalFrontOrigin);
             }
 
             result.Success = false;
@@ -1932,11 +2089,56 @@ public static class PHU_OpenGridView
         }
     }
 
-    public static FitGridOriginArrangeResult
-        ArrangeTopFrontHorizontallyByOriginAfterGridFit()
+    public static FitGridOriginArrangeResult VerifyTopFrontGreenBoxGap(
+        View topView,
+        View frontView,
+        double expectedGap
+    )
     {
-        FitGridOriginArrangeResult result =
-            new FitGridOriginArrangeResult();
+        FitGridOriginArrangeResult result = new FitGridOriginArrangeResult();
+
+        try
+        {
+            ViewSheetBox topBox;
+            ViewSheetBox frontBox;
+            if (
+                topView == null
+                || frontView == null
+                || !TryGetViewSheetBox(topView, out topBox)
+                || !TryGetViewSheetBox(frontView, out frontBox)
+            )
+            {
+                result.Message = "Không đọc lại được khung xanh TOP/FRONT sau DIM.";
+                return result;
+            }
+
+            double actualGap = topBox.MinY - frontBox.MaxY;
+            bool orderCorrect = frontBox.MaxY < topBox.MinY;
+            bool gapCorrect = Math.Abs(actualGap - expectedGap) <= FIT_GRID_GAP_TOLERANCE;
+
+            result.Success = orderCorrect && gapCorrect;
+            result.Applied = result.Success;
+            result.Message = result.Success
+                ? "TOP/FRONT verified after DIM, Gap = " + expectedGap.ToString("0.###") + "."
+                : "TOP/FRONT sau DIM chưa đúng: expected Gap = "
+                    + expectedGap.ToString("0.###")
+                    + ", actual Gap = "
+                    + actualGap.ToString("0.###")
+                    + ".";
+            return result;
+        }
+        catch (Exception ex)
+        {
+            result.Success = false;
+            result.Applied = false;
+            result.Message = "Không verify được TOP/FRONT sau DIM: " + ex.Message;
+            return result;
+        }
+    }
+
+    public static FitGridOriginArrangeResult ArrangeTopFrontHorizontallyByOriginAfterGridFit()
+    {
+        FitGridOriginArrangeResult result = new FitGridOriginArrangeResult();
         Drawing drawing = null;
         View frontView = null;
         Point originalFrontOrigin = null;
@@ -1949,8 +2151,7 @@ public static class PHU_OpenGridView
             {
                 result.Success = false;
                 result.Applied = false;
-                result.Message =
-                    "⚠  Fit Grid hoàn tất nhưng sắp xếp ngang theo Origin thất bại.";
+                result.Message = "⚠  Fit Grid hoàn tất nhưng sắp xếp ngang theo Origin thất bại.";
                 return result;
             }
 
@@ -1959,8 +2160,7 @@ public static class PHU_OpenGridView
             {
                 result.Success = false;
                 result.Applied = false;
-                result.Message =
-                    "⚠  Fit Grid hoàn tất nhưng sắp xếp ngang theo Origin thất bại.";
+                result.Message = "⚠  Fit Grid hoàn tất nhưng sắp xếp ngang theo Origin thất bại.";
                 return result;
             }
 
@@ -2009,24 +2209,19 @@ public static class PHU_OpenGridView
             {
                 result.Success = false;
                 result.Applied = false;
-                result.Message =
-                    "⚠  Fit Grid hoàn tất nhưng sắp xếp ngang theo Origin thất bại.";
+                result.Message = "⚠  Fit Grid hoàn tất nhưng sắp xếp ngang theo Origin thất bại.";
                 return result;
             }
 
-            Point originalTopOrigin =
-                new Point(topOrigin.X, topOrigin.Y, topOrigin.Z);
-            originalFrontOrigin =
-                new Point(frontOrigin.X, frontOrigin.Y, frontOrigin.Z);
+            Point originalTopOrigin = new Point(topOrigin.X, topOrigin.Y, topOrigin.Z);
+            originalFrontOrigin = new Point(frontOrigin.X, frontOrigin.Y, frontOrigin.Z);
 
             ViewSheetBox originalTopBox;
             ViewSheetBox originalFrontBox;
-            if (!TryGetFitOriginalSheetBox(
-                    topView,
-                    out originalTopBox) ||
-                !TryGetFitOriginalSheetBox(
-                    frontView,
-                    out originalFrontBox))
+            if (
+                !TryGetFitOriginalSheetBox(topView, out originalTopBox)
+                || !TryGetFitOriginalSheetBox(frontView, out originalFrontBox)
+            )
             {
                 result.Success = false;
                 result.Applied = false;
@@ -2037,36 +2232,33 @@ public static class PHU_OpenGridView
 
             ViewSheetBox topBox;
             ViewSheetBox frontBox;
-            if (!TryGetViewSheetBox(topView, out topBox) ||
-                !TryGetViewSheetBox(frontView, out frontBox))
+            if (
+                !TryGetViewSheetBox(topView, out topBox)
+                || !TryGetViewSheetBox(frontView, out frontBox)
+            )
             {
                 result.Success = false;
                 result.Applied = false;
-                result.Message =
-                    "⚠  Fit Grid hoàn tất nhưng sắp xếp ngang theo Origin thất bại.";
+                result.Message = "⚠  Fit Grid hoàn tất nhưng sắp xếp ngang theo Origin thất bại.";
                 return result;
             }
 
             bool frontWasLeft = false;
             bool frontWasRight = false;
 
-            if (originalFrontBox.MaxX <=
-                originalTopBox.MinX + FIT_GRID_ORIGIN_TOLERANCE)
+            if (originalFrontBox.MaxX <= originalTopBox.MinX + FIT_GRID_ORIGIN_TOLERANCE)
             {
                 frontWasLeft = true;
             }
-            else if (originalFrontBox.MinX >=
-                     originalTopBox.MaxX - FIT_GRID_ORIGIN_TOLERANCE)
+            else if (originalFrontBox.MinX >= originalTopBox.MaxX - FIT_GRID_ORIGIN_TOLERANCE)
             {
                 frontWasRight = true;
             }
-            else if (originalFrontBox.CenterX <
-                     originalTopBox.CenterX - FIT_GRID_ORIGIN_TOLERANCE)
+            else if (originalFrontBox.CenterX < originalTopBox.CenterX - FIT_GRID_ORIGIN_TOLERANCE)
             {
                 frontWasLeft = true;
             }
-            else if (originalFrontBox.CenterX >
-                     originalTopBox.CenterX + FIT_GRID_ORIGIN_TOLERANCE)
+            else if (originalFrontBox.CenterX > originalTopBox.CenterX + FIT_GRID_ORIGIN_TOLERANCE)
             {
                 frontWasRight = true;
             }
@@ -2082,21 +2274,15 @@ public static class PHU_OpenGridView
             double desiredFrontOriginX;
             if (frontWasRight)
             {
-                double frontLeftOffset =
-                    originalFrontOrigin.X - frontBox.MinX;
+                double frontLeftOffset = originalFrontOrigin.X - frontBox.MinX;
                 desiredFrontOriginX =
-                    topBox.MaxX +
-                    FIT_GRID_TOP_FRONT_HORIZONTAL_GAP +
-                    frontLeftOffset;
+                    topBox.MaxX + FIT_GRID_TOP_FRONT_HORIZONTAL_GAP + frontLeftOffset;
             }
             else if (frontWasLeft)
             {
-                double frontRightOffset =
-                    frontBox.MaxX - originalFrontOrigin.X;
+                double frontRightOffset = frontBox.MaxX - originalFrontOrigin.X;
                 desiredFrontOriginX =
-                    topBox.MinX -
-                    FIT_GRID_TOP_FRONT_HORIZONTAL_GAP -
-                    frontRightOffset;
+                    topBox.MinX - FIT_GRID_TOP_FRONT_HORIZONTAL_GAP - frontRightOffset;
             }
             else
             {
@@ -2111,25 +2297,21 @@ public static class PHU_OpenGridView
             Point desiredFrontOrigin = new Point(
                 desiredFrontOriginX,
                 desiredFrontOriginY,
-                originalFrontOrigin.Z);
+                originalFrontOrigin.Z
+            );
 
             double currentGap = frontWasRight
                 ? frontBox.MinX - topBox.MaxX
                 : topBox.MinX - frontBox.MaxX;
             bool originYAlreadyCorrect =
-                Math.Abs(originalFrontOrigin.Y - originalTopOrigin.Y) <=
-                FIT_GRID_ORIGIN_TOLERANCE;
+                Math.Abs(originalFrontOrigin.Y - originalTopOrigin.Y) <= FIT_GRID_ORIGIN_TOLERANCE;
             bool gapAlreadyCorrect =
-                Math.Abs(currentGap -
-                         FIT_GRID_TOP_FRONT_HORIZONTAL_GAP) <=
-                FIT_GRID_GAP_TOLERANCE;
+                Math.Abs(currentGap - FIT_GRID_TOP_FRONT_HORIZONTAL_GAP) <= FIT_GRID_GAP_TOLERANCE;
             bool sideAlreadyCorrect = frontWasRight
                 ? frontBox.MinX > topBox.MaxX
                 : frontBox.MaxX < topBox.MinX;
 
-            if (originYAlreadyCorrect &&
-                gapAlreadyCorrect &&
-                sideAlreadyCorrect)
+            if (originYAlreadyCorrect && gapAlreadyCorrect && sideAlreadyCorrect)
             {
                 result.Success = true;
                 result.Applied = true;
@@ -2141,21 +2323,15 @@ public static class PHU_OpenGridView
 
             if (!TrySetViewOrigin(frontView, desiredFrontOrigin))
             {
-                RestoreFrontOriginAfterArrangeFailure(
-                    drawing,
-                    frontView,
-                    originalFrontOrigin);
+                RestoreFrontOriginAfterArrangeFailure(drawing, frontView, originalFrontOrigin);
                 result.Success = false;
                 result.Applied = false;
-                result.Message =
-                    "⚠  Fit Grid hoàn tất nhưng sắp xếp ngang theo Origin thất bại.";
+                result.Message = "⚠  Fit Grid hoàn tất nhưng sắp xếp ngang theo Origin thất bại.";
                 return result;
             }
 
             frontOriginChanged = true;
-            SafeModify(
-                frontView,
-                "arrange top front horizontally by origin");
+            SafeModify(frontView, "arrange top front horizontally by origin");
             drawing.CommitChanges();
 
             Point verifiedTopOrigin = topView.Origin;
@@ -2164,10 +2340,10 @@ public static class PHU_OpenGridView
             ViewSheetBox verifiedFrontBox = null;
 
             bool verifiedBoxes =
-                verifiedTopOrigin != null &&
-                verifiedFrontOrigin != null &&
-                TryGetViewSheetBox(topView, out verifiedTopBox) &&
-                TryGetViewSheetBox(frontView, out verifiedFrontBox);
+                verifiedTopOrigin != null
+                && verifiedFrontOrigin != null
+                && TryGetViewSheetBox(topView, out verifiedTopBox)
+                && TryGetViewSheetBox(frontView, out verifiedFrontBox);
 
             bool topOriginUnchanged = false;
             bool frontZUnchanged = false;
@@ -2178,47 +2354,43 @@ public static class PHU_OpenGridView
             if (verifiedBoxes)
             {
                 topOriginUnchanged =
-                    Math.Abs(verifiedTopOrigin.X - originalTopOrigin.X) <=
-                    FIT_GRID_ORIGIN_TOLERANCE &&
-                    Math.Abs(verifiedTopOrigin.Y - originalTopOrigin.Y) <=
-                    FIT_GRID_ORIGIN_TOLERANCE &&
-                    Math.Abs(verifiedTopOrigin.Z - originalTopOrigin.Z) <=
-                    FIT_GRID_ORIGIN_TOLERANCE;
+                    Math.Abs(verifiedTopOrigin.X - originalTopOrigin.X) <= FIT_GRID_ORIGIN_TOLERANCE
+                    && Math.Abs(verifiedTopOrigin.Y - originalTopOrigin.Y)
+                        <= FIT_GRID_ORIGIN_TOLERANCE
+                    && Math.Abs(verifiedTopOrigin.Z - originalTopOrigin.Z)
+                        <= FIT_GRID_ORIGIN_TOLERANCE;
                 frontZUnchanged =
-                    Math.Abs(verifiedFrontOrigin.Z - originalFrontOrigin.Z) <=
-                    FIT_GRID_ORIGIN_TOLERANCE;
+                    Math.Abs(verifiedFrontOrigin.Z - originalFrontOrigin.Z)
+                    <= FIT_GRID_ORIGIN_TOLERANCE;
                 originYCorrect =
-                    Math.Abs(verifiedFrontOrigin.Y - verifiedTopOrigin.Y) <=
-                    FIT_GRID_ORIGIN_TOLERANCE;
+                    Math.Abs(verifiedFrontOrigin.Y - verifiedTopOrigin.Y)
+                    <= FIT_GRID_ORIGIN_TOLERANCE;
 
                 double actualGap;
                 if (frontWasRight)
                 {
-                    actualGap =
-                        verifiedFrontBox.MinX - verifiedTopBox.MaxX;
-                    sideCorrect =
-                        verifiedFrontBox.MinX > verifiedTopBox.MaxX;
+                    actualGap = verifiedFrontBox.MinX - verifiedTopBox.MaxX;
+                    sideCorrect = verifiedFrontBox.MinX > verifiedTopBox.MaxX;
                 }
                 else
                 {
-                    actualGap =
-                        verifiedTopBox.MinX - verifiedFrontBox.MaxX;
-                    sideCorrect =
-                        verifiedFrontBox.MaxX < verifiedTopBox.MinX;
+                    actualGap = verifiedTopBox.MinX - verifiedFrontBox.MaxX;
+                    sideCorrect = verifiedFrontBox.MaxX < verifiedTopBox.MinX;
                 }
 
                 gapCorrect =
-                    Math.Abs(actualGap -
-                             FIT_GRID_TOP_FRONT_HORIZONTAL_GAP) <=
-                    FIT_GRID_GAP_TOLERANCE;
+                    Math.Abs(actualGap - FIT_GRID_TOP_FRONT_HORIZONTAL_GAP)
+                    <= FIT_GRID_GAP_TOLERANCE;
             }
 
-            if (verifiedBoxes &&
-                topOriginUnchanged &&
-                frontZUnchanged &&
-                originYCorrect &&
-                sideCorrect &&
-                gapCorrect)
+            if (
+                verifiedBoxes
+                && topOriginUnchanged
+                && frontZUnchanged
+                && originYCorrect
+                && sideCorrect
+                && gapCorrect
+            )
             {
                 result.Success = true;
                 result.Applied = true;
@@ -2228,32 +2400,24 @@ public static class PHU_OpenGridView
                 return result;
             }
 
-            RestoreFrontOriginAfterArrangeFailure(
-                drawing,
-                frontView,
-                originalFrontOrigin);
+            RestoreFrontOriginAfterArrangeFailure(drawing, frontView, originalFrontOrigin);
             frontOriginChanged = false;
 
             result.Success = false;
             result.Applied = false;
-            result.Message =
-                "⚠  Fit Grid hoàn tất nhưng sắp xếp ngang theo Origin thất bại.";
+            result.Message = "⚠  Fit Grid hoàn tất nhưng sắp xếp ngang theo Origin thất bại.";
             return result;
         }
         catch
         {
             if (frontOriginChanged)
             {
-                RestoreFrontOriginAfterArrangeFailure(
-                    drawing,
-                    frontView,
-                    originalFrontOrigin);
+                RestoreFrontOriginAfterArrangeFailure(drawing, frontView, originalFrontOrigin);
             }
 
             result.Success = false;
             result.Applied = false;
-            result.Message =
-                "⚠  Fit Grid hoàn tất nhưng sắp xếp ngang theo Origin thất bại.";
+            result.Message = "⚠  Fit Grid hoàn tất nhưng sắp xếp ngang theo Origin thất bại.";
             return result;
         }
     }
@@ -2261,7 +2425,8 @@ public static class PHU_OpenGridView
     private static void RestoreFrontOriginAfterArrangeFailure(
         Drawing drawing,
         View frontView,
-        Point originalFrontOrigin)
+        Point originalFrontOrigin
+    )
     {
         try
         {
@@ -2276,12 +2441,8 @@ public static class PHU_OpenGridView
             if (drawing != null)
                 drawing.CommitChanges();
         }
-        catch
-        {
-        }
+        catch { }
     }
-
-
 
     // =================================================
     // PHU FIT MODEL PADDING 20
@@ -2344,7 +2505,10 @@ public static class PHU_OpenGridView
                 try
                 {
                     AABB originalRestrictionBox;
-                    bool hasOriginalRestrictionBox = TryGetFitOriginalRestrictionBox(v, out originalRestrictionBox);
+                    bool hasOriginalRestrictionBox = TryGetFitOriginalRestrictionBox(
+                        v,
+                        out originalRestrictionBox
+                    );
 
                     ViewSheetBox originalSheetBox;
                     bool hasOriginalSheetBox = TryGetFitOriginalSheetBox(v, out originalSheetBox);
@@ -2360,7 +2524,10 @@ public static class PHU_OpenGridView
 
                     if (hasOriginalSheetBox)
                     {
-                        try { drawing.CommitChanges(); }
+                        try
+                        {
+                            drawing.CommitChanges();
+                        }
                         catch { }
 
                         KeepViewAtOriginalCenter(v, originalSheetBox);
@@ -2374,7 +2541,10 @@ public static class PHU_OpenGridView
                 }
             }
 
-            try { drawing.CommitChanges(); }
+            try
+            {
+                drawing.CommitChanges();
+            }
             catch { }
 
             result.Message = "Restore original RestrictionBox done.";
@@ -2473,7 +2643,8 @@ public static class PHU_OpenGridView
                         originalRestrictionBox,
                         expectedGridCount,
                         padding,
-                        out selection);
+                        out selection
+                    );
 
                     int found = selection == null ? 0 : selection.Count;
                     if (found < result.GridAxesFoundCount)
@@ -2495,29 +2666,33 @@ public static class PHU_OpenGridView
                     if (found < expectedGridCount)
                         result.GridAxisPartialViewCount++;
 
-                    selectedDetails.Add(
-                        DescribeNearestGridSelection(view, selection));
+                    selectedDetails.Add(DescribeNearestGridSelection(view, selection));
                 }
                 catch
                 {
                     RestoreRestrictionBoxWithoutMoving(
                         view,
-                        entryRestrictionBox ?? originalRestrictionBox);
+                        entryRestrictionBox ?? originalRestrictionBox
+                    );
                     result.FailedCount++;
                     result.GridAxesFoundCount = 0;
                 }
             }
 
-            try { drawing.CommitChanges(); }
+            try
+            {
+                drawing.CommitChanges();
+            }
             catch { }
 
             result.SelectedGridAxes = string.Join(" | ", selectedDetails.ToArray());
 
             if (result.GridAxisNoGridViewCount == result.ViewCount)
             {
-                result.Message = expectedGridCount == 1
-                    ? "Không tìm thấy grid phù hợp với hướng của View để chạy chế độ giữ 1 trục."
-                    : "Không tìm thấy grid để chạy chế độ Có trục.";
+                result.Message =
+                    expectedGridCount == 1
+                        ? "Không tìm thấy grid phù hợp với hướng của View để chạy chế độ giữ 1 trục."
+                        : "Không tìm thấy grid để chạy chế độ Có trục.";
             }
             else if (result.FailedCount > 0)
             {
@@ -2525,7 +2700,12 @@ public static class PHU_OpenGridView
             }
             else if (result.GridAxesFoundCount < expectedGridCount)
             {
-                result.Message = "Chỉ tìm thấy " + result.GridAxesFoundCount + "/" + expectedGridCount + " grid gần main part.";
+                result.Message =
+                    "Chỉ tìm thấy "
+                    + result.GridAxesFoundCount
+                    + "/"
+                    + expectedGridCount
+                    + " grid gần main part.";
             }
             else
             {
@@ -2580,12 +2760,14 @@ public static class PHU_OpenGridView
                 }
             }
 
-            try { drawing.CommitChanges(); }
+            try
+            {
+                drawing.CommitChanges();
+            }
             catch { }
 
-            result.Message = result.FailedCount == 0
-                ? "View đã được restore."
-                : "Có view không restore được.";
+            result.Message =
+                result.FailedCount == 0 ? "View đã được restore." : "Có view không restore được.";
             return result;
         }
         catch (Exception ex)
@@ -2603,24 +2785,45 @@ public static class PHU_OpenGridView
         AABB originalRestrictionBox,
         int expectedGridCount,
         double padding,
-        out NearestGridSelection selection)
+        out NearestGridSelection selection
+    )
     {
         selection = new NearestGridSelection();
 
-        if (view == null ||
-            originalRestrictionBox == null ||
-            originalRestrictionBox.MinPoint == null ||
-            originalRestrictionBox.MaxPoint == null)
+        if (
+            view == null
+            || originalRestrictionBox == null
+            || originalRestrictionBox.MinPoint == null
+            || originalRestrictionBox.MaxPoint == null
+        )
         {
             return false;
         }
 
-        double originalMinX = Math.Min(originalRestrictionBox.MinPoint.X, originalRestrictionBox.MaxPoint.X);
-        double originalMaxX = Math.Max(originalRestrictionBox.MinPoint.X, originalRestrictionBox.MaxPoint.X);
-        double originalMinY = Math.Min(originalRestrictionBox.MinPoint.Y, originalRestrictionBox.MaxPoint.Y);
-        double originalMaxY = Math.Max(originalRestrictionBox.MinPoint.Y, originalRestrictionBox.MaxPoint.Y);
-        double originalMinZ = Math.Min(originalRestrictionBox.MinPoint.Z, originalRestrictionBox.MaxPoint.Z);
-        double originalMaxZ = Math.Max(originalRestrictionBox.MinPoint.Z, originalRestrictionBox.MaxPoint.Z);
+        double originalMinX = Math.Min(
+            originalRestrictionBox.MinPoint.X,
+            originalRestrictionBox.MaxPoint.X
+        );
+        double originalMaxX = Math.Max(
+            originalRestrictionBox.MinPoint.X,
+            originalRestrictionBox.MaxPoint.X
+        );
+        double originalMinY = Math.Min(
+            originalRestrictionBox.MinPoint.Y,
+            originalRestrictionBox.MaxPoint.Y
+        );
+        double originalMaxY = Math.Max(
+            originalRestrictionBox.MinPoint.Y,
+            originalRestrictionBox.MaxPoint.Y
+        );
+        double originalMinZ = Math.Min(
+            originalRestrictionBox.MinPoint.Z,
+            originalRestrictionBox.MaxPoint.Z
+        );
+        double originalMaxZ = Math.Max(
+            originalRestrictionBox.MinPoint.Z,
+            originalRestrictionBox.MaxPoint.Z
+        );
 
         double contentMinX = originalMinX;
         double contentMaxX = originalMaxX;
@@ -2634,7 +2837,8 @@ public static class PHU_OpenGridView
             ref contentMinX,
             ref contentMaxX,
             ref contentMinY,
-            ref contentMaxY);
+            ref contentMaxY
+        );
 
         List<GridSeg> segments = ReadGridSegments(view);
 
@@ -2652,7 +2856,8 @@ public static class PHU_OpenGridView
                 contentMinX,
                 contentMaxX,
                 contentMinY,
-                contentMaxY);
+                contentMaxY
+            );
 
             ProgressiveReadSingleAxisCandidates(
                 view,
@@ -2667,7 +2872,8 @@ public static class PHU_OpenGridView
                 contentMaxX,
                 contentMinY,
                 contentMaxY,
-                ref candidates);
+                ref candidates
+            );
 
             selection = SelectSingleNearestGridAxis(view, candidates);
         }
@@ -2683,7 +2889,8 @@ public static class PHU_OpenGridView
                 contentMaxX,
                 contentMinY,
                 contentMaxY,
-                expectedGridCount);
+                expectedGridCount
+            );
 
             if (selection.Count < expectedGridCount)
             {
@@ -2705,7 +2912,8 @@ public static class PHU_OpenGridView
                     originalMinY,
                     originalMaxY,
                     expectedGridCount,
-                    ref selection);
+                    ref selection
+                );
             }
         }
 
@@ -2737,12 +2945,14 @@ public static class PHU_OpenGridView
         Point finalMin = new Point(finalMinX, finalMinY, originalMinZ);
         Point finalMax = new Point(finalMaxX, finalMaxY, originalMaxZ);
 
-        if (!IsFinite(finalMinX) ||
-            !IsFinite(finalMaxX) ||
-            !IsFinite(finalMinY) ||
-            !IsFinite(finalMaxY) ||
-            finalMaxX <= finalMinX + 1.0 ||
-            finalMaxY <= finalMinY + 1.0)
+        if (
+            !IsFinite(finalMinX)
+            || !IsFinite(finalMaxX)
+            || !IsFinite(finalMinY)
+            || !IsFinite(finalMaxY)
+            || finalMaxX <= finalMinX + 1.0
+            || finalMaxY <= finalMinY + 1.0
+        )
         {
             RestoreRestrictionBoxWithoutMoving(view, originalRestrictionBox);
             return false;
@@ -2768,8 +2978,10 @@ public static class PHU_OpenGridView
                 return false;
             }
 
-            if (!RestrictionBoxMatches(view, finalBox) ||
-                !SelectedGridAxesRemainVisible(view, selection))
+            if (
+                !RestrictionBoxMatches(view, finalBox)
+                || !SelectedGridAxesRemainVisible(view, selection)
+            )
             {
                 RestoreRestrictionBoxWithoutMoving(view, originalRestrictionBox);
                 try
@@ -2800,7 +3012,8 @@ public static class PHU_OpenGridView
         double contentMinX,
         double contentMaxX,
         double contentMinY,
-        double contentMaxY)
+        double contentMaxY
+    )
     {
         SingleAxisCandidates candidates = new SingleAxisCandidates();
 
@@ -2814,30 +3027,40 @@ public static class PHU_OpenGridView
 
             if (grid.IsVertical)
             {
-                if (grid.ConstX <= referenceMinX + LINE_AXIS_TOLERANCE &&
-                    grid.ConstX <= contentMinX + LINE_AXIS_TOLERANCE)
+                if (
+                    grid.ConstX <= referenceMinX + LINE_AXIS_TOLERANCE
+                    && grid.ConstX <= contentMinX + LINE_AXIS_TOLERANCE
+                )
                 {
                     double distance = Math.Max(0.0, contentMinX - grid.ConstX);
-                    if (IsBetterGridCandidate(
-                        grid,
-                        distance,
-                        candidates.LeftVertical,
-                        candidates.LeftVerticalDistance))
+                    if (
+                        IsBetterGridCandidate(
+                            grid,
+                            distance,
+                            candidates.LeftVertical,
+                            candidates.LeftVerticalDistance
+                        )
+                    )
                     {
                         candidates.LeftVertical = grid;
                         candidates.LeftVerticalDistance = distance;
                     }
                 }
 
-                if (grid.ConstX >= referenceMaxX - LINE_AXIS_TOLERANCE &&
-                    grid.ConstX >= contentMaxX - LINE_AXIS_TOLERANCE)
+                if (
+                    grid.ConstX >= referenceMaxX - LINE_AXIS_TOLERANCE
+                    && grid.ConstX >= contentMaxX - LINE_AXIS_TOLERANCE
+                )
                 {
                     double distance = Math.Max(0.0, grid.ConstX - contentMaxX);
-                    if (IsBetterGridCandidate(
-                        grid,
-                        distance,
-                        candidates.RightVertical,
-                        candidates.RightVerticalDistance))
+                    if (
+                        IsBetterGridCandidate(
+                            grid,
+                            distance,
+                            candidates.RightVertical,
+                            candidates.RightVerticalDistance
+                        )
+                    )
                     {
                         candidates.RightVertical = grid;
                         candidates.RightVerticalDistance = distance;
@@ -2847,30 +3070,40 @@ public static class PHU_OpenGridView
 
             if (grid.IsHorizontal)
             {
-                if (grid.ConstY <= referenceMinY + LINE_AXIS_TOLERANCE &&
-                    grid.ConstY <= contentMinY + LINE_AXIS_TOLERANCE)
+                if (
+                    grid.ConstY <= referenceMinY + LINE_AXIS_TOLERANCE
+                    && grid.ConstY <= contentMinY + LINE_AXIS_TOLERANCE
+                )
                 {
                     double distance = Math.Max(0.0, contentMinY - grid.ConstY);
-                    if (IsBetterGridCandidate(
-                        grid,
-                        distance,
-                        candidates.BottomHorizontal,
-                        candidates.BottomHorizontalDistance))
+                    if (
+                        IsBetterGridCandidate(
+                            grid,
+                            distance,
+                            candidates.BottomHorizontal,
+                            candidates.BottomHorizontalDistance
+                        )
+                    )
                     {
                         candidates.BottomHorizontal = grid;
                         candidates.BottomHorizontalDistance = distance;
                     }
                 }
 
-                if (grid.ConstY >= referenceMaxY - LINE_AXIS_TOLERANCE &&
-                    grid.ConstY >= contentMaxY - LINE_AXIS_TOLERANCE)
+                if (
+                    grid.ConstY >= referenceMaxY - LINE_AXIS_TOLERANCE
+                    && grid.ConstY >= contentMaxY - LINE_AXIS_TOLERANCE
+                )
                 {
                     double distance = Math.Max(0.0, grid.ConstY - contentMaxY);
-                    if (IsBetterGridCandidate(
-                        grid,
-                        distance,
-                        candidates.TopHorizontal,
-                        candidates.TopHorizontalDistance))
+                    if (
+                        IsBetterGridCandidate(
+                            grid,
+                            distance,
+                            candidates.TopHorizontal,
+                            candidates.TopHorizontalDistance
+                        )
+                    )
                     {
                         candidates.TopHorizontal = grid;
                         candidates.TopHorizontalDistance = distance;
@@ -2884,69 +3117,80 @@ public static class PHU_OpenGridView
 
     private static void MergeSingleAxisCandidates(
         SingleAxisCandidates target,
-        SingleAxisCandidates incoming)
+        SingleAxisCandidates incoming
+    )
     {
         if (target == null || incoming == null)
             return;
 
-        if (IsBetterGridCandidate(
-            incoming.LeftVertical,
-            incoming.LeftVerticalDistance,
-            target.LeftVertical,
-            target.LeftVerticalDistance))
+        if (
+            IsBetterGridCandidate(
+                incoming.LeftVertical,
+                incoming.LeftVerticalDistance,
+                target.LeftVertical,
+                target.LeftVerticalDistance
+            )
+        )
         {
             target.LeftVertical = incoming.LeftVertical;
             target.LeftVerticalDistance = incoming.LeftVerticalDistance;
         }
 
-        if (IsBetterGridCandidate(
-            incoming.RightVertical,
-            incoming.RightVerticalDistance,
-            target.RightVertical,
-            target.RightVerticalDistance))
+        if (
+            IsBetterGridCandidate(
+                incoming.RightVertical,
+                incoming.RightVerticalDistance,
+                target.RightVertical,
+                target.RightVerticalDistance
+            )
+        )
         {
             target.RightVertical = incoming.RightVertical;
             target.RightVerticalDistance = incoming.RightVerticalDistance;
         }
 
-        if (IsBetterGridCandidate(
-            incoming.BottomHorizontal,
-            incoming.BottomHorizontalDistance,
-            target.BottomHorizontal,
-            target.BottomHorizontalDistance))
+        if (
+            IsBetterGridCandidate(
+                incoming.BottomHorizontal,
+                incoming.BottomHorizontalDistance,
+                target.BottomHorizontal,
+                target.BottomHorizontalDistance
+            )
+        )
         {
             target.BottomHorizontal = incoming.BottomHorizontal;
             target.BottomHorizontalDistance = incoming.BottomHorizontalDistance;
         }
 
-        if (IsBetterGridCandidate(
-            incoming.TopHorizontal,
-            incoming.TopHorizontalDistance,
-            target.TopHorizontal,
-            target.TopHorizontalDistance))
+        if (
+            IsBetterGridCandidate(
+                incoming.TopHorizontal,
+                incoming.TopHorizontalDistance,
+                target.TopHorizontal,
+                target.TopHorizontalDistance
+            )
+        )
         {
             target.TopHorizontal = incoming.TopHorizontal;
             target.TopHorizontalDistance = incoming.TopHorizontalDistance;
         }
     }
 
-    private static bool IsSingleAxisComparisonComplete(
-        View view,
-        SingleAxisCandidates candidates)
+    private static bool IsSingleAxisComparisonComplete(View view, SingleAxisCandidates candidates)
     {
         if (view == null || candidates == null)
             return false;
 
         bool topOrBottom =
-            ViewTypeMatches(view, "TopView", "Top") ||
-            ViewTypeMatches(view, "BottomView", "Bottom");
+            ViewTypeMatches(view, "TopView", "Top")
+            || ViewTypeMatches(view, "BottomView", "Bottom");
 
         if (topOrBottom)
             return candidates.HasBothVerticalSides;
 
         bool frontOrBack =
-            ViewTypeMatches(view, "FrontView", "Front") ||
-            ViewTypeMatches(view, "BackView", "Back");
+            ViewTypeMatches(view, "FrontView", "Front")
+            || ViewTypeMatches(view, "BackView", "Back");
 
         if (frontOrBack)
             return candidates.HasBothHorizontalSides;
@@ -2969,7 +3213,8 @@ public static class PHU_OpenGridView
         double contentMaxX,
         double contentMinY,
         double contentMaxY,
-        ref SingleAxisCandidates bestCandidates)
+        ref SingleAxisCandidates bestCandidates
+    )
     {
         if (view == null)
             return;
@@ -2990,22 +3235,12 @@ public static class PHU_OpenGridView
         // area as the minimum search box; otherwise the first progressive
         // step visibly shrinks the View and re-opens an area already read.
         AABB currentBox = view.RestrictionBox;
-        if (currentBox != null &&
-            currentBox.MinPoint != null &&
-            currentBox.MaxPoint != null)
+        if (currentBox != null && currentBox.MinPoint != null && currentBox.MaxPoint != null)
         {
-            baseMinX = Math.Min(
-                baseMinX,
-                Math.Min(currentBox.MinPoint.X, currentBox.MaxPoint.X));
-            baseMaxX = Math.Max(
-                baseMaxX,
-                Math.Max(currentBox.MinPoint.X, currentBox.MaxPoint.X));
-            baseMinY = Math.Min(
-                baseMinY,
-                Math.Min(currentBox.MinPoint.Y, currentBox.MaxPoint.Y));
-            baseMaxY = Math.Max(
-                baseMaxY,
-                Math.Max(currentBox.MinPoint.Y, currentBox.MaxPoint.Y));
+            baseMinX = Math.Min(baseMinX, Math.Min(currentBox.MinPoint.X, currentBox.MaxPoint.X));
+            baseMaxX = Math.Max(baseMaxX, Math.Max(currentBox.MinPoint.X, currentBox.MaxPoint.X));
+            baseMinY = Math.Min(baseMinY, Math.Min(currentBox.MinPoint.Y, currentBox.MaxPoint.Y));
+            baseMaxY = Math.Max(baseMaxY, Math.Max(currentBox.MinPoint.Y, currentBox.MaxPoint.Y));
         }
 
         for (int i = 0; i < TEMP_EXPAND_STEPS.Length; i++)
@@ -3014,7 +3249,8 @@ public static class PHU_OpenGridView
 
             view.RestrictionBox = new AABB(
                 new Point(baseMinX - step, baseMinY - step, originalMinZ),
-                new Point(baseMaxX + step, baseMaxY + step, originalMaxZ));
+                new Point(baseMaxX + step, baseMaxY + step, originalMaxZ)
+            );
             SafeModify(view, "fit keep one grid expand " + R(step));
 
             try
@@ -3033,7 +3269,8 @@ public static class PHU_OpenGridView
                 contentMinX,
                 contentMaxX,
                 contentMinY,
-                contentMaxY);
+                contentMaxY
+            );
 
             MergeSingleAxisCandidates(bestCandidates, current);
 
@@ -3046,7 +3283,8 @@ public static class PHU_OpenGridView
 
     private static NearestGridSelection SelectSingleNearestGridAxis(
         View view,
-        SingleAxisCandidates candidates)
+        SingleAxisCandidates candidates
+    )
     {
         NearestGridSelection selected = new NearestGridSelection();
 
@@ -3054,8 +3292,8 @@ public static class PHU_OpenGridView
             return selected;
 
         bool topOrBottom =
-            ViewTypeMatches(view, "TopView", "Top") ||
-            ViewTypeMatches(view, "BottomView", "Bottom");
+            ViewTypeMatches(view, "TopView", "Top")
+            || ViewTypeMatches(view, "BottomView", "Bottom");
 
         if (topOrBottom)
         {
@@ -3063,22 +3301,28 @@ public static class PHU_OpenGridView
             double bestDistance = double.PositiveInfinity;
             bool isLeft = false;
 
-            if (IsBetterGridCandidate(
-                candidates.LeftVertical,
-                candidates.LeftVerticalDistance,
-                bestVertical,
-                bestDistance))
+            if (
+                IsBetterGridCandidate(
+                    candidates.LeftVertical,
+                    candidates.LeftVerticalDistance,
+                    bestVertical,
+                    bestDistance
+                )
+            )
             {
                 bestVertical = candidates.LeftVertical;
                 bestDistance = candidates.LeftVerticalDistance;
                 isLeft = true;
             }
 
-            if (IsBetterGridCandidate(
-                candidates.RightVertical,
-                candidates.RightVerticalDistance,
-                bestVertical,
-                bestDistance))
+            if (
+                IsBetterGridCandidate(
+                    candidates.RightVertical,
+                    candidates.RightVerticalDistance,
+                    bestVertical,
+                    bestDistance
+                )
+            )
             {
                 bestVertical = candidates.RightVertical;
                 bestDistance = candidates.RightVerticalDistance;
@@ -3091,8 +3335,8 @@ public static class PHU_OpenGridView
         }
 
         bool frontOrBack =
-            ViewTypeMatches(view, "FrontView", "Front") ||
-            ViewTypeMatches(view, "BackView", "Back");
+            ViewTypeMatches(view, "FrontView", "Front")
+            || ViewTypeMatches(view, "BackView", "Back");
 
         if (frontOrBack)
         {
@@ -3100,22 +3344,28 @@ public static class PHU_OpenGridView
             double bestDistance = double.PositiveInfinity;
             bool isBottom = false;
 
-            if (IsBetterGridCandidate(
-                candidates.BottomHorizontal,
-                candidates.BottomHorizontalDistance,
-                bestHorizontal,
-                bestDistance))
+            if (
+                IsBetterGridCandidate(
+                    candidates.BottomHorizontal,
+                    candidates.BottomHorizontalDistance,
+                    bestHorizontal,
+                    bestDistance
+                )
+            )
             {
                 bestHorizontal = candidates.BottomHorizontal;
                 bestDistance = candidates.BottomHorizontalDistance;
                 isBottom = true;
             }
 
-            if (IsBetterGridCandidate(
-                candidates.TopHorizontal,
-                candidates.TopHorizontalDistance,
-                bestHorizontal,
-                bestDistance))
+            if (
+                IsBetterGridCandidate(
+                    candidates.TopHorizontal,
+                    candidates.TopHorizontalDistance,
+                    bestHorizontal,
+                    bestDistance
+                )
+            )
             {
                 bestHorizontal = candidates.TopHorizontal;
                 bestDistance = candidates.TopHorizontalDistance;
@@ -3136,44 +3386,56 @@ public static class PHU_OpenGridView
         double bestAnyDistance = double.PositiveInfinity;
         int bestKind = 0;
 
-        if (IsBetterGridCandidate(
-            candidates.LeftVertical,
-            candidates.LeftVerticalDistance,
-            best,
-            bestAnyDistance))
+        if (
+            IsBetterGridCandidate(
+                candidates.LeftVertical,
+                candidates.LeftVerticalDistance,
+                best,
+                bestAnyDistance
+            )
+        )
         {
             best = candidates.LeftVertical;
             bestAnyDistance = candidates.LeftVerticalDistance;
             bestKind = 1;
         }
 
-        if (IsBetterGridCandidate(
-            candidates.RightVertical,
-            candidates.RightVerticalDistance,
-            best,
-            bestAnyDistance))
+        if (
+            IsBetterGridCandidate(
+                candidates.RightVertical,
+                candidates.RightVerticalDistance,
+                best,
+                bestAnyDistance
+            )
+        )
         {
             best = candidates.RightVertical;
             bestAnyDistance = candidates.RightVerticalDistance;
             bestKind = 2;
         }
 
-        if (IsBetterGridCandidate(
-            candidates.BottomHorizontal,
-            candidates.BottomHorizontalDistance,
-            best,
-            bestAnyDistance))
+        if (
+            IsBetterGridCandidate(
+                candidates.BottomHorizontal,
+                candidates.BottomHorizontalDistance,
+                best,
+                bestAnyDistance
+            )
+        )
         {
             best = candidates.BottomHorizontal;
             bestAnyDistance = candidates.BottomHorizontalDistance;
             bestKind = 3;
         }
 
-        if (IsBetterGridCandidate(
-            candidates.TopHorizontal,
-            candidates.TopHorizontalDistance,
-            best,
-            bestAnyDistance))
+        if (
+            IsBetterGridCandidate(
+                candidates.TopHorizontal,
+                candidates.TopHorizontalDistance,
+                best,
+                bestAnyDistance
+            )
+        )
         {
             best = candidates.TopHorizontal;
             bestAnyDistance = candidates.TopHorizontalDistance;
@@ -3215,7 +3477,8 @@ public static class PHU_OpenGridView
         double rankMinY,
         double rankMaxY,
         int expectedGridCount,
-        ref NearestGridSelection bestSelection)
+        ref NearestGridSelection bestSelection
+    )
     {
         double baseMinX = Math.Min(originalMinX, contentMinX);
         double baseMaxX = Math.Max(originalMaxX, contentMaxX);
@@ -3226,22 +3489,12 @@ public static class PHU_OpenGridView
         // fallback may only expand from here; it must not collapse back to
         // the pre-Open-Grid snapshot before searching for a missing axis.
         AABB currentBox = view == null ? null : view.RestrictionBox;
-        if (currentBox != null &&
-            currentBox.MinPoint != null &&
-            currentBox.MaxPoint != null)
+        if (currentBox != null && currentBox.MinPoint != null && currentBox.MaxPoint != null)
         {
-            baseMinX = Math.Min(
-                baseMinX,
-                Math.Min(currentBox.MinPoint.X, currentBox.MaxPoint.X));
-            baseMaxX = Math.Max(
-                baseMaxX,
-                Math.Max(currentBox.MinPoint.X, currentBox.MaxPoint.X));
-            baseMinY = Math.Min(
-                baseMinY,
-                Math.Min(currentBox.MinPoint.Y, currentBox.MaxPoint.Y));
-            baseMaxY = Math.Max(
-                baseMaxY,
-                Math.Max(currentBox.MinPoint.Y, currentBox.MaxPoint.Y));
+            baseMinX = Math.Min(baseMinX, Math.Min(currentBox.MinPoint.X, currentBox.MaxPoint.X));
+            baseMaxX = Math.Max(baseMaxX, Math.Max(currentBox.MinPoint.X, currentBox.MaxPoint.X));
+            baseMinY = Math.Min(baseMinY, Math.Min(currentBox.MinPoint.Y, currentBox.MaxPoint.Y));
+            baseMaxY = Math.Max(baseMaxY, Math.Max(currentBox.MinPoint.Y, currentBox.MaxPoint.Y));
         }
 
         for (int i = 0; i < TEMP_EXPAND_STEPS.Length; i++)
@@ -3250,7 +3503,8 @@ public static class PHU_OpenGridView
 
             view.RestrictionBox = new AABB(
                 new Point(baseMinX - step, baseMinY - step, originalMinZ),
-                new Point(baseMaxX + step, baseMaxY + step, originalMaxZ));
+                new Point(baseMaxX + step, baseMaxY + step, originalMaxZ)
+            );
             SafeModify(view, "fit keep grid expand " + R(step));
 
             try
@@ -3270,7 +3524,8 @@ public static class PHU_OpenGridView
                 contentMaxX,
                 contentMinY,
                 contentMaxY,
-                expectedGridCount);
+                expectedGridCount
+            );
 
             if (current.Count > bestSelection.Count)
                 bestSelection = current;
@@ -3290,7 +3545,8 @@ public static class PHU_OpenGridView
         double contentMaxX,
         double contentMinY,
         double contentMaxY,
-        int expectedGridCount)
+        int expectedGridCount
+    )
     {
         NearestGridSelection selected = new NearestGridSelection();
         double bestVerticalDistance = double.PositiveInfinity;
@@ -3310,14 +3566,18 @@ public static class PHU_OpenGridView
                 bool isLeft;
                 double distance;
 
-                if (grid.ConstX <= referenceMinX + LINE_AXIS_TOLERANCE &&
-                    grid.ConstX <= contentMinX + LINE_AXIS_TOLERANCE)
+                if (
+                    grid.ConstX <= referenceMinX + LINE_AXIS_TOLERANCE
+                    && grid.ConstX <= contentMinX + LINE_AXIS_TOLERANCE
+                )
                 {
                     isLeft = true;
                     distance = Math.Max(0.0, referenceMinX - grid.ConstX);
                 }
-                else if (grid.ConstX >= referenceMaxX - LINE_AXIS_TOLERANCE &&
-                         grid.ConstX >= contentMaxX - LINE_AXIS_TOLERANCE)
+                else if (
+                    grid.ConstX >= referenceMaxX - LINE_AXIS_TOLERANCE
+                    && grid.ConstX >= contentMaxX - LINE_AXIS_TOLERANCE
+                )
                 {
                     isLeft = false;
                     distance = Math.Max(0.0, grid.ConstX - referenceMaxX);
@@ -3328,11 +3588,7 @@ public static class PHU_OpenGridView
                     isLeft = false;
                 }
 
-                if (IsBetterGridCandidate(
-                    grid,
-                    distance,
-                    selected.Vertical,
-                    bestVerticalDistance))
+                if (IsBetterGridCandidate(grid, distance, selected.Vertical, bestVerticalDistance))
                 {
                     selected.Vertical = grid;
                     selected.VerticalIsLeft = isLeft;
@@ -3340,32 +3596,28 @@ public static class PHU_OpenGridView
                 }
             }
 
-            if (grid.IsHorizontal &&
-                grid.ConstY <= referenceMinY + LINE_AXIS_TOLERANCE &&
-                grid.ConstY <= contentMinY + LINE_AXIS_TOLERANCE)
+            if (
+                grid.IsHorizontal
+                && grid.ConstY <= referenceMinY + LINE_AXIS_TOLERANCE
+                && grid.ConstY <= contentMinY + LINE_AXIS_TOLERANCE
+            )
             {
                 double distance = Math.Max(0.0, referenceMinY - grid.ConstY);
-                if (IsBetterGridCandidate(
-                    grid,
-                    distance,
-                    selected.Bottom,
-                    bestBottomDistance))
+                if (IsBetterGridCandidate(grid, distance, selected.Bottom, bestBottomDistance))
                 {
                     selected.Bottom = grid;
                     bestBottomDistance = distance;
                 }
             }
 
-            if (grid.IsHorizontal &&
-                grid.ConstY >= referenceMaxY - LINE_AXIS_TOLERANCE &&
-                grid.ConstY >= contentMaxY - LINE_AXIS_TOLERANCE)
+            if (
+                grid.IsHorizontal
+                && grid.ConstY >= referenceMaxY - LINE_AXIS_TOLERANCE
+                && grid.ConstY >= contentMaxY - LINE_AXIS_TOLERANCE
+            )
             {
                 double distance = Math.Max(0.0, grid.ConstY - referenceMaxY);
-                if (IsBetterGridCandidate(
-                    grid,
-                    distance,
-                    selected.Top,
-                    bestTopDistance))
+                if (IsBetterGridCandidate(grid, distance, selected.Top, bestTopDistance))
                 {
                     selected.Top = grid;
                     bestTopDistance = distance;
@@ -3373,9 +3625,7 @@ public static class PHU_OpenGridView
             }
         }
 
-        if (expectedGridCount == 2 &&
-            selected.Bottom != null &&
-            selected.Top != null)
+        if (expectedGridCount == 2 && selected.Bottom != null && selected.Top != null)
         {
             if (bestBottomDistance <= bestTopDistance)
                 selected.Top = null;
@@ -3390,7 +3640,8 @@ public static class PHU_OpenGridView
         GridSeg candidate,
         double candidateDistance,
         GridSeg current,
-        double currentDistance)
+        double currentDistance
+    )
     {
         if (candidate == null || !IsFinite(candidateDistance))
             return false;
@@ -3407,7 +3658,8 @@ public static class PHU_OpenGridView
         int labelCompare = string.Compare(
             candidate.Label ?? "",
             current.Label ?? "",
-            StringComparison.OrdinalIgnoreCase);
+            StringComparison.OrdinalIgnoreCase
+        );
 
         if (labelCompare != 0)
             return labelCompare < 0;
@@ -3425,7 +3677,8 @@ public static class PHU_OpenGridView
         ref double minX,
         ref double maxX,
         ref double minY,
-        ref double maxY)
+        ref double maxY
+    )
     {
         if (view == null || model == null)
             return false;
@@ -3440,11 +3693,15 @@ public static class PHU_OpenGridView
         try
         {
             oldPlane = model.GetWorkPlaneHandler().GetCurrentTransformationPlane();
-            model.GetWorkPlaneHandler().SetCurrentTransformationPlane(
-                new Tekla.Structures.Model.TransformationPlane(view.DisplayCoordinateSystem));
+            model
+                .GetWorkPlaneHandler()
+                .SetCurrentTransformationPlane(
+                    new Tekla.Structures.Model.TransformationPlane(view.DisplayCoordinateSystem)
+                );
 
-            DrawingObjectEnumerator objects =
-                view.GetAllObjects(typeof(Tekla.Structures.Drawing.Part));
+            DrawingObjectEnumerator objects = view.GetAllObjects(
+                typeof(Tekla.Structures.Drawing.Part)
+            );
 
             while (objects != null && objects.MoveNext())
             {
@@ -3456,8 +3713,9 @@ public static class PHU_OpenGridView
                 Tekla.Structures.Model.Part modelPart = null;
                 try
                 {
-                    modelPart = model.SelectModelObject(
-                        drawingPart.ModelIdentifier) as Tekla.Structures.Model.Part;
+                    modelPart =
+                        model.SelectModelObject(drawingPart.ModelIdentifier)
+                        as Tekla.Structures.Model.Part;
                 }
                 catch
                 {
@@ -3468,12 +3726,16 @@ public static class PHU_OpenGridView
                     continue;
 
                 Tekla.Structures.Model.Solid solid = null;
-                try { solid = modelPart.GetSolid(); }
-                catch { solid = null; }
+                try
+                {
+                    solid = modelPart.GetSolid();
+                }
+                catch
+                {
+                    solid = null;
+                }
 
-                if (solid == null ||
-                    solid.MinimumPoint == null ||
-                    solid.MaximumPoint == null)
+                if (solid == null || solid.MinimumPoint == null || solid.MaximumPoint == null)
                 {
                     continue;
                 }
@@ -3483,10 +3745,7 @@ public static class PHU_OpenGridView
                 double y1 = Math.Min(solid.MinimumPoint.Y, solid.MaximumPoint.Y);
                 double y2 = Math.Max(solid.MinimumPoint.Y, solid.MaximumPoint.Y);
 
-                if (!IsFinite(x1) ||
-                    !IsFinite(x2) ||
-                    !IsFinite(y1) ||
-                    !IsFinite(y2))
+                if (!IsFinite(x1) || !IsFinite(x2) || !IsFinite(y1) || !IsFinite(y2))
                 {
                     continue;
                 }
@@ -3523,9 +3782,7 @@ public static class PHU_OpenGridView
         return true;
     }
 
-    private static string DescribeNearestGridSelection(
-        View view,
-        NearestGridSelection selection)
+    private static string DescribeNearestGridSelection(View view, NearestGridSelection selection)
     {
         if (selection == null)
             return "";
@@ -3535,13 +3792,17 @@ public static class PHU_OpenGridView
         if (selection.Vertical != null)
         {
             axes.Add(
-                (selection.VerticalIsLeft ? "V-Left " : "V-Right ") +
-                GridDisplayName(selection.Vertical) +
-                "@" + R(selection.Vertical.ConstX));
+                (selection.VerticalIsLeft ? "V-Left " : "V-Right ")
+                    + GridDisplayName(selection.Vertical)
+                    + "@"
+                    + R(selection.Vertical.ConstX)
+            );
         }
 
         if (selection.Bottom != null)
-            axes.Add("H-Bottom " + GridDisplayName(selection.Bottom) + "@" + R(selection.Bottom.ConstY));
+            axes.Add(
+                "H-Bottom " + GridDisplayName(selection.Bottom) + "@" + R(selection.Bottom.ConstY)
+            );
 
         if (selection.Top != null)
             axes.Add("H-Top " + GridDisplayName(selection.Top) + "@" + R(selection.Top.ConstY));
@@ -3565,10 +3826,7 @@ public static class PHU_OpenGridView
     {
         try
         {
-            if (view == null ||
-                box == null ||
-                box.MinPoint == null ||
-                box.MaxPoint == null)
+            if (view == null || box == null || box.MinPoint == null || box.MaxPoint == null)
             {
                 return false;
             }
@@ -3586,27 +3844,27 @@ public static class PHU_OpenGridView
     {
         try
         {
-            if (view == null ||
-                expected == null ||
-                expected.MinPoint == null ||
-                expected.MaxPoint == null)
+            if (
+                view == null
+                || expected == null
+                || expected.MinPoint == null
+                || expected.MaxPoint == null
+            )
             {
                 return false;
             }
 
             AABB actual = view.RestrictionBox;
-            if (actual == null ||
-                actual.MinPoint == null ||
-                actual.MaxPoint == null)
+            if (actual == null || actual.MinPoint == null || actual.MaxPoint == null)
             {
                 return false;
             }
 
             const double tolerance = 0.5;
-            return Math.Abs(actual.MinPoint.X - expected.MinPoint.X) <= tolerance &&
-                   Math.Abs(actual.MinPoint.Y - expected.MinPoint.Y) <= tolerance &&
-                   Math.Abs(actual.MaxPoint.X - expected.MaxPoint.X) <= tolerance &&
-                   Math.Abs(actual.MaxPoint.Y - expected.MaxPoint.Y) <= tolerance;
+            return Math.Abs(actual.MinPoint.X - expected.MinPoint.X) <= tolerance
+                && Math.Abs(actual.MinPoint.Y - expected.MinPoint.Y) <= tolerance
+                && Math.Abs(actual.MaxPoint.X - expected.MaxPoint.X) <= tolerance
+                && Math.Abs(actual.MaxPoint.Y - expected.MaxPoint.Y) <= tolerance;
         }
         catch
         {
@@ -3614,28 +3872,26 @@ public static class PHU_OpenGridView
         }
     }
 
-    private static bool SelectedGridAxesRemainVisible(
-        View view,
-        NearestGridSelection selection)
+    private static bool SelectedGridAxesRemainVisible(View view, NearestGridSelection selection)
     {
         if (view == null || selection == null)
             return false;
 
         List<GridSeg> visibleSegments = ReadGridSegments(view);
-        if (selection.Vertical != null &&
-            !ContainsEquivalentGrid(visibleSegments, selection.Vertical))
+        if (
+            selection.Vertical != null
+            && !ContainsEquivalentGrid(visibleSegments, selection.Vertical)
+        )
         {
             return false;
         }
 
-        if (selection.Bottom != null &&
-            !ContainsEquivalentGrid(visibleSegments, selection.Bottom))
+        if (selection.Bottom != null && !ContainsEquivalentGrid(visibleSegments, selection.Bottom))
         {
             return false;
         }
 
-        if (selection.Top != null &&
-            !ContainsEquivalentGrid(visibleSegments, selection.Top))
+        if (selection.Top != null && !ContainsEquivalentGrid(visibleSegments, selection.Top))
         {
             return false;
         }
@@ -3643,9 +3899,7 @@ public static class PHU_OpenGridView
         return true;
     }
 
-    private static bool ContainsEquivalentGrid(
-        List<GridSeg> segments,
-        GridSeg expected)
+    private static bool ContainsEquivalentGrid(List<GridSeg> segments, GridSeg expected)
     {
         if (segments == null || expected == null)
             return false;
@@ -3655,16 +3909,20 @@ public static class PHU_OpenGridView
             if (current == null)
                 continue;
 
-            if (expected.IsVertical &&
-                current.IsVertical &&
-                Math.Abs(current.ConstX - expected.ConstX) <= LINE_AXIS_TOLERANCE)
+            if (
+                expected.IsVertical
+                && current.IsVertical
+                && Math.Abs(current.ConstX - expected.ConstX) <= LINE_AXIS_TOLERANCE
+            )
             {
                 return true;
             }
 
-            if (expected.IsHorizontal &&
-                current.IsHorizontal &&
-                Math.Abs(current.ConstY - expected.ConstY) <= LINE_AXIS_TOLERANCE)
+            if (
+                expected.IsHorizontal
+                && current.IsHorizontal
+                && Math.Abs(current.ConstY - expected.ConstY) <= LINE_AXIS_TOLERANCE
+            )
             {
                 return true;
             }
@@ -3673,16 +3931,16 @@ public static class PHU_OpenGridView
         return false;
     }
 
-    private static void RestoreRestrictionBoxWithoutMoving(
-        View view,
-        AABB originalRestrictionBox)
+    private static void RestoreRestrictionBoxWithoutMoving(View view, AABB originalRestrictionBox)
     {
         try
         {
-            if (view == null ||
-                originalRestrictionBox == null ||
-                originalRestrictionBox.MinPoint == null ||
-                originalRestrictionBox.MaxPoint == null)
+            if (
+                view == null
+                || originalRestrictionBox == null
+                || originalRestrictionBox.MinPoint == null
+                || originalRestrictionBox.MaxPoint == null
+            )
             {
                 return;
             }
@@ -3691,19 +3949,24 @@ public static class PHU_OpenGridView
                 new Point(
                     originalRestrictionBox.MinPoint.X,
                     originalRestrictionBox.MinPoint.Y,
-                    originalRestrictionBox.MinPoint.Z),
+                    originalRestrictionBox.MinPoint.Z
+                ),
                 new Point(
                     originalRestrictionBox.MaxPoint.X,
                     originalRestrictionBox.MaxPoint.Y,
-                    originalRestrictionBox.MaxPoint.Z));
+                    originalRestrictionBox.MaxPoint.Z
+                )
+            );
             TryApplyRestrictionBox(view, restoreBox);
         }
-        catch
-        {
-        }
+        catch { }
     }
 
-    private static bool FitViewRestrictionBoxByModelSolid(View view, Tekla.Structures.Model.Model model, double padding)
+    private static bool FitViewRestrictionBoxByModelSolid(
+        View view,
+        Tekla.Structures.Model.Model model,
+        double padding
+    )
     {
         if (view == null || model == null)
             return false;
@@ -3732,13 +3995,17 @@ public static class PHU_OpenGridView
         try
         {
             oldPlane = model.GetWorkPlaneHandler().GetCurrentTransformationPlane();
-            model.GetWorkPlaneHandler().SetCurrentTransformationPlane(
-                new Tekla.Structures.Model.TransformationPlane(view.DisplayCoordinateSystem));
+            model
+                .GetWorkPlaneHandler()
+                .SetCurrentTransformationPlane(
+                    new Tekla.Structures.Model.TransformationPlane(view.DisplayCoordinateSystem)
+                );
 
             DrawingObjectEnumerator e = view.GetAllObjects(typeof(Tekla.Structures.Drawing.Part));
             while (e != null && e.MoveNext())
             {
-                Tekla.Structures.Drawing.Part drawingPart = e.Current as Tekla.Structures.Drawing.Part;
+                Tekla.Structures.Drawing.Part drawingPart =
+                    e.Current as Tekla.Structures.Drawing.Part;
                 if (drawingPart == null)
                     continue;
 
@@ -3780,16 +4047,18 @@ public static class PHU_OpenGridView
                 if (sx2 <= sx1 + 0.01 || sy2 <= sy1 + 0.01)
                     continue;
 
-                if (sx1 < minX) minX = sx1;
-                if (sx2 > maxX) maxX = sx2;
-                if (sy1 < minY) minY = sy1;
-                if (sy2 > maxY) maxY = sy2;
+                if (sx1 < minX)
+                    minX = sx1;
+                if (sx2 > maxX)
+                    maxX = sx2;
+                if (sy1 < minY)
+                    minY = sy1;
+                if (sy2 > maxY)
+                    maxY = sy2;
                 found = true;
             }
         }
-        catch
-        {
-        }
+        catch { }
         finally
         {
             try
@@ -3797,9 +4066,7 @@ public static class PHU_OpenGridView
                 if (oldPlane != null)
                     model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane);
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         if (!found)
@@ -3828,8 +4095,14 @@ public static class PHU_OpenGridView
         if (min == null || max == null)
             return false;
 
-        if (!IsFinite(min.X) || !IsFinite(min.Y) || !IsFinite(min.Z) ||
-            !IsFinite(max.X) || !IsFinite(max.Y) || !IsFinite(max.Z))
+        if (
+            !IsFinite(min.X)
+            || !IsFinite(min.Y)
+            || !IsFinite(min.Z)
+            || !IsFinite(max.X)
+            || !IsFinite(max.Y)
+            || !IsFinite(max.Z)
+        )
             return false;
 
         if (max.X <= min.X + 1.0)
@@ -3846,9 +4119,6 @@ public static class PHU_OpenGridView
         return true;
     }
 
-
-
-
     // =================================================
     // PHU NEIGHBOR GRIDS - CREATE DIRECT
     // Port chức năng chính Neighboring grids: tạo mark lân cận theo Grid trong Drawing.
@@ -3859,7 +4129,8 @@ public static class PHU_OpenGridView
     // =================================================
 
     private const string PHU_NG_UDA_FIELD = "CREATED_BY";
-    private const string PHU_NG_UDA_VALUE_GRID = "CUSTOM_OBJECT_CREATED_BY_NEIGHBORING_GRID_SYMBOLS";
+    private const string PHU_NG_UDA_VALUE_GRID =
+        "CUSTOM_OBJECT_CREATED_BY_NEIGHBORING_GRID_SYMBOLS";
 
     public static Result RunNeighborGrid30()
     {
@@ -3934,7 +4205,10 @@ public static class PHU_OpenGridView
                 }
             }
 
-            try { drawing.CommitChanges(); }
+            try
+            {
+                drawing.CommitChanges();
+            }
             catch { }
 
             result.Message = "Neighbor grids created: " + created;
@@ -3948,7 +4222,12 @@ public static class PHU_OpenGridView
         }
     }
 
-    private static int CreateNeighborGridInView(View view, Tekla.Structures.Model.Model model, double xOffset, double yOffset)
+    private static int CreateNeighborGridInView(
+        View view,
+        Tekla.Structures.Model.Model model,
+        double xOffset,
+        double yOffset
+    )
     {
         if (view == null || model == null)
             return 0;
@@ -3957,28 +4236,42 @@ public static class PHU_OpenGridView
 
         try
         {
-            DrawingObjectEnumerator grids = view.GetAllObjects(typeof(Tekla.Structures.Drawing.Grid));
+            DrawingObjectEnumerator grids = view.GetAllObjects(
+                typeof(Tekla.Structures.Drawing.Grid)
+            );
             while (grids != null && grids.MoveNext())
             {
-                Tekla.Structures.Drawing.Grid drawingGrid = grids.Current as Tekla.Structures.Drawing.Grid;
+                Tekla.Structures.Drawing.Grid drawingGrid =
+                    grids.Current as Tekla.Structures.Drawing.Grid;
                 if (drawingGrid == null)
                     continue;
 
-                Tekla.Structures.Model.Grid modelGrid = GetModelGridFromDrawingGrid(drawingGrid, model);
+                Tekla.Structures.Model.Grid modelGrid = GetModelGridFromDrawingGrid(
+                    drawingGrid,
+                    model
+                );
                 if (modelGrid == null)
                     continue;
 
-                created += CreateNeighborMarksForDrawingGrid(view, drawingGrid, modelGrid, model, xOffset, yOffset);
+                created += CreateNeighborMarksForDrawingGrid(
+                    view,
+                    drawingGrid,
+                    modelGrid,
+                    model,
+                    xOffset,
+                    yOffset
+                );
             }
         }
-        catch
-        {
-        }
+        catch { }
 
         return created;
     }
 
-    private static Tekla.Structures.Model.Grid GetModelGridFromDrawingGrid(Tekla.Structures.Drawing.Grid drawingGrid, Tekla.Structures.Model.Model model)
+    private static Tekla.Structures.Model.Grid GetModelGridFromDrawingGrid(
+        Tekla.Structures.Drawing.Grid drawingGrid,
+        Tekla.Structures.Model.Model model
+    )
     {
         try
         {
@@ -4005,7 +4298,8 @@ public static class PHU_OpenGridView
         Tekla.Structures.Model.Grid modelGrid,
         Tekla.Structures.Model.Model model,
         double xOffset,
-        double yOffset)
+        double yOffset
+    )
     {
         int created = 0;
 
@@ -4024,7 +4318,8 @@ public static class PHU_OpenGridView
         DrawingObjectEnumerator lines = drawingGrid.GetObjects();
         while (lines != null && lines.MoveNext())
         {
-            Tekla.Structures.Drawing.GridLine line = lines.Current as Tekla.Structures.Drawing.GridLine;
+            Tekla.Structures.Drawing.GridLine line =
+                lines.Current as Tekla.Structures.Drawing.GridLine;
             if (line == null)
                 continue;
 
@@ -4037,11 +4332,20 @@ public static class PHU_OpenGridView
 
             string previousLabel;
             string nextLabel;
-            if (!FindNeighborLabels(modelLabelGroups, currentLabel, out previousLabel, out nextLabel))
+            if (
+                !FindNeighborLabels(
+                    modelLabelGroups,
+                    currentLabel,
+                    out previousLabel,
+                    out nextLabel
+                )
+            )
                 continue;
 
-            bool showPrevious = firstVisibleLabels.Contains(currentLabel) && !string.IsNullOrEmpty(previousLabel);
-            bool showNext = lastVisibleLabels.Contains(currentLabel) && !string.IsNullOrEmpty(nextLabel);
+            bool showPrevious =
+                firstVisibleLabels.Contains(currentLabel) && !string.IsNullOrEmpty(previousLabel);
+            bool showNext =
+                lastVisibleLabels.Contains(currentLabel) && !string.IsNullOrEmpty(nextLabel);
 
             if (!showPrevious && !showNext)
                 continue;
@@ -4057,13 +4361,17 @@ public static class PHU_OpenGridView
                 showPrevious,
                 showNext,
                 xOffset,
-                yOffset);
+                yOffset
+            );
         }
 
         return created;
     }
 
-    private static List<string> GetDrawingGridVisibleLabels(Tekla.Structures.Drawing.Grid drawingGrid, Tekla.Structures.Model.Model model)
+    private static List<string> GetDrawingGridVisibleLabels(
+        Tekla.Structures.Drawing.Grid drawingGrid,
+        Tekla.Structures.Model.Model model
+    )
     {
         List<string> labels = new List<string>();
 
@@ -4072,7 +4380,8 @@ public static class PHU_OpenGridView
             DrawingObjectEnumerator lines = drawingGrid.GetObjects();
             while (lines != null && lines.MoveNext())
             {
-                Tekla.Structures.Drawing.GridLine line = lines.Current as Tekla.Structures.Drawing.GridLine;
+                Tekla.Structures.Drawing.GridLine line =
+                    lines.Current as Tekla.Structures.Drawing.GridLine;
                 if (line == null)
                     continue;
 
@@ -4083,9 +4392,7 @@ public static class PHU_OpenGridView
                 AddUniqueString(labels, label);
             }
         }
-        catch
-        {
-        }
+        catch { }
 
         return labels;
     }
@@ -4094,9 +4401,21 @@ public static class PHU_OpenGridView
     {
         List<string[]> groups = new List<string[]>();
 
-        try { groups.Add(SplitGridLabels(modelGrid.LabelX)); } catch { }
-        try { groups.Add(SplitGridLabels(modelGrid.LabelY)); } catch { }
-        try { groups.Add(SplitGridLabels(modelGrid.LabelZ)); } catch { }
+        try
+        {
+            groups.Add(SplitGridLabels(modelGrid.LabelX));
+        }
+        catch { }
+        try
+        {
+            groups.Add(SplitGridLabels(modelGrid.LabelY));
+        }
+        catch { }
+        try
+        {
+            groups.Add(SplitGridLabels(modelGrid.LabelZ));
+        }
+        catch { }
 
         return groups;
     }
@@ -4108,14 +4427,16 @@ public static class PHU_OpenGridView
 
         return text.Split(
             new char[] { ' ', '\t', '\r', '\n' },
-            StringSplitOptions.RemoveEmptyEntries);
+            StringSplitOptions.RemoveEmptyEntries
+        );
     }
 
     private static void AddFirstLastVisibleInGroup(
         List<string> visibleLabels,
         string[] modelLabels,
         List<string> firstVisibleLabels,
-        List<string> lastVisibleLabels)
+        List<string> lastVisibleLabels
+    )
     {
         try
         {
@@ -4150,12 +4471,15 @@ public static class PHU_OpenGridView
                 AddUniqueString(lastVisibleLabels, last);
             }
         }
-        catch
-        {
-        }
+        catch { }
     }
 
-    private static bool FindNeighborLabels(List<string[]> groups, string currentLabel, out string previousLabel, out string nextLabel)
+    private static bool FindNeighborLabels(
+        List<string[]> groups,
+        string currentLabel,
+        out string previousLabel,
+        out string nextLabel
+    )
     {
         previousLabel = "";
         nextLabel = "";
@@ -4185,9 +4509,7 @@ public static class PHU_OpenGridView
                 }
             }
         }
-        catch
-        {
-        }
+        catch { }
 
         return false;
     }
@@ -4203,7 +4525,8 @@ public static class PHU_OpenGridView
         bool showPrevious,
         bool showNext,
         double xOffset,
-        double yOffset)
+        double yOffset
+    )
     {
         int created = 0;
 
@@ -4216,17 +4539,25 @@ public static class PHU_OpenGridView
             Point previousGridPoint = GetModelGridPlanePointInView(modelGrid, previousLabel, view);
             Point nextGridPoint = GetModelGridPlanePointInView(modelGrid, nextLabel, view);
 
-            Vector gridDirection = new LineSegment(line.StartLabel.GridPoint, line.EndLabel.GridPoint).GetDirectionVector();
+            Vector gridDirection = new LineSegment(
+                line.StartLabel.GridPoint,
+                line.EndLabel.GridPoint
+            ).GetDirectionVector();
 
             bool isVerticalGridLine = Math.Abs(gridDirection.Y) > Math.Abs(gridDirection.X);
 
-            bool hasStartLabel = GetBool(GetProp(line.Attributes, "DrawTextAtStartOfGridLine"), true);
+            bool hasStartLabel = GetBool(
+                GetProp(line.Attributes, "DrawTextAtStartOfGridLine"),
+                true
+            );
             bool hasEndLabel = GetBool(GetProp(line.Attributes, "DrawTextAtEndOfGridLine"), true);
 
             if (hasStartLabel)
             {
                 Point labelCenter = SafeCopyPoint(line.StartLabel.CenterPoint);
-                Point[] labelBox = GetRectanglePointsSafe(line.StartLabel.GetAxisAlignedBoundingBox());
+                Point[] labelBox = GetRectanglePointsSafe(
+                    line.StartLabel.GetAxisAlignedBoundingBox()
+                );
 
                 Vector sideDirection = isVerticalGridLine
                     ? new Vector(0.0, -1.0, 0.0)
@@ -4246,13 +4577,16 @@ public static class PHU_OpenGridView
                     showNext,
                     sideDirection,
                     xOffset,
-                    yOffset);
+                    yOffset
+                );
             }
 
             if (hasEndLabel)
             {
                 Point labelCenter = SafeCopyPoint(line.EndLabel.CenterPoint);
-                Point[] labelBox = GetRectanglePointsSafe(line.EndLabel.GetAxisAlignedBoundingBox());
+                Point[] labelBox = GetRectanglePointsSafe(
+                    line.EndLabel.GetAxisAlignedBoundingBox()
+                );
 
                 Vector sideDirection = isVerticalGridLine
                     ? new Vector(0.0, 1.0, 0.0)
@@ -4272,12 +4606,11 @@ public static class PHU_OpenGridView
                     showNext,
                     sideDirection,
                     xOffset,
-                    yOffset);
+                    yOffset
+                );
             }
         }
-        catch
-        {
-        }
+        catch { }
 
         return created;
     }
@@ -4296,7 +4629,8 @@ public static class PHU_OpenGridView
         bool showNext,
         Vector sideDirection,
         double xOffset,
-        double yOffset)
+        double yOffset
+    )
     {
         int created = 0;
 
@@ -4305,39 +4639,79 @@ public static class PHU_OpenGridView
 
         try
         {
-            Point sheetDelta = new Point(labelCenter.X - currentGridPoint.X, labelCenter.Y - currentGridPoint.Y, 0.0);
+            Point sheetDelta = new Point(
+                labelCenter.X - currentGridPoint.X,
+                labelCenter.Y - currentGridPoint.Y,
+                0.0
+            );
 
             Point previousBase = null;
             Point nextBase = null;
 
             if (previousGridPoint != null)
-                previousBase = new Point(previousGridPoint.X + sheetDelta.X, previousGridPoint.Y + sheetDelta.Y, 0.0);
+                previousBase = new Point(
+                    previousGridPoint.X + sheetDelta.X,
+                    previousGridPoint.Y + sheetDelta.Y,
+                    0.0
+                );
 
             if (nextGridPoint != null)
-                nextBase = new Point(nextGridPoint.X + sheetDelta.X, nextGridPoint.Y + sheetDelta.Y, 0.0);
+                nextBase = new Point(
+                    nextGridPoint.X + sheetDelta.X,
+                    nextGridPoint.Y + sheetDelta.Y,
+                    0.0
+                );
 
             if (showPrevious && previousBase != null && !string.IsNullOrEmpty(previousLabel))
             {
-                Point pos = GetNeighborMarkPoint(labelCenter, previousBase, sideDirection, xOffset, yOffset, view);
-                if (InsertNeighborTextAndLeader(view, line, previousLabel, labelCenter, labelBox, pos))
+                Point pos = GetNeighborMarkPoint(
+                    labelCenter,
+                    previousBase,
+                    sideDirection,
+                    xOffset,
+                    yOffset,
+                    view
+                );
+                if (
+                    InsertNeighborTextAndLeader(
+                        view,
+                        line,
+                        previousLabel,
+                        labelCenter,
+                        labelBox,
+                        pos
+                    )
+                )
                     created++;
             }
 
             if (showNext && nextBase != null && !string.IsNullOrEmpty(nextLabel))
             {
-                Point pos = GetNeighborMarkPoint(labelCenter, nextBase, sideDirection, xOffset, yOffset, view);
+                Point pos = GetNeighborMarkPoint(
+                    labelCenter,
+                    nextBase,
+                    sideDirection,
+                    xOffset,
+                    yOffset,
+                    view
+                );
                 if (InsertNeighborTextAndLeader(view, line, nextLabel, labelCenter, labelBox, pos))
                     created++;
             }
         }
-        catch
-        {
-        }
+        catch { }
 
         return created;
     }
 
-    private static Point GetNeighborMarkPoint(Point labelCenter, Point neighborBase, Vector sideDirection, double xOffset, double yOffset, View view)
+    private static Point GetNeighborMarkPoint(
+        Point labelCenter,
+        Point neighborBase,
+        Vector sideDirection,
+        double xOffset,
+        double yOffset,
+        View view
+    )
     {
         try
         {
@@ -4370,7 +4744,11 @@ public static class PHU_OpenGridView
             Point basePoint = labelCenter + (Point)(object)(x * dir);
 
             Vector side = sideDirection;
-            try { side.Normalize(); } catch { }
+            try
+            {
+                side.Normalize();
+            }
+            catch { }
 
             return basePoint + (Point)(object)(y * side);
         }
@@ -4386,7 +4764,8 @@ public static class PHU_OpenGridView
         string label,
         Point gridLabelPoint,
         Point[] gridLabelBox,
-        Point textPoint)
+        Point textPoint
+    )
     {
         try
         {
@@ -4397,13 +4776,22 @@ public static class PHU_OpenGridView
 
             Text text = new Text((ViewBase)(object)view, textPoint, label, attr);
             bool textOk = false;
-            try { textOk = ((DatabaseObject)text).Insert(); }
-            catch { textOk = false; }
+            try
+            {
+                textOk = ((DatabaseObject)text).Insert();
+            }
+            catch
+            {
+                textOk = false;
+            }
 
             if (!textOk)
                 return false;
 
-            try { ((DatabaseObject)text).SetUserProperty(PHU_NG_UDA_FIELD, PHU_NG_UDA_VALUE_GRID); }
+            try
+            {
+                ((DatabaseObject)text).SetUserProperty(PHU_NG_UDA_FIELD, PHU_NG_UDA_VALUE_GRID);
+            }
             catch { }
 
             Point end = textPoint;
@@ -4411,29 +4799,56 @@ public static class PHU_OpenGridView
 
             try
             {
-                Point[] textBox = GetRectanglePointsSafe(text.Attributes.Frame.GetAxisAlignedBoundingBox());
-                Point p1 = IntersectLineWithRectangle(new LineSegment(gridLabelPoint, textPoint), gridLabelBox, textPoint);
-                Point p2 = IntersectLineWithRectangle(new LineSegment(gridLabelPoint, textPoint), textBox, gridLabelPoint);
+                Point[] textBox = GetRectanglePointsSafe(
+                    text.Attributes.Frame.GetAxisAlignedBoundingBox()
+                );
+                Point p1 = IntersectLineWithRectangle(
+                    new LineSegment(gridLabelPoint, textPoint),
+                    gridLabelBox,
+                    textPoint
+                );
+                Point p2 = IntersectLineWithRectangle(
+                    new LineSegment(gridLabelPoint, textPoint),
+                    textBox,
+                    gridLabelPoint
+                );
 
-                if (p1 != null) start = p1;
-                if (p2 != null) end = p2;
+                if (p1 != null)
+                    start = p1;
+                if (p2 != null)
+                    end = p2;
             }
-            catch
-            {
-            }
+            catch { }
 
             if (Distance2D(start, end) > 0.01)
             {
-                Tekla.Structures.Drawing.Line leader = new Tekla.Structures.Drawing.Line((ViewBase)(object)view, start, end, 0.0);
+                Tekla.Structures.Drawing.Line leader = new Tekla.Structures.Drawing.Line(
+                    (ViewBase)(object)view,
+                    start,
+                    end,
+                    0.0
+                );
                 TryCopyLineAttributes(line, leader);
 
                 bool lineOk = false;
-                try { lineOk = ((DatabaseObject)leader).Insert(); }
-                catch { lineOk = false; }
+                try
+                {
+                    lineOk = ((DatabaseObject)leader).Insert();
+                }
+                catch
+                {
+                    lineOk = false;
+                }
 
                 if (lineOk)
                 {
-                    try { ((DatabaseObject)leader).SetUserProperty(PHU_NG_UDA_FIELD, PHU_NG_UDA_VALUE_GRID); }
+                    try
+                    {
+                        ((DatabaseObject)leader).SetUserProperty(
+                            PHU_NG_UDA_FIELD,
+                            PHU_NG_UDA_VALUE_GRID
+                        );
+                    }
                     catch { }
                 }
             }
@@ -4446,7 +4861,9 @@ public static class PHU_OpenGridView
         }
     }
 
-    private static TextAttributes CreateNeighborTextAttributes(Tekla.Structures.Drawing.GridLine line)
+    private static TextAttributes CreateNeighborTextAttributes(
+        Tekla.Structures.Drawing.GridLine line
+    )
     {
         TextAttributes attr = new TextAttributes();
 
@@ -4454,9 +4871,7 @@ public static class PHU_OpenGridView
         {
             attr.PreferredPlacing = PreferredTextPlacingTypes.PointPlacingType();
         }
-        catch
-        {
-        }
+        catch { }
 
         try
         {
@@ -4498,9 +4913,7 @@ public static class PHU_OpenGridView
             if (bg != null)
                 TrySetEnumValueByName(attr, "Background", "Opaque");
         }
-        catch
-        {
-        }
+        catch { }
 
         return attr;
     }
@@ -4552,12 +4965,13 @@ public static class PHU_OpenGridView
             if (background != null)
                 TrySetProp(target, "Background", background);
         }
-        catch
-        {
-        }
+        catch { }
     }
 
-    private static void TryCopyLineAttributes(Tekla.Structures.Drawing.GridLine source, Tekla.Structures.Drawing.Line target)
+    private static void TryCopyLineAttributes(
+        Tekla.Structures.Drawing.GridLine source,
+        Tekla.Structures.Drawing.Line target
+    )
     {
         try
         {
@@ -4593,9 +5007,7 @@ public static class PHU_OpenGridView
                 TrySetEnumByName(arrow, "Position", "None");
             }
         }
-        catch
-        {
-        }
+        catch { }
     }
 
     private static void ApplyNeighborGridLineTypeL04(object lineAttributes, object lineObject)
@@ -4622,9 +5034,7 @@ public static class PHU_OpenGridView
                 TrySetLineTypePropertyL04(lineObject, "Type");
             }
         }
-        catch
-        {
-        }
+        catch { }
     }
 
     private static void TryLoadNeighborGridAttributes(object target, string attributeName)
@@ -4634,12 +5044,15 @@ public static class PHU_OpenGridView
 
         try
         {
-            MethodInfo m = target.GetType().GetMethod(
-                "LoadAttributes",
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-                null,
-                new Type[] { typeof(string) },
-                null);
+            MethodInfo m = target
+                .GetType()
+                .GetMethod(
+                    "LoadAttributes",
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                    null,
+                    new Type[] { typeof(string) },
+                    null
+                );
 
             if (m != null)
             {
@@ -4647,25 +5060,24 @@ public static class PHU_OpenGridView
                 return;
             }
         }
-        catch
-        {
-        }
+        catch { }
 
         try
         {
-            MethodInfo m = target.GetType().GetMethod(
-                "Load",
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-                null,
-                new Type[] { typeof(string) },
-                null);
+            MethodInfo m = target
+                .GetType()
+                .GetMethod(
+                    "Load",
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                    null,
+                    new Type[] { typeof(string) },
+                    null
+                );
 
             if (m != null)
                 m.Invoke(target, new object[] { attributeName });
         }
-        catch
-        {
-        }
+        catch { }
     }
 
     private static void TrySetLineTypePropertyL04(object target, string propName)
@@ -4675,9 +5087,12 @@ public static class PHU_OpenGridView
 
         try
         {
-            PropertyInfo p = target.GetType().GetProperty(
-                propName,
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            PropertyInfo p = target
+                .GetType()
+                .GetProperty(
+                    propName,
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic
+                );
 
             if (p == null || !p.CanWrite || p.GetIndexParameters().Length > 0)
                 return;
@@ -4693,15 +5108,19 @@ public static class PHU_OpenGridView
             }
 
             object current = null;
-            try { current = p.GetValue(target, null); }
-            catch { current = null; }
+            try
+            {
+                current = p.GetValue(target, null);
+            }
+            catch
+            {
+                current = null;
+            }
 
             if (current != null)
                 SetLineTypeL04OnObject(current);
         }
-        catch
-        {
-        }
+        catch { }
     }
 
     private static void SetLineTypeL04OnObject(object target)
@@ -4723,9 +5142,12 @@ public static class PHU_OpenGridView
 
         try
         {
-            FieldInfo f = target.GetType().GetField(
-                fieldName,
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            FieldInfo f = target
+                .GetType()
+                .GetField(
+                    fieldName,
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic
+                );
 
             if (f == null)
                 return;
@@ -4741,15 +5163,19 @@ public static class PHU_OpenGridView
             }
 
             object current = null;
-            try { current = f.GetValue(target); }
-            catch { current = null; }
+            try
+            {
+                current = f.GetValue(target);
+            }
+            catch
+            {
+                current = null;
+            }
 
             if (current != null && !object.ReferenceEquals(current, target))
                 SetLineTypeL04OnObject(current);
         }
-        catch
-        {
-        }
+        catch { }
     }
 
     private static object GetLineTypeL04EnumValue(Type enumType)
@@ -4761,18 +5187,18 @@ public static class PHU_OpenGridView
         {
             foreach (string name in Enum.GetNames(enumType))
             {
-                if (string.Equals(name, "XKITLINE04", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(name, "L04", StringComparison.OrdinalIgnoreCase) ||
-                    name.IndexOf("XKITLINE04", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    name.IndexOf("LINE04", StringComparison.OrdinalIgnoreCase) >= 0)
+                if (
+                    string.Equals(name, "XKITLINE04", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(name, "L04", StringComparison.OrdinalIgnoreCase)
+                    || name.IndexOf("XKITLINE04", StringComparison.OrdinalIgnoreCase) >= 0
+                    || name.IndexOf("LINE04", StringComparison.OrdinalIgnoreCase) >= 0
+                )
                 {
                     return Enum.Parse(enumType, name);
                 }
             }
         }
-        catch
-        {
-        }
+        catch { }
 
         try
         {
@@ -4791,16 +5217,17 @@ public static class PHU_OpenGridView
 
         try
         {
-            FieldInfo f = target.GetType().GetField(
-                fieldName,
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            FieldInfo f = target
+                .GetType()
+                .GetField(
+                    fieldName,
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic
+                );
 
             if (f != null && f.FieldType == typeof(string))
                 f.SetValue(target, value);
         }
-        catch
-        {
-        }
+        catch { }
     }
 
     private static void SetEnumFieldNeighborGrid(object target, string fieldName, string enumName)
@@ -4810,9 +5237,12 @@ public static class PHU_OpenGridView
 
         try
         {
-            FieldInfo f = target.GetType().GetField(
-                fieldName,
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            FieldInfo f = target
+                .GetType()
+                .GetField(
+                    fieldName,
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic
+                );
 
             if (f == null)
                 return;
@@ -4823,30 +5253,37 @@ public static class PHU_OpenGridView
 
             foreach (string name in Enum.GetNames(t))
             {
-                if (string.Equals(name, enumName, StringComparison.OrdinalIgnoreCase) ||
-                    name.IndexOf(enumName, StringComparison.OrdinalIgnoreCase) >= 0)
+                if (
+                    string.Equals(name, enumName, StringComparison.OrdinalIgnoreCase)
+                    || name.IndexOf(enumName, StringComparison.OrdinalIgnoreCase) >= 0
+                )
                 {
                     f.SetValue(target, Enum.Parse(t, name));
                     return;
                 }
             }
         }
-        catch
-        {
-        }
+        catch { }
     }
 
-    private static Point GetModelGridPlanePointInView(Tekla.Structures.Model.Grid modelGrid, string label, View view)
+    private static Point GetModelGridPlanePointInView(
+        Tekla.Structures.Model.Grid modelGrid,
+        string label,
+        View view
+    )
     {
         try
         {
             if (modelGrid == null || string.IsNullOrEmpty(label) || view == null)
                 return null;
 
-            Tekla.Structures.Model.ModelObjectEnumerator children = ((Tekla.Structures.Model.ModelObject)modelGrid).GetChildren();
+            Tekla.Structures.Model.ModelObjectEnumerator children = (
+                (Tekla.Structures.Model.ModelObject)modelGrid
+            ).GetChildren();
             while (children != null && children.MoveNext())
             {
-                Tekla.Structures.Model.GridPlane plane = children.Current as Tekla.Structures.Model.GridPlane;
+                Tekla.Structures.Model.GridPlane plane =
+                    children.Current as Tekla.Structures.Model.GridPlane;
                 if (plane == null)
                     continue;
 
@@ -4854,17 +5291,20 @@ public static class PHU_OpenGridView
                     continue;
 
                 Point origin = plane.Plane.Origin;
-                return MatrixFactory.ToCoordinateSystem(view.ViewCoordinateSystem).Transform(origin);
+                return MatrixFactory
+                    .ToCoordinateSystem(view.ViewCoordinateSystem)
+                    .Transform(origin);
             }
         }
-        catch
-        {
-        }
+        catch { }
 
         return null;
     }
 
-    private static string GetGridLineModelLabel(Tekla.Structures.Drawing.GridLine line, Tekla.Structures.Model.Model model)
+    private static string GetGridLineModelLabel(
+        Tekla.Structures.Drawing.GridLine line,
+        Tekla.Structures.Model.Model model
+    )
     {
         try
         {
@@ -4881,9 +5321,7 @@ public static class PHU_OpenGridView
             if (plane != null)
                 return plane.Label;
         }
-        catch
-        {
-        }
+        catch { }
 
         return "";
     }
@@ -4903,9 +5341,7 @@ public static class PHU_OpenGridView
             if (b != null && !string.IsNullOrEmpty(b.ToString()))
                 return b.ToString();
         }
-        catch
-        {
-        }
+        catch { }
 
         return "";
     }
@@ -4915,8 +5351,14 @@ public static class PHU_OpenGridView
         if (p == null)
             return null;
 
-        try { return new Point(p.X, p.Y, p.Z); }
-        catch { return null; }
+        try
+        {
+            return new Point(p.X, p.Y, p.Z);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static Point[] GetRectanglePointsSafe(RectangleBoundingBox box)
@@ -4933,14 +5375,16 @@ public static class PHU_OpenGridView
             pts[2] = box.UpperLeft;
             pts[3] = box.UpperRight;
         }
-        catch
-        {
-        }
+        catch { }
 
         return pts;
     }
 
-    private static Point IntersectLineWithRectangle(LineSegment line, Point[] rect, Point referencePoint)
+    private static Point IntersectLineWithRectangle(
+        LineSegment line,
+        Point[] rect,
+        Point referencePoint
+    )
     {
         try
         {
@@ -4953,10 +5397,38 @@ public static class PHU_OpenGridView
             Point best = null;
             double bestDistance = double.MaxValue;
 
-            TryIntersectRectEdge(line, rect[0], rect[1], referencePoint, ref best, ref bestDistance);
-            TryIntersectRectEdge(line, rect[1], rect[3], referencePoint, ref best, ref bestDistance);
-            TryIntersectRectEdge(line, rect[3], rect[2], referencePoint, ref best, ref bestDistance);
-            TryIntersectRectEdge(line, rect[2], rect[0], referencePoint, ref best, ref bestDistance);
+            TryIntersectRectEdge(
+                line,
+                rect[0],
+                rect[1],
+                referencePoint,
+                ref best,
+                ref bestDistance
+            );
+            TryIntersectRectEdge(
+                line,
+                rect[1],
+                rect[3],
+                referencePoint,
+                ref best,
+                ref bestDistance
+            );
+            TryIntersectRectEdge(
+                line,
+                rect[3],
+                rect[2],
+                referencePoint,
+                ref best,
+                ref bestDistance
+            );
+            TryIntersectRectEdge(
+                line,
+                rect[2],
+                rect[0],
+                referencePoint,
+                ref best,
+                ref bestDistance
+            );
 
             return best;
         }
@@ -4972,12 +5444,16 @@ public static class PHU_OpenGridView
         Point b,
         Point referencePoint,
         ref Point best,
-        ref double bestDistance)
+        ref double bestDistance
+    )
     {
         try
         {
             LineSegment edge = new LineSegment(a, b);
-            LineSegment intersection = Intersection.LineToLine(new Tekla.Structures.Geometry3d.Line(baseLine), new Tekla.Structures.Geometry3d.Line(edge));
+            LineSegment intersection = Intersection.LineToLine(
+                new Tekla.Structures.Geometry3d.Line(baseLine),
+                new Tekla.Structures.Geometry3d.Line(edge)
+            );
 
             if (intersection == null || intersection.Point1 == null)
                 return;
@@ -4993,9 +5469,7 @@ public static class PHU_OpenGridView
                 best = p;
             }
         }
-        catch
-        {
-        }
+        catch { }
     }
 
     private static bool IsPointOnSegment(Point p, LineSegment seg)
@@ -5054,9 +5528,11 @@ public static class PHU_OpenGridView
             if (obj == null || string.IsNullOrEmpty(propName) || string.IsNullOrEmpty(enumName))
                 return false;
 
-            PropertyInfo p = obj.GetType().GetProperty(
-                propName,
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            PropertyInfo p = obj.GetType()
+                .GetProperty(
+                    propName,
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic
+                );
 
             if (p == null || !p.CanWrite || p.GetIndexParameters().Length > 0)
                 return false;
@@ -5087,9 +5563,11 @@ public static class PHU_OpenGridView
             if (obj == null || string.IsNullOrEmpty(name))
                 return false;
 
-            PropertyInfo p = obj.GetType().GetProperty(
-                name,
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            PropertyInfo p = obj.GetType()
+                .GetProperty(
+                    name,
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic
+                );
 
             if (p == null || !p.CanWrite || p.GetIndexParameters().Length > 0)
                 return false;
@@ -5102,6 +5580,4 @@ public static class PHU_OpenGridView
             return false;
         }
     }
-
-
 }

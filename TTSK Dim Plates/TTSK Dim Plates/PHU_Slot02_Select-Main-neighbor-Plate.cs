@@ -39,6 +39,7 @@ namespace Tekla.Technology.Akit.UserScript
         private const double NEIGHBOR_TO_PLATE_TIER = 450.0;
 
         private const double BOUND_TOL = 20.0;
+        private const double FLANGE_FACE_MIN_ALIGNMENT = 0.98;
 
         public static void Run()
         {
@@ -63,18 +64,68 @@ namespace Tekla.Technology.Akit.UserScript
                 return;
             }
 
-            List<DrawingPart> selectedParts = GetSelectedDrawingParts(dh);
-            if (selectedParts.Count < 3)
+            ModelPart mainBeam = PHU_MainPartResolver.Resolve(model, drawing);
+            if (mainBeam == null || mainBeam.Identifier == null)
             {
-                Msg("Slot02: Hãy chọn ít nhất 3 part trong drawing: 1 main thép hình + 1 hoặc nhiều neighbor thép hình + 1 hoặc nhiều plate.");
+                Msg("Slot02: Không xác định được Main Part từ bản vẽ đang mở.");
+                return;
+            }
+
+            List<DrawingPart> selectedParts = GetSelectedDrawingParts(dh);
+            if (selectedParts.Count < 1)
+            {
+                List<Slot02AutomaticViewTarget> automaticTargets = FindAutomaticSlot02Targets(
+                    model,
+                    drawing,
+                    mainBeam
+                );
+
+                if (automaticTargets.Count == 0)
+                {
+                    Msg(
+                        "Slot02: Không tìm thấy liên kết chắc chắn Main → Plate → Neighbor H trong các view."
+                    );
+                    return;
+                }
+
+                int automaticCreated = 0;
+                for (int targetIndex = 0; targetIndex < automaticTargets.Count; targetIndex++)
+                {
+                    Slot02AutomaticViewTarget target = automaticTargets[targetIndex];
+                    if (target == null || target.View == null || target.Connections.Count == 0)
+                        continue;
+
+                    automaticCreated += CreateNeighborPlateReferenceDims(
+                        model,
+                        target.View,
+                        mainBeam,
+                        target.NeighborBeams,
+                        target.Plates,
+                        target.Connections
+                    );
+                }
+
+                if (automaticCreated <= 0)
+                {
+                    Msg("Slot02: Đã nhận diện liên kết nhưng không tạo được dimension hợp lệ.");
+                    return;
+                }
+
+                try
+                {
+                    drawing.CommitChanges();
+                }
+                catch { }
                 return;
             }
 
             List<DrawingPart> plateDrawingParts = new List<DrawingPart>();
             List<ModelPart> plates = new List<ModelPart>();
 
-            List<DrawingPart> beamDrawingParts = new List<DrawingPart>();
-            List<ModelPart> beams = new List<ModelPart>();
+            // Van chap nhan neighbor duoc chon de giu tuong thich thao tac cu,
+            // nhung main authoritative luon lay tu drawing/assembly.
+            List<DrawingPart> selectedNeighborDrawingParts = new List<DrawingPart>();
+            List<ModelPart> neighborBeams = new List<ModelPart>();
 
             for (int i = 0; i < selectedParts.Count; i++)
             {
@@ -96,61 +147,82 @@ namespace Tekla.Technology.Akit.UserScript
                 }
                 else
                 {
-                    beams.Add(mp);
-                    beamDrawingParts.Add(dp);
+                    if (!SameIdentifier(mp.Identifier, mainBeam.Identifier))
+                    {
+                        AddUniqueModelPart(neighborBeams, mp);
+                        selectedNeighborDrawingParts.Add(dp);
+                    }
                 }
             }
 
-            if (plates.Count == 0 || beams.Count < 2)
+            if (plates.Count == 0)
             {
-                Msg("Slot02: Không nhận diện đủ plate và thép hình. Cần 1 main + 1 hoặc nhiều neighbor + 1 hoặc nhiều plate.");
+                Msg("Slot02: Không nhận diện được plate trong selection.");
                 return;
             }
 
-            ModelPart mainBeam = null;
-            DrawingPart mainDrawingPart = null;
-            PickMainBeamByPlateAssemblies(plates, beams, beamDrawingParts, out mainBeam, out mainDrawingPart);
-
-            if (mainBeam == null)
+            // Khi user chi chon plate, neighbor duoc lay bang quan he model chac chan:
+            // main cua assembly cua plate (neu khac drawing main) va cac part cung bolt group.
+            for (int i = 0; i < plates.Count; i++)
             {
-                Msg("Slot02: Không xác định được main beam.");
-                return;
-            }
-
-            List<ModelPart> neighborBeams = new List<ModelPart>();
-            List<DrawingPart> neighborDrawingParts = new List<DrawingPart>();
-            for (int i = 0; i < beams.Count; i++)
-            {
-                if (SameIdentifier(beams[i].Identifier, mainBeam.Identifier))
-                    continue;
-
-                neighborBeams.Add(beams[i]);
-                if (i < beamDrawingParts.Count)
-                    neighborDrawingParts.Add(beamDrawingParts[i]);
+                AddSemanticNeighborBeamsForPlate(plates[i], mainBeam, neighborBeams);
             }
 
             if (neighborBeams.Count == 0)
             {
-                Msg("Slot02: Không xác định được neighbor beam.");
+                Msg(
+                    "Slot02: Plate đã chọn không có quan hệ assembly/bolt đủ chắc chắn để xác định neighbor."
+                );
                 return;
             }
 
-            DrawingPart firstPlateDrawingPart = plateDrawingParts.Count > 0 ? plateDrawingParts[0] : null;
-            DrawingPart firstNeighborDrawingPart = neighborDrawingParts.Count > 0 ? neighborDrawingParts[0] : null;
+            DrawingPart firstPlateDrawingPart =
+                plateDrawingParts.Count > 0 ? plateDrawingParts[0] : null;
+            DrawingPart firstNeighborDrawingPart =
+                selectedNeighborDrawingParts.Count > 0 ? selectedNeighborDrawingParts[0] : null;
 
-            TSD.View view = TryGetSelectedPartsView(firstPlateDrawingPart, mainDrawingPart, firstNeighborDrawingPart);
+            TSD.View view = TryGetSelectedPartsView(
+                firstPlateDrawingPart,
+                firstNeighborDrawingPart
+            );
+            if (
+                view != null
+                && (
+                    !ViewContainsPart(view, mainBeam.Identifier)
+                    || !ViewContainsPart(view, neighborBeams[0].Identifier)
+                )
+            )
+            {
+                view = null;
+            }
+
             if (view == null)
-                view = FindViewContainingParts(drawing, plates[0].Identifier, mainBeam.Identifier, neighborBeams[0].Identifier);
+                view = FindViewContainingParts(
+                    drawing,
+                    plates[0].Identifier,
+                    mainBeam.Identifier,
+                    neighborBeams[0].Identifier
+                );
 
             if (view == null)
             {
-                Msg("Slot02: Không tìm thấy view chứa đủ plate, main beam và neighbor beam đã chọn.");
+                Msg("Slot02: Không tìm thấy view chứa đủ plate, Main Part và neighbor đã resolve.");
                 return;
             }
 
-            int created = CreateNeighborPlateReferenceDims(model, view, mainBeam, neighborBeams, plates);
+            int created = CreateNeighborPlateReferenceDims(
+                model,
+                view,
+                mainBeam,
+                neighborBeams,
+                plates
+            );
 
-            try { drawing.CommitChanges(); } catch { }
+            try
+            {
+                drawing.CommitChanges();
+            }
+            catch { }
 
             //Msg("Slot02 DONE. DIM đã tạo: " + created.ToString());  Tắt popup debug
         }
@@ -160,29 +232,67 @@ namespace Tekla.Technology.Akit.UserScript
             TSD.View view,
             ModelPart mainBeam,
             List<ModelPart> neighborBeams,
-            List<ModelPart> plates)
+            List<ModelPart> plates
+        )
+        {
+            return CreateNeighborPlateReferenceDims(
+                model,
+                view,
+                mainBeam,
+                neighborBeams,
+                plates,
+                null
+            );
+        }
+
+        private static int CreateNeighborPlateReferenceDims(
+            TSM.Model model,
+            TSD.View view,
+            ModelPart mainBeam,
+            List<ModelPart> neighborBeams,
+            List<ModelPart> plates,
+            List<Slot02AutomaticConnection> exactConnections
+        )
         {
             int count = 0;
 
-            if (model == null || view == null || mainBeam == null || neighborBeams == null || neighborBeams.Count == 0 || plates == null || plates.Count == 0)
+            if (
+                model == null
+                || view == null
+                || mainBeam == null
+                || neighborBeams == null
+                || neighborBeams.Count == 0
+                || plates == null
+                || plates.Count == 0
+            )
                 return count;
 
-            TSM.TransformationPlane oldPlane =
-                model.GetWorkPlaneHandler().GetCurrentTransformationPlane();
+            TSM.TransformationPlane oldPlane = model
+                .GetWorkPlaneHandler()
+                .GetCurrentTransformationPlane();
 
             try
             {
-                model.GetWorkPlaneHandler().SetCurrentTransformationPlane(
-                    new TSM.TransformationPlane(view.DisplayCoordinateSystem));
+                model
+                    .GetWorkPlaneHandler()
+                    .SetCurrentTransformationPlane(
+                        new TSM.TransformationPlane(view.DisplayCoordinateSystem)
+                    );
 
                 Bounds2D mainBox = GetPartBounds2D(mainBeam);
                 if (!mainBox.Valid)
                     return count;
 
-                Point mainCenter = new Point(
-                    (mainBox.MinX + mainBox.MaxX) / 2.0,
-                    (mainBox.MinY + mainBox.MaxY) / 2.0,
-                    0);
+                Point mainReferenceStart;
+                Point mainReferenceEnd;
+                if (
+                    !TryGetStraightReferenceAxis(
+                        mainBeam,
+                        out mainReferenceStart,
+                        out mainReferenceEnd
+                    )
+                )
+                    return count;
 
                 List<NeighborPlateGroup> groups = new List<NeighborPlateGroup>();
 
@@ -195,45 +305,106 @@ namespace Tekla.Technology.Akit.UserScript
                     if (!nb.Valid)
                         continue;
 
-                    if (nb.MinY < allMinY) allMinY = nb.MinY;
-                    if (nb.MaxY > allMaxY) allMaxY = nb.MaxY;
+                    if (nb.MinY < allMinY)
+                        allMinY = nb.MinY;
+                    if (nb.MaxY > allMaxY)
+                        allMaxY = nb.MaxY;
                 }
 
-                for (int i = 0; i < plates.Count; i++)
+                List<Slot02AutomaticConnection> connectionsToProcess =
+                    new List<Slot02AutomaticConnection>();
+
+                if (exactConnections != null)
                 {
-                    ModelPart plate = plates[i];
-                    if (plate == null)
+                    connectionsToProcess.AddRange(exactConnections);
+                }
+                else
+                {
+                    // Legacy selection flow giu nguyen cach ghep plate voi
+                    // neighbor gan nhat trong tap neighbor da resolve.
+                    for (int i = 0; i < plates.Count; i++)
+                    {
+                        ModelPart plate = plates[i];
+                        if (plate == null)
+                            continue;
+
+                        Bounds2D plateBoxForSelection = GetPartBounds2D(plate);
+                        if (!plateBoxForSelection.Valid)
+                            continue;
+
+                        Point plateCenterForSelection = new Point(
+                            (plateBoxForSelection.MinX + plateBoxForSelection.MaxX) / 2.0,
+                            (plateBoxForSelection.MinY + plateBoxForSelection.MaxY) / 2.0,
+                            0
+                        );
+
+                        ModelPart nearestNeighbor;
+                        Bounds2D nearestNeighborBox;
+                        if (
+                            !FindNearestNeighborBeam(
+                                plateCenterForSelection,
+                                neighborBeams,
+                                out nearestNeighbor,
+                                out nearestNeighborBox
+                            )
+                        )
+                            continue;
+
+                        Slot02AutomaticConnection legacyConnection =
+                            new Slot02AutomaticConnection();
+                        legacyConnection.Plate = plate;
+                        legacyConnection.Neighbor = nearestNeighbor;
+                        connectionsToProcess.Add(legacyConnection);
+                    }
+                }
+
+                for (int i = 0; i < connectionsToProcess.Count; i++)
+                {
+                    Slot02AutomaticConnection connection = connectionsToProcess[i];
+                    ModelPart plate = connection == null ? null : connection.Plate;
+                    ModelPart neighborBeam = connection == null ? null : connection.Neighbor;
+                    if (plate == null || neighborBeam == null)
                         continue;
 
                     Bounds2D plateBox = GetPartBounds2D(plate);
-                    if (!plateBox.Valid)
+                    Bounds2D neighborBox = GetPartBounds2D(neighborBeam);
+                    if (!plateBox.Valid || !neighborBox.Valid)
                         continue;
 
                     Point plateCenter = new Point(
                         (plateBox.MinX + plateBox.MaxX) / 2.0,
                         (plateBox.MinY + plateBox.MaxY) / 2.0,
-                        0);
+                        0
+                    );
 
-                    ModelPart neighborBeam;
-                    Bounds2D neighborBox;
-                    if (!FindNearestNeighborBeam(plateCenter, neighborBeams, out neighborBeam, out neighborBox))
+                    // Chan reference bat buoc la giao hinh hoc cua hai
+                    // GetReferenceLine that trong cung he toa do view.
+                    Point neighborRef;
+                    if (
+                        !TryResolveReferenceIntersection(
+                            mainReferenceStart,
+                            mainReferenceEnd,
+                            neighborBeam,
+                            mainBox,
+                            neighborBox,
+                            out neighborRef
+                        )
+                    )
                         continue;
 
-                    Point neighborBoxCenter = new Point(
-                        (neighborBox.MinX + neighborBox.MaxX) / 2.0,
-                        (neighborBox.MinY + neighborBox.MaxY) / 2.0,
-                        0);
-
-                    // Neighbor reference chân DIM = giao giữa ref neighbor (X tâm neighbor) và ref main chính (Y tâm main).
-                    Point neighborRef = new Point(neighborBoxCenter.X, mainCenter.Y, 0);
-
-                    bool dimToTop = plateCenter.Y >= mainCenter.Y;
+                    bool dimToTop = plateCenter.Y >= neighborRef.Y;
                     Vector direction = dimToTop ? new Vector(0, 1, 0) : new Vector(0, -1, 0);
 
-                    Point plateEdge = GetPlateEdgePointTowardNeighbor(plateBox, neighborRef, dimToTop);
+                    Point plateEdge = GetPlateEdgePointTowardNeighbor(
+                        plateBox,
+                        neighborRef,
+                        dimToTop
+                    );
 
-                    if (plateBox.MinY < allMinY) allMinY = plateBox.MinY;
-                    if (plateBox.MaxY > allMaxY) allMaxY = plateBox.MaxY;
+                    if (plateBox.MinY < allMinY)
+                        allMinY = plateBox.MinY;
+                    if (plateBox.MaxY > allMaxY)
+                        allMaxY = plateBox.MaxY;
 
                     NeighborPlateGroup g = new NeighborPlateGroup();
                     g.Plate = plate;
@@ -245,18 +416,17 @@ namespace Tekla.Technology.Akit.UserScript
                     g.PlateEdge = plateEdge;
                     g.Direction = direction;
                     g.IsTop = dimToTop;
-                    g.AttributeName = plateCenter.X >= neighborRef.X
-                        ? "GEO_HIGE_RIGHT"
-                        : "GEO_HIGE_LEFT";
+                    g.AttributeName =
+                        plateCenter.X >= neighborRef.X ? "GEO_HIGE_RIGHT" : "GEO_HIGE_LEFT";
 
-                    groups.Add(g);
+                    if (exactConnections == null || !HasEquivalentAutomaticGroup(groups, g))
+                        groups.Add(g);
                 }
 
                 if (groups.Count == 0)
                     return count;
 
-                TSD.StraightDimensionSetHandler handler =
-                    new TSD.StraightDimensionSetHandler();
+                TSD.StraightDimensionSetHandler handler = new TSD.StraightDimensionSetHandler();
 
                 List<Point> topRefs = new List<Point>();
                 List<Point> bottomRefs = new List<Point>();
@@ -273,19 +443,19 @@ namespace Tekla.Technology.Akit.UserScript
                         g.NeighborRef,
                         allMinY,
                         allMaxY,
-                        NEIGHBOR_TO_PLATE_TIER);
+                        NEIGHBOR_TO_PLATE_TIER
+                    );
 
-                    if (CreateDimChain(
-                        handler,
-                        view,
-                        new Point[]
-                        {
-                            g.NeighborRef,
-                            g.PlateEdge
-                        },
-                        g.Direction,
-                        distanceNeighborToPlate,
-                        g.AttributeName))
+                    if (
+                        CreateDimChain(
+                            handler,
+                            view,
+                            new Point[] { g.NeighborRef, g.PlateEdge },
+                            g.Direction,
+                            distanceNeighborToPlate,
+                            g.AttributeName
+                        )
+                    )
                     {
                         count++;
                     }
@@ -317,14 +487,18 @@ namespace Tekla.Technology.Akit.UserScript
                         mainLeftEdge,
                         allMinY,
                         allMaxY,
-                        MAIN_TO_NEIGHBOR_TIER);
+                        MAIN_TO_NEIGHBOR_TIER
+                    );
 
-                    if (CreateDimChain(
-                        handler,
-                        view,
-                        chain.ToArray(),
-                        direction,
-                        distanceMainToNeighbor))
+                    if (
+                        CreateDimChain(
+                            handler,
+                            view,
+                            chain.ToArray(),
+                            direction,
+                            distanceMainToNeighbor
+                        )
+                    )
                     {
                         count++;
                     }
@@ -348,14 +522,18 @@ namespace Tekla.Technology.Akit.UserScript
                         mainLeftEdge,
                         allMinY,
                         allMaxY,
-                        MAIN_TO_NEIGHBOR_TIER);
+                        MAIN_TO_NEIGHBOR_TIER
+                    );
 
-                    if (CreateDimChain(
-                        handler,
-                        view,
-                        chain.ToArray(),
-                        direction,
-                        distanceMainToNeighbor))
+                    if (
+                        CreateDimChain(
+                            handler,
+                            view,
+                            chain.ToArray(),
+                            direction,
+                            distanceMainToNeighbor
+                        )
+                    )
                     {
                         count++;
                     }
@@ -367,7 +545,11 @@ namespace Tekla.Technology.Akit.UserScript
             }
             finally
             {
-                try { model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane); } catch { }
+                try
+                {
+                    model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane);
+                }
+                catch { }
             }
 
             return count;
@@ -387,76 +569,638 @@ namespace Tekla.Technology.Akit.UserScript
             public string AttributeName;
         }
 
-        private static void PickMainBeamByPlateAssemblies(
-            List<ModelPart> plates,
-            List<ModelPart> beams,
-            List<DrawingPart> beamDrawingParts,
-            out ModelPart mainBeam,
-            out DrawingPart mainDrawingPart)
+        private static bool HasEquivalentAutomaticGroup(
+            List<NeighborPlateGroup> groups,
+            NeighborPlateGroup candidate
+        )
         {
-            mainBeam = null;
-            mainDrawingPart = null;
+            if (
+                groups == null
+                || candidate == null
+                || candidate.NeighborRef == null
+                || candidate.PlateEdge == null
+            )
+                return false;
 
-            int bestScore = -1;
-            int bestIndex = -1;
-
-            for (int i = 0; i < beams.Count; i++)
+            for (int i = 0; i < groups.Count; i++)
             {
-                ModelPart beam = beams[i];
-                if (beam == null)
+                NeighborPlateGroup old = groups[i];
+                if (
+                    old == null
+                    || old.NeighborRef == null
+                    || old.PlateEdge == null
+                    || old.Direction == null
+                    || candidate.Direction == null
+                )
                     continue;
 
-                string beamAssembly = GetReportString(beam, "ASSEMBLY_POS");
-                int score = 0;
+                if (
+                    Distance2D(old.NeighborRef, candidate.NeighborRef) <= 0.5
+                    && Distance2D(old.PlateEdge, candidate.PlateEdge) <= 0.5
+                    && Math.Abs(old.Direction.X - candidate.Direction.X) <= TOL
+                    && Math.Abs(old.Direction.Y - candidate.Direction.Y) <= TOL
+                )
+                    return true;
+            }
 
-                for (int p = 0; p < plates.Count; p++)
+            return false;
+        }
+
+        private sealed class Slot02AutomaticConnection
+        {
+            public ModelPart Plate;
+            public ModelPart Neighbor;
+        }
+
+        private sealed class Slot02AutomaticViewTarget
+        {
+            public TSD.View View;
+            public readonly List<Slot02AutomaticConnection> Connections =
+                new List<Slot02AutomaticConnection>();
+            public readonly List<ModelPart> Plates = new List<ModelPart>();
+            public readonly List<ModelPart> NeighborBeams = new List<ModelPart>();
+        }
+
+        private static List<Slot02AutomaticViewTarget> FindAutomaticSlot02Targets(
+            TSM.Model model,
+            TSD.Drawing drawing,
+            ModelPart authoritativeMain
+        )
+        {
+            List<Slot02AutomaticViewTarget> result = new List<Slot02AutomaticViewTarget>();
+
+            if (
+                model == null
+                || drawing == null
+                || authoritativeMain == null
+                || authoritativeMain.Identifier == null
+            )
+                return result;
+
+            TSM.TransformationPlane oldPlane = model
+                .GetWorkPlaneHandler()
+                .GetCurrentTransformationPlane();
+
+            try
+            {
+                TSD.ContainerView sheet = drawing.GetSheet();
+                if (sheet == null)
+                    return result;
+
+                TSD.DrawingObjectEnumerator views = sheet.GetAllViews();
+                while (views != null && views.MoveNext())
                 {
-                    string plateAssembly = GetReportString(plates[p], "ASSEMBLY_POS");
-                    if (!string.IsNullOrEmpty(plateAssembly) &&
-                        !string.IsNullOrEmpty(beamAssembly) &&
-                        string.Equals(plateAssembly, beamAssembly, StringComparison.OrdinalIgnoreCase))
+                    TSD.View view = views.Current as TSD.View;
+                    if (view == null)
+                        continue;
+
+                    try
                     {
-                        score++;
+                        model
+                            .GetWorkPlaneHandler()
+                            .SetCurrentTransformationPlane(
+                                new TSM.TransformationPlane(view.DisplayCoordinateSystem)
+                            );
+
+                        List<ModelPart> viewParts = GetModelPartsInView(model, view);
+                        if (!ContainsModelPart(viewParts, authoritativeMain.Identifier))
+                            continue;
+
+                        ModelPart mainInView =
+                            model.SelectModelObject(authoritativeMain.Identifier) as ModelPart;
+                        Bounds2D mainBox = GetPartBounds2D(mainInView);
+
+                        // Writer Slot02 hien tai co semantic main ngang -> neighbor H doc.
+                        // View dau thanh/section khong duoc dua vao auto flow.
+                        if (!IsHorizontallyElongated(mainBox))
+                            continue;
+
+                        List<ModelPart> plateCandidates = new List<ModelPart>();
+                        List<ModelPart> neighborCandidates = new List<ModelPart>();
+                        Dictionary<int, Bounds2D> boundsByPartId = new Dictionary<int, Bounds2D>();
+
+                        for (int partIndex = 0; partIndex < viewParts.Count; partIndex++)
+                        {
+                            ModelPart part = viewParts[partIndex];
+                            if (
+                                part == null
+                                || part.Identifier == null
+                                || SameIdentifier(part.Identifier, authoritativeMain.Identifier)
+                                || IsDummyReferencePart(part)
+                            )
+                                continue;
+
+                            Bounds2D partBox = GetPartBounds2D(part);
+                            boundsByPartId[part.Identifier.ID] = partBox;
+
+                            if (IsPlatePart(part))
+                            {
+                                plateCandidates.Add(part);
+                            }
+                            else if (
+                                IsHProfilePart(part)
+                                && IsAssemblyMainPart(part)
+                                && IsNeighborShownOnFlangeFace(part)
+                                && IsVerticallyElongated(partBox)
+                            )
+                            {
+                                neighborCandidates.Add(part);
+                            }
+                        }
+
+                        Slot02AutomaticViewTarget target = new Slot02AutomaticViewTarget();
+                        target.View = view;
+
+                        for (int plateIndex = 0; plateIndex < plateCandidates.Count; plateIndex++)
+                        {
+                            ModelPart plate = plateCandidates[plateIndex];
+                            Bounds2D plateBox = boundsByPartId[plate.Identifier.ID];
+                            if (!plateBox.Valid)
+                                continue;
+
+                            for (
+                                int neighborIndex = 0;
+                                neighborIndex < neighborCandidates.Count;
+                                neighborIndex++
+                            )
+                            {
+                                ModelPart neighbor = neighborCandidates[neighborIndex];
+                                Bounds2D neighborBox = boundsByPartId[neighbor.Identifier.ID];
+
+                                if (
+                                    !IsExactAutomaticSlot02Topology(
+                                        authoritativeMain,
+                                        plate,
+                                        neighbor
+                                    )
+                                )
+                                    continue;
+
+                                if (!IsAtMainNeighborInterface(mainBox, plateBox, neighborBox))
+                                    continue;
+
+                                AddAutomaticConnection(target, plate, neighbor);
+                            }
+                        }
+
+                        if (target.Connections.Count > 0)
+                            result.Add(target);
+                    }
+                    catch
+                    {
+                        // Mot view loi/khong doc duoc khong duoc lam mat cac
+                        // cap lien ket chac chan da tim thay trong view khac.
+                        continue;
                     }
                 }
-
-                if (score > bestScore)
+            }
+            catch
+            {
+                // Giu lai cac target da xac minh neu enumerator dung giua chung.
+            }
+            finally
+            {
+                try
                 {
-                    bestScore = score;
-                    bestIndex = i;
+                    model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane);
                 }
+                catch { }
             }
 
-            if (bestIndex < 0 || bestScore <= 0)
-            {
-                double bestArea = -1.0;
-                bestIndex = 0;
+            return result;
+        }
 
-                for (int i = 0; i < beams.Count; i++)
+        private static void AddAutomaticConnection(
+            Slot02AutomaticViewTarget target,
+            ModelPart plate,
+            ModelPart neighbor
+        )
+        {
+            if (
+                target == null
+                || plate == null
+                || neighbor == null
+                || plate.Identifier == null
+                || neighbor.Identifier == null
+            )
+                return;
+
+            for (int i = 0; i < target.Connections.Count; i++)
+            {
+                Slot02AutomaticConnection old = target.Connections[i];
+                if (
+                    old != null
+                    && SameIdentifier(old.Plate.Identifier, plate.Identifier)
+                    && SameIdentifier(old.Neighbor.Identifier, neighbor.Identifier)
+                )
+                    return;
+            }
+
+            Slot02AutomaticConnection connection = new Slot02AutomaticConnection();
+            connection.Plate = plate;
+            connection.Neighbor = neighbor;
+            target.Connections.Add(connection);
+            AddUniqueModelPart(target.Plates, plate);
+            AddUniqueModelPart(target.NeighborBeams, neighbor);
+        }
+
+        private static bool IsExactAutomaticSlot02Topology(
+            ModelPart main,
+            ModelPart plate,
+            ModelPart neighbor
+        )
+        {
+            if (main == null || plate == null || neighbor == null)
+                return false;
+
+            // Semantic Slot02: plate la secondary part cua assembly Main va
+            // duoc bolt truc tiep sang neighbor H. Chieu nguoc (plate thuoc
+            // assembly neighbor roi bolt vao Main) la mot loai lien ket khac;
+            // neu chap nhan se nhan nham hinh chieu o dau Main.
+            bool plateInMainAssembly = IsPartInSameAssembly(plate, main);
+            bool plateBoltedToNeighbor = ArePartsDirectlyBoltConnected(plate, neighbor);
+
+            return plateInMainAssembly && plateBoltedToNeighbor;
+        }
+
+        private static bool IsAtMainNeighborInterface(
+            Bounds2D mainBox,
+            Bounds2D plateBox,
+            Bounds2D neighborBox
+        )
+        {
+            if (!mainBox.Valid || !plateBox.Valid || !neighborBox.Valid)
+                return false;
+
+            double mainCenterY = (mainBox.MinY + mainBox.MaxY) / 2.0;
+            double neighborCenterX = (neighborBox.MinX + neighborBox.MaxX) / 2.0;
+            double mainHeight = Math.Abs(mainBox.MaxY - mainBox.MinY);
+            double neighborWidth = Math.Abs(neighborBox.MaxX - neighborBox.MinX);
+
+            double plateToNeighborAxisX = DistanceToInterval(
+                neighborCenterX,
+                plateBox.MinX,
+                plateBox.MaxX
+            );
+            double plateToMainAxisY = DistanceToInterval(mainCenterY, plateBox.MinY, plateBox.MaxY);
+            double neighborToMainAxisY = DistanceToInterval(
+                mainCenterY,
+                neighborBox.MinY,
+                neighborBox.MaxY
+            );
+
+            bool neighborFallsOnMainSpan =
+                neighborCenterX >= mainBox.MinX - neighborWidth - BOUND_TOL
+                && neighborCenterX <= mainBox.MaxX + neighborWidth + BOUND_TOL;
+
+            return neighborFallsOnMainSpan
+                && plateToNeighborAxisX <= neighborWidth + BOUND_TOL
+                && plateToMainAxisY <= mainHeight + BOUND_TOL
+                && neighborToMainAxisY <= mainHeight + BOUND_TOL;
+        }
+
+        private static double DistanceToInterval(double value, double min, double max)
+        {
+            if (value < min)
+                return min - value;
+            if (value > max)
+                return value - max;
+            return 0.0;
+        }
+
+        private static bool IsHorizontallyElongated(Bounds2D box)
+        {
+            if (!box.Valid)
+                return false;
+
+            double width = Math.Abs(box.MaxX - box.MinX);
+            double height = Math.Abs(box.MaxY - box.MinY);
+            return width > height * 2.0;
+        }
+
+        private static bool IsVerticallyElongated(Bounds2D box)
+        {
+            if (!box.Valid)
+                return false;
+
+            double width = Math.Abs(box.MaxX - box.MinX);
+            double height = Math.Abs(box.MaxY - box.MinY);
+            return height > width * 2.0;
+        }
+
+        private static bool IsHProfilePart(ModelPart part)
+        {
+            string profile = GetProfileString(part).Trim().ToUpperInvariant();
+            return profile.StartsWith("H", StringComparison.OrdinalIgnoreCase)
+                || profile.StartsWith("I", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsNeighborShownOnFlangeFace(ModelPart part)
+        {
+            try
+            {
+                if (part == null)
+                    return false;
+
+                // Finder da dat current transformation plane = view. Trong he
+                // nay truc Z la phap tuyen view; DSTV AxisY cua H/I la phap
+                // tuyen mat canh thuc, ke ca khi profile bi rotation/mirror.
+                CoordinateSystem partCoordinateSystem = part.GetDSTVCoordinateSystem();
+                if (partCoordinateSystem == null)
+                    partCoordinateSystem = part.GetCoordinateSystem();
+                if (partCoordinateSystem == null || partCoordinateSystem.AxisY == null)
+                    return false;
+
+                Vector flangeNormal = partCoordinateSystem.AxisY;
+                double length = Math.Sqrt(
+                    flangeNormal.X * flangeNormal.X
+                        + flangeNormal.Y * flangeNormal.Y
+                        + flangeNormal.Z * flangeNormal.Z
+                );
+                if (length <= TOL * 0.001)
+                    return false;
+
+                double alignment = Math.Abs(flangeNormal.Z) / length;
+                return alignment >= FLANGE_FACE_MIN_ALIGNMENT;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool IsAssemblyMainPart(ModelPart part)
+        {
+            try
+            {
+                if (part == null || part.Identifier == null)
+                    return false;
+
+                TSM.Assembly assembly = part.GetAssembly();
+                ModelPart assemblyMain =
+                    assembly == null ? null : assembly.GetMainPart() as ModelPart;
+                return assemblyMain != null
+                    && SameIdentifier(assemblyMain.Identifier, part.Identifier);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool IsPartInSameAssembly(ModelPart first, ModelPart second)
+        {
+            try
+            {
+                if (first == null || second == null)
+                    return false;
+
+                TSM.Assembly firstAssembly = first.GetAssembly();
+                TSM.Assembly secondAssembly = second.GetAssembly();
+                return firstAssembly != null
+                    && secondAssembly != null
+                    && SameIdentifier(firstAssembly.Identifier, secondAssembly.Identifier);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool ArePartsDirectlyBoltConnected(ModelPart first, ModelPart second)
+        {
+            if (first == null || second == null || second.Identifier == null)
+                return false;
+
+            return PartBoltCollectionReferencesPart(first, second)
+                || PartBoltCollectionReferencesPart(second, first);
+        }
+
+        private static bool PartBoltCollectionReferencesPart(ModelPart owner, ModelPart other)
+        {
+            try
+            {
+                if (owner == null || other == null || other.Identifier == null)
+                    return false;
+
+                TSM.ModelObjectEnumerator bolts = owner.GetBolts();
+                while (bolts != null && bolts.MoveNext())
                 {
-                    Bounds2D box = GetPartBounds2D(beams[i]);
-                    double area = box.Valid ? Math.Abs(box.MaxX - box.MinX) * Math.Abs(box.MaxY - box.MinY) : 0.0;
-                    if (area > bestArea)
+                    object boltGroup = bolts.Current;
+                    if (
+                        ObjectOrEnumerableContainsIdentifier(
+                            GetPropertyValue(boltGroup, "PartToBoltTo"),
+                            other.Identifier
+                        )
+                        || ObjectOrEnumerableContainsIdentifier(
+                            GetPropertyValue(boltGroup, "PartToBeBolted"),
+                            other.Identifier
+                        )
+                        || ObjectOrEnumerableContainsIdentifier(
+                            GetPropertyValue(boltGroup, "OtherPartsToBolt"),
+                            other.Identifier
+                        )
+                    )
                     {
-                        bestArea = area;
-                        bestIndex = i;
+                        return true;
                     }
                 }
             }
+            catch { }
 
-            if (bestIndex >= 0 && bestIndex < beams.Count)
+            return false;
+        }
+
+        private static bool ObjectOrEnumerableContainsIdentifier(
+            object value,
+            Identifier identifier
+        )
+        {
+            if (value == null || identifier == null)
+                return false;
+
+            ModelObject modelObject = value as ModelObject;
+            if (modelObject != null && SameIdentifier(modelObject.Identifier, identifier))
+                return true;
+
+            IEnumerable enumerable = value as IEnumerable;
+            if (enumerable == null || value is string)
+                return false;
+
+            foreach (object item in enumerable)
             {
-                mainBeam = beams[bestIndex];
-                if (bestIndex < beamDrawingParts.Count)
-                    mainDrawingPart = beamDrawingParts[bestIndex];
+                if (ObjectOrEnumerableContainsIdentifier(item, identifier))
+                    return true;
             }
+
+            return false;
+        }
+
+        private static List<ModelPart> GetModelPartsInView(TSM.Model model, TSD.View view)
+        {
+            List<ModelPart> result = new List<ModelPart>();
+
+            try
+            {
+                if (model == null || view == null)
+                    return result;
+
+                TSD.DrawingObjectEnumerator parts = view.GetAllObjects(typeof(DrawingPart));
+                while (parts != null && parts.MoveNext())
+                {
+                    DrawingPart drawingPart = parts.Current as DrawingPart;
+                    if (drawingPart == null || drawingPart.ModelIdentifier == null)
+                        continue;
+
+                    ModelPart modelPart =
+                        model.SelectModelObject(drawingPart.ModelIdentifier) as ModelPart;
+                    AddUniqueModelPart(result, modelPart);
+                }
+            }
+            catch { }
+
+            return result;
+        }
+
+        private static bool ContainsModelPart(List<ModelPart> parts, Identifier identifier)
+        {
+            if (parts == null || identifier == null)
+                return false;
+
+            for (int i = 0; i < parts.Count; i++)
+            {
+                if (parts[i] != null && SameIdentifier(parts[i].Identifier, identifier))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static void AddSemanticNeighborBeamsForPlate(
+            ModelPart plate,
+            ModelPart authoritativeMain,
+            List<ModelPart> neighbors
+        )
+        {
+            if (plate == null || neighbors == null)
+                return;
+
+            try
+            {
+                TSM.Assembly assembly = plate.GetAssembly();
+                ModelPart assemblyMain =
+                    assembly == null ? null : assembly.GetMainPart() as ModelPart;
+                AddNeighborCandidate(assemblyMain, plate, authoritativeMain, neighbors);
+            }
+            catch { }
+
+            try
+            {
+                TSM.ModelObjectEnumerator bolts = plate.GetBolts();
+                while (bolts != null && bolts.MoveNext())
+                {
+                    object boltGroup = bolts.Current;
+                    AddNeighborCandidatesFromValue(
+                        GetPropertyValue(boltGroup, "PartToBoltTo"),
+                        plate,
+                        authoritativeMain,
+                        neighbors
+                    );
+                    AddNeighborCandidatesFromValue(
+                        GetPropertyValue(boltGroup, "PartToBeBolted"),
+                        plate,
+                        authoritativeMain,
+                        neighbors
+                    );
+                    AddNeighborCandidatesFromValue(
+                        GetPropertyValue(boltGroup, "OtherPartsToBolt"),
+                        plate,
+                        authoritativeMain,
+                        neighbors
+                    );
+                }
+            }
+            catch { }
+        }
+
+        private static void AddNeighborCandidatesFromValue(
+            object value,
+            ModelPart plate,
+            ModelPart authoritativeMain,
+            List<ModelPart> neighbors
+        )
+        {
+            if (value == null)
+                return;
+
+            ModelPart directPart = value as ModelPart;
+            if (directPart != null)
+            {
+                AddNeighborCandidate(directPart, plate, authoritativeMain, neighbors);
+                return;
+            }
+
+            IEnumerable enumerable = value as IEnumerable;
+            if (enumerable == null || value is string)
+                return;
+
+            foreach (object item in enumerable)
+            {
+                AddNeighborCandidatesFromValue(item, plate, authoritativeMain, neighbors);
+            }
+        }
+
+        private static void AddNeighborCandidate(
+            ModelPart candidate,
+            ModelPart plate,
+            ModelPart authoritativeMain,
+            List<ModelPart> neighbors
+        )
+        {
+            if (
+                candidate == null
+                || candidate.Identifier == null
+                || plate == null
+                || plate.Identifier == null
+            )
+                return;
+
+            if (
+                SameIdentifier(candidate.Identifier, plate.Identifier)
+                || (
+                    authoritativeMain != null
+                    && SameIdentifier(candidate.Identifier, authoritativeMain.Identifier)
+                )
+                || IsDummyReferencePart(candidate)
+                || IsPlatePart(candidate)
+            )
+            {
+                return;
+            }
+
+            AddUniqueModelPart(neighbors, candidate);
+        }
+
+        private static void AddUniqueModelPart(List<ModelPart> parts, ModelPart candidate)
+        {
+            if (parts == null || candidate == null || candidate.Identifier == null)
+                return;
+
+            for (int i = 0; i < parts.Count; i++)
+            {
+                if (parts[i] != null && SameIdentifier(parts[i].Identifier, candidate.Identifier))
+                    return;
+            }
+
+            parts.Add(candidate);
         }
 
         private static bool FindNearestNeighborBeam(
             Point plateCenter,
             List<ModelPart> neighborBeams,
             out ModelPart neighborBeam,
-            out Bounds2D neighborBox)
+            out Bounds2D neighborBox
+        )
         {
             neighborBeam = null;
             neighborBox = new Bounds2D();
@@ -480,7 +1224,8 @@ namespace Tekla.Technology.Akit.UserScript
                 Point center = new Point(
                     (box.MinX + box.MaxX) / 2.0,
                     (box.MinY + box.MaxY) / 2.0,
-                    0);
+                    0
+                );
 
                 double d = Distance2D(plateCenter, center);
                 if (d < bestDistance)
@@ -496,12 +1241,16 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static int ComparePointByXThenY(Point a, Point b)
         {
-            if (a == null && b == null) return 0;
-            if (a == null) return -1;
-            if (b == null) return 1;
+            if (a == null && b == null)
+                return 0;
+            if (a == null)
+                return -1;
+            if (b == null)
+                return 1;
 
             int c = a.X.CompareTo(b.X);
-            if (c != 0) return c;
+            if (c != 0)
+                return c;
             return a.Y.CompareTo(b.Y);
         }
 
@@ -518,6 +1267,192 @@ namespace Tekla.Technology.Akit.UserScript
 
             list.Add(p);
         }
+
+        private static bool TryGetStraightReferenceAxis(
+            ModelPart part,
+            out Point axisStart,
+            out Point axisEnd
+        )
+        {
+            axisStart = null;
+            axisEnd = null;
+
+            try
+            {
+                if (part == null)
+                    return false;
+
+                ArrayList rawReference = part.GetReferenceLine(false);
+                List<Point> referencePoints = new List<Point>();
+                if (rawReference != null)
+                {
+                    foreach (object value in rawReference)
+                    {
+                        Point point = value as Point;
+                        if (IsFinitePoint2D(point))
+                            AddUniquePoint2D(
+                                referencePoints,
+                                new Point(point.X, point.Y, 0),
+                                TOL * 0.01
+                            );
+                    }
+                }
+
+                double longestDistance = 0.0;
+                for (int firstIndex = 0; firstIndex < referencePoints.Count; firstIndex++)
+                {
+                    for (
+                        int secondIndex = firstIndex + 1;
+                        secondIndex < referencePoints.Count;
+                        secondIndex++
+                    )
+                    {
+                        double distance = Distance2D(
+                            referencePoints[firstIndex],
+                            referencePoints[secondIndex]
+                        );
+                        if (distance > longestDistance)
+                        {
+                            longestDistance = distance;
+                            axisStart = referencePoints[firstIndex];
+                            axisEnd = referencePoints[secondIndex];
+                        }
+                    }
+                }
+
+                if (axisStart == null || axisEnd == null || longestDistance <= TOL)
+                    return false;
+
+                // Slot02 chi ho tro reference thang. Farthest pair xac dinh
+                // axis khong phu thuoc thu tu point Tekla tra ve; cac point
+                // con lai phai nam tren cung axis.
+                double axisX = axisEnd.X - axisStart.X;
+                double axisY = axisEnd.Y - axisStart.Y;
+                double collinearTolerance = Math.Max(TOL, longestDistance * 0.00001);
+                for (int pointIndex = 0; pointIndex < referencePoints.Count; pointIndex++)
+                {
+                    Point point = referencePoints[pointIndex];
+                    double signedArea =
+                        axisX * (point.Y - axisStart.Y) - axisY * (point.X - axisStart.X);
+                    double distanceToAxis = Math.Abs(signedArea) / longestDistance;
+                    if (distanceToAxis > collinearTolerance)
+                        return false;
+                }
+
+                return true;
+            }
+            catch
+            {
+                axisStart = null;
+                axisEnd = null;
+                return false;
+            }
+        }
+
+        private static bool TryResolveReferenceIntersection(
+            Point mainReferenceStart,
+            Point mainReferenceEnd,
+            ModelPart neighbor,
+            Bounds2D mainBox,
+            Bounds2D neighborBox,
+            out Point intersection
+        )
+        {
+            intersection = null;
+
+            Point neighborReferenceStart;
+            Point neighborReferenceEnd;
+            if (
+                !TryGetStraightReferenceAxis(
+                    neighbor,
+                    out neighborReferenceStart,
+                    out neighborReferenceEnd
+                )
+            )
+                return false;
+
+            Point candidate;
+            if (
+                !TryIntersectInfiniteReferenceAxes(
+                    mainReferenceStart,
+                    mainReferenceEnd,
+                    neighborReferenceStart,
+                    neighborReferenceEnd,
+                    out candidate
+                )
+            )
+                return false;
+
+            // Cho phep reference dung tai tim Main trong khi solid neighbor
+            // dung o mep Main, nhung loai giao diem nam xa cum lien ket.
+            double xTolerance = Math.Max(Math.Abs(neighborBox.MaxX - neighborBox.MinX), BOUND_TOL);
+            double yTolerance = Math.Max(Math.Abs(mainBox.MaxY - mainBox.MinY), BOUND_TOL);
+            if (
+                DistanceToInterval(candidate.X, mainBox.MinX, mainBox.MaxX) > xTolerance
+                || DistanceToInterval(candidate.Y, neighborBox.MinY, neighborBox.MaxY) > yTolerance
+            )
+                return false;
+
+            intersection = candidate;
+            return true;
+        }
+
+        private static bool TryIntersectInfiniteReferenceAxes(
+            Point mainReferenceStart,
+            Point mainReferenceEnd,
+            Point neighborReferenceStart,
+            Point neighborReferenceEnd,
+            out Point intersection
+        )
+        {
+            intersection = null;
+            if (
+                !IsFinitePoint2D(mainReferenceStart)
+                || !IsFinitePoint2D(mainReferenceEnd)
+                || !IsFinitePoint2D(neighborReferenceStart)
+                || !IsFinitePoint2D(neighborReferenceEnd)
+            )
+                return false;
+
+            double mainX = mainReferenceEnd.X - mainReferenceStart.X;
+            double mainY = mainReferenceEnd.Y - mainReferenceStart.Y;
+            double neighborX = neighborReferenceEnd.X - neighborReferenceStart.X;
+            double neighborY = neighborReferenceEnd.Y - neighborReferenceStart.Y;
+            double mainLength = Math.Sqrt(mainX * mainX + mainY * mainY);
+            double neighborLength = Math.Sqrt(neighborX * neighborX + neighborY * neighborY);
+            if (mainLength <= TOL || neighborLength <= TOL)
+                return false;
+
+            double denominator = mainX * neighborY - mainY * neighborX;
+            double normalizedCross = Math.Abs(denominator) / (mainLength * neighborLength);
+            if (normalizedCross <= 0.000001)
+                return false;
+
+            double deltaX = neighborReferenceStart.X - mainReferenceStart.X;
+            double deltaY = neighborReferenceStart.Y - mainReferenceStart.Y;
+            double mainParameter = (deltaX * neighborY - deltaY * neighborX) / denominator;
+
+            Point candidate = new Point(
+                mainReferenceStart.X + mainParameter * mainX,
+                mainReferenceStart.Y + mainParameter * mainY,
+                0
+            );
+            if (!IsFinitePoint2D(candidate))
+                return false;
+
+            intersection = candidate;
+            return true;
+        }
+
+        private static bool IsFinitePoint2D(Point point)
+        {
+            return point != null
+                && !Double.IsNaN(point.X)
+                && !Double.IsInfinity(point.X)
+                && !Double.IsNaN(point.Y)
+                && !Double.IsInfinity(point.Y);
+        }
+
         private struct Bounds2D
         {
             public bool Valid;
@@ -544,14 +1479,16 @@ namespace Tekla.Technology.Akit.UserScript
                 b.MaxY = Math.Max(min.Y, max.Y);
                 b.Valid = Math.Abs(b.MaxX - b.MinX) > TOL && Math.Abs(b.MaxY - b.MinY) > TOL;
             }
-            catch
-            {
-            }
+            catch { }
 
             return b;
         }
 
-        private static Point GetPlateEdgePointTowardNeighbor(Bounds2D plateBox, Point neighborRef, bool isTopGroup)
+        private static Point GetPlateEdgePointTowardNeighbor(
+            Bounds2D plateBox,
+            Point neighborRef,
+            bool isTopGroup
+        )
         {
             double x = Clamp(neighborRef.X, plateBox.MinX, plateBox.MaxX);
 
@@ -565,7 +1502,8 @@ namespace Tekla.Technology.Akit.UserScript
             Point firstDimPoint,
             double minY,
             double maxY,
-            double tier)
+            double tier
+        )
         {
             return tier;
         }
@@ -575,7 +1513,8 @@ namespace Tekla.Technology.Akit.UserScript
             TSD.View view,
             Point[] points,
             Vector direction,
-            double distance)
+            double distance
+        )
         {
             return CreateDimChain(handler, view, points, direction, distance, null);
         }
@@ -586,7 +1525,8 @@ namespace Tekla.Technology.Akit.UserScript
             Point[] points,
             Vector direction,
             double distance,
-            string attributeName)
+            string attributeName
+        )
         {
             if (handler == null || view == null || points == null || points.Length < 2)
                 return false;
@@ -616,8 +1556,12 @@ namespace Tekla.Technology.Akit.UserScript
             if (list.Count < 2)
                 return false;
 
-            TSD.StraightDimensionSet dim =
-                handler.CreateDimensionSet(view, list, direction, distance);
+            TSD.StraightDimensionSet dim = handler.CreateDimensionSet(
+                view,
+                list,
+                direction,
+                distance
+            );
 
             if (dim != null && !string.IsNullOrEmpty(attributeName))
                 TryApplyStraightDimAttributes(dim, attributeName);
@@ -627,7 +1571,8 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static void TryApplyStraightDimAttributes(
             TSD.StraightDimensionSet dim,
-            string attributeName)
+            string attributeName
+        )
         {
             try
             {
@@ -638,12 +1583,14 @@ namespace Tekla.Technology.Akit.UserScript
                 if (attr == null)
                     return;
 
-                MethodInfo loadMethod = attr.GetType().GetMethod(
-                    "LoadAttributes",
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
-                    null,
-                    new Type[] { typeof(string) },
-                    null);
+                MethodInfo loadMethod = attr.GetType()
+                    .GetMethod(
+                        "LoadAttributes",
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
+                        null,
+                        new Type[] { typeof(string) },
+                        null
+                    );
 
                 if (loadMethod == null)
                     return;
@@ -651,75 +1598,7 @@ namespace Tekla.Technology.Akit.UserScript
                 loadMethod.Invoke(attr, new object[] { attributeName });
                 dim.Modify();
             }
-            catch
-            {
-            }
-        }
-
-        private static void PickMainAndNeighborByAssembly(
-            ModelPart plate,
-            List<ModelPart> beams,
-            List<DrawingPart> beamDrawingParts,
-            out ModelPart mainBeam,
-            out DrawingPart mainDrawingPart,
-            out ModelPart neighborBeam,
-            out DrawingPart neighborDrawingPart)
-        {
-            mainBeam = null;
-            neighborBeam = null;
-            mainDrawingPart = null;
-            neighborDrawingPart = null;
-
-            string plateAssembly = GetReportString(plate, "ASSEMBLY_POS");
-
-            for (int i = 0; i < beams.Count; i++)
-            {
-                ModelPart b = beams[i];
-                string beamAssembly = GetReportString(b, "ASSEMBLY_POS");
-
-                if (!string.IsNullOrEmpty(plateAssembly) &&
-                    !string.IsNullOrEmpty(beamAssembly) &&
-                    string.Equals(plateAssembly, beamAssembly, StringComparison.OrdinalIgnoreCase))
-                {
-                    mainBeam = b;
-                    if (i < beamDrawingParts.Count)
-                        mainDrawingPart = beamDrawingParts[i];
-                    break;
-                }
-            }
-
-            if (mainBeam == null && beams.Count > 0)
-            {
-                // Fallback: chọn beam có hộp bao lớn hơn làm main.
-                double bestArea = -1.0;
-                int bestIndex = 0;
-
-                for (int i = 0; i < beams.Count; i++)
-                {
-                    Bounds2D box = GetPartBounds2D(beams[i]);
-                    double area = box.Valid ? Math.Abs(box.MaxX - box.MinX) * Math.Abs(box.MaxY - box.MinY) : 0.0;
-                    if (area > bestArea)
-                    {
-                        bestArea = area;
-                        bestIndex = i;
-                    }
-                }
-
-                mainBeam = beams[bestIndex];
-                if (bestIndex < beamDrawingParts.Count)
-                    mainDrawingPart = beamDrawingParts[bestIndex];
-            }
-
-            for (int i = 0; i < beams.Count; i++)
-            {
-                if (mainBeam != null && SameIdentifier(beams[i].Identifier, mainBeam.Identifier))
-                    continue;
-
-                neighborBeam = beams[i];
-                if (i < beamDrawingParts.Count)
-                    neighborDrawingPart = beamDrawingParts[i];
-                break;
-            }
+            catch { }
         }
 
         private static List<DrawingPart> GetSelectedDrawingParts(TSD.DrawingHandler dh)
@@ -728,8 +1607,7 @@ namespace Tekla.Technology.Akit.UserScript
 
             try
             {
-                TSD.DrawingObjectEnumerator e =
-                    dh.GetDrawingObjectSelector().GetSelected();
+                TSD.DrawingObjectEnumerator e = dh.GetDrawingObjectSelector().GetSelected();
 
                 while (e != null && e.MoveNext())
                 {
@@ -738,9 +1616,7 @@ namespace Tekla.Technology.Akit.UserScript
                         result.Add(dp);
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return result;
         }
@@ -787,23 +1663,21 @@ namespace Tekla.Technology.Akit.UserScript
             if (drawingObject == null)
                 return null;
 
-            string[] methodNames = new string[]
-            {
-                "GetView",
-                "GetFatherView",
-                "GetParentView"
-            };
+            string[] methodNames = new string[] { "GetView", "GetFatherView", "GetParentView" };
 
             for (int i = 0; i < methodNames.Length; i++)
             {
                 try
                 {
-                    MethodInfo m = drawingObject.GetType().GetMethod(
-                        methodNames[i],
-                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
-                        null,
-                        Type.EmptyTypes,
-                        null);
+                    MethodInfo m = drawingObject
+                        .GetType()
+                        .GetMethod(
+                            methodNames[i],
+                            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
+                            null,
+                            Type.EmptyTypes,
+                            null
+                        );
 
                     if (m == null)
                         continue;
@@ -813,17 +1687,10 @@ namespace Tekla.Technology.Akit.UserScript
                     if (view != null)
                         return view;
                 }
-                catch
-                {
-                }
+                catch { }
             }
 
-            string[] propertyNames = new string[]
-            {
-                "View",
-                "FatherView",
-                "ParentView"
-            };
+            string[] propertyNames = new string[] { "View", "FatherView", "ParentView" };
 
             for (int i = 0; i < propertyNames.Length; i++)
             {
@@ -834,9 +1701,7 @@ namespace Tekla.Technology.Akit.UserScript
                     if (view != null)
                         return view;
                 }
-                catch
-                {
-                }
+                catch { }
             }
 
             return null;
@@ -846,7 +1711,8 @@ namespace Tekla.Technology.Akit.UserScript
             TSD.Drawing drawing,
             Identifier id1,
             Identifier id2,
-            Identifier id3)
+            Identifier id3
+        )
         {
             try
             {
@@ -875,20 +1741,44 @@ namespace Tekla.Technology.Akit.UserScript
                         if (dp == null || dp.ModelIdentifier == null)
                             continue;
 
-                        if (SameIdentifier(dp.ModelIdentifier, id1)) has1 = true;
-                        if (SameIdentifier(dp.ModelIdentifier, id2)) has2 = true;
-                        if (SameIdentifier(dp.ModelIdentifier, id3)) has3 = true;
+                        if (SameIdentifier(dp.ModelIdentifier, id1))
+                            has1 = true;
+                        if (SameIdentifier(dp.ModelIdentifier, id2))
+                            has2 = true;
+                        if (SameIdentifier(dp.ModelIdentifier, id3))
+                            has3 = true;
 
                         if (has1 && has2 && has3)
                             return view;
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return null;
+        }
+
+        private static bool ViewContainsPart(TSD.View view, Identifier identifier)
+        {
+            try
+            {
+                if (view == null || identifier == null)
+                    return false;
+
+                TSD.DrawingObjectEnumerator parts = view.GetAllObjects(typeof(DrawingPart));
+                while (parts != null && parts.MoveNext())
+                {
+                    DrawingPart drawingPart = parts.Current as DrawingPart;
+                    if (
+                        drawingPart != null
+                        && SameIdentifier(drawingPart.ModelIdentifier, identifier)
+                    )
+                        return true;
+                }
+            }
+            catch { }
+
+            return false;
         }
 
         private static bool IsDummyReferencePart(ModelPart part)
@@ -900,10 +1790,12 @@ namespace Tekla.Technology.Akit.UserScript
             string material = GetReportString(part, "MATERIAL").Trim().ToUpperInvariant();
             string name = GetReportString(part, "NAME").Trim().ToUpperInvariant();
 
-            if (partPos == "DUMMY-99" ||
-                partPos.StartsWith("DUMMY", StringComparison.OrdinalIgnoreCase) ||
-                material == "JOINT" ||
-                name.StartsWith("BJ", StringComparison.OrdinalIgnoreCase))
+            if (
+                partPos == "DUMMY-99"
+                || partPos.StartsWith("DUMMY", StringComparison.OrdinalIgnoreCase)
+                || material == "JOINT"
+                || name.StartsWith("BJ", StringComparison.OrdinalIgnoreCase)
+            )
                 return true;
 
             return false;
@@ -915,20 +1807,24 @@ namespace Tekla.Technology.Akit.UserScript
             if (string.IsNullOrEmpty(profile))
                 return false;
 
-            if (profile.StartsWith("PL") ||
-                profile.StartsWith("PLT") ||
-                profile.StartsWith("FB") ||
-                profile.StartsWith("FL") ||
-                profile.IndexOf("PLATE") >= 0)
+            if (
+                profile.StartsWith("PL")
+                || profile.StartsWith("PLT")
+                || profile.StartsWith("FB")
+                || profile.StartsWith("FL")
+                || profile.IndexOf("PLATE") >= 0
+            )
                 return true;
 
-            if (profile.IndexOf("H") == 0 ||
-                profile.IndexOf("I") == 0 ||
-                profile.IndexOf("C") == 0 ||
-                profile.IndexOf("L") == 0 ||
-                profile.IndexOf("RHS") >= 0 ||
-                profile.IndexOf("SHS") >= 0 ||
-                profile.IndexOf("PIPE") >= 0)
+            if (
+                profile.IndexOf("H") == 0
+                || profile.IndexOf("I") == 0
+                || profile.IndexOf("C") == 0
+                || profile.IndexOf("L") == 0
+                || profile.IndexOf("RHS") >= 0
+                || profile.IndexOf("SHS") >= 0
+                || profile.IndexOf("PIPE") >= 0
+            )
                 return false;
 
             return false;
@@ -946,9 +1842,7 @@ namespace Tekla.Technology.Akit.UserScript
                 if (profileString != null)
                     return profileString.ToString();
             }
-            catch
-            {
-            }
+            catch { }
 
             string value = "";
             try
@@ -956,9 +1850,7 @@ namespace Tekla.Technology.Akit.UserScript
                 if (part.GetReportProperty("PROFILE", ref value) && !string.IsNullOrEmpty(value))
                     return value;
             }
-            catch
-            {
-            }
+            catch { }
 
             return "";
         }
@@ -989,9 +1881,11 @@ namespace Tekla.Technology.Akit.UserScript
                 if (obj == null || string.IsNullOrEmpty(name))
                     return null;
 
-                PropertyInfo p = obj.GetType().GetProperty(
-                    name,
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                PropertyInfo p = obj.GetType()
+                    .GetProperty(
+                        name,
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    );
 
                 if (p == null || !p.CanRead || p.GetIndexParameters().Length > 0)
                     return null;
@@ -1031,8 +1925,10 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static double Clamp(double value, double min, double max)
         {
-            if (value < min) return min;
-            if (value > max) return max;
+            if (value < min)
+                return min;
+            if (value > max)
+                return max;
             return value;
         }
 
@@ -1054,11 +1950,10 @@ namespace Tekla.Technology.Akit.UserScript
                     text,
                     "PHU Slot02 Neighbor Ref Plate Dim",
                     System.Windows.Forms.MessageBoxButtons.OK,
-                    System.Windows.Forms.MessageBoxIcon.Information);
+                    System.Windows.Forms.MessageBoxIcon.Information
+                );
             }
-            catch
-            {
-            }
+            catch { }
         }
     }
 }

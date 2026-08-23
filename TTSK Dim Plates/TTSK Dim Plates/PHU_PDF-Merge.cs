@@ -37,28 +37,25 @@ namespace TTSK_AutoDim_Plates
 
         public static DrawingPdfPrintResult PrintToSeparatePdfs(
             IList<DrawingPdfPrintJob> jobs,
-            IWin32Window owner)
+            IWin32Window owner
+        )
         {
-            return ExecutePdfWorkflow(
-                jobs,
-                owner,
-                false);
+            return ExecutePdfWorkflow(jobs, owner, false);
         }
 
         public static DrawingPdfPrintResult PrintAndMergePdfs(
             IList<DrawingPdfPrintJob> jobs,
-            IWin32Window owner)
+            IWin32Window owner
+        )
         {
-            return ExecutePdfWorkflow(
-                jobs,
-                owner,
-                true);
+            return ExecutePdfWorkflow(jobs, owner, true);
         }
 
         private static DrawingPdfPrintResult ExecutePdfWorkflow(
             IList<DrawingPdfPrintJob> jobs,
             IWin32Window owner,
-            bool mergeAndDeleteChildren)
+            bool mergeAndDeleteChildren
+        )
         {
             DrawingPdfPrintResult result = new DrawingPdfPrintResult();
             string modelPath = null;
@@ -69,19 +66,18 @@ namespace TTSK_AutoDim_Plates
 
             try
             {
-                List<DrawingPdfPrintJob> validJobs = jobs == null
-                    ? new List<DrawingPdfPrintJob>()
-                    : jobs
-                        .Where(job => job != null && job.Drawing != null)
-                        .ToList();
+                List<DrawingPdfPrintJob> validJobs =
+                    jobs == null
+                        ? new List<DrawingPdfPrintJob>()
+                        : jobs.Where(job => job != null && job.Drawing != null).ToList();
 
                 result.RequestedDrawingCount = validJobs.Count;
 
                 if (validJobs.Count == 0)
                 {
                     result.Message =
-                        "Không có drawing hợp lệ để xuất PDF. " +
-                        "Hãy chọn drawing trong Document Manager rồi thử lại.";
+                        "Không có drawing hợp lệ để xuất PDF. "
+                        + "Hãy chọn drawing trong Document Manager rồi thử lại.";
                     return result;
                 }
 
@@ -110,8 +106,8 @@ namespace TTSK_AutoDim_Plates
                 if (!drawingHandler.GetConnectionStatus())
                 {
                     result.Message =
-                        "Drawing API chưa kết nối đúng với Tekla Structures. " +
-                        "Hãy kiểm tra Tekla đang mở model và ứng dụng đang chạy bằng x64.";
+                        "Drawing API chưa kết nối đúng với Tekla Structures. "
+                        + "Hãy kiểm tra Tekla đang mở model và ứng dụng đang chạy bằng x64.";
                     return result;
                 }
 
@@ -120,14 +116,13 @@ namespace TTSK_AutoDim_Plates
                 {
                     DialogResult continueResult = MessageBox.Show(
                         owner,
-                        "Hiện đang có một drawing mở. Trong lúc xuất PDF, Tekla có thể đóng drawing đang mở.\r\n\r\n" +
-                        "Hãy chắc chắn drawing đã được lưu. Tiếp tục?",
-                        mergeAndDeleteChildren
-                            ? "TTSK Merge PDF"
-                            : "TTSK Print PDF",
+                        "Hiện đang có một drawing mở. Trong lúc xuất PDF, Tekla có thể đóng drawing đang mở.\r\n\r\n"
+                            + "Hãy chắc chắn drawing đã được lưu. Tiếp tục?",
+                        mergeAndDeleteChildren ? "TTSK Merge PDF" : "TTSK Print PDF",
                         MessageBoxButtons.YesNo,
                         MessageBoxIcon.Warning,
-                        MessageBoxDefaultButton.Button2);
+                        MessageBoxDefaultButton.Button2
+                    );
 
                     if (continueResult != DialogResult.Yes)
                     {
@@ -142,24 +137,23 @@ namespace TTSK_AutoDim_Plates
                     DrawingPdfPrintJob job = validJobs[index];
                     DrawingPdfItemResult itemResult = new DrawingPdfItemResult();
                     itemResult.Index = index;
-                    itemResult.Mark = NormalizeDisplayText(
-                        job.Mark,
-                        "Drawing " + (index + 1));
-                    itemResult.Revision = NormalizeDisplayText(
-                        job.Revision,
-                        string.Empty);
+                    itemResult.Mark = NormalizeDisplayText(job.Mark, "Drawing " + (index + 1));
+                    itemResult.Revision = NormalizeDisplayText(job.Revision, string.Empty);
                     itemResult.DrawnBy = NormalizeDisplayText(
                         job.DrawnBy,
-                        GetDrawingDrawnBy(job.Drawing));
+                        GetDrawingDrawnBy(job.Drawing)
+                    );
 
                     string baseFileName = BuildDrawingFileBaseName(
                         itemResult.Mark,
-                        itemResult.Revision);
+                        itemResult.Revision
+                    );
 
                     string outputFilePath = BuildUniqueOutputPath(
                         outputDirectory,
                         baseFileName,
-                        ".pdf");
+                        ".pdf"
+                    );
 
                     itemResult.OutputFilePath = outputFilePath;
                     result.ItemResults.Add(itemResult);
@@ -168,21 +162,23 @@ namespace TTSK_AutoDim_Plates
                     {
                         Application.DoEvents();
 
-                        DPMPrinterAttributes printAttributes =
-                            CreatePdfPrintAttributes(
-                                outputFilePath,
-                                job.Drawing);
+                        DPMPrinterAttributes printAttributes = CreatePdfPrintAttributes(
+                            outputFilePath,
+                            job.Drawing
+                        );
 
                         bool printSucceeded = drawingHandler.PrintDrawing(
                             job.Drawing,
                             printAttributes,
-                            outputFilePath);
+                            outputFilePath
+                        );
 
                         itemResult.TeklaPrintReturnedSuccess = printSucceeded;
 
                         bool outputCreated = WaitForCompletedPdf(
                             outputFilePath,
-                            OutputWaitTimeoutMilliseconds);
+                            OutputWaitTimeoutMilliseconds
+                        );
 
                         itemResult.OutputFileVerified = outputCreated;
 
@@ -197,7 +193,8 @@ namespace TTSK_AutoDim_Plates
                             itemResult.Success = false;
                             itemResult.Message = BuildItemFailureMessage(
                                 printSucceeded,
-                                outputCreated);
+                                outputCreated
+                            );
                             result.FailedDrawingCount++;
                         }
                     }
@@ -205,8 +202,7 @@ namespace TTSK_AutoDim_Plates
                     {
                         itemResult.Success = false;
                         itemResult.Message =
-                            "Print drawing lỗi: " +
-                            GetDeepestExceptionMessage(itemException);
+                            "Print drawing lỗi: " + GetDeepestExceptionMessage(itemException);
                         itemResult.ExceptionDetails = itemException.ToString();
                         result.FailedDrawingCount++;
                     }
@@ -217,51 +213,43 @@ namespace TTSK_AutoDim_Plates
 
                 result.DrawingCount = result.SuccessfulDrawingCount;
 
-                List<DrawingPdfItemResult> successfulItems = result.ItemResults
-                    .Where(item =>
-                        item != null &&
-                        item.Success &&
-                        item.OutputFileVerified &&
-                        !string.IsNullOrWhiteSpace(item.OutputFilePath) &&
-                        File.Exists(item.OutputFilePath))
+                List<DrawingPdfItemResult> successfulItems = result
+                    .ItemResults.Where(item =>
+                        item != null
+                        && item.Success
+                        && item.OutputFileVerified
+                        && !string.IsNullOrWhiteSpace(item.OutputFilePath)
+                        && File.Exists(item.OutputFilePath)
+                    )
                     .OrderBy(item => item.Index)
                     .ToList();
 
                 if (mergeAndDeleteChildren)
                 {
-                    RunMergeAndCleanup(
-                        successfulItems,
-                        outputDirectory,
-                        result);
+                    RunMergeAndCleanup(successfulItems, outputDirectory, result);
                 }
 
                 bool allIndividualPdfsSucceeded =
-                    result.SuccessfulDrawingCount == validJobs.Count &&
-                    result.FailedDrawingCount == 0;
+                    result.SuccessfulDrawingCount == validJobs.Count
+                    && result.FailedDrawingCount == 0;
 
                 if (mergeAndDeleteChildren)
                 {
                     result.Success =
-                        allIndividualPdfsSucceeded &&
-                        result.MergeAttempted &&
-                        result.MergeSuccess &&
-                        result.CleanupAttempted &&
-                        result.CleanupSuccess;
+                        allIndividualPdfsSucceeded
+                        && result.MergeAttempted
+                        && result.MergeSuccess
+                        && result.CleanupAttempted
+                        && result.CleanupSuccess;
                 }
                 else
                 {
                     result.Success = allIndividualPdfsSucceeded;
                 }
 
-                result.PartialSuccess =
-                    result.SuccessfulDrawingCount > 0 &&
-                    !result.Success;
+                result.PartialSuccess = result.SuccessfulDrawingCount > 0 && !result.Success;
 
-                BuildFinalResult(
-                    validJobs.Count,
-                    mergeAndDeleteChildren,
-                    modelPath,
-                    result);
+                BuildFinalResult(validJobs.Count, mergeAndDeleteChildren, modelPath, result);
 
                 if (result.SuccessfulDrawingCount > 0 || result.MergeSuccess)
                     TryOpenOutputFolder(outputDirectory);
@@ -273,15 +261,11 @@ namespace TTSK_AutoDim_Plates
                 result.OutputDirectory = outputDirectory;
                 result.OutputFilePath = outputDirectory;
                 result.LogFilePath = FindLatestDpmPrinterLog(modelPath);
-                result.DiagnosticDetails =
-                    ex.ToString() +
-                    AppendLogTail(result.LogFilePath, 20);
+                result.DiagnosticDetails = ex.ToString() + AppendLogTail(result.LogFilePath, 20);
                 result.Message =
-                    (mergeAndDeleteChildren ? "Merge PDF lỗi: " : "Print PDF lỗi: ") +
-                    GetDeepestExceptionMessage(ex);
-                result.DiagnosticFilePath = WriteDiagnosticFile(
-                    outputDirectory,
-                    result);
+                    (mergeAndDeleteChildren ? "Merge PDF lỗi: " : "Print PDF lỗi: ")
+                    + GetDeepestExceptionMessage(ex);
+                result.DiagnosticFilePath = WriteDiagnosticFile(outputDirectory, result);
                 return result;
             }
         }
@@ -289,14 +273,14 @@ namespace TTSK_AutoDim_Plates
         private static void RunMergeAndCleanup(
             IList<DrawingPdfItemResult> successfulItems,
             string outputDirectory,
-            DrawingPdfPrintResult result)
+            DrawingPdfPrintResult result
+        )
         {
             if (successfulItems == null || successfulItems.Count == 0)
             {
                 result.MergeAttempted = false;
                 result.MergeSuccess = false;
-                result.MergeMessage =
-                    "Không có PDF con thành công trong phiên hiện tại để gộp.";
+                result.MergeMessage = "Không có PDF con thành công trong phiên hiện tại để gộp.";
                 return;
             }
 
@@ -308,51 +292,45 @@ namespace TTSK_AutoDim_Plates
                     .Select(item => item.OutputFilePath)
                     .ToList();
 
-                string mergedBaseName = ResolveMergedFileBaseName(
-                    successfulItems);
+                string mergedBaseName = ResolveMergedFileBaseName(successfulItems);
 
                 string mergedFilePath = BuildUniqueOutputPath(
                     outputDirectory,
                     mergedBaseName,
-                    ".pdf");
+                    ".pdf"
+                );
 
-                MergePdfFiles(
-                    currentRunPdfFiles,
-                    mergedFilePath);
+                MergePdfFiles(currentRunPdfFiles, mergedFilePath);
 
                 bool mergedFileVerified = WaitForCompletedPdf(
                     mergedFilePath,
-                    OutputWaitTimeoutMilliseconds);
+                    OutputWaitTimeoutMilliseconds
+                );
 
                 if (!mergedFileVerified)
                 {
-                    throw new IOException(
-                        "PDF đã được gộp nhưng không xác minh được file đầu ra.");
+                    throw new IOException("PDF đã được gộp nhưng không xác minh được file đầu ra.");
                 }
 
                 result.MergeSuccess = true;
                 result.MergedFilePath = mergedFilePath;
                 result.MergeMessage =
-                    "Đã gộp " + currentRunPdfFiles.Count +
-                    " PDF con thành một PDF nhiều trang.";
+                    "Đã gộp " + currentRunPdfFiles.Count + " PDF con thành một PDF nhiều trang.";
 
-                DeleteCurrentRunChildFiles(
-                    successfulItems,
-                    result);
+                DeleteCurrentRunChildFiles(successfulItems, result);
             }
             catch (Exception mergeException)
             {
                 result.MergeSuccess = false;
-                result.MergeMessage =
-                    "Gộp PDF lỗi: " +
-                    GetDeepestExceptionMessage(mergeException);
+                result.MergeMessage = "Gộp PDF lỗi: " + GetDeepestExceptionMessage(mergeException);
                 result.MergeExceptionDetails = mergeException.ToString();
             }
         }
 
         private static void DeleteCurrentRunChildFiles(
             IList<DrawingPdfItemResult> successfulItems,
-            DrawingPdfPrintResult result)
+            DrawingPdfPrintResult result
+        )
         {
             result.CleanupAttempted = true;
             List<string> cleanupErrors = new List<string>();
@@ -369,8 +347,7 @@ namespace TTSK_AutoDim_Plates
 
                     if (File.Exists(item.OutputFilePath))
                     {
-                        cleanupErrors.Add(
-                            "Không xóa được: " + item.OutputFilePath);
+                        cleanupErrors.Add("Không xóa được: " + item.OutputFilePath);
                         continue;
                     }
 
@@ -380,8 +357,8 @@ namespace TTSK_AutoDim_Plates
                 catch (Exception deleteException)
                 {
                     cleanupErrors.Add(
-                        item.OutputFilePath + " | " +
-                        GetDeepestExceptionMessage(deleteException));
+                        item.OutputFilePath + " | " + GetDeepestExceptionMessage(deleteException)
+                    );
                 }
             }
 
@@ -390,19 +367,18 @@ namespace TTSK_AutoDim_Plates
             if (result.CleanupSuccess)
             {
                 result.CleanupMessage =
-                    "Đã xóa " + result.DeletedChildFileCount +
-                    " PDF con vừa tạo trong phiên Merge này.";
+                    "Đã xóa "
+                    + result.DeletedChildFileCount
+                    + " PDF con vừa tạo trong phiên Merge này.";
             }
             else
             {
                 result.CleanupMessage =
-                    "PDF tổng đã được tạo nhưng còn " +
-                    cleanupErrors.Count +
-                    " PDF con không xóa được." +
-                    Environment.NewLine +
-                    string.Join(
-                        Environment.NewLine,
-                        cleanupErrors.ToArray());
+                    "PDF tổng đã được tạo nhưng còn "
+                    + cleanupErrors.Count
+                    + " PDF con không xóa được."
+                    + Environment.NewLine
+                    + string.Join(Environment.NewLine, cleanupErrors.ToArray());
             }
         }
 
@@ -410,22 +386,22 @@ namespace TTSK_AutoDim_Plates
             int requestedCount,
             bool mergeAndDeleteChildren,
             string modelPath,
-            DrawingPdfPrintResult result)
+            DrawingPdfPrintResult result
+        )
         {
             if (result.Success)
             {
                 if (mergeAndDeleteChildren)
                 {
                     result.Message =
-                        "Đã tạo PDF tổng và xóa " +
-                        result.DeletedChildFileCount +
-                        " PDF con của phiên này.";
+                        "Đã tạo PDF tổng và xóa "
+                        + result.DeletedChildFileCount
+                        + " PDF con của phiên này.";
                 }
                 else
                 {
                     result.Message =
-                        "Đã tạo " + result.SuccessfulDrawingCount +
-                        " file PDF riêng thành công.";
+                        "Đã tạo " + result.SuccessfulDrawingCount + " file PDF riêng thành công.";
                 }
 
                 return;
@@ -440,54 +416,59 @@ namespace TTSK_AutoDim_Plates
             if (!string.IsNullOrWhiteSpace(result.MergeExceptionDetails))
             {
                 diagnostics.Add(
-                    "PDF MERGE ERROR" +
-                    Environment.NewLine +
-                    result.MergeExceptionDetails);
+                    "PDF MERGE ERROR" + Environment.NewLine + result.MergeExceptionDetails
+                );
             }
 
             if (!string.IsNullOrWhiteSpace(logTail))
             {
-                diagnostics.Add(
-                    "DPMPRINTER LOG TAIL" +
-                    Environment.NewLine +
-                    logTail);
+                diagnostics.Add("DPMPRINTER LOG TAIL" + Environment.NewLine + logTail);
             }
 
             result.DiagnosticDetails = string.Join(
                 Environment.NewLine + Environment.NewLine,
-                diagnostics.ToArray());
+                diagnostics.ToArray()
+            );
 
             if (!mergeAndDeleteChildren)
             {
                 result.Message =
-                    "Đã tạo " + result.SuccessfulDrawingCount + "/" +
-                    requestedCount + " file PDF riêng. Lỗi: " +
-                    result.FailedDrawingCount + " drawing.";
+                    "Đã tạo "
+                    + result.SuccessfulDrawingCount
+                    + "/"
+                    + requestedCount
+                    + " file PDF riêng. Lỗi: "
+                    + result.FailedDrawingCount
+                    + " drawing.";
             }
             else if (!result.MergeSuccess)
             {
                 result.Message =
-                    "Đã tạo " + result.SuccessfulDrawingCount + "/" +
-                    requestedCount + " PDF con nhưng không tạo được PDF tổng. " +
-                    result.MergeMessage;
+                    "Đã tạo "
+                    + result.SuccessfulDrawingCount
+                    + "/"
+                    + requestedCount
+                    + " PDF con nhưng không tạo được PDF tổng. "
+                    + result.MergeMessage;
             }
             else if (!result.CleanupSuccess)
             {
                 result.Message =
-                    "PDF tổng đã được tạo nhưng chưa xóa hết PDF con. " +
-                    result.CleanupMessage;
+                    "PDF tổng đã được tạo nhưng chưa xóa hết PDF con. " + result.CleanupMessage;
             }
             else
             {
                 result.Message =
-                    "Đã tạo PDF tổng từ " + result.SuccessfulDrawingCount + "/" +
-                    requestedCount + " drawing. Có " +
-                    result.FailedDrawingCount + " drawing xuất lỗi.";
+                    "Đã tạo PDF tổng từ "
+                    + result.SuccessfulDrawingCount
+                    + "/"
+                    + requestedCount
+                    + " drawing. Có "
+                    + result.FailedDrawingCount
+                    + " drawing xuất lỗi.";
             }
 
-            result.DiagnosticFilePath = WriteDiagnosticFile(
-                result.OutputDirectory,
-                result);
+            result.DiagnosticFilePath = WriteDiagnosticFile(result.OutputDirectory, result);
         }
 
         public static string GetDrawingDrawnBy(Drawing drawing)
@@ -497,20 +478,14 @@ namespace TTSK_AutoDim_Plates
 
             string value;
 
-            if (TryGetDrawingStringUserProperty(
-                drawing,
-                DrawnByUdaName,
-                out value))
+            if (TryGetDrawingStringUserProperty(drawing, DrawnByUdaName, out value))
             {
                 return value;
             }
 
             // Compatibility fallback for custom environments that expose the same
             // Document Manager value without the standard DR_ prefix.
-            if (TryGetDrawingStringUserProperty(
-                drawing,
-                "DRAWN_BY",
-                out value))
+            if (TryGetDrawingStringUserProperty(drawing, "DRAWN_BY", out value))
             {
                 return value;
             }
@@ -521,7 +496,8 @@ namespace TTSK_AutoDim_Plates
         private static bool TryGetDrawingStringUserProperty(
             Drawing drawing,
             string propertyName,
-            out string value)
+            out string value
+        )
         {
             value = string.Empty;
 
@@ -531,9 +507,7 @@ namespace TTSK_AutoDim_Plates
             try
             {
                 string propertyValue = string.Empty;
-                bool found = drawing.GetUserProperty(
-                    propertyName,
-                    ref propertyValue);
+                bool found = drawing.GetUserProperty(propertyName, ref propertyValue);
 
                 if (found && !string.IsNullOrWhiteSpace(propertyValue))
                 {
@@ -541,18 +515,14 @@ namespace TTSK_AutoDim_Plates
                     return true;
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             try
             {
                 drawing.Select();
 
                 string propertyValue = string.Empty;
-                bool found = drawing.GetUserProperty(
-                    propertyName,
-                    ref propertyValue);
+                bool found = drawing.GetUserProperty(propertyName, ref propertyValue);
 
                 if (found && !string.IsNullOrWhiteSpace(propertyValue))
                 {
@@ -560,9 +530,7 @@ namespace TTSK_AutoDim_Plates
                     return true;
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return false;
         }
@@ -572,7 +540,8 @@ namespace TTSK_AutoDim_Plates
         /// </summary>
         public static DrawingPdfPrintResult PrintToSinglePdf(
             IList<Drawing> drawings,
-            IWin32Window owner)
+            IWin32Window owner
+        )
         {
             List<DrawingPdfPrintJob> jobs = new List<DrawingPdfPrintJob>();
 
@@ -584,13 +553,15 @@ namespace TTSK_AutoDim_Plates
                     if (drawing == null)
                         continue;
 
-                    jobs.Add(new DrawingPdfPrintJob
-                    {
-                        Drawing = drawing,
-                        Mark = TryGetDrawingDisplayText(drawing, index),
-                        Revision = string.Empty,
-                        DrawnBy = GetDrawingDrawnBy(drawing)
-                    });
+                    jobs.Add(
+                        new DrawingPdfPrintJob
+                        {
+                            Drawing = drawing,
+                            Mark = TryGetDrawingDisplayText(drawing, index),
+                            Revision = string.Empty,
+                            DrawnBy = GetDrawingDrawnBy(drawing)
+                        }
+                    );
                 }
             }
 
@@ -599,7 +570,8 @@ namespace TTSK_AutoDim_Plates
 
         private static DPMPrinterAttributes CreatePdfPrintAttributes(
             string outputFilePath,
-            Drawing drawing)
+            Drawing drawing
+        )
         {
             DPMPrinterAttributes printAttributes = new DPMPrinterAttributes();
             printAttributes.OutputType = DotPrintOutputType.PDF;
@@ -629,9 +601,7 @@ namespace TTSK_AutoDim_Plates
             return singlePartDrawingPaperSize;
         }
 
-        private static string BuildItemFailureMessage(
-            bool printSucceeded,
-            bool outputCreated)
+        private static string BuildItemFailureMessage(bool printSucceeded, bool outputCreated)
         {
             if (!printSucceeded && !outputCreated)
                 return "Tekla trả về Print thất bại và không tạo PDF.";
@@ -642,27 +612,20 @@ namespace TTSK_AutoDim_Plates
             return "Tekla nhận lệnh Print nhưng không tìm thấy PDF đầu ra.";
         }
 
-        private static string BuildDrawingFileBaseName(
-            string mark,
-            string revision)
+        private static string BuildDrawingFileBaseName(string mark, string revision)
         {
-            string normalizedMark = NormalizeDisplayText(
-                mark,
-                "Drawing");
-            string normalizedRevision = NormalizeDisplayText(
-                revision,
-                string.Empty);
+            string normalizedMark = NormalizeDisplayText(mark, "Drawing");
+            string normalizedRevision = NormalizeDisplayText(revision, string.Empty);
 
             normalizedMark = SanitizeFileName(normalizedMark);
 
             string fileName = normalizedMark;
 
-            if (!string.IsNullOrWhiteSpace(normalizedRevision) &&
-                normalizedRevision != "-" &&
-                !string.Equals(
-                    normalizedRevision,
-                    "UNKNOWN",
-                    StringComparison.OrdinalIgnoreCase))
+            if (
+                !string.IsNullOrWhiteSpace(normalizedRevision)
+                && normalizedRevision != "-"
+                && !string.Equals(normalizedRevision, "UNKNOWN", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 normalizedRevision = SanitizeFileName(normalizedRevision);
                 fileName += "_REV_" + normalizedRevision;
@@ -671,25 +634,23 @@ namespace TTSK_AutoDim_Plates
             return fileName;
         }
 
-        private static string ResolveMergedFileBaseName(
-            IList<DrawingPdfItemResult> successfulItems)
+        private static string ResolveMergedFileBaseName(IList<DrawingPdfItemResult> successfulItems)
         {
             if (successfulItems != null)
             {
-                foreach (DrawingPdfItemResult item in successfulItems
-                    .Where(currentItem => currentItem != null)
-                    .OrderBy(currentItem => currentItem.Index))
+                foreach (
+                    DrawingPdfItemResult item in successfulItems
+                        .Where(currentItem => currentItem != null)
+                        .OrderBy(currentItem => currentItem.Index)
+                )
                 {
-                    string drawnBy = NormalizeDisplayText(
-                        item.DrawnBy,
-                        string.Empty);
+                    string drawnBy = NormalizeDisplayText(item.DrawnBy, string.Empty);
 
-                    if (string.IsNullOrWhiteSpace(drawnBy) ||
-                        drawnBy == "-" ||
-                        string.Equals(
-                            drawnBy,
-                            "UNKNOWN",
-                            StringComparison.OrdinalIgnoreCase))
+                    if (
+                        string.IsNullOrWhiteSpace(drawnBy)
+                        || drawnBy == "-"
+                        || string.Equals(drawnBy, "UNKNOWN", StringComparison.OrdinalIgnoreCase)
+                    )
                     {
                         continue;
                     }
@@ -706,35 +667,31 @@ namespace TTSK_AutoDim_Plates
         private static string BuildUniqueOutputPath(
             string outputDirectory,
             string baseFileName,
-            string extension)
+            string extension
+        )
         {
             string safeBaseName = SanitizeFileName(baseFileName);
-            string normalizedExtension = string.IsNullOrWhiteSpace(extension)
-                ? ".pdf"
-                : extension;
+            string normalizedExtension = string.IsNullOrWhiteSpace(extension) ? ".pdf" : extension;
 
             if (!normalizedExtension.StartsWith("."))
                 normalizedExtension = "." + normalizedExtension;
 
-            string candidate = Path.Combine(
-                outputDirectory,
-                safeBaseName + normalizedExtension);
+            string candidate = Path.Combine(outputDirectory, safeBaseName + normalizedExtension);
 
             int duplicateNumber = 2;
             while (File.Exists(candidate))
             {
                 candidate = Path.Combine(
                     outputDirectory,
-                    safeBaseName + "_" + duplicateNumber + normalizedExtension);
+                    safeBaseName + "_" + duplicateNumber + normalizedExtension
+                );
                 duplicateNumber++;
             }
 
             return candidate;
         }
 
-        private static bool WaitForCompletedPdf(
-            string filePath,
-            int timeoutMilliseconds)
+        private static bool WaitForCompletedPdf(string filePath, int timeoutMilliseconds)
         {
             if (string.IsNullOrWhiteSpace(filePath))
                 return false;
@@ -768,9 +725,7 @@ namespace TTSK_AutoDim_Plates
                         }
                     }
                 }
-                catch
-                {
-                }
+                catch { }
 
                 Thread.Sleep(OutputWaitIntervalMilliseconds);
                 elapsed += OutputWaitIntervalMilliseconds;
@@ -778,8 +733,7 @@ namespace TTSK_AutoDim_Plates
 
             try
             {
-                return File.Exists(filePath) &&
-                       new FileInfo(filePath).Length > 0;
+                return File.Exists(filePath) && new FileInfo(filePath).Length > 0;
             }
             catch
             {
@@ -787,9 +741,7 @@ namespace TTSK_AutoDim_Plates
             }
         }
 
-        private static void MergePdfFiles(
-            IList<string> inputPdfPaths,
-            string outputPdfPath)
+        private static void MergePdfFiles(IList<string> inputPdfPaths, string outputPdfPath)
         {
             if (inputPdfPaths == null || inputPdfPaths.Count == 0)
                 throw new ArgumentException("Danh sách PDF cần gộp đang trống.");
@@ -808,8 +760,7 @@ namespace TTSK_AutoDim_Plates
             try
             {
                 outputDocument.Info.Title = "TTSK Merged Drawing PDF";
-                outputDocument.Info.Subject =
-                    "Merged automatically from Tekla drawing PDF files.";
+                outputDocument.Info.Subject = "Merged automatically from Tekla drawing PDF files.";
                 outputDocument.Info.Creator = "TTSK AutoDim Plates";
 
                 int importedPageCount = 0;
@@ -823,23 +774,19 @@ namespace TTSK_AutoDim_Plates
                     {
                         throw new FileNotFoundException(
                             "Không tìm thấy PDF con để gộp.",
-                            inputPdfPath);
+                            inputPdfPath
+                        );
                     }
 
                     PdfDocument inputDocument = null;
 
                     try
                     {
-                        inputDocument = PdfReader.Open(
-                            inputPdfPath,
-                            PdfDocumentOpenMode.Import);
+                        inputDocument = PdfReader.Open(inputPdfPath, PdfDocumentOpenMode.Import);
 
-                        for (int pageIndex = 0;
-                             pageIndex < inputDocument.PageCount;
-                             pageIndex++)
+                        for (int pageIndex = 0; pageIndex < inputDocument.PageCount; pageIndex++)
                         {
-                            outputDocument.AddPage(
-                                inputDocument.Pages[pageIndex]);
+                            outputDocument.AddPage(inputDocument.Pages[pageIndex]);
                             importedPageCount++;
                         }
                     }
@@ -852,8 +799,7 @@ namespace TTSK_AutoDim_Plates
 
                 if (importedPageCount == 0)
                 {
-                    throw new InvalidOperationException(
-                        "Không đọc được trang PDF nào để gộp.");
+                    throw new InvalidOperationException("Không đọc được trang PDF nào để gộp.");
                 }
 
                 outputDocument.Save(outputPdfPath);
@@ -868,8 +814,9 @@ namespace TTSK_AutoDim_Plates
         {
             try
             {
-                if (string.IsNullOrWhiteSpace(outputDirectory) ||
-                    !Directory.Exists(outputDirectory))
+                if (
+                    string.IsNullOrWhiteSpace(outputDirectory) || !Directory.Exists(outputDirectory)
+                )
                 {
                     return;
                 }
@@ -879,9 +826,7 @@ namespace TTSK_AutoDim_Plates
                 startInfo.UseShellExecute = true;
                 Process.Start(startInfo);
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static string ResolveModelPath(Model model)
@@ -892,9 +837,7 @@ namespace TTSK_AutoDim_Plates
                 if (info != null && !string.IsNullOrWhiteSpace(info.ModelPath))
                     return info.ModelPath;
             }
-            catch
-            {
-            }
+            catch { }
 
             return null;
         }
@@ -902,34 +845,27 @@ namespace TTSK_AutoDim_Plates
         private static string ResolveDesktopDatedOutputFolder(DateTime printRunDate)
         {
             string desktopPath = Environment.GetFolderPath(
-                Environment.SpecialFolder.DesktopDirectory);
+                Environment.SpecialFolder.DesktopDirectory
+            );
 
             if (string.IsNullOrWhiteSpace(desktopPath))
             {
-                desktopPath = Environment.GetFolderPath(
-                    Environment.SpecialFolder.Desktop);
+                desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
             }
 
             if (string.IsNullOrWhiteSpace(desktopPath))
             {
-                desktopPath = Environment.GetFolderPath(
-                    Environment.SpecialFolder.MyDocuments);
+                desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
             }
 
             if (string.IsNullOrWhiteSpace(desktopPath))
                 desktopPath = AppDomain.CurrentDomain.BaseDirectory;
 
-            string rootOutputFolder = Path.Combine(
-                desktopPath,
-                OutputSubFolder);
+            string rootOutputFolder = Path.Combine(desktopPath, OutputSubFolder);
 
-            string dateFolderName = printRunDate.ToString(
-                "dd-MM-yy",
-                CultureInfo.InvariantCulture);
+            string dateFolderName = printRunDate.ToString("dd-MM-yy", CultureInfo.InvariantCulture);
 
-            return Path.Combine(
-                rootOutputFolder,
-                dateFolderName);
+            return Path.Combine(rootOutputFolder, dateFolderName);
         }
 
         private static string FindLatestDpmPrinterLog(string modelPath)
@@ -946,14 +882,13 @@ namespace TTSK_AutoDim_Plates
                 string[] files = Directory.GetFiles(
                     logDirectory,
                     "DPMPrinter_*.log",
-                    SearchOption.TopDirectoryOnly);
+                    SearchOption.TopDirectoryOnly
+                );
 
                 if (files == null || files.Length == 0)
                     return null;
 
-                return files
-                    .OrderByDescending(File.GetLastWriteTimeUtc)
-                    .FirstOrDefault();
+                return files.OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
             }
             catch
             {
@@ -961,14 +896,11 @@ namespace TTSK_AutoDim_Plates
             }
         }
 
-        private static string ReadLogTail(
-            string logFilePath,
-            int maximumLineCount)
+        private static string ReadLogTail(string logFilePath, int maximumLineCount)
         {
             try
             {
-                if (string.IsNullOrWhiteSpace(logFilePath) ||
-                    !File.Exists(logFilePath))
+                if (string.IsNullOrWhiteSpace(logFilePath) || !File.Exists(logFilePath))
                 {
                     return null;
                 }
@@ -980,9 +912,7 @@ namespace TTSK_AutoDim_Plates
                 int takeCount = Math.Max(1, maximumLineCount);
                 int startIndex = Math.Max(0, lines.Length - takeCount);
 
-                return string.Join(
-                    Environment.NewLine,
-                    lines.Skip(startIndex).ToArray());
+                return string.Join(Environment.NewLine, lines.Skip(startIndex).ToArray());
             }
             catch (Exception ex)
             {
@@ -990,40 +920,39 @@ namespace TTSK_AutoDim_Plates
             }
         }
 
-        private static string AppendLogTail(
-            string logFilePath,
-            int maximumLineCount)
+        private static string AppendLogTail(string logFilePath, int maximumLineCount)
         {
             string logTail = ReadLogTail(logFilePath, maximumLineCount);
             if (string.IsNullOrWhiteSpace(logTail))
                 return string.Empty;
 
-            return Environment.NewLine +
-                   Environment.NewLine +
-                   "DPMPrinter log gần nhất:" +
-                   Environment.NewLine +
-                   logTail;
+            return Environment.NewLine
+                + Environment.NewLine
+                + "DPMPrinter log gần nhất:"
+                + Environment.NewLine
+                + logTail;
         }
 
         private static string WriteDiagnosticFile(
             string outputDirectory,
-            DrawingPdfPrintResult result)
+            DrawingPdfPrintResult result
+        )
         {
             try
             {
                 if (string.IsNullOrWhiteSpace(outputDirectory))
                 {
                     outputDirectory = Environment.GetFolderPath(
-                        Environment.SpecialFolder.MyDocuments);
+                        Environment.SpecialFolder.MyDocuments
+                    );
                 }
 
                 Directory.CreateDirectory(outputDirectory);
 
                 string diagnosticPath = Path.Combine(
                     outputDirectory,
-                    "TTSK_Print_Merge_Error_" +
-                    DateTime.Now.ToString("yyyyMMdd_HHmmss") +
-                    ".txt");
+                    "TTSK_Print_Merge_Error_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".txt"
+                );
 
                 List<string> lines = new List<string>();
                 lines.Add("TTSK PRINT / MERGE PDF DIAGNOSTIC");
@@ -1059,16 +988,26 @@ namespace TTSK_AutoDim_Plates
                     foreach (DrawingPdfItemResult item in result.ItemResults)
                     {
                         lines.Add(
-                            (item.Index + 1).ToString("000") +
-                            " | " + (item.Success ? "OK" : "ERROR") +
-                            " | MARK=" + SafeText(item.Mark) +
-                            " | REV=" + SafeText(item.Revision) +
-                            " | DRAWN_BY=" + SafeText(item.DrawnBy) +
-                            " | Tekla=" + item.TeklaPrintReturnedSuccess +
-                            " | FileVerified=" + item.OutputFileVerified +
-                            " | ChildDeleted=" + item.ChildFileDeleted +
-                            " | File=" + SafeText(item.OutputFilePath) +
-                            " | Message=" + SafeText(item.Message));
+                            (item.Index + 1).ToString("000")
+                                + " | "
+                                + (item.Success ? "OK" : "ERROR")
+                                + " | MARK="
+                                + SafeText(item.Mark)
+                                + " | REV="
+                                + SafeText(item.Revision)
+                                + " | DRAWN_BY="
+                                + SafeText(item.DrawnBy)
+                                + " | Tekla="
+                                + item.TeklaPrintReturnedSuccess
+                                + " | FileVerified="
+                                + item.OutputFileVerified
+                                + " | ChildDeleted="
+                                + item.ChildFileDeleted
+                                + " | File="
+                                + SafeText(item.OutputFilePath)
+                                + " | Message="
+                                + SafeText(item.Message)
+                        );
 
                         if (!string.IsNullOrWhiteSpace(item.ExceptionDetails))
                             lines.Add(item.ExceptionDetails);
@@ -1091,31 +1030,23 @@ namespace TTSK_AutoDim_Plates
             }
         }
 
-        private static string TryGetDrawingDisplayText(
-            Drawing drawing,
-            int zeroBasedIndex)
+        private static string TryGetDrawingDisplayText(Drawing drawing, int zeroBasedIndex)
         {
             if (drawing == null)
                 return "Drawing_" + (zeroBasedIndex + 1);
 
-            string[] propertyNames = new string[]
-            {
-                "Mark",
-                "Name",
-                "Title1",
-                "Title2",
-                "Title3"
-            };
+            string[] propertyNames = new string[] { "Mark", "Name", "Title1", "Title2", "Title3" };
 
             foreach (string propertyName in propertyNames)
             {
                 try
                 {
-                    PropertyInfo property = drawing.GetType().GetProperty(
-                        propertyName,
-                        BindingFlags.Instance |
-                        BindingFlags.Public |
-                        BindingFlags.NonPublic);
+                    PropertyInfo property = drawing
+                        .GetType()
+                        .GetProperty(
+                            propertyName,
+                            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic
+                        );
 
                     if (property == null || !property.CanRead)
                         continue;
@@ -1126,25 +1057,19 @@ namespace TTSK_AutoDim_Plates
                     if (!string.IsNullOrWhiteSpace(text))
                         return text.Trim();
                 }
-                catch
-                {
-                }
+                catch { }
             }
 
             return drawing.GetType().Name + "_" + (zeroBasedIndex + 1);
         }
 
-        private static string NormalizeDisplayText(
-            string value,
-            string fallback)
+        private static string NormalizeDisplayText(string value, string fallback)
         {
             if (string.IsNullOrWhiteSpace(value))
                 return fallback == null ? string.Empty : fallback;
 
             string text = value.Trim();
-            return text == "-" && !string.IsNullOrEmpty(fallback)
-                ? fallback
-                : text;
+            return text == "-" && !string.IsNullOrEmpty(fallback) ? fallback : text;
         }
 
         private static string GetDeepestExceptionMessage(Exception exception)
@@ -1185,9 +1110,7 @@ namespace TTSK_AutoDim_Plates
             while (sanitized.EndsWith(".") || sanitized.EndsWith(" "))
                 sanitized = sanitized.Substring(0, sanitized.Length - 1);
 
-            return string.IsNullOrWhiteSpace(sanitized)
-                ? "UNKNOWN"
-                : sanitized;
+            return string.IsNullOrWhiteSpace(sanitized) ? "UNKNOWN" : sanitized;
         }
     }
 
@@ -1195,8 +1118,7 @@ namespace TTSK_AutoDim_Plates
     {
         private const string DefaultMergedFileName = "TTSK_Merge";
 
-        public static ExternalPdfMergeResult MergeSelectedFiles(
-            IWin32Window owner)
+        public static ExternalPdfMergeResult MergeSelectedFiles(IWin32Window owner)
         {
             ExternalPdfMergeResult result = new ExternalPdfMergeResult();
             string outputFilePath = null;
@@ -1221,8 +1143,8 @@ namespace TTSK_AutoDim_Plates
                         return result;
                     }
 
-                    selectedFiles = dialog.FileNames
-                        .Where(path => !string.IsNullOrWhiteSpace(path))
+                    selectedFiles = dialog
+                        .FileNames.Where(path => !string.IsNullOrWhiteSpace(path))
                         .Select(Path.GetFullPath)
                         .Distinct(StringComparer.OrdinalIgnoreCase)
                         .ToList();
@@ -1233,8 +1155,7 @@ namespace TTSK_AutoDim_Plates
 
                 if (selectedFiles.Count < 2)
                 {
-                    result.Message =
-                        "Merge File cần ít nhất 2 file PDF được chọn.";
+                    result.Message = "Merge File cần ít nhất 2 file PDF được chọn.";
                     return result;
                 }
 
@@ -1242,8 +1163,7 @@ namespace TTSK_AutoDim_Plates
                 {
                     if (!File.Exists(sourceFile))
                     {
-                        result.Message =
-                            "Không tìm thấy file PDF đã chọn:\r\n" + sourceFile;
+                        result.Message = "Không tìm thấy file PDF đã chọn:\r\n" + sourceFile;
                         return result;
                     }
                 }
@@ -1251,31 +1171,31 @@ namespace TTSK_AutoDim_Plates
                 string outputDirectory = Path.GetDirectoryName(selectedFiles[0]);
                 if (string.IsNullOrWhiteSpace(outputDirectory))
                 {
-                    result.Message =
-                        "Không xác định được thư mục chứa các file PDF đã chọn.";
+                    result.Message = "Không xác định được thư mục chứa các file PDF đã chọn.";
                     return result;
                 }
 
-                string normalizedOutputDirectory = NormalizeDirectoryPath(
-                    outputDirectory);
+                string normalizedOutputDirectory = NormalizeDirectoryPath(outputDirectory);
 
                 bool allFilesInSameFolder = selectedFiles.All(path =>
                     string.Equals(
                         NormalizeDirectoryPath(Path.GetDirectoryName(path)),
                         normalizedOutputDirectory,
-                        StringComparison.OrdinalIgnoreCase));
+                        StringComparison.OrdinalIgnoreCase
+                    )
+                );
 
                 if (!allFilesInSameFolder)
                 {
-                    result.Message =
-                        "Hãy chọn các file PDF nằm trong cùng một folder Windows.";
+                    result.Message = "Hãy chọn các file PDF nằm trong cùng một folder Windows.";
                     return result;
                 }
 
                 outputFilePath = BuildUniqueOutputPath(
                     outputDirectory,
                     DefaultMergedFileName,
-                    ".pdf");
+                    ".pdf"
+                );
 
                 result.OutputDirectory = outputDirectory;
                 result.OutputFilePath = outputFilePath;
@@ -1284,8 +1204,7 @@ namespace TTSK_AutoDim_Plates
 
                 if (!VerifyMergedPdf(outputFilePath))
                 {
-                    throw new IOException(
-                        "Đã tạo file tổng nhưng không xác minh được PDF đầu ra.");
+                    throw new IOException("Đã tạo file tổng nhưng không xác minh được PDF đầu ra.");
                 }
 
                 result.MergeSuccess = true;
@@ -1309,32 +1228,32 @@ namespace TTSK_AutoDim_Plates
                     catch (Exception deleteException)
                     {
                         cleanupErrors.Add(
-                            sourceFile + " | " +
-                            GetDeepestExceptionMessage(deleteException));
+                            sourceFile + " | " + GetDeepestExceptionMessage(deleteException)
+                        );
                     }
                 }
 
                 result.CleanupSuccess = cleanupErrors.Count == 0;
-                result.CleanupDetails = cleanupErrors.Count == 0
-                    ? null
-                    : string.Join(Environment.NewLine, cleanupErrors.ToArray());
-                result.PartialSuccess =
-                    result.MergeSuccess && !result.CleanupSuccess;
-                result.Success =
-                    result.MergeSuccess && result.CleanupSuccess;
+                result.CleanupDetails =
+                    cleanupErrors.Count == 0
+                        ? null
+                        : string.Join(Environment.NewLine, cleanupErrors.ToArray());
+                result.PartialSuccess = result.MergeSuccess && !result.CleanupSuccess;
+                result.Success = result.MergeSuccess && result.CleanupSuccess;
 
                 if (result.Success)
                 {
                     result.Message =
-                        "Đã gộp " + selectedFiles.Count +
-                        " file PDF và xóa toàn bộ file nguồn đã chọn.";
+                        "Đã gộp "
+                        + selectedFiles.Count
+                        + " file PDF và xóa toàn bộ file nguồn đã chọn.";
                 }
                 else
                 {
                     result.Message =
-                        "PDF tổng đã được tạo nhưng còn " +
-                        cleanupErrors.Count +
-                        " file nguồn không xóa được.";
+                        "PDF tổng đã được tạo nhưng còn "
+                        + cleanupErrors.Count
+                        + " file nguồn không xóa được.";
                 }
 
                 TryOpenOutputFolder(outputDirectory);
@@ -1344,11 +1263,9 @@ namespace TTSK_AutoDim_Plates
             {
                 result.Success = false;
                 result.PartialSuccess = false;
-                result.Message =
-                    "Merge File lỗi: " + GetDeepestExceptionMessage(ex);
+                result.Message = "Merge File lỗi: " + GetDeepestExceptionMessage(ex);
 
-                if (!result.MergeSuccess &&
-                    !string.IsNullOrWhiteSpace(outputFilePath))
+                if (!result.MergeSuccess && !string.IsNullOrWhiteSpace(outputFilePath))
                 {
                     TryDeleteIncompleteOutput(outputFilePath);
                 }
@@ -1357,17 +1274,14 @@ namespace TTSK_AutoDim_Plates
             }
         }
 
-        private static void MergePdfFiles(
-            IList<string> inputPdfPaths,
-            string outputPdfPath)
+        private static void MergePdfFiles(IList<string> inputPdfPaths, string outputPdfPath)
         {
             PdfDocument outputDocument = new PdfDocument();
 
             try
             {
                 outputDocument.Info.Title = "TTSK Merge File";
-                outputDocument.Info.Subject =
-                    "Merged from PDF files selected by the user.";
+                outputDocument.Info.Subject = "Merged from PDF files selected by the user.";
                 outputDocument.Info.Creator = "TTSK AutoDim Plates";
 
                 int importedPageCount = 0;
@@ -1378,16 +1292,11 @@ namespace TTSK_AutoDim_Plates
 
                     try
                     {
-                        inputDocument = PdfReader.Open(
-                            inputPdfPath,
-                            PdfDocumentOpenMode.Import);
+                        inputDocument = PdfReader.Open(inputPdfPath, PdfDocumentOpenMode.Import);
 
-                        for (int pageIndex = 0;
-                             pageIndex < inputDocument.PageCount;
-                             pageIndex++)
+                        for (int pageIndex = 0; pageIndex < inputDocument.PageCount; pageIndex++)
                         {
-                            outputDocument.AddPage(
-                                inputDocument.Pages[pageIndex]);
+                            outputDocument.AddPage(inputDocument.Pages[pageIndex]);
                             importedPageCount++;
                         }
                     }
@@ -1400,8 +1309,7 @@ namespace TTSK_AutoDim_Plates
 
                 if (importedPageCount == 0)
                 {
-                    throw new InvalidOperationException(
-                        "Không đọc được trang PDF nào để gộp.");
+                    throw new InvalidOperationException("Không đọc được trang PDF nào để gộp.");
                 }
 
                 outputDocument.Save(outputPdfPath);
@@ -1416,16 +1324,21 @@ namespace TTSK_AutoDim_Plates
         {
             try
             {
-                if (string.IsNullOrWhiteSpace(filePath) ||
-                    !File.Exists(filePath) ||
-                    new FileInfo(filePath).Length <= 0)
+                if (
+                    string.IsNullOrWhiteSpace(filePath)
+                    || !File.Exists(filePath)
+                    || new FileInfo(filePath).Length <= 0
+                )
                 {
                     return false;
                 }
 
-                using (PdfDocument verifyDocument = PdfReader.Open(
-                    filePath,
-                    PdfDocumentOpenMode.Import))
+                using (
+                    PdfDocument verifyDocument = PdfReader.Open(
+                        filePath,
+                        PdfDocumentOpenMode.Import
+                    )
+                )
                 {
                     return verifyDocument.PageCount > 0;
                 }
@@ -1439,18 +1352,18 @@ namespace TTSK_AutoDim_Plates
         private static string BuildUniqueOutputPath(
             string outputDirectory,
             string baseFileName,
-            string extension)
+            string extension
+        )
         {
-            string candidate = Path.Combine(
-                outputDirectory,
-                baseFileName + extension);
+            string candidate = Path.Combine(outputDirectory, baseFileName + extension);
             int duplicateNumber = 2;
 
             while (File.Exists(candidate))
             {
                 candidate = Path.Combine(
                     outputDirectory,
-                    baseFileName + "_" + duplicateNumber + extension);
+                    baseFileName + "_" + duplicateNumber + extension
+                );
                 duplicateNumber++;
             }
 
@@ -1463,17 +1376,16 @@ namespace TTSK_AutoDim_Plates
                 return string.Empty;
 
             return Path.GetFullPath(directoryPath)
-                .TrimEnd(
-                    Path.DirectorySeparatorChar,
-                    Path.AltDirectorySeparatorChar);
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         }
 
         private static void TryOpenOutputFolder(string outputDirectory)
         {
             try
             {
-                if (string.IsNullOrWhiteSpace(outputDirectory) ||
-                    !Directory.Exists(outputDirectory))
+                if (
+                    string.IsNullOrWhiteSpace(outputDirectory) || !Directory.Exists(outputDirectory)
+                )
                 {
                     return;
                 }
@@ -1483,24 +1395,19 @@ namespace TTSK_AutoDim_Plates
                 startInfo.UseShellExecute = true;
                 Process.Start(startInfo);
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static void TryDeleteIncompleteOutput(string outputFilePath)
         {
             try
             {
-                if (!string.IsNullOrWhiteSpace(outputFilePath) &&
-                    File.Exists(outputFilePath))
+                if (!string.IsNullOrWhiteSpace(outputFilePath) && File.Exists(outputFilePath))
                 {
                     File.Delete(outputFilePath);
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static string GetDeepestExceptionMessage(Exception exception)

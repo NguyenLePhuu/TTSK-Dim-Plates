@@ -19,35 +19,24 @@ namespace Tekla.Technology.Akit.UserScript
     /// </summary>
     public static class PHU_MainPartResolver
     {
-        public static ModelPart Resolve(
-            Model model,
-            Drawing drawing)
+        public static ModelPart Resolve(Model model, Drawing drawing)
         {
             try
             {
-                if (model == null || drawing == null ||
-                    !model.GetConnectionStatus())
+                if (model == null || drawing == null || !model.GetConnectionStatus())
                     return null;
 
-                SinglePartDrawing singlePartDrawing =
-                    drawing as SinglePartDrawing;
+                SinglePartDrawing singlePartDrawing = drawing as SinglePartDrawing;
                 if (singlePartDrawing != null)
-                    return SelectModelPart(
-                        model,
-                        singlePartDrawing.PartIdentifier);
+                    return SelectModelPart(model, singlePartDrawing.PartIdentifier);
 
-                AssemblyDrawing assemblyDrawing =
-                    drawing as AssemblyDrawing;
+                AssemblyDrawing assemblyDrawing = drawing as AssemblyDrawing;
                 if (assemblyDrawing == null)
                     return null;
 
-                Identifier identifier = GetIdentifier(
-                    assemblyDrawing,
-                    "AssemblyIdentifier");
+                Identifier identifier = GetIdentifier(assemblyDrawing, "AssemblyIdentifier");
                 if (identifier == null)
-                    identifier = GetIdentifier(
-                        assemblyDrawing,
-                        "ModelIdentifier");
+                    identifier = GetIdentifier(assemblyDrawing, "ModelIdentifier");
                 if (identifier == null)
                     return null;
 
@@ -58,9 +47,7 @@ namespace Tekla.Technology.Akit.UserScript
                     return directPart;
 
                 ModelAssembly assembly = value as ModelAssembly;
-                return assembly == null
-                    ? null
-                    : assembly.GetMainPart() as ModelPart;
+                return assembly == null ? null : assembly.GetMainPart() as ModelPart;
             }
             catch
             {
@@ -68,9 +55,7 @@ namespace Tekla.Technology.Akit.UserScript
             }
         }
 
-        private static ModelPart SelectModelPart(
-            Model model,
-            Identifier identifier)
+        private static ModelPart SelectModelPart(Model model, Identifier identifier)
         {
             try
             {
@@ -85,33 +70,31 @@ namespace Tekla.Technology.Akit.UserScript
             }
         }
 
-        private static Identifier GetIdentifier(
-            object drawingObject,
-            string propertyName)
+        private static Identifier GetIdentifier(object drawingObject, string propertyName)
         {
             try
             {
                 if (drawingObject == null || string.IsNullOrEmpty(propertyName))
                     return null;
 
-                PropertyInfo property = drawingObject.GetType().GetProperty(
-                    propertyName,
-                    BindingFlags.Public |
-                    BindingFlags.NonPublic |
-                    BindingFlags.Instance);
+                PropertyInfo property = drawingObject
+                    .GetType()
+                    .GetProperty(
+                        propertyName,
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    );
 
                 if (property != null && property.CanRead)
                     return property.GetValue(drawingObject, null) as Identifier;
 
-                FieldInfo field = drawingObject.GetType().GetField(
-                    propertyName,
-                    BindingFlags.Public |
-                    BindingFlags.NonPublic |
-                    BindingFlags.Instance);
+                FieldInfo field = drawingObject
+                    .GetType()
+                    .GetField(
+                        propertyName,
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    );
 
-                return field == null
-                    ? null
-                    : field.GetValue(drawingObject) as Identifier;
+                return field == null ? null : field.GetValue(drawingObject) as Identifier;
             }
             catch
             {

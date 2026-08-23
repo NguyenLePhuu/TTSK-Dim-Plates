@@ -14,7 +14,8 @@ namespace UserMacros
         {
             string commandPath = System.IO.Path.Combine(
                 System.IO.Path.GetTempPath(),
-                CommandFileName);
+                CommandFileName
+            );
 
             try
             {
@@ -22,6 +23,9 @@ namespace UserMacros
 
                 Tekla.Macros.Akit.IAkitScriptHost akit =
                     runtime.Get<Tekla.Macros.Akit.IAkitScriptHost>();
+
+                // Bảo đảm view_dial tồn tại trước ValueChange; macro chỉ chạy từ TTSK, không ghi vào Model.
+                akit.Callback("acmd_display_attr_dialog", "view_dial", "main_frame");
 
                 if (string.Equals(command, "OPEN", System.StringComparison.OrdinalIgnoreCase))
                 {
@@ -34,22 +38,42 @@ namespace UserMacros
                     akit.ValueChange("view_dial", "gr_bottom_middle", "0");
                     akit.ValueChange("view_dial", "gr_view_grid_on", "0");
                 }
-                else if (string.Equals(command, "FIT_KEEP_GRID", System.StringComparison.OrdinalIgnoreCase))
+                else if (
+                    string.Equals(
+                        command,
+                        "FIT_KEEP_GRID",
+                        System.StringComparison.OrdinalIgnoreCase
+                    )
+                )
                 {
                     akit.ValueChange("view_dial", "gr_view_grid_on", "1");
                 }
-                else if (string.Equals(command, "FIT_COMPLETE", System.StringComparison.OrdinalIgnoreCase))
+                else if (
+                    string.Equals(
+                        command,
+                        "FIT_COMPLETE",
+                        System.StringComparison.OrdinalIgnoreCase
+                    )
+                )
                 {
                     akit.ValueChange("view_dial", "gr_vnp_collect_by", "4");
                 }
-                else if (string.Equals(command, "FIT_GRID_COMPLETE", System.StringComparison.OrdinalIgnoreCase))
+                else if (
+                    string.Equals(
+                        command,
+                        "FIT_GRID_COMPLETE",
+                        System.StringComparison.OrdinalIgnoreCase
+                    )
+                )
                 {
                     akit.ValueChange("view_dial", "gr_view_grid_on", "1");
                     akit.ValueChange("view_dial", "gr_top_middle", "1");
                     akit.ValueChange("view_dial", "gr_bottom_middle", "0");
                     akit.ValueChange("view_dial", "gr_vnp_collect_by", "4");
                 }
-                else if (string.Equals(command, "MARK_OFFSET", System.StringComparison.OrdinalIgnoreCase))
+                else if (
+                    string.Equals(command, "MARK_OFFSET", System.StringComparison.OrdinalIgnoreCase)
+                )
                 {
                     akit.ValueChange("view_dial", "gr_view_grid_on", "1");
                     akit.ValueChange("view_dial", "gr_top_middle", "1");
@@ -60,7 +84,8 @@ namespace UserMacros
                 {
                     System.IO.File.WriteAllText(
                         commandPath,
-                        "ERROR|Lệnh Grid Visibility không hợp lệ.");
+                        "ERROR|Lệnh Grid Visibility không hợp lệ."
+                    );
                     return;
                 }
 
@@ -76,11 +101,10 @@ namespace UserMacros
                 {
                     System.IO.File.WriteAllText(
                         commandPath,
-                        "ERROR|" + ex.GetType().Name + ": " + ex.Message);
+                        "ERROR|" + ex.GetType().Name + ": " + ex.Message
+                    );
                 }
-                catch
-                {
-                }
+                catch { }
             }
         }
     }

@@ -56,7 +56,9 @@ namespace TTSK_AutoDim_Plates
 
         public IDictionary<string, Keys> GetShortcutsCopy()
         {
-            Dictionary<string, Keys> copy = new Dictionary<string, Keys>(StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, Keys> copy = new Dictionary<string, Keys>(
+                StringComparer.OrdinalIgnoreCase
+            );
 
             foreach (KeyValuePair<string, Keys> pair in _shortcuts)
                 copy[pair.Key] = pair.Value;
@@ -66,7 +68,9 @@ namespace TTSK_AutoDim_Plates
 
         public IDictionary<string, Keys> GetDefaultShortcutsCopy()
         {
-            Dictionary<string, Keys> copy = new Dictionary<string, Keys>(StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, Keys> copy = new Dictionary<string, Keys>(
+                StringComparer.OrdinalIgnoreCase
+            );
 
             foreach (ShortcutActionDefinition def in _definitions)
                 copy[def.ActionId] = NormalizeShortcut(def.DefaultShortcut);
@@ -156,10 +160,22 @@ namespace TTSK_AutoDim_Plates
                     string actionId = line.Substring(0, index).Trim();
                     string keyText = line.Substring(index + 1).Trim();
 
-                    if (string.Equals(actionId, ActionBatchCreate, StringComparison.OrdinalIgnoreCase))
+                    if (
+                        string.Equals(
+                            actionId,
+                            ActionBatchCreate,
+                            StringComparison.OrdinalIgnoreCase
+                        )
+                    )
                         hasBatchCreateSetting = true;
 
-                    if (string.Equals(actionId, ActionArrangeView, StringComparison.OrdinalIgnoreCase))
+                    if (
+                        string.Equals(
+                            actionId,
+                            ActionArrangeView,
+                            StringComparison.OrdinalIgnoreCase
+                        )
+                    )
                         hasArrangeViewSetting = true;
 
                     if (string.Equals(actionId, ActionSlot07, StringComparison.OrdinalIgnoreCase))
@@ -177,9 +193,11 @@ namespace TTSK_AutoDim_Plates
                         _shortcuts[actionId] = NormalizeShortcut(keys);
                 }
 
-                if (!hasBatchCreateSetting &&
-                    NormalizeShortcut(GetShortcut(ActionCreateDrawing)) ==
-                    NormalizeShortcut(Keys.Control | Keys.D))
+                if (
+                    !hasBatchCreateSetting
+                    && NormalizeShortcut(GetShortcut(ActionCreateDrawing))
+                        == NormalizeShortcut(Keys.Control | Keys.D)
+                )
                 {
                     _shortcuts[ActionCreateDrawing] = Keys.D;
                     _shortcuts[ActionBatchCreate] = Keys.Control | Keys.D;
@@ -201,8 +219,10 @@ namespace TTSK_AutoDim_Plates
                     migratedDefaults = true;
                 }
 
-                if (NormalizeShortcut(GetShortcut(ActionFitView)) ==
-                    NormalizeShortcut(Keys.Control | Keys.Shift))
+                if (
+                    NormalizeShortcut(GetShortcut(ActionFitView))
+                    == NormalizeShortcut(Keys.Control | Keys.Shift)
+                )
                 {
                     _shortcuts[ActionFitView] = Keys.W;
                     migratedDefaults = true;
@@ -248,9 +268,7 @@ namespace TTSK_AutoDim_Plates
 
                 File.WriteAllLines(_filePath, lines.ToArray(), Encoding.UTF8);
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         public bool TryFindAction(Keys keyData, out string actionId)
@@ -258,9 +276,7 @@ namespace TTSK_AutoDim_Plates
             actionId = null;
             Keys target = NormalizeShortcut(keyData);
 
-            if (target == Keys.None ||
-                IsBareModifier(target) ||
-                (target & Keys.Alt) == Keys.Alt)
+            if (target == Keys.None || IsBareModifier(target) || (target & Keys.Alt) == Keys.Alt)
                 return false;
 
             foreach (ShortcutActionDefinition def in _definitions)
@@ -291,8 +307,10 @@ namespace TTSK_AutoDim_Plates
             foreach (ShortcutActionDefinition def in _definitions)
             {
                 Keys keys = NormalizeShortcut(GetShortcut(def.ActionId));
-                if (IsAllowedModifierOnlyShortcut(def.ActionId, keys) &&
-                    (keys & Keys.Modifiers) == target)
+                if (
+                    IsAllowedModifierOnlyShortcut(def.ActionId, keys)
+                    && (keys & Keys.Modifiers) == target
+                )
                 {
                     actionId = def.ActionId;
                     return true;
@@ -329,7 +347,14 @@ namespace TTSK_AutoDim_Plates
 
                 if (used.ContainsKey(keys))
                 {
-                    message = "Shortcut " + Format(keys) + " đang bị trùng giữa " + used[keys] + " và " + def.DisplayName + ".";
+                    message =
+                        "Shortcut "
+                        + Format(keys)
+                        + " đang bị trùng giữa "
+                        + used[keys]
+                        + " và "
+                        + def.DisplayName
+                        + ".";
                     return false;
                 }
 
@@ -349,10 +374,10 @@ namespace TTSK_AutoDim_Plates
             Keys normalized = NormalizeShortcut(keyData);
             Keys modifiers = normalized & Keys.Modifiers;
 
-            return AllowsModifierOnly(actionId) &&
-                   (normalized & Keys.KeyCode) == Keys.None &&
-                   modifiers != Keys.None &&
-                   (modifiers & Keys.Alt) != Keys.Alt;
+            return AllowsModifierOnly(actionId)
+                && (normalized & Keys.KeyCode) == Keys.None
+                && modifiers != Keys.None
+                && (modifiers & Keys.Alt) != Keys.Alt;
         }
 
         public ShortcutActionDefinition FindDefinition(string actionId)
@@ -375,25 +400,177 @@ namespace TTSK_AutoDim_Plates
         {
             List<ShortcutActionDefinition> list = new List<ShortcutActionDefinition>();
 
-            list.Add(new ShortcutActionDefinition(ActionCreateDrawing, "Create (Run DIM)", "Run Auto Dimension", "+", Keys.D));
-            list.Add(new ShortcutActionDefinition(ActionBatchCreate, "Batch Create", "Batch load selected + create drawings", "B", Keys.Control | Keys.D));
-            list.Add(new ShortcutActionDefinition(ActionCheckScale, "Check Scale", "Batch load selected + check scale", "S", Keys.Tab));
-            list.Add(new ShortcutActionDefinition(ActionLineDistance, "Line Distance", "Pick 2 points to draw line", "L", Keys.L));
-            list.Add(new ShortcutActionDefinition(ActionRepeatLast, "Repeat Last Command", "Repeat the last repeatable shortcut", "↻", Keys.Space));
-            list.Add(new ShortcutActionDefinition(ActionOpenGrid, "Open Grid", "Open grid view by picked frame", "G", Keys.Q));
-            list.Add(new ShortcutActionDefinition(ActionFitView, "Fit View", "Fit active drawing view", "F", Keys.W));
-            list.Add(new ShortcutActionDefinition(ActionNeighborGrid, "Neighboring Grid", "Open grid + create neighboring grid marks", "E", Keys.E));
-            list.Add(new ShortcutActionDefinition(ActionArrangeView, "Arrange View", "Arrange drawing views", "A", Keys.A));
-            list.Add(new ShortcutActionDefinition(ActionAutoSection, "Auto Section", "Tự động tạo mặt cắt (Section)", "—", Keys.None));
-            list.Add(new ShortcutActionDefinition(ActionSlot01, "Slot01 (Function 1)", "Selected Main Part", "1", Keys.D1));
-            list.Add(new ShortcutActionDefinition(ActionSlot02, "Slot02 (Function 2)", "AutoDim function 2", "2", Keys.D2));
-            list.Add(new ShortcutActionDefinition(ActionSlot03, "Slot03 (Function 3)", "AutoDim function 3", "3", Keys.D3));
-            list.Add(new ShortcutActionDefinition(ActionSlot04, "Slot04 (Function 4)", "Use current Slot04 mode", "4", Keys.D4));
-            list.Add(new ShortcutActionDefinition(ActionSlot05, "Slot05 (Function 5)", "Use current Slot05 mode", "5", Keys.D5));
-            list.Add(new ShortcutActionDefinition(ActionSlot06, "Slot06 (Function 6)", "AutoDim function 6", "6", Keys.D6));
-            list.Add(new ShortcutActionDefinition(ActionSlot07, "Slot07 (Nishi Azabu 2)", "AutoDim Nishi topology 2", "7", Keys.D7));
-            list.Add(new ShortcutActionDefinition(ActionSlot08, "Slot08 (Liên kết giằng xéo)", "Auto dim 3 thanh L + plate liên kết", "8", Keys.D8));
-            list.Add(new ShortcutActionDefinition(ActionSlot09, "Slot09 (Function 9)", "AutoDim function 9", "9", Keys.D9));
+            list.Add(
+                new ShortcutActionDefinition(
+                    ActionCreateDrawing,
+                    "Create (Run DIM)",
+                    "Run Auto Dimension",
+                    "+",
+                    Keys.D
+                )
+            );
+            list.Add(
+                new ShortcutActionDefinition(
+                    ActionBatchCreate,
+                    "Batch Create",
+                    "Batch load selected + create drawings",
+                    "B",
+                    Keys.Control | Keys.D
+                )
+            );
+            list.Add(
+                new ShortcutActionDefinition(
+                    ActionCheckScale,
+                    "Check Scale",
+                    "Batch load selected + check scale",
+                    "S",
+                    Keys.Tab
+                )
+            );
+            list.Add(
+                new ShortcutActionDefinition(
+                    ActionLineDistance,
+                    "Line Distance",
+                    "Pick 2 points to draw line",
+                    "L",
+                    Keys.L
+                )
+            );
+            list.Add(
+                new ShortcutActionDefinition(
+                    ActionRepeatLast,
+                    "Repeat Last Command",
+                    "Repeat the last repeatable shortcut",
+                    "↻",
+                    Keys.Space
+                )
+            );
+            list.Add(
+                new ShortcutActionDefinition(
+                    ActionOpenGrid,
+                    "Open Grid",
+                    "Open grid view by picked frame",
+                    "G",
+                    Keys.Q
+                )
+            );
+            list.Add(
+                new ShortcutActionDefinition(
+                    ActionFitView,
+                    "Fit View",
+                    "Fit active drawing view",
+                    "F",
+                    Keys.W
+                )
+            );
+            list.Add(
+                new ShortcutActionDefinition(
+                    ActionNeighborGrid,
+                    "Neighboring Grid",
+                    "Open grid + create neighboring grid marks",
+                    "E",
+                    Keys.E
+                )
+            );
+            list.Add(
+                new ShortcutActionDefinition(
+                    ActionArrangeView,
+                    "Arrange View",
+                    "Arrange drawing views",
+                    "A",
+                    Keys.A
+                )
+            );
+            list.Add(
+                new ShortcutActionDefinition(
+                    ActionAutoSection,
+                    "Auto Section",
+                    "Tự động tạo mặt cắt (Section)",
+                    "—",
+                    Keys.None
+                )
+            );
+            list.Add(
+                new ShortcutActionDefinition(
+                    ActionSlot01,
+                    "Slot01 (Function 1)",
+                    "Selected Main Part",
+                    "1",
+                    Keys.D1
+                )
+            );
+            list.Add(
+                new ShortcutActionDefinition(
+                    ActionSlot02,
+                    "Slot02 (Function 2)",
+                    "AutoDim function 2",
+                    "2",
+                    Keys.D2
+                )
+            );
+            list.Add(
+                new ShortcutActionDefinition(
+                    ActionSlot03,
+                    "Slot03 (Function 3)",
+                    "AutoDim function 3",
+                    "3",
+                    Keys.D3
+                )
+            );
+            list.Add(
+                new ShortcutActionDefinition(
+                    ActionSlot04,
+                    "Slot04 (Function 4)",
+                    "Use current Slot04 mode",
+                    "4",
+                    Keys.D4
+                )
+            );
+            list.Add(
+                new ShortcutActionDefinition(
+                    ActionSlot05,
+                    "Slot05 (Function 5)",
+                    "Use current Slot05 mode",
+                    "5",
+                    Keys.D5
+                )
+            );
+            list.Add(
+                new ShortcutActionDefinition(
+                    ActionSlot06,
+                    "Slot06 (Function 6)",
+                    "AutoDim function 6",
+                    "6",
+                    Keys.D6
+                )
+            );
+            list.Add(
+                new ShortcutActionDefinition(
+                    ActionSlot07,
+                    "Slot07 (Nishi Azabu 2)",
+                    "AutoDim Nishi topology 2",
+                    "7",
+                    Keys.D7
+                )
+            );
+            list.Add(
+                new ShortcutActionDefinition(
+                    ActionSlot08,
+                    "Slot08 (Liên kết giằng xéo)",
+                    "Auto dim 3 thanh L + plate liên kết",
+                    "8",
+                    Keys.D8
+                )
+            );
+            list.Add(
+                new ShortcutActionDefinition(
+                    ActionSlot09,
+                    "Slot09 (Function 9)",
+                    "AutoDim function 9",
+                    "9",
+                    Keys.D9
+                )
+            );
 
             return list;
         }
@@ -413,23 +590,23 @@ namespace TTSK_AutoDim_Plates
         {
             Keys keyCode = keyData & Keys.KeyCode;
 
-            return keyCode == Keys.None ||
-                   keyCode == Keys.ControlKey ||
-                   keyCode == Keys.ShiftKey ||
-                   keyCode == Keys.Menu ||
-                   keyCode == Keys.LControlKey ||
-                   keyCode == Keys.RControlKey ||
-                   keyCode == Keys.LShiftKey ||
-                   keyCode == Keys.RShiftKey ||
-                   keyCode == Keys.LMenu ||
-                   keyCode == Keys.RMenu;
+            return keyCode == Keys.None
+                || keyCode == Keys.ControlKey
+                || keyCode == Keys.ShiftKey
+                || keyCode == Keys.Menu
+                || keyCode == Keys.LControlKey
+                || keyCode == Keys.RControlKey
+                || keyCode == Keys.LShiftKey
+                || keyCode == Keys.RShiftKey
+                || keyCode == Keys.LMenu
+                || keyCode == Keys.RMenu;
         }
 
         public static bool HasControlAltShift(Keys keyData)
         {
-            return (keyData & Keys.Control) == Keys.Control ||
-                   (keyData & Keys.Alt) == Keys.Alt ||
-                   (keyData & Keys.Shift) == Keys.Shift;
+            return (keyData & Keys.Control) == Keys.Control
+                || (keyData & Keys.Alt) == Keys.Alt
+                || (keyData & Keys.Shift) == Keys.Shift;
         }
 
         public static string Format(Keys keyData)
@@ -484,8 +661,10 @@ namespace TTSK_AutoDim_Plates
                 if (part.Length == 0)
                     continue;
 
-                if (string.Equals(part, "Ctrl", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(part, "Control", StringComparison.OrdinalIgnoreCase))
+                if (
+                    string.Equals(part, "Ctrl", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(part, "Control", StringComparison.OrdinalIgnoreCase)
+                )
                 {
                     result |= Keys.Control;
                     continue;
@@ -556,8 +735,10 @@ namespace TTSK_AutoDim_Plates
                 return true;
             }
 
-            if (string.Equals(value, "Esc", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(value, "Escape", StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(value, "Esc", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(value, "Escape", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 keyCode = Keys.Escape;
                 return true;
@@ -576,9 +757,7 @@ namespace TTSK_AutoDim_Plates
                 keyCode = parsed & Keys.KeyCode;
                 return keyCode != Keys.None;
             }
-            catch
-            {
-            }
+            catch { }
 
             return false;
         }
@@ -623,7 +802,8 @@ namespace TTSK_AutoDim_Plates
             string displayName,
             string description,
             string iconText,
-            Keys defaultShortcut)
+            Keys defaultShortcut
+        )
         {
             ActionId = actionId;
             DisplayName = displayName;

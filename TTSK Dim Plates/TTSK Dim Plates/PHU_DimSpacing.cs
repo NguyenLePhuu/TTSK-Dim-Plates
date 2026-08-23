@@ -44,7 +44,8 @@ namespace TTSK_AutoDim_Plates
             public double MaxY;
         }
 
-        private static Dictionary<int, ViewAnchorInfo> ViewAnchorMap = new Dictionary<int, ViewAnchorInfo>();
+        private static Dictionary<int, ViewAnchorInfo> ViewAnchorMap =
+            new Dictionary<int, ViewAnchorInfo>();
 
         public class Result
         {
@@ -58,15 +59,27 @@ namespace TTSK_AutoDim_Plates
 
             public string ToDisplayText(bool apply)
             {
-                return
-                    "APPLY\r\n" +
-                    "Scope: " + Scope + "\r\n" +
-                    "Spacing: " + Spacing.ToString("0.###") + " mm\r\n\r\n" +
-                    "Found dim sets: " + FoundCount + "\r\n" +
-                    "Groups: " + GroupCount + "\r\n" +
-                    "Changed: " + ChangedCount + "\r\n" +
-                    "Skipped: " + SkippedCount + "\r\n" +
-                    "Failed: " + FailedCount;
+                return "APPLY\r\n"
+                    + "Scope: "
+                    + Scope
+                    + "\r\n"
+                    + "Spacing: "
+                    + Spacing.ToString("0.###")
+                    + " mm\r\n\r\n"
+                    + "Found dim sets: "
+                    + FoundCount
+                    + "\r\n"
+                    + "Groups: "
+                    + GroupCount
+                    + "\r\n"
+                    + "Changed: "
+                    + ChangedCount
+                    + "\r\n"
+                    + "Skipped: "
+                    + SkippedCount
+                    + "\r\n"
+                    + "Failed: "
+                    + FailedCount;
             }
         }
 
@@ -138,7 +151,8 @@ namespace TTSK_AutoDim_Plates
             // Internal dim vẫn chạy spacing, nhưng dùng chính chân DIM của nó làm gốc và không ảnh hưởng tier ngoài.
             MarkInternalDimItems(items, spacing);
 
-            Dictionary<string, List<DimSetItem>> groups = new Dictionary<string, List<DimSetItem>>();
+            Dictionary<string, List<DimSetItem>> groups =
+                new Dictionary<string, List<DimSetItem>>();
             foreach (DimSetItem item in items)
             {
                 if (item == null || item.DimSet == null)
@@ -180,7 +194,11 @@ namespace TTSK_AutoDim_Plates
                 ArrangeExistingSetGroup(list, spacing, result, drawing);
             }
 
-            try { drawing.CommitChanges(); } catch { }
+            try
+            {
+                drawing.CommitChanges();
+            }
+            catch { }
             return result;
         }
 
@@ -188,7 +206,8 @@ namespace TTSK_AutoDim_Plates
             List<DimSetItem> list,
             double spacing,
             Result result,
-            Drawing drawing)
+            Drawing drawing
+        )
         {
             if (list == null || list.Count <= 0)
                 return;
@@ -258,7 +277,8 @@ namespace TTSK_AutoDim_Plates
                     list[i],
                     groupAxis,
                     targetBaseVisualLevel + spacing * i,
-                    out newDistance);
+                    out newDistance
+                );
 
                 if (!solved || !IsFinite(newDistance))
                 {
@@ -267,30 +287,35 @@ namespace TTSK_AutoDim_Plates
                     return;
                 }
 
-                if (Math.Abs(list[i].OriginalDistance) > 0.0001 &&
-                    Math.Abs(newDistance) > 0.0001 &&
-                    Math.Sign(list[i].OriginalDistance) != Math.Sign(newDistance))
+                if (
+                    Math.Abs(list[i].OriginalDistance) > 0.0001
+                    && Math.Abs(newDistance) > 0.0001
+                    && Math.Sign(list[i].OriginalDistance) != Math.Sign(newDistance)
+                )
                 {
                     if (result != null)
                         result.SkippedCount += list.Count;
                     return;
                 }
 
-                changes.Add(new DimDistanceChange
-                {
-                    Item = list[i],
-                    OriginalDistance = list[i].OriginalDistance,
-                    NewDistance = newDistance,
-                    OriginalTierIndex = list[i].OriginalTierIndex,
-                    OriginalStableId = list[i].StableId
-                });
+                changes.Add(
+                    new DimDistanceChange
+                    {
+                        Item = list[i],
+                        OriginalDistance = list[i].OriginalDistance,
+                        NewDistance = newDistance,
+                        OriginalTierIndex = list[i].OriginalTierIndex,
+                        OriginalStableId = list[i].StableId
+                    }
+                );
             }
 
-            if (changes.Count != list.Count ||
-                !TryApplyGroupAtomically(changes, groupAxis, spacing, result, drawing))
+            if (
+                changes.Count != list.Count
+                || !TryApplyGroupAtomically(changes, groupAxis, spacing, result, drawing)
+            )
                 return;
         }
-
 
         private static void MarkInternalDimItems(List<DimSetItem> items, double spacing)
         {
@@ -307,13 +332,14 @@ namespace TTSK_AutoDim_Plates
                     if (IsInternalDimItem(item, spacing))
                     {
                         item.IsInternal = true;
-                        item.GroupKey = GetViewKey(item.View) + "_INTERNAL_" + RuntimeHelpersHash(item.DimSet).ToString();
+                        item.GroupKey =
+                            GetViewKey(item.View)
+                            + "_INTERNAL_"
+                            + RuntimeHelpersHash(item.DimSet).ToString();
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static bool IsInternalOnlyGroup(List<DimSetItem> list)
@@ -338,7 +364,10 @@ namespace TTSK_AutoDim_Plates
                     return false;
 
                 ViewAnchorInfo info;
-                if (ViewAnchorMap == null || !ViewAnchorMap.TryGetValue(RuntimeHelpersHash(item.View), out info))
+                if (
+                    ViewAnchorMap == null
+                    || !ViewAnchorMap.TryGetValue(RuntimeHelpersHash(item.View), out info)
+                )
                     return false;
 
                 if (info == null || !info.IsValid)
@@ -353,10 +382,9 @@ namespace TTSK_AutoDim_Plates
                 // line inside the content bounds may be classified as INTERNAL.
                 double dimensionLineX;
                 double dimensionLineY;
-                if (!TryGetDimensionLineReferencePoint(
-                        item,
-                        out dimensionLineX,
-                        out dimensionLineY))
+                if (
+                    !TryGetDimensionLineReferencePoint(item, out dimensionLineX, out dimensionLineY)
+                )
                     return false;
 
                 // Ngưỡng mới theo yêu cầu:
@@ -375,8 +403,10 @@ namespace TTSK_AutoDim_Plates
                 // và KHÔNG nằm gần mép trên/dưới theo nearEdgeLimit.
                 if (item.KindKey == "H")
                 {
-                    if (dimensionLineY <= info.MinY + INTERNAL_DIM_EDGE_TOL ||
-                        dimensionLineY >= info.MaxY - INTERNAL_DIM_EDGE_TOL)
+                    if (
+                        dimensionLineY <= info.MinY + INTERNAL_DIM_EDGE_TOL
+                        || dimensionLineY >= info.MaxY - INTERNAL_DIM_EDGE_TOL
+                    )
                         return false;
 
                     foreach (Point p in pts)
@@ -384,7 +414,10 @@ namespace TTSK_AutoDim_Plates
                         if (p == null)
                             return false;
 
-                        if (p.Y <= info.MinY + INTERNAL_DIM_EDGE_TOL || p.Y >= info.MaxY - INTERNAL_DIM_EDGE_TOL)
+                        if (
+                            p.Y <= info.MinY + INTERNAL_DIM_EDGE_TOL
+                            || p.Y >= info.MaxY - INTERNAL_DIM_EDGE_TOL
+                        )
                             return false;
 
                         if (p.Y <= info.MinY + nearEdgeLimit || p.Y >= info.MaxY - nearEdgeLimit)
@@ -398,8 +431,10 @@ namespace TTSK_AutoDim_Plates
                 // và KHÔNG nằm gần mép trái/phải theo nearEdgeLimit.
                 if (item.KindKey == "V")
                 {
-                    if (dimensionLineX <= info.MinX + INTERNAL_DIM_EDGE_TOL ||
-                        dimensionLineX >= info.MaxX - INTERNAL_DIM_EDGE_TOL)
+                    if (
+                        dimensionLineX <= info.MinX + INTERNAL_DIM_EDGE_TOL
+                        || dimensionLineX >= info.MaxX - INTERNAL_DIM_EDGE_TOL
+                    )
                         return false;
 
                     foreach (Point p in pts)
@@ -407,7 +442,10 @@ namespace TTSK_AutoDim_Plates
                         if (p == null)
                             return false;
 
-                        if (p.X <= info.MinX + INTERNAL_DIM_EDGE_TOL || p.X >= info.MaxX - INTERNAL_DIM_EDGE_TOL)
+                        if (
+                            p.X <= info.MinX + INTERNAL_DIM_EDGE_TOL
+                            || p.X >= info.MaxX - INTERNAL_DIM_EDGE_TOL
+                        )
                             return false;
 
                         if (p.X <= info.MinX + nearEdgeLimit || p.X >= info.MaxX - nearEdgeLimit)
@@ -417,9 +455,7 @@ namespace TTSK_AutoDim_Plates
                     return true;
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return false;
         }
@@ -427,7 +463,8 @@ namespace TTSK_AutoDim_Plates
         private static bool TryGetDimensionLineReferencePoint(
             DimSetItem item,
             out double dimensionLineX,
-            out double dimensionLineY)
+            out double dimensionLineY
+        )
         {
             dimensionLineX = Double.NaN;
             dimensionLineY = Double.NaN;
@@ -464,7 +501,8 @@ namespace TTSK_AutoDim_Plates
             {
                 if (item == null || item.DimSet == null)
                 {
-                    if (result != null) result.SkippedCount++;
+                    if (result != null)
+                        result.SkippedCount++;
                     return;
                 }
 
@@ -474,24 +512,31 @@ namespace TTSK_AutoDim_Plates
             }
             catch
             {
-                if (result != null) result.FailedCount++;
+                if (result != null)
+                    result.FailedCount++;
             }
         }
 
-        private static void ArrangeSingleExternalDimItemByAnchor(DimSetItem item, double spacing, Result result)
+        private static void ArrangeSingleExternalDimItemByAnchor(
+            DimSetItem item,
+            double spacing,
+            Result result
+        )
         {
             try
             {
                 if (item == null || item.DimSet == null)
                 {
-                    if (result != null) result.SkippedCount++;
+                    if (result != null)
+                        result.SkippedCount++;
                     return;
                 }
 
                 SimpleVector axis = item.VisualOffset;
                 if (axis.Length < 0.0001)
                 {
-                    if (result != null) result.SkippedCount++;
+                    if (result != null)
+                        result.SkippedCount++;
                     return;
                 }
                 axis.Normalize();
@@ -500,26 +545,38 @@ namespace TTSK_AutoDim_Plates
                 one.Add(item);
 
                 double targetLevel;
-                if (!USE_ANCHOR_ABCD_AS_TIER_BASE ||
-                    !TryGetAnchorFirstTierVisualLevel(one, axis, spacing, out targetLevel) ||
-                    Double.IsNaN(targetLevel))
+                if (
+                    !USE_ANCHOR_ABCD_AS_TIER_BASE
+                    || !TryGetAnchorFirstTierVisualLevel(one, axis, spacing, out targetLevel)
+                    || Double.IsNaN(targetLevel)
+                )
                 {
-                    if (result != null) result.SkippedCount++;
+                    if (result != null)
+                        result.SkippedCount++;
                     return;
                 }
 
                 double solvedDistance;
-                if (TrySolveDistanceForTargetVisualLevel(item, axis, targetLevel, out solvedDistance))
+                if (
+                    TrySolveDistanceForTargetVisualLevel(
+                        item,
+                        axis,
+                        targetLevel,
+                        out solvedDistance
+                    )
+                )
                 {
                     TryApplyDistance(item, solvedDistance, result);
                     return;
                 }
 
-                if (result != null) result.SkippedCount++;
+                if (result != null)
+                    result.SkippedCount++;
             }
             catch
             {
-                if (result != null) result.FailedCount++;
+                if (result != null)
+                    result.FailedCount++;
             }
         }
 
@@ -558,10 +615,14 @@ namespace TTSK_AutoDim_Plates
                         if (p == null)
                             continue;
 
-                        if (p.X < info.MinX) info.MinX = p.X;
-                        if (p.X > info.MaxX) info.MaxX = p.X;
-                        if (p.Y < info.MinY) info.MinY = p.Y;
-                        if (p.Y > info.MaxY) info.MaxY = p.Y;
+                        if (p.X < info.MinX)
+                            info.MinX = p.X;
+                        if (p.X > info.MaxX)
+                            info.MaxX = p.X;
+                        if (p.Y < info.MinY)
+                            info.MinY = p.Y;
+                        if (p.Y > info.MaxY)
+                            info.MaxY = p.Y;
                     }
                 }
 
@@ -572,12 +633,16 @@ namespace TTSK_AutoDim_Plates
                         continue;
 
                     info.IsValid =
-                        info.MaxX > info.MinX + 0.001 &&
-                        info.MaxY > info.MinY + 0.001 &&
-                        !Double.IsNaN(info.MinX) && !Double.IsNaN(info.MaxX) &&
-                        !Double.IsNaN(info.MinY) && !Double.IsNaN(info.MaxY) &&
-                        !Double.IsInfinity(info.MinX) && !Double.IsInfinity(info.MaxX) &&
-                        !Double.IsInfinity(info.MinY) && !Double.IsInfinity(info.MaxY);
+                        info.MaxX > info.MinX + 0.001
+                        && info.MaxY > info.MinY + 0.001
+                        && !Double.IsNaN(info.MinX)
+                        && !Double.IsNaN(info.MaxX)
+                        && !Double.IsNaN(info.MinY)
+                        && !Double.IsNaN(info.MaxY)
+                        && !Double.IsInfinity(info.MinX)
+                        && !Double.IsInfinity(info.MaxX)
+                        && !Double.IsInfinity(info.MinY)
+                        && !Double.IsInfinity(info.MaxY);
                 }
             }
             catch
@@ -590,7 +655,8 @@ namespace TTSK_AutoDim_Plates
             List<DimSetItem> list,
             SimpleVector visualAxis,
             double spacing,
-            out double targetVisualLevel)
+            out double targetVisualLevel
+        )
         {
             targetVisualLevel = Double.NaN;
 
@@ -604,7 +670,10 @@ namespace TTSK_AutoDim_Plates
                     return false;
 
                 ViewAnchorInfo info;
-                if (ViewAnchorMap == null || !ViewAnchorMap.TryGetValue(RuntimeHelpersHash(seed.View), out info))
+                if (
+                    ViewAnchorMap == null
+                    || !ViewAnchorMap.TryGetValue(RuntimeHelpersHash(seed.View), out info)
+                )
                     return false;
 
                 if (info == null || !info.IsValid)
@@ -645,11 +714,13 @@ namespace TTSK_AutoDim_Plates
         private static SimpleVector GetGroupAxisFromFirstValidOffset(List<DimSetItem> list)
         {
             SimpleVector v = new SimpleVector();
-            if (list == null) return v;
+            if (list == null)
+                return v;
 
             foreach (DimSetItem item in list)
             {
-                if (item == null) continue;
+                if (item == null)
+                    continue;
 
                 // Use VISUAL side, not raw UpDirection.
                 // Raw UpDirection + negative Distance can visually place the dim on the opposite side.
@@ -667,7 +738,8 @@ namespace TTSK_AutoDim_Plates
         private static bool TryGetCurrentVisualLineLevel(
             DimSetItem item,
             SimpleVector groupAxis,
-            out double level)
+            out double level
+        )
         {
             level = Double.NaN;
 
@@ -689,9 +761,7 @@ namespace TTSK_AutoDim_Plates
                     return false;
                 itemOffset.Normalize();
 
-                double dot =
-                    itemOffset.X * groupAxis.X +
-                    itemOffset.Y * groupAxis.Y;
+                double dot = itemOffset.X * groupAxis.X + itemOffset.Y * groupAxis.Y;
                 if (!IsFinite(dot) || Math.Abs(dot) < 0.0001)
                     return false;
 
@@ -710,13 +780,19 @@ namespace TTSK_AutoDim_Plates
             DimSetItem item,
             SimpleVector groupAxis,
             double distance,
-            out double level)
+            out double level
+        )
         {
             level = Double.NaN;
 
             try
             {
-                if (item == null || item.DimSet == null || groupAxis.Length < 0.0001 || !IsFinite(distance))
+                if (
+                    item == null
+                    || item.DimSet == null
+                    || groupAxis.Length < 0.0001
+                    || !IsFinite(distance)
+                )
                     return false;
 
                 groupAxis.Normalize();
@@ -732,9 +808,7 @@ namespace TTSK_AutoDim_Plates
                     return false;
                 itemOffset.Normalize();
 
-                double dot =
-                    itemOffset.X * groupAxis.X +
-                    itemOffset.Y * groupAxis.Y;
+                double dot = itemOffset.X * groupAxis.X + itemOffset.Y * groupAxis.Y;
                 if (!IsFinite(dot) || Math.Abs(dot) < 0.0001)
                     return false;
 
@@ -750,7 +824,8 @@ namespace TTSK_AutoDim_Plates
 
         private static bool TryCaptureOriginalTierOrder(
             List<DimSetItem> list,
-            SimpleVector groupAxis)
+            SimpleVector groupAxis
+        )
         {
             if (list == null || list.Count == 0 || groupAxis.Length < 0.0001)
                 return false;
@@ -769,18 +844,23 @@ namespace TTSK_AutoDim_Plates
                 item.OriginalVisualLineLevel = level;
             }
 
-            list.Sort(delegate (DimSetItem a, DimSetItem b)
-            {
-                double delta = a.OriginalVisualLineLevel - b.OriginalVisualLineLevel;
-                if (Math.Abs(delta) > 0.01)
-                    return delta < 0.0 ? -1 : 1;
+            list.Sort(
+                delegate(DimSetItem a, DimSetItem b)
+                {
+                    double delta = a.OriginalVisualLineLevel - b.OriginalVisualLineLevel;
+                    if (Math.Abs(delta) > 0.01)
+                        return delta < 0.0 ? -1 : 1;
 
-                int c = StringComparer.Ordinal.Compare(a.StableId ?? string.Empty, b.StableId ?? string.Empty);
-                if (c != 0)
-                    return c;
+                    int c = StringComparer.Ordinal.Compare(
+                        a.StableId ?? string.Empty,
+                        b.StableId ?? string.Empty
+                    );
+                    if (c != 0)
+                        return c;
 
-                return a.CollectionIndex.CompareTo(b.CollectionIndex);
-            });
+                    return a.CollectionIndex.CompareTo(b.CollectionIndex);
+                }
+            );
 
             for (int i = 0; i < list.Count; i++)
                 list[i].OriginalTierIndex = i;
@@ -814,7 +894,8 @@ namespace TTSK_AutoDim_Plates
             SimpleVector groupAxis,
             double spacing,
             Result result,
-            Drawing drawing)
+            Drawing drawing
+        )
         {
             if (changes == null || changes.Count == 0 || drawing == null)
             {
@@ -827,8 +908,13 @@ namespace TTSK_AutoDim_Plates
             {
                 foreach (DimDistanceChange change in changes)
                 {
-                    if (change == null || change.Item == null || change.Item.DimSet == null ||
-                        !IsFinite(change.OriginalDistance) || !IsFinite(change.NewDistance))
+                    if (
+                        change == null
+                        || change.Item == null
+                        || change.Item.DimSet == null
+                        || !IsFinite(change.OriginalDistance)
+                        || !IsFinite(change.NewDistance)
+                    )
                         throw new Exception("Invalid dimension change.");
                 }
 
@@ -854,14 +940,23 @@ namespace TTSK_AutoDim_Plates
                 foreach (DimDistanceChange change in changes)
                 {
                     double actualDistance;
-                    if (TryGetDistanceValue(change.Item.DimSet, out actualDistance) && IsFinite(actualDistance))
+                    if (
+                        TryGetDistanceValue(change.Item.DimSet, out actualDistance)
+                        && IsFinite(actualDistance)
+                    )
                     {
                         change.Item.Distance = actualDistance;
                         change.Item.AbsDistance = Math.Abs(actualDistance);
                         change.Item.Sign = actualDistance < 0.0 ? -1.0 : 1.0;
 
                         SimpleVector currentVisualOffset;
-                        if (TryGetVisualOffsetForDistance(change.Item, actualDistance, out currentVisualOffset))
+                        if (
+                            TryGetVisualOffsetForDistance(
+                                change.Item,
+                                actualDistance,
+                                out currentVisualOffset
+                            )
+                        )
                             change.Item.VisualOffset = currentVisualOffset;
                     }
                 }
@@ -882,7 +977,8 @@ namespace TTSK_AutoDim_Plates
         private static bool VerifyGroupApply(
             List<DimDistanceChange> changes,
             SimpleVector groupAxis,
-            double spacing)
+            double spacing
+        )
         {
             if (changes == null || changes.Count == 0 || spacing <= 0.0)
                 return false;
@@ -894,24 +990,41 @@ namespace TTSK_AutoDim_Plates
                 if (change == null || change.Item == null || change.Item.DimSet == null)
                     return false;
 
-                if (change.OriginalTierIndex != i ||
-                    !String.Equals(change.Item.StableId, change.OriginalStableId, StringComparison.Ordinal))
+                if (
+                    change.OriginalTierIndex != i
+                    || !String.Equals(
+                        change.Item.StableId,
+                        change.OriginalStableId,
+                        StringComparison.Ordinal
+                    )
+                )
                     return false;
 
                 double currentDistance;
-                if (!TryGetDistanceValue(change.Item.DimSet, out currentDistance) || !IsFinite(currentDistance))
+                if (
+                    !TryGetDistanceValue(change.Item.DimSet, out currentDistance)
+                    || !IsFinite(currentDistance)
+                )
                     return false;
 
                 if (Math.Abs(currentDistance - change.NewDistance) > 0.01)
                     return false;
 
-                if (Math.Abs(change.OriginalDistance) > 0.0001 &&
-                    Math.Abs(currentDistance) > 0.0001 &&
-                    Math.Sign(change.OriginalDistance) != Math.Sign(currentDistance))
+                if (
+                    Math.Abs(change.OriginalDistance) > 0.0001
+                    && Math.Abs(currentDistance) > 0.0001
+                    && Math.Sign(change.OriginalDistance) != Math.Sign(currentDistance)
+                )
                     return false;
 
                 SimpleVector currentVisualOffset;
-                if (!TryGetVisualOffsetForDistance(change.Item, currentDistance, out currentVisualOffset))
+                if (
+                    !TryGetVisualOffsetForDistance(
+                        change.Item,
+                        currentDistance,
+                        out currentVisualOffset
+                    )
+                )
                     return false;
 
                 SimpleVector originalVisualOffset = change.Item.VisualOffset;
@@ -919,13 +1032,20 @@ namespace TTSK_AutoDim_Plates
                     return false;
                 originalVisualOffset.Normalize();
                 double sideDot =
-                    originalVisualOffset.X * currentVisualOffset.X +
-                    originalVisualOffset.Y * currentVisualOffset.Y;
+                    originalVisualOffset.X * currentVisualOffset.X
+                    + originalVisualOffset.Y * currentVisualOffset.Y;
                 if (!IsFinite(sideDot) || sideDot < 0.999)
                     return false;
 
                 double currentLevel;
-                if (!TryGetVisualLineLevelForDistance(change.Item, groupAxis, currentDistance, out currentLevel))
+                if (
+                    !TryGetVisualLineLevelForDistance(
+                        change.Item,
+                        groupAxis,
+                        currentDistance,
+                        out currentLevel
+                    )
+                )
                     return false;
 
                 if (!Double.IsNaN(previousLevel))
@@ -967,7 +1087,11 @@ namespace TTSK_AutoDim_Plates
                     if (change == null || change.Item == null || change.Item.DimSet == null)
                         continue;
 
-                    try { TryInvokeNoArgSuccessful(change.Item.DimSet, "Modify"); } catch { }
+                    try
+                    {
+                        TryInvokeNoArgSuccessful(change.Item.DimSet, "Modify");
+                    }
+                    catch { }
                 }
 
                 TryCommitDrawing(drawing);
@@ -987,7 +1111,8 @@ namespace TTSK_AutoDim_Plates
         private static bool TryGetVisualOffsetForDistance(
             DimSetItem item,
             double distance,
-            out SimpleVector visualOffset)
+            out SimpleVector visualOffset
+        )
         {
             visualOffset = new SimpleVector();
             if (item == null || item.Offset.Length < 0.0001 || !IsFinite(distance))
@@ -1009,9 +1134,11 @@ namespace TTSK_AutoDim_Plates
 
             try
             {
-                MethodInfo method = obj.GetType().GetMethod(
-                    methodName,
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                MethodInfo method = obj.GetType()
+                    .GetMethod(
+                        methodName,
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    );
                 if (method == null || method.GetParameters().Length != 0)
                     return false;
 
@@ -1038,8 +1165,10 @@ namespace TTSK_AutoDim_Plates
             }
         }
 
-
-        private static bool CanUseUnifiedGeometrySpacing(List<DimSetItem> list, SimpleVector groupAxis)
+        private static bool CanUseUnifiedGeometrySpacing(
+            List<DimSetItem> list,
+            SimpleVector groupAxis
+        )
         {
             if (list == null || list.Count <= 1 || groupAxis.Length < 0.0001)
                 return false;
@@ -1059,7 +1188,8 @@ namespace TTSK_AutoDim_Plates
             DimSetItem item,
             SimpleVector visualAxis,
             double targetVisualLevel,
-            out double distance)
+            out double distance
+        )
         {
             distance = 0.0;
 
@@ -1130,8 +1260,11 @@ namespace TTSK_AutoDim_Plates
             return okCount >= 2;
         }
 
-
-        private static double GetVisualLineLevelForDistance(DimSetItem item, SimpleVector outUnit, double distance)
+        private static double GetVisualLineLevelForDistance(
+            DimSetItem item,
+            SimpleVector outUnit,
+            double distance
+        )
         {
             if (item == null || item.DimSet == null || outUnit.Length < 0.0001)
                 return Double.NaN;
@@ -1173,8 +1306,10 @@ namespace TTSK_AutoDim_Plates
             return anchor + item.Distance * dotOffsetToOut;
         }
 
-
-        private static double GetDimensionLineAnchorProjection(DimSetItem item, SimpleVector outUnit)
+        private static double GetDimensionLineAnchorProjection(
+            DimSetItem item,
+            SimpleVector outUnit
+        )
         {
             if (item == null || item.DimSet == null || outUnit.Length < 0.0001)
                 return Double.NaN;
@@ -1188,9 +1323,7 @@ namespace TTSK_AutoDim_Plates
             // Tekla defines StraightDimensionSet.Distance from DimensionPoints[0].
             // This indexed point is the set's actual distance reference, whereas the
             // outer-most point may be a protruding foot and must not determine tier order.
-            double anchor =
-                firstDimensionPoint.X * outUnit.X +
-                firstDimensionPoint.Y * outUnit.Y;
+            double anchor = firstDimensionPoint.X * outUnit.X + firstDimensionPoint.Y * outUnit.Y;
             return IsFinite(anchor) ? anchor : Double.NaN;
         }
 
@@ -1211,8 +1344,11 @@ namespace TTSK_AutoDim_Plates
             try
             {
                 Type type = raw.GetType();
-                foreach (PropertyInfo property in type.GetProperties(
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+                foreach (
+                    PropertyInfo property in type.GetProperties(
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    )
+                )
                 {
                     ParameterInfo[] parameters = property.GetIndexParameters();
                     if (parameters.Length != 1)
@@ -1296,14 +1432,26 @@ namespace TTSK_AutoDim_Plates
             // Fallback: Count + indexer / Item property.
             int count = 0;
             object countObj = GetPropertyOrFieldValue(raw, "Count");
-            try { if (countObj != null) count = Convert.ToInt32(countObj); } catch { count = 0; }
+            try
+            {
+                if (countObj != null)
+                    count = Convert.ToInt32(countObj);
+            }
+            catch
+            {
+                count = 0;
+            }
 
             if (count <= 0)
                 return null;
 
             Type t = raw.GetType();
             PropertyInfo indexer = null;
-            foreach (PropertyInfo prop in t.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+            foreach (
+                PropertyInfo prop in t.GetProperties(
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                )
+            )
             {
                 if (prop.GetIndexParameters().Length == 1)
                 {
@@ -1363,68 +1511,92 @@ namespace TTSK_AutoDim_Plates
 
             if (kindKey == "H")
             {
-                sorted.Sort(delegate (Point a, Point b)
-                {
-                    int c = a.X.CompareTo(b.X);
-                    if (c != 0) return c;
-                    return a.Y.CompareTo(b.Y);
-                });
+                sorted.Sort(
+                    delegate(Point a, Point b)
+                    {
+                        int c = a.X.CompareTo(b.X);
+                        if (c != 0)
+                            return c;
+                        return a.Y.CompareTo(b.Y);
+                    }
+                );
                 return sorted;
             }
 
             if (kindKey == "V")
             {
-                sorted.Sort(delegate (Point a, Point b)
-                {
-                    int c = a.Y.CompareTo(b.Y);
-                    if (c != 0) return c;
-                    return a.X.CompareTo(b.X);
-                });
+                sorted.Sort(
+                    delegate(Point a, Point b)
+                    {
+                        int c = a.Y.CompareTo(b.Y);
+                        if (c != 0)
+                            return c;
+                        return a.X.CompareTo(b.X);
+                    }
+                );
                 return sorted;
             }
 
             // Sloped: sort along the longest axis. This keeps point order stable without moving anchors.
-            double minX = sorted[0].X, maxX = sorted[0].X;
-            double minY = sorted[0].Y, maxY = sorted[0].Y;
+            double minX = sorted[0].X,
+                maxX = sorted[0].X;
+            double minY = sorted[0].Y,
+                maxY = sorted[0].Y;
             foreach (Point p in sorted)
             {
-                if (p.X < minX) minX = p.X;
-                if (p.X > maxX) maxX = p.X;
-                if (p.Y < minY) minY = p.Y;
-                if (p.Y > maxY) maxY = p.Y;
+                if (p.X < minX)
+                    minX = p.X;
+                if (p.X > maxX)
+                    maxX = p.X;
+                if (p.Y < minY)
+                    minY = p.Y;
+                if (p.Y > maxY)
+                    maxY = p.Y;
             }
 
             if ((maxX - minX) >= (maxY - minY))
             {
-                sorted.Sort(delegate (Point a, Point b)
-                {
-                    int c = a.X.CompareTo(b.X);
-                    if (c != 0) return c;
-                    return a.Y.CompareTo(b.Y);
-                });
+                sorted.Sort(
+                    delegate(Point a, Point b)
+                    {
+                        int c = a.X.CompareTo(b.X);
+                        if (c != 0)
+                            return c;
+                        return a.Y.CompareTo(b.Y);
+                    }
+                );
             }
             else
             {
-                sorted.Sort(delegate (Point a, Point b)
-                {
-                    int c = a.Y.CompareTo(b.Y);
-                    if (c != 0) return c;
-                    return a.X.CompareTo(b.X);
-                });
+                sorted.Sort(
+                    delegate(Point a, Point b)
+                    {
+                        int c = a.Y.CompareTo(b.Y);
+                        if (c != 0)
+                            return c;
+                        return a.X.CompareTo(b.X);
+                    }
+                );
             }
 
             return sorted;
         }
 
-        private static List<DimSetItem> CollectStraightDimensionSets(ContainerView sheet, string scope)
+        private static List<DimSetItem> CollectStraightDimensionSets(
+            ContainerView sheet,
+            string scope
+        )
         {
             List<DimSetItem> items = new List<DimSetItem>();
 
-            Type straightSetType = Type.GetType("Tekla.Structures.Drawing.StraightDimensionSet, Tekla.Structures.Drawing");
+            Type straightSetType = Type.GetType(
+                "Tekla.Structures.Drawing.StraightDimensionSet, Tekla.Structures.Drawing"
+            );
             if (straightSetType == null)
                 return items;
 
-            List<Tekla.Structures.Drawing.View> allViews = new List<Tekla.Structures.Drawing.View>();
+            List<Tekla.Structures.Drawing.View> allViews =
+                new List<Tekla.Structures.Drawing.View>();
             DrawingObjectEnumerator views = sheet.GetAllViews();
             while (views.MoveNext())
             {
@@ -1433,12 +1605,18 @@ namespace TTSK_AutoDim_Plates
                     allViews.Add(view);
             }
 
-            Tekla.Structures.Drawing.View frontView = FindViewByViewTypeForDimSpacing(allViews, "FrontView", "Front");
+            Tekla.Structures.Drawing.View frontView = FindViewByViewTypeForDimSpacing(
+                allViews,
+                "FrontView",
+                "Front"
+            );
 
             foreach (Tekla.Structures.Drawing.View view in allViews)
             {
-                if (view == null) continue;
-                if (!ScopeAcceptsView(view, scope, frontView)) continue;
+                if (view == null)
+                    continue;
+                if (!ScopeAcceptsView(view, scope, frontView))
+                    continue;
 
                 try
                 {
@@ -1448,7 +1626,8 @@ namespace TTSK_AutoDim_Plates
                     {
                         object dimSet = e.Current;
                         int currentCollectionIndex = collectionIndex++;
-                        if (dimSet == null) continue;
+                        if (dimSet == null)
+                            continue;
 
                         DimSetItem item = BuildDimSetItem(dimSet, view, currentCollectionIndex);
                         if (item != null)
@@ -1464,7 +1643,8 @@ namespace TTSK_AutoDim_Plates
         private static DimSetItem BuildDimSetItem(
             object dimSet,
             Tekla.Structures.Drawing.View view,
-            int collectionIndex)
+            int collectionIndex
+        )
         {
             double distance;
             if (!TryGetDistanceValue(dimSet, out distance))
@@ -1486,7 +1666,9 @@ namespace TTSK_AutoDim_Plates
             visualOffset.Y *= sign;
             visualOffset.Normalize();
 
-            double offsetAngle = Normalize360(Math.Atan2(visualOffset.Y, visualOffset.X) * 180.0 / Math.PI);
+            double offsetAngle = Normalize360(
+                Math.Atan2(visualOffset.Y, visualOffset.X) * 180.0 / Math.PI
+            );
             double roundedOffset = RoundAngle(offsetAngle, 5.0, 360.0);
 
             string kindKey = GetKindKey(visualOffset);
@@ -1503,7 +1685,7 @@ namespace TTSK_AutoDim_Plates
             item.StableId = GetStableDimSetId(dimSet, view, collectionIndex);
             item.AbsDistance = Math.Abs(distance);
             item.Sign = sign;
-            item.Offset = offset;             // raw Tekla direction, used only when setting Distance
+            item.Offset = offset; // raw Tekla direction, used only when setting Distance
             item.VisualOffset = visualOffset; // actual drawing side, used for grouping/sorting
             item.OffsetAngle = roundedOffset;
             item.LineAngle = 0.0;
@@ -1511,11 +1693,14 @@ namespace TTSK_AutoDim_Plates
             item.KindKey = kindKey;
 
             if (kindKey == "V")
-                item.GroupKey = viewKey + "_VERT_OFF_" + roundedOffset.ToString("0") + "_SIDE_" + sideKey;
+                item.GroupKey =
+                    viewKey + "_VERT_OFF_" + roundedOffset.ToString("0") + "_SIDE_" + sideKey;
             else if (kindKey == "H")
-                item.GroupKey = viewKey + "_HORIZ_OFF_" + roundedOffset.ToString("0") + "_SIDE_" + sideKey;
+                item.GroupKey =
+                    viewKey + "_HORIZ_OFF_" + roundedOffset.ToString("0") + "_SIDE_" + sideKey;
             else
-                item.GroupKey = viewKey + "_SLOPE_OFF_" + roundedOffset.ToString("0") + "_SIDE_" + sideKey;
+                item.GroupKey =
+                    viewKey + "_SLOPE_OFF_" + roundedOffset.ToString("0") + "_SIDE_" + sideKey;
 
             return item;
         }
@@ -1525,8 +1710,10 @@ namespace TTSK_AutoDim_Plates
             double ax = Math.Abs(offset.X);
             double ay = Math.Abs(offset.Y);
 
-            if (ay >= ax * 2.0) return "H";
-            if (ax >= ay * 2.0) return "V";
+            if (ay >= ax * 2.0)
+                return "H";
+            if (ax >= ay * 2.0)
+                return "V";
             return "S";
         }
 
@@ -1539,22 +1726,29 @@ namespace TTSK_AutoDim_Plates
                 return offset.X >= 0.0 ? "RIGHT" : "LEFT";
 
             double angle = Normalize360(Math.Atan2(offset.Y, offset.X) * 180.0 / Math.PI);
-            if (angle >= 45.0 && angle < 135.0) return "SLOPE_TOP";
-            if (angle >= 135.0 && angle < 225.0) return "SLOPE_LEFT";
-            if (angle >= 225.0 && angle < 315.0) return "SLOPE_BOTTOM";
+            if (angle >= 45.0 && angle < 135.0)
+                return "SLOPE_TOP";
+            if (angle >= 135.0 && angle < 225.0)
+                return "SLOPE_LEFT";
+            if (angle >= 225.0 && angle < 315.0)
+                return "SLOPE_BOTTOM";
             return "SLOPE_RIGHT";
         }
 
         private static bool ScopeAcceptsView(
             Tekla.Structures.Drawing.View view,
             string scope,
-            Tekla.Structures.Drawing.View frontView)
+            Tekla.Structures.Drawing.View frontView
+        )
         {
-            if (view == null) return false;
+            if (view == null)
+                return false;
 
-            if (string.IsNullOrWhiteSpace(scope) ||
-                scope.IndexOf("Toàn", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                scope.IndexOf("All", StringComparison.OrdinalIgnoreCase) >= 0)
+            if (
+                string.IsNullOrWhiteSpace(scope)
+                || scope.IndexOf("Toàn", StringComparison.OrdinalIgnoreCase) >= 0
+                || scope.IndexOf("All", StringComparison.OrdinalIgnoreCase) >= 0
+            )
                 return true;
 
             string target = scope.Trim().ToLowerInvariant();
@@ -1584,7 +1778,8 @@ namespace TTSK_AutoDim_Plates
         private static Tekla.Structures.Drawing.View FindViewByViewTypeForDimSpacing(
             List<Tekla.Structures.Drawing.View> views,
             string exactViewTypeName,
-            string fallbackText)
+            string fallbackText
+        )
         {
             try
             {
@@ -1597,9 +1792,7 @@ namespace TTSK_AutoDim_Plates
                         return view;
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return null;
         }
@@ -1607,7 +1800,8 @@ namespace TTSK_AutoDim_Plates
         private static bool ViewTypeMatchesForDimSpacing(
             Tekla.Structures.Drawing.View view,
             string exactViewTypeName,
-            string fallbackText)
+            string fallbackText
+        )
         {
             try
             {
@@ -1615,26 +1809,36 @@ namespace TTSK_AutoDim_Plates
                     return false;
 
                 string text = "";
-                try { text = view.ViewType.ToString(); } catch { text = ""; }
+                try
+                {
+                    text = view.ViewType.ToString();
+                }
+                catch
+                {
+                    text = "";
+                }
 
-                if (!string.IsNullOrEmpty(exactViewTypeName) &&
-                    string.Equals(text, exactViewTypeName, StringComparison.OrdinalIgnoreCase))
+                if (
+                    !string.IsNullOrEmpty(exactViewTypeName)
+                    && string.Equals(text, exactViewTypeName, StringComparison.OrdinalIgnoreCase)
+                )
                     return true;
 
-                if (!string.IsNullOrEmpty(fallbackText) &&
-                    text.IndexOf(fallbackText, StringComparison.OrdinalIgnoreCase) >= 0)
+                if (
+                    !string.IsNullOrEmpty(fallbackText)
+                    && text.IndexOf(fallbackText, StringComparison.OrdinalIgnoreCase) >= 0
+                )
                     return true;
             }
-            catch
-            {
-            }
+            catch { }
 
             return false;
         }
 
         private static bool IsSpecialTopSectionForDimSpacing(
             Tekla.Structures.Drawing.View view,
-            Tekla.Structures.Drawing.View frontView)
+            Tekla.Structures.Drawing.View frontView
+        )
         {
             try
             {
@@ -1657,7 +1861,8 @@ namespace TTSK_AutoDim_Plates
 
         private static bool IsSpecialBottomSectionForDimSpacing(
             Tekla.Structures.Drawing.View view,
-            Tekla.Structures.Drawing.View frontView)
+            Tekla.Structures.Drawing.View frontView
+        )
         {
             try
             {
@@ -1680,7 +1885,8 @@ namespace TTSK_AutoDim_Plates
 
         private static bool IsSectionWidthCloseToFrontForDimSpacing(
             Tekla.Structures.Drawing.View sectionView,
-            Tekla.Structures.Drawing.View frontView)
+            Tekla.Structures.Drawing.View frontView
+        )
         {
             try
             {
@@ -1699,7 +1905,9 @@ namespace TTSK_AutoDim_Plates
             }
         }
 
-        private static double GetViewRestrictionBoxWidthForDimSpacing(Tekla.Structures.Drawing.View view)
+        private static double GetViewRestrictionBoxWidthForDimSpacing(
+            Tekla.Structures.Drawing.View view
+        )
         {
             try
             {
@@ -1746,7 +1954,8 @@ namespace TTSK_AutoDim_Plates
         private static string GetStableDimSetId(
             object dimSet,
             Tekla.Structures.Drawing.View view,
-            int collectionIndex)
+            int collectionIndex
+        )
         {
             try
             {
@@ -1754,7 +1963,10 @@ namespace TTSK_AutoDim_Plates
                 object id = GetPropertyOrFieldValue(identifier, "ID");
                 if (id != null)
                 {
-                    string idText = Convert.ToString(id, System.Globalization.CultureInfo.InvariantCulture);
+                    string idText = Convert.ToString(
+                        id,
+                        System.Globalization.CultureInfo.InvariantCulture
+                    );
                     if (!string.IsNullOrWhiteSpace(idText))
                         return "ID:" + idText;
                 }
@@ -1762,7 +1974,9 @@ namespace TTSK_AutoDim_Plates
             catch { }
 
             string stableViewKey = GetStableTierViewKey(view);
-            return stableViewKey + "_COL_" + collectionIndex.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            return stableViewKey
+                + "_COL_"
+                + collectionIndex.ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
 
         private static string GetStableTierViewKey(Tekla.Structures.Drawing.View view)
@@ -1790,8 +2004,10 @@ namespace TTSK_AutoDim_Plates
 
         private static double Normalize360(double angle)
         {
-            while (angle < 0.0) angle += 360.0;
-            while (angle >= 360.0) angle -= 360.0;
+            while (angle < 0.0)
+                angle += 360.0;
+            while (angle >= 360.0)
+                angle -= 360.0;
             return angle;
         }
 
@@ -1803,34 +2019,42 @@ namespace TTSK_AutoDim_Plates
         private static double RoundAngle(double angle, double step, double max)
         {
             double a = Math.Round(angle / step) * step;
-            while (a < 0.0) a += max;
-            while (a >= max) a -= max;
+            while (a < 0.0)
+                a += max;
+            while (a >= max)
+                a -= max;
             return a;
         }
 
         private static bool TryGetDistanceValue(object dim, out double distance)
         {
             distance = 0.0;
-            if (TryReadDoublePropertyOrField(dim, "Distance", out distance)) return true;
+            if (TryReadDoublePropertyOrField(dim, "Distance", out distance))
+                return true;
 
             object attr = GetPropertyOrFieldValue(dim, "Attributes");
-            if (TryReadDoublePropertyOrField(attr, "Distance", out distance)) return true;
+            if (TryReadDoublePropertyOrField(attr, "Distance", out distance))
+                return true;
 
             object setAttr = GetPropertyOrFieldValue(dim, "DimensionSetAttributes");
-            if (TryReadDoublePropertyOrField(setAttr, "Distance", out distance)) return true;
+            if (TryReadDoublePropertyOrField(setAttr, "Distance", out distance))
+                return true;
 
             return false;
         }
 
         private static bool SetDistanceValue(object dim, double distance)
         {
-            if (TrySetDoublePropertyOrField(dim, "Distance", distance)) return true;
+            if (TrySetDoublePropertyOrField(dim, "Distance", distance))
+                return true;
 
             object attr = GetPropertyOrFieldValue(dim, "Attributes");
-            if (TrySetDoublePropertyOrField(attr, "Distance", distance)) return true;
+            if (TrySetDoublePropertyOrField(attr, "Distance", distance))
+                return true;
 
             object setAttr = GetPropertyOrFieldValue(dim, "DimensionSetAttributes");
-            if (TrySetDoublePropertyOrField(setAttr, "Distance", distance)) return true;
+            if (TrySetDoublePropertyOrField(setAttr, "Distance", distance))
+                return true;
 
             return false;
         }
@@ -1838,26 +2062,35 @@ namespace TTSK_AutoDim_Plates
         private static bool TryGetOffsetDirection(object dim, out SimpleVector up)
         {
             up = new SimpleVector();
-            string[] names = new string[] { "UpDirection", "OffsetDirection", "Normal", "Direction" };
+            string[] names = new string[]
+            {
+                "UpDirection",
+                "OffsetDirection",
+                "Normal",
+                "Direction"
+            };
 
             foreach (string name in names)
             {
                 object value = GetPropertyOrFieldValue(dim, name);
-                if (TryConvertToVector(value, out up)) return true;
+                if (TryConvertToVector(value, out up))
+                    return true;
             }
 
             object attr = GetPropertyOrFieldValue(dim, "Attributes");
             foreach (string name in names)
             {
                 object value = GetPropertyOrFieldValue(attr, name);
-                if (TryConvertToVector(value, out up)) return true;
+                if (TryConvertToVector(value, out up))
+                    return true;
             }
 
             object setAttr = GetPropertyOrFieldValue(dim, "DimensionSetAttributes");
             foreach (string name in names)
             {
                 object value = GetPropertyOrFieldValue(setAttr, name);
-                if (TryConvertToVector(value, out up)) return true;
+                if (TryConvertToVector(value, out up))
+                    return true;
             }
 
             return false;
@@ -1866,19 +2099,24 @@ namespace TTSK_AutoDim_Plates
         private static bool TryConvertToVector(object value, out SimpleVector v)
         {
             v = new SimpleVector();
-            if (value == null) return false;
+            if (value == null)
+                return false;
 
             try
             {
                 object xObj = GetPropertyOrFieldValue(value, "X");
                 object yObj = GetPropertyOrFieldValue(value, "Y");
-                if (xObj == null || yObj == null) return false;
+                if (xObj == null || yObj == null)
+                    return false;
 
                 v.X = Convert.ToDouble(xObj);
                 v.Y = Convert.ToDouble(yObj);
                 return v.Length > 0.0001;
             }
-            catch { return false; }
+            catch
+            {
+                return false;
+            }
         }
 
         private struct SimpleVector
@@ -1892,12 +2130,16 @@ namespace TTSK_AutoDim_Plates
                 Y = y;
             }
 
-            public double Length { get { return Math.Sqrt(X * X + Y * Y); } }
+            public double Length
+            {
+                get { return Math.Sqrt(X * X + Y * Y); }
+            }
 
             public void Normalize()
             {
                 double len = Length;
-                if (len < 0.0001) return;
+                if (len < 0.0001)
+                    return;
                 X /= len;
                 Y /= len;
             }
@@ -1907,24 +2149,32 @@ namespace TTSK_AutoDim_Plates
         {
             value = 0.0;
             object raw = GetPropertyOrFieldValue(obj, name);
-            if (raw == null) return false;
+            if (raw == null)
+                return false;
 
             try
             {
                 value = Convert.ToDouble(raw);
                 return true;
             }
-            catch { return false; }
+            catch
+            {
+                return false;
+            }
         }
 
         private static bool TrySetDoublePropertyOrField(object obj, string name, double value)
         {
-            if (obj == null) return false;
+            if (obj == null)
+                return false;
             Type type = obj.GetType();
 
             try
             {
-                PropertyInfo prop = type.GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                PropertyInfo prop = type.GetProperty(
+                    name,
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                );
                 if (prop != null && prop.CanWrite && prop.GetIndexParameters().Length == 0)
                 {
                     object converted = Convert.ChangeType(value, prop.PropertyType);
@@ -1936,7 +2186,10 @@ namespace TTSK_AutoDim_Plates
 
             try
             {
-                FieldInfo field = type.GetField(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                FieldInfo field = type.GetField(
+                    name,
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                );
                 if (field != null)
                 {
                     object converted = Convert.ChangeType(value, field.FieldType);
@@ -1951,12 +2204,16 @@ namespace TTSK_AutoDim_Plates
 
         private static object GetPropertyOrFieldValue(object obj, string name)
         {
-            if (obj == null || string.IsNullOrWhiteSpace(name)) return null;
+            if (obj == null || string.IsNullOrWhiteSpace(name))
+                return null;
             Type type = obj.GetType();
 
             try
             {
-                PropertyInfo prop = type.GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                PropertyInfo prop = type.GetProperty(
+                    name,
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                );
                 if (prop != null && prop.CanRead && prop.GetIndexParameters().Length == 0)
                     return prop.GetValue(obj, null);
             }
@@ -1964,8 +2221,12 @@ namespace TTSK_AutoDim_Plates
 
             try
             {
-                FieldInfo field = type.GetField(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                if (field != null) return field.GetValue(obj);
+                FieldInfo field = type.GetField(
+                    name,
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                );
+                if (field != null)
+                    return field.GetValue(obj);
             }
             catch { }
 
@@ -1974,20 +2235,31 @@ namespace TTSK_AutoDim_Plates
 
         private static object InvokeNoArg(object obj, string methodName)
         {
-            if (obj == null || string.IsNullOrWhiteSpace(methodName)) return null;
+            if (obj == null || string.IsNullOrWhiteSpace(methodName))
+                return null;
             try
             {
-                MethodInfo method = obj.GetType().GetMethod(methodName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                if (method == null) return null;
-                if (method.GetParameters().Length != 0) return null;
+                MethodInfo method = obj.GetType()
+                    .GetMethod(
+                        methodName,
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    );
+                if (method == null)
+                    return null;
+                if (method.GetParameters().Length != 0)
+                    return null;
                 return method.Invoke(obj, null);
             }
-            catch { return null; }
+            catch
+            {
+                return null;
+            }
         }
 
         private static int RuntimeHelpersHash(object obj)
         {
-            if (obj == null) return 0;
+            if (obj == null)
+                return 0;
             return System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(obj);
         }
     }

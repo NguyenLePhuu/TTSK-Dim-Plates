@@ -37,8 +37,7 @@ namespace Tekla.Technology.Akit.UserScript
         // Tất cả dim thường dùng khoảng cách cố định 100mm tính từ mép tấm.
         // Không bù trừ theo chân dim.
         private const double NORMAL_NO_CHAMFER_DIM_OFFSET = 100.0;
-        private static double CurrentDimTierUnit =
-            NORMAL_NO_CHAMFER_DIM_OFFSET;
+        private static double CurrentDimTierUnit = NORMAL_NO_CHAMFER_DIM_OFFSET;
 
         private const double TOP_LENGTH_DIM_OFFSET = NORMAL_NO_CHAMFER_DIM_OFFSET;
         private const double TOP_THICKNESS_DIM_OFFSET = NORMAL_NO_CHAMFER_DIM_OFFSET;
@@ -55,13 +54,17 @@ namespace Tekla.Technology.Akit.UserScript
         private const double DIM_TIER_3 = 190.0;
         private const double DIM_TIER_4 = 255.0;
 
-        // KHOẢNG HỞ CHÂN DIM TẠI TÂM LỖ
-        // V21: Không dùng hằng số cố định nữa.
-        // Khoảng hở chân DIM lấy theo phi lỗ / BoltSize thật của từng lỗ.
+        // PLATE HOLE FAMILY - port đúng nguyên tắc đang dùng ổn định trong Shape L:
+        // tách family kỹ thuật trước, sau đó mới gom hàng/cột theo hình học.
+        private const double HOLE_FAMILY_SIZE_TOL = 1.0;
+        private const double HOLE_ROW_COLUMN_TOL = 3.0;
+        private const double HOLE_CLUSTER_SPLIT_GAP = 200.0;
+        private const double HOLE_END_ZONE = 300.0;
 
-        // Nếu khoảng cách giữa 2 nhóm lỗ theo phương ngang > 300
-        // thì dim dọc sẽ tách thành cụm trái và cụm phải.
-        private const double HOLE_GROUP_SPLIT_DISTANCE = 300.0;
+        // Dung sai cục bộ duy nhất cho việc nhận hai đầu thuộc cùng một mép plate.
+        // Không tăng TOL toàn cục vì TOL còn tham gia nhận dạng chamfer/feature.
+        // 0.1 mm chỉ hấp thụ sai số chiếu Solid -> view, không thay đổi hình học DIM.
+        private const double PLATE_EDGE_FOOT_ALIGNMENT_TOL = 0.1;
 
         // CHỈNH KHUNG VIEW TÍM Ở ĐÂY
         // 10  = khung sát hơn
@@ -112,7 +115,7 @@ namespace Tekla.Technology.Akit.UserScript
         private const double THIN_FILLET_DISTANCE_LEFT_TOP = -2.5701706264229;
         private const double THIN_FILLET_DISTANCE_LEFT_BOTTOM = -1.78082545781903;
 
-        // AUTO DIM ANGLE CHO CHAMFER XUYEN HET MAT DAY / THIN VIEW.
+        // AUTO DIM ANGLE CHO CHAMFER TOÀN PHẦN HOẶC CHỈ VÁT MỘT PHẦN ĐỘ DÀY.
         // Distance va chieu dai tia dung duoc lay dung theo 4 file dump mau.
         private const bool AUTO_DIM_THIN_VIEW_CHAMFER_ANGLE = true;
         private const double THIN_CHAMFER_EDGE_TOL = 1.0;
@@ -213,6 +216,20 @@ namespace Tekla.Technology.Akit.UserScript
             // Không còn kiểu vừa load attribute + scale + resize boundary + move trong cùng 1 nhịp.
             List<View> processedViews = GetMainPartViews(drawing, spDrawing);
 
+            // Giữ tham chiếu semantic ngay từ đầu giống flow Shape H.
+            // Không nhận TOP/FRONT bằng chiều cao khung xanh vì DIM/mark có thể làm
+            // khung đổi kích thước và khiến hai view bị đảo vai trò khi chạy GAP.
+            View topViewForArrange = FindSinglePlateViewByViewType(
+                processedViews,
+                "TopView",
+                "Top"
+            );
+            View frontViewForArrange = FindSinglePlateViewByViewType(
+                processedViews,
+                "FrontView",
+                "Front"
+            );
+
             // BƯỚC 1: Xóa DIM cũ trước, commit cho Tekla xử lý xong.
             DeleteAllDimensions(drawing);
             SafeCommitAndWait(drawing, 250);
@@ -227,7 +244,8 @@ namespace Tekla.Technology.Akit.UserScript
 
                 foreach (View view in processedViews)
                 {
-                    if (view == null) continue;
+                    if (view == null || IsSectionView(view))
+                        continue;
 
                     ApplyViewStandardSafeV2(view, SAFE_VIEW_STANDARD_FILE);
                 }
@@ -241,7 +259,8 @@ namespace Tekla.Technology.Akit.UserScript
             {
                 foreach (View view in processedViews)
                 {
-                    if (view == null) continue;
+                    if (view == null)
+                        continue;
                     ApplyAutoScaleByPartLength(model, drawing, part, view);
                 }
 
@@ -271,7 +290,11 @@ namespace Tekla.Technology.Akit.UserScript
             // Khung xanh giữ gap có tính cả DIM, tránh chồng dim lên mặt view.
             if (AUTO_ARRANGE_VIEW_GAP)
             {
-                ArrangeProcessedViewsVerticalGap(processedViews, VIEW_VERTICAL_GAP_AFTER_RUN);
+                ArrangeProcessedViewsVerticalGap(
+                    topViewForArrange,
+                    frontViewForArrange,
+                    VIEW_VERTICAL_GAP_AFTER_RUN
+                );
                 SafeCommitAndWait(drawing, 250);
             }
 
@@ -285,7 +308,11 @@ namespace Tekla.Technology.Akit.UserScript
             // Chỉ chỉnh vị trí view theo Y để gap TOP/FRONT = 15, không center lại, không đụng DIM/mark/scale.
             if (AUTO_ARRANGE_VIEW_GAP)
             {
-                ForceFinalEqualArrangeTopFrontGap15(processedViews, VIEW_VERTICAL_GAP_AFTER_RUN);
+                ForceFinalEqualArrangeTopFrontGap15(
+                    topViewForArrange,
+                    frontViewForArrange,
+                    VIEW_VERTICAL_GAP_AFTER_RUN
+                );
                 SafeCommitAndWait(drawing, 250);
             }
 
@@ -307,18 +334,14 @@ namespace Tekla.Technology.Akit.UserScript
                 if (drawing != null)
                     drawing.CommitChanges();
             }
-            catch
-            {
-            }
+            catch { }
 
             try
             {
                 if (milliseconds > 0)
                     System.Threading.Thread.Sleep(milliseconds);
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         #endregion
@@ -349,11 +372,99 @@ namespace Tekla.Technology.Akit.UserScript
                         result.Add(view);
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return result;
+        }
+
+        private static bool IsSectionView(View view)
+        {
+            try
+            {
+                if (view == null)
+                    return false;
+
+                return IsSectionViewTypeText(view.ViewType.ToString());
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool IsSectionViewTypeText(string viewType)
+        {
+            if (String.IsNullOrEmpty(viewType))
+                return false;
+
+            return String.Equals(viewType, "SectionView", StringComparison.OrdinalIgnoreCase)
+                || viewType.IndexOf("Section", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static View FindSinglePlateViewByViewType(
+            List<View> views,
+            string exactViewTypeName,
+            string fallbackText
+        )
+        {
+            try
+            {
+                if (views == null)
+                    return null;
+
+                foreach (View view in views)
+                {
+                    if (view == null)
+                        continue;
+
+                    string viewTypeText = "";
+                    try
+                    {
+                        viewTypeText = view.ViewType.ToString();
+                    }
+                    catch
+                    {
+                        viewTypeText = "";
+                    }
+
+                    if (
+                        SinglePlateViewTypeMatchesForArrange(
+                            viewTypeText,
+                            exactViewTypeName,
+                            fallbackText
+                        )
+                    )
+                        return view;
+                }
+            }
+            catch { }
+
+            return null;
+        }
+
+        private static bool SinglePlateViewTypeMatchesForArrange(
+            string viewTypeText,
+            string exactViewTypeName,
+            string fallbackText
+        )
+        {
+            if (String.IsNullOrEmpty(viewTypeText))
+                return false;
+
+            if (
+                !String.IsNullOrEmpty(exactViewTypeName)
+                && String.Equals(
+                    viewTypeText,
+                    exactViewTypeName,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
+                return true;
+
+            // Fallback mềm giống Shape H: vẫn chỉ đọc ViewType, tuyệt đối không
+            // quay lại đoán bằng chiều cao khung hoặc vị trí Y hiện tại.
+            return !String.IsNullOrEmpty(fallbackText)
+                && viewTypeText.IndexOf(fallbackText, StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private static double GetPlateThickness(ModelPart part)
@@ -362,15 +473,24 @@ namespace Tekla.Technology.Akit.UserScript
             part.GetReportProperty("PROFILE", ref profile);
 
             string p = profile.ToUpper().Replace("PL", "").Replace(" ", "").Replace(",", ".");
-            string[] tokens = p.Split(new char[] { '*', 'X', '-' }, StringSplitOptions.RemoveEmptyEntries);
+            string[] tokens = p.Split(
+                new char[] { '*', 'X', '-' },
+                StringSplitOptions.RemoveEmptyEntries
+            );
 
             double min = 999999.0;
 
             foreach (string token in tokens)
             {
                 double value;
-                if (double.TryParse(token, System.Globalization.NumberStyles.Any,
-                    System.Globalization.CultureInfo.InvariantCulture, out value))
+                if (
+                    double.TryParse(
+                        token,
+                        System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out value
+                    )
+                )
                 {
                     if (value > 0 && value < min)
                         min = value;
@@ -404,10 +524,9 @@ namespace Tekla.Technology.Akit.UserScript
                 DeleteDrawingObjectsByTypeSafe(sheet, typeof(CurvedDimensionSetRadial));
                 DeleteDrawingObjectsByTypeSafe(sheet, typeof(CurvedDimensionSetOrthogonal));
                 DeleteDrawingObjectsByTypeSafe(sheet, typeof(RadiusDimension));
+                DeleteDrawingObjectsByTypeSafe(sheet, typeof(AngleDimension));
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static void DeleteDrawingObjectsByTypeSafe(ContainerView sheet, Type objectType)
@@ -465,14 +584,10 @@ namespace Tekla.Technology.Akit.UserScript
                     {
                         obj.Delete();
                     }
-                    catch
-                    {
-                    }
+                    catch { }
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static int CreateDimsBySectionPolygon(
@@ -481,7 +596,8 @@ namespace Tekla.Technology.Akit.UserScript
             SinglePartDrawing spDrawing,
             ModelPart part,
             double thickness,
-            List<View> processedViews)
+            List<View> processedViews
+        )
         {
             int count = 0;
 
@@ -491,7 +607,8 @@ namespace Tekla.Technology.Akit.UserScript
             while (views.MoveNext())
             {
                 View view = views.Current as View;
-                if (view == null) continue;
+                if (view == null)
+                    continue;
 
                 if (!ViewContainsMainPart(view, spDrawing))
                     continue;
@@ -514,7 +631,8 @@ namespace Tekla.Technology.Akit.UserScript
             while (parts.MoveNext())
             {
                 DrawingPart dp = parts.Current as DrawingPart;
-                if (dp == null) continue;
+                if (dp == null)
+                    continue;
 
                 if (dp.ModelIdentifier.ID == spDrawing.PartIdentifier.ID)
                     return true;
@@ -527,17 +645,20 @@ namespace Tekla.Technology.Akit.UserScript
             Model model,
             ModelPart part,
             View view,
-            double realThickness)
+            double realThickness
+        )
         {
             int count = 0;
 
-            TransformationPlane oldPlane =
-                model.GetWorkPlaneHandler().GetCurrentTransformationPlane();
+            TransformationPlane oldPlane = model
+                .GetWorkPlaneHandler()
+                .GetCurrentTransformationPlane();
 
             try
             {
-                TransformationPlane viewPlane =
-                    new TransformationPlane(view.DisplayCoordinateSystem);
+                TransformationPlane viewPlane = new TransformationPlane(
+                    view.DisplayCoordinateSystem
+                );
 
                 model.GetWorkPlaneHandler().SetCurrentTransformationPlane(viewPlane);
 
@@ -548,40 +669,44 @@ namespace Tekla.Technology.Akit.UserScript
 
                 double solidHeight = Math.Abs(max.Y - min.Y);
 
-                bool thinView =
-                    solidHeight <= realThickness + 5.0 ||
-                    solidHeight <= 25.0;
+                bool thinView = solidHeight <= realThickness + 5.0 || solidHeight <= 25.0;
 
-                StraightDimensionSetHandler handler =
-                    new StraightDimensionSetHandler();
+                StraightDimensionSetHandler handler = new StraightDimensionSetHandler();
 
                 if (thinView)
                 {
-                    PointList lengthDim = new PointList();
-                    lengthDim.Add(new Point(min.X, max.Y, 0));
-                    lengthDim.Add(new Point(max.X, max.Y, 0));
+                    // Không dựng chân DIM từ MinimumPoint/MaximumPoint: với plate vát,
+                    // bốn tổ hợp (minX,minY)... là góc của bounding box và có thể không
+                    // hề thuộc plate. Silhouette dưới đây chỉ gồm vertex thật của Solid.
+                    List<List<Point>> thinBoundaries = GetThinViewIntersectionPolygons(
+                        solid,
+                        min,
+                        max
+                    );
+                    List<Point> thinOuterContour = BuildExactProjectedOuterContour(
+                        solid,
+                        thinBoundaries
+                    );
 
-                    if (handler.CreateDimensionSet(view, lengthDim, new Vector(0, 1, 0), CurrentDimTierUnit) != null)
-                        count++;
+                    // Intersect ở giữa Z có thể không đi qua phần vát cục bộ. Đưa
+                    // silhouette thật vào đầu danh sách để bộ nhận diện angle luôn thấy
+                    // cạnh vát không xuyên hết độ dày.
+                    if (thinOuterContour != null && thinOuterContour.Count >= 3)
+                        thinBoundaries.Insert(0, thinOuterContour);
 
-                    PointList thickDim = new PointList();
-                    thickDim.Add(new Point(min.X, min.Y, 0));
-                    thickDim.Add(new Point(min.X, max.Y, 0));
+                    count += CreateThinViewExactPlateDims(handler, view, thinOuterContour);
 
-                    if (handler.CreateDimensionSet(view, thickDim, new Vector(-1, 0, 0), CurrentDimTierUnit) != null)
-                        count++;
+                    double thinRadiusThickness = GetThinRadiusReferenceThickness(
+                        part,
+                        realThickness
+                    );
 
-                    double thinRadiusThickness =
-                        GetThinRadiusReferenceThickness(part, realThickness);
-
-                    if ((AUTO_DIM_THIN_VIEW_FILLET_RADIUS ||
-                         AUTO_DIM_THIN_VIEW_CHAMFER_ANGLE) &&
-                        thinRadiusThickness > 0.0 &&
-                        solidHeight <= thinRadiusThickness + 5.0)
+                    if (
+                        (AUTO_DIM_THIN_VIEW_FILLET_RADIUS || AUTO_DIM_THIN_VIEW_CHAMFER_ANGLE)
+                        && thinRadiusThickness > 0.0
+                        && solidHeight <= thinRadiusThickness + 5.0
+                    )
                     {
-                        List<List<Point>> thinBoundaries =
-                            GetThinViewIntersectionPolygons(solid, min, max);
-
                         count += CreateThinViewBoundaryFeatureDims(
                             view,
                             solid,
@@ -602,10 +727,9 @@ namespace Tekla.Technology.Akit.UserScript
                 Point planeP2 = new Point(max.X + 1000, min.Y - 1000, midZ);
                 Point planeP3 = new Point(min.X - 1000, max.Y + 1000, midZ);
 
-                List<Point> polygon =
-                    GetLargestIntersectionPolygon(
-                        solid.IntersectAllFaces(planeP1, planeP2, planeP3)
-                    );
+                List<Point> polygon = GetLargestIntersectionPolygon(
+                    solid.IntersectAllFaces(planeP1, planeP2, planeP3)
+                );
 
                 if (polygon.Count < 2)
                 {
@@ -613,7 +737,10 @@ namespace Tekla.Technology.Akit.UserScript
                     return count;
                 }
 
-                double minX, maxX, minY, maxY;
+                double minX,
+                    maxX,
+                    minY,
+                    maxY;
                 GetMinMax(polygon, out minX, out maxX, out minY, out maxY);
 
                 // TOTAL DIM VIEW PROJECTION - V20:
@@ -633,32 +760,64 @@ namespace Tekla.Technology.Akit.UserScript
                 if (totalPolygon == null || totalPolygon.Count < 2)
                     totalPolygon = polygon;
 
-                double totalMinX, totalMaxX, totalMinY, totalMaxY;
-                GetMinMax(totalPolygon, out totalMinX, out totalMaxX, out totalMinY, out totalMaxY);
+                // Outer contour phải được tạo từ điểm Solid thật. Convex hull loại các
+                // vòng lỗ và vertex mặt trong nhưng vẫn giữ nguyên endpoint thật của
+                // cạnh vát; không sinh bốn góc ảo của bounding box.
+                List<Point> exactOuterContour = BuildConvexHull2D(totalPolygon);
+                if (exactOuterContour == null || exactOuterContour.Count < 3)
+                    exactOuterContour = polygon;
+
+                double totalMinX,
+                    totalMaxX,
+                    totalMinY,
+                    totalMaxY;
+                GetMinMax(
+                    exactOuterContour,
+                    out totalMinX,
+                    out totalMaxX,
+                    out totalMinY,
+                    out totalMaxY
+                );
 
                 // FIX BO GÓC / RADIUS:
                 // Giữ nguyên logic tầng DIM và vị trí DIM tổng như cũ,
                 // nhưng nguồn điểm cho DIM tổng đã là projected solid theo hệ tọa độ view.
-                Point leftForLength = GetStraightVerticalEdgePointForTotalDim(totalPolygon, totalMinX, true);
-                Point rightForLength = GetStraightVerticalEdgePointForTotalDim(totalPolygon, totalMaxX, true);
+                Point leftForLength = GetStraightVerticalEdgePointForTotalDim(
+                    exactOuterContour,
+                    totalMinX,
+                    true
+                );
+                Point rightForLength = GetStraightVerticalEdgePointForTotalDim(
+                    exactOuterContour,
+                    totalMaxX,
+                    true
+                );
 
                 if (leftForLength == null)
-                    leftForLength = HighestPointNearX(totalPolygon, totalMinX);
+                    leftForLength = HighestPointNearX(exactOuterContour, totalMinX);
 
                 if (rightForLength == null)
-                    rightForLength = HighestPointNearX(totalPolygon, totalMaxX);
+                    rightForLength = HighestPointNearX(exactOuterContour, totalMaxX);
 
                 // FIX BO GÓC / RADIUS:
                 // DIM dọc tổng vẫn giữ cách đặt cũ ở phía trái,
                 // nhưng nguồn điểm cho DIM tổng đã là projected solid theo hệ tọa độ view.
-                Point bottomForHeight = GetStraightHorizontalEdgePointForTotalDim(totalPolygon, totalMinY, true);
-                Point topForHeight = GetStraightHorizontalEdgePointForTotalDim(totalPolygon, totalMaxY, true);
+                Point bottomForHeight = GetStraightHorizontalEdgePointForTotalDim(
+                    exactOuterContour,
+                    totalMinY,
+                    true
+                );
+                Point topForHeight = GetStraightHorizontalEdgePointForTotalDim(
+                    exactOuterContour,
+                    totalMaxY,
+                    true
+                );
 
                 if (bottomForHeight == null)
-                    bottomForHeight = LeftMostPointNearY(totalPolygon, totalMinY);
+                    bottomForHeight = LeftMostPointNearY(exactOuterContour, totalMinY);
 
                 if (topForHeight == null)
-                    topForHeight = LeftMostPointNearY(totalPolygon, totalMaxY);
+                    topForHeight = LeftMostPointNearY(exactOuterContour, totalMaxY);
 
                 // CLEAN PA6 - TẦNG DIM ĐỘC LẬP 4 HƯỚNG:
                 // Không đổi thuật toán tạo chân DIM tổng.
@@ -669,11 +828,11 @@ namespace Tekla.Technology.Akit.UserScript
                 bool chamferLeft;
                 bool chamferRight;
                 GetChamferInfluenceSides(
-                    polygon,
-                    minX,
-                    maxX,
-                    minY,
-                    maxY,
+                    exactOuterContour,
+                    totalMinX,
+                    totalMaxX,
+                    totalMinY,
+                    totalMaxY,
                     out chamferTop,
                     out chamferBottom,
                     out chamferLeft,
@@ -687,35 +846,43 @@ namespace Tekla.Technology.Akit.UserScript
 
                 // Chamfer/rãnh ngoài nếu có thì chiếm tầng đầu của đúng hướng đó.
                 // Chỉ dùng để quản lý tầng; không bù offset theo chamfer.
-                if (AUTO_DIM_CHAMFER && realThickness > 16.0)
+                if (AUTO_DIM_CHAMFER)
                 {
-                    if (chamferTop) topTier++;
-                    if (chamferBottom) bottomTier++;
-                    if (chamferLeft) leftTier++;
-                    if (chamferRight) rightTier++;
+                    if (chamferTop)
+                        topTier++;
+                    if (chamferBottom)
+                        bottomTier++;
+                    if (chamferLeft)
+                        leftTier++;
+                    if (chamferRight)
+                        rightTier++;
                 }
 
                 bool hasHoleDims = false;
-                bool holeLeftDim = false;
-                bool holeRightDim = false;
+                int holeLeftDimCount = 0;
+                int holeRightDimCount = 0;
+                List<List<PlateHoleCandidate>> holeFamiliesForView =
+                    new List<List<PlateHoleCandidate>>();
 
                 if (realThickness > 16.0)
                 {
-                    List<Point> holesForTier = GetBoltHoleCenters(part, minX, maxX, minY, maxY);
-                    if (holesForTier.Count > 0)
+                    holeFamiliesForView = GetPlateHoleFamilies(
+                        part,
+                        totalMinX,
+                        totalMaxX,
+                        totalMinY,
+                        totalMaxY
+                    );
+                    if (holeFamiliesForView.Count > 0)
                     {
                         hasHoleDims = true;
-                        List<List<Point>> groupsForTier = SplitHoleGroupsByX(holesForTier);
-
-                        if (groupsForTier.Count <= 1)
-                        {
-                            holeRightDim = true;
-                        }
-                        else
-                        {
-                            holeLeftDim = true;
-                            holeRightDim = true;
-                        }
+                        GetPlateHoleExternalClusterCounts(
+                            holeFamiliesForView,
+                            totalMinX,
+                            totalMaxX,
+                            out holeLeftDimCount,
+                            out holeRightDimCount
+                        );
                     }
                 }
 
@@ -729,16 +896,16 @@ namespace Tekla.Technology.Akit.UserScript
                     holeBottomOffset = GetCleanDimOffsetByTier(bottomTier);
                     bottomTier++;
 
-                    if (holeLeftDim)
+                    if (holeLeftDimCount > 0)
                     {
                         holeLeftOffset = GetCleanDimOffsetByTier(leftTier);
-                        leftTier++;
+                        leftTier += holeLeftDimCount;
                     }
 
-                    if (holeRightDim)
+                    if (holeRightDimCount > 0)
                     {
                         holeRightOffset = GetCleanDimOffsetByTier(rightTier);
-                        rightTier++;
+                        rightTier += holeRightDimCount;
                     }
                 }
 
@@ -765,10 +932,28 @@ namespace Tekla.Technology.Akit.UserScript
                     totalVerticalTierOffset
                 );
 
-                if (CreateDim(handler, view, leftForLength, rightForLength, new Vector(0, 1, 0), totalHorizontalDimOffset))
+                if (
+                    CreateDim(
+                        handler,
+                        view,
+                        leftForLength,
+                        rightForLength,
+                        new Vector(0, 1, 0),
+                        totalHorizontalDimOffset
+                    )
+                )
                     count++;
 
-                if (CreateDim(handler, view, bottomForHeight, topForHeight, new Vector(-1, 0, 0), totalVerticalDimOffset))
+                if (
+                    CreateDim(
+                        handler,
+                        view,
+                        bottomForHeight,
+                        topForHeight,
+                        new Vector(-1, 0, 0),
+                        totalVerticalDimOffset
+                    )
+                )
                     count++;
 
                 if (realThickness > 16.0)
@@ -776,12 +961,12 @@ namespace Tekla.Technology.Akit.UserScript
                     count += CreateHoleCenterDims(
                         handler,
                         view,
-                        part,
-                        polygon,
-                        minX,
-                        maxX,
-                        minY,
-                        maxY,
+                        holeFamiliesForView,
+                        exactOuterContour,
+                        totalMinX,
+                        totalMaxX,
+                        totalMinY,
+                        totalMaxY,
                         holeBottomOffset,
                         holeLeftOffset,
                         holeRightOffset,
@@ -792,17 +977,23 @@ namespace Tekla.Technology.Akit.UserScript
                     );
                 }
 
-                // CHAMFER DIM:
-                // Chỉ dim chamfer khi thickness > 16.
-                // Nếu t <= 16 thì bỏ qua chamfer dim.
-                if (AUTO_DIM_CHAMFER && realThickness > 16.0)
+                // DIM hai thành phần X/Y của cạnh vát từ chính hai endpoint thật.
+                if (AUTO_DIM_CHAMFER)
                 {
-                    count += CreateChamferDims(handler, view, polygon, minX, maxX, minY, maxY);
+                    count += CreateChamferDims(
+                        handler,
+                        view,
+                        exactOuterContour,
+                        totalMinX,
+                        totalMaxX,
+                        totalMinY,
+                        totalMaxY
+                    );
                 }
 
                 if (AUTO_MOVE_PART_MARK_NAME)
                 {
-                    AutoMovePartMarkNameV3(view, part, minX, maxX, minY, maxY);
+                    AutoMovePartMarkNameV3(view, part, totalMinX, totalMaxX, totalMinY, totalMaxY);
                 }
 
                 // View boundary cũng dùng bao ngoài projected solid để không bị hụt khi tấm vát theo chiều dày.
@@ -810,9 +1001,7 @@ namespace Tekla.Technology.Akit.UserScript
                 Point boundaryMax = new Point(totalMaxX, totalMaxY, max.Z);
                 ResizeViewBoundary(view, boundaryMin, boundaryMax);
             }
-            catch
-            {
-            }
+            catch { }
             finally
             {
                 model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane);
@@ -887,8 +1076,14 @@ namespace Tekla.Technology.Akit.UserScript
                     view.RestrictionBox = new AABB(newMin, newMax);
                     bool ok = false;
 
-                    try { ok = view.Modify(); }
-                    catch { ok = false; }
+                    try
+                    {
+                        ok = view.Modify();
+                    }
+                    catch
+                    {
+                        ok = false;
+                    }
 
                     // Nếu Tekla không nhận modify, rollback box cũ để tránh hỏng view.
                     if (!ok && oldMin != null && oldMax != null)
@@ -898,9 +1093,7 @@ namespace Tekla.Technology.Akit.UserScript
                             view.RestrictionBox = new AABB(oldMin, oldMax);
                             view.Modify();
                         }
-                        catch
-                        {
-                        }
+                        catch { }
                     }
                 }
                 catch
@@ -913,15 +1106,11 @@ namespace Tekla.Technology.Akit.UserScript
                             view.RestrictionBox = new AABB(oldMin, oldMax);
                             view.Modify();
                         }
-                        catch
-                        {
-                        }
+                        catch { }
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static bool IsValidBoundaryBox(Point min, Point max)
@@ -929,12 +1118,24 @@ namespace Tekla.Technology.Akit.UserScript
             if (min == null || max == null)
                 return false;
 
-            if (double.IsNaN(min.X) || double.IsNaN(min.Y) || double.IsNaN(min.Z) ||
-                double.IsNaN(max.X) || double.IsNaN(max.Y) || double.IsNaN(max.Z))
+            if (
+                double.IsNaN(min.X)
+                || double.IsNaN(min.Y)
+                || double.IsNaN(min.Z)
+                || double.IsNaN(max.X)
+                || double.IsNaN(max.Y)
+                || double.IsNaN(max.Z)
+            )
                 return false;
 
-            if (double.IsInfinity(min.X) || double.IsInfinity(min.Y) || double.IsInfinity(min.Z) ||
-                double.IsInfinity(max.X) || double.IsInfinity(max.Y) || double.IsInfinity(max.Z))
+            if (
+                double.IsInfinity(min.X)
+                || double.IsInfinity(min.Y)
+                || double.IsInfinity(min.Z)
+                || double.IsInfinity(max.X)
+                || double.IsInfinity(max.Y)
+                || double.IsInfinity(max.Z)
+            )
                 return false;
 
             if (max.X <= min.X + 1.0)
@@ -956,7 +1157,8 @@ namespace Tekla.Technology.Akit.UserScript
             double minX,
             double maxX,
             double minY,
-            double maxY)
+            double maxY
+        )
         {
             int count = 0;
 
@@ -973,17 +1175,8 @@ namespace Tekla.Technology.Akit.UserScript
                 double centerX = (minX + maxX) / 2.0;
                 double centerY = (minY + maxY) / 2.0;
 
-                // PA13 - CHAMFER DÙNG 4 BIÊN NGOÀI LÀM CHUẨN:
-                // - Không dùng rule đường chéo / hoặc \.
-                // - Không bù +dx/+dy.
-                // - Không dùng hệ bù chamfer / bounding box riêng.
-                // - Chỉ riêng DIM chamfer được chiếu chân về biên ngoài cùng hướng:
-                //      Top    -> Y = maxY
-                //      Bottom -> Y = minY
-                //      Left   -> X = minX
-                //      Right  -> X = maxX
-                // Mục tiêu: 2 DIM chamfer ngang/dọc cùng ăn theo một hệ biên ngoài,
-                // tránh tình trạng một bên đúng tầng, một bên bị hụt.
+                // Offset chỉ quyết định tầng hiển thị. Chân DIM luôn giữ nguyên hai
+                // endpoint của cạnh vát; không chiếu sang bốn biên bounding box.
                 double chamferOffset = GetCleanDimOffsetByTier(CHAMFER_DIM_TIER);
 
                 for (int i = 0; i < pts.Count; i++)
@@ -1016,39 +1209,104 @@ namespace Tekla.Technology.Akit.UserScript
                         ? new Vector(1, 0, 0)
                         : new Vector(-1, 0, 0);
 
-                    // DIM NGANG CỦA GÓC VÁT:
-                    // Chỉ đo theo X của 2 đầu chamfer, nhưng Y của chân DIM được đưa về biên ngoài.
+                    // Contour có thể chạy thuận hoặc ngược nên a/b không mang ý nghĩa kỹ thuật.
+                    // Mỗi trục đo phải chuẩn hóa lại đúng thứ tự mép trong -> mép ngoài.
                     if (dx >= CHAMFER_MIN_SIZE)
                     {
-                        double y = topSide ? maxY : minY;
-                        Point h1 = new Point(a.X, y, 0);
-                        Point h2 = new Point(b.X, y, 0);
-
-                        if (CreateDim(handler, view, h1, h2, horizontalDimDirection, chamferOffset))
+                        Point horizontalInner;
+                        Point horizontalOuter;
+                        OrderChamferFeetInnerToOuter(
+                            a,
+                            b,
+                            true,
+                            rightSide,
+                            topSide,
+                            out horizontalInner,
+                            out horizontalOuter
+                        );
+                        if (
+                            CreateDim(
+                                handler,
+                                view,
+                                horizontalInner,
+                                horizontalOuter,
+                                horizontalDimDirection,
+                                chamferOffset
+                            )
+                        )
+                        {
                             count++;
+                        }
                     }
 
-                    // DIM DỌC CỦA GÓC VÁT:
-                    // Chỉ đo theo Y của 2 đầu chamfer, nhưng X của chân DIM được đưa về biên ngoài.
                     if (dy >= CHAMFER_MIN_SIZE)
                     {
-                        double x = rightSide ? maxX : minX;
-                        Point v1 = new Point(x, a.Y, 0);
-                        Point v2 = new Point(x, b.Y, 0);
-
-                        if (CreateDim(handler, view, v1, v2, verticalDimDirection, chamferOffset))
+                        Point verticalInner;
+                        Point verticalOuter;
+                        OrderChamferFeetInnerToOuter(
+                            a,
+                            b,
+                            false,
+                            rightSide,
+                            topSide,
+                            out verticalInner,
+                            out verticalOuter
+                        );
+                        if (
+                            CreateDim(
+                                handler,
+                                view,
+                                verticalInner,
+                                verticalOuter,
+                                verticalDimDirection,
+                                chamferOffset
+                            )
+                        )
+                        {
                             count++;
+                        }
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return count;
         }
 
+        private static void OrderChamferFeetInnerToOuter(
+            Point first,
+            Point second,
+            bool horizontalMeasurement,
+            bool rightSide,
+            bool topSide,
+            out Point inner,
+            out Point outer
+        )
+        {
+            inner = first;
+            outer = second;
+            if (first == null || second == null)
+                return;
 
+            bool firstIsInner;
+            if (horizontalMeasurement)
+            {
+                // Bên trái: X lớn hơn là mép trong; bên phải: X nhỏ hơn là mép trong.
+                firstIsInner = rightSide ? first.X <= second.X : first.X >= second.X;
+            }
+            else
+            {
+                // Phía trên: Y nhỏ hơn là mép trong; phía dưới: Y lớn hơn là mép trong.
+                // Với vát không hết độ dày, đây chính là chân trên/dưới của đoạn land đứng.
+                firstIsInner = topSide ? first.Y <= second.Y : first.Y >= second.Y;
+            }
+
+            if (!firstIsInner)
+            {
+                inner = second;
+                outer = first;
+            }
+        }
 
         private static bool IsValidChamferSegment(
             Point a,
@@ -1056,7 +1314,8 @@ namespace Tekla.Technology.Akit.UserScript
             double minX,
             double maxX,
             double minY,
-            double maxY)
+            double maxY
+        )
         {
             if (a == null || b == null)
                 return false;
@@ -1065,10 +1324,12 @@ namespace Tekla.Technology.Akit.UserScript
             double dy = Math.Abs(a.Y - b.Y);
 
             // Phải là cạnh xiên nhỏ.
-            if (dx < CHAMFER_MIN_SIZE ||
-                dy < CHAMFER_MIN_SIZE ||
-                dx >= CHAMFER_MAX_SIZE ||
-                dy >= CHAMFER_MAX_SIZE)
+            if (
+                dx < CHAMFER_MIN_SIZE
+                || dy < CHAMFER_MIN_SIZE
+                || dx >= CHAMFER_MAX_SIZE
+                || dy >= CHAMFER_MAX_SIZE
+            )
                 return false;
 
             // Lọc cung tròn/polycurve:
@@ -1097,7 +1358,6 @@ namespace Tekla.Technology.Akit.UserScript
             return true;
         }
 
-
         private static void GetChamferInfluenceSides(
             List<Point> polygon,
             double minX,
@@ -1107,7 +1367,8 @@ namespace Tekla.Technology.Akit.UserScript
             out bool top,
             out bool bottom,
             out bool left,
-            out bool right)
+            out bool right
+        )
         {
             top = false;
             bottom = false;
@@ -1148,11 +1409,8 @@ namespace Tekla.Technology.Akit.UserScript
                         left = true;
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
-
 
         private static double GetHoleDimOffsetByPolygon(List<Point> polygon)
         {
@@ -1203,13 +1461,15 @@ namespace Tekla.Technology.Akit.UserScript
                     result.Add(new Point(p.X, p.Y, p.Z));
             }
 
-            result.Sort(delegate (Point p1, Point p2)
-            {
-                double a1 = Math.Atan2(p1.Y - cy, p1.X - cx);
-                double a2 = Math.Atan2(p2.Y - cy, p2.X - cx);
+            result.Sort(
+                delegate(Point p1, Point p2)
+                {
+                    double a1 = Math.Atan2(p1.Y - cy, p1.X - cx);
+                    double a2 = Math.Atan2(p2.Y - cy, p2.X - cx);
 
-                return a1.CompareTo(a2);
-            });
+                    return a1.CompareTo(a2);
+                }
+            );
 
             return result;
         }
@@ -1217,10 +1477,1068 @@ namespace Tekla.Technology.Akit.UserScript
         #endregion
 
         #region 05 - HOLE DIM LOGIC
+
+        private sealed class PlateHoleCandidate
+        {
+            public Point Point;
+            public double HoleDiameter;
+            public double BoltSize;
+            public double SlotX;
+            public double SlotY;
+            public string HoleType;
+        }
+
+        private static List<List<PlateHoleCandidate>> GetPlateHoleFamilies(
+            ModelPart part,
+            double minX,
+            double maxX,
+            double minY,
+            double maxY
+        )
+        {
+            List<PlateHoleCandidate> candidates = new List<PlateHoleCandidate>();
+
+            try
+            {
+                if (part == null)
+                    return new List<List<PlateHoleCandidate>>();
+
+                ModelObjectEnumerator bolts = part.GetBolts();
+                while (bolts.MoveNext())
+                {
+                    ModelBoltGroup group = bolts.Current as ModelBoltGroup;
+                    if (group == null)
+                        continue;
+
+                    double holeDiameter = GetBoltGroupPhiForDimGap(group);
+                    double boltSize = GetPlateBoltSize(group);
+                    double slotX = GetPlateHoleSlotX(group);
+                    double slotY = GetPlateHoleSlotY(group);
+                    string holeType = GetPlateHoleTypeText(group);
+
+                    foreach (object item in group.BoltPositions)
+                    {
+                        Point point = item as Point;
+                        if (
+                            point == null
+                            || point.X < minX - 5.0
+                            || point.X > maxX + 5.0
+                            || point.Y < minY - 5.0
+                            || point.Y > maxY + 5.0
+                        )
+                        {
+                            continue;
+                        }
+
+                        PlateHoleCandidate candidate = new PlateHoleCandidate();
+                        candidate.Point = new Point(point.X, point.Y, 0);
+                        candidate.HoleDiameter = holeDiameter;
+                        candidate.BoltSize = boltSize;
+                        candidate.SlotX = slotX;
+                        candidate.SlotY = slotY;
+                        candidate.HoleType = holeType;
+                        candidates.Add(candidate);
+                    }
+                }
+            }
+            catch { }
+
+            return GroupPlateHoleCandidatesByFamily(candidates);
+        }
+
+        private static List<List<PlateHoleCandidate>> GroupPlateHoleCandidatesByFamily(
+            List<PlateHoleCandidate> candidates
+        )
+        {
+            List<List<PlateHoleCandidate>> families = new List<List<PlateHoleCandidate>>();
+            if (candidates == null || candidates.Count == 0)
+                return families;
+
+            candidates.Sort(
+                delegate(PlateHoleCandidate first, PlateHoleCandidate second)
+                {
+                    int xCompare = first.Point.X.CompareTo(second.Point.X);
+                    if (xCompare != 0)
+                        return xCompare;
+                    return first.Point.Y.CompareTo(second.Point.Y);
+                }
+            );
+
+            foreach (PlateHoleCandidate candidate in candidates)
+            {
+                List<PlateHoleCandidate> matched = null;
+                foreach (List<PlateHoleCandidate> family in families)
+                {
+                    if (family.Count > 0 && AreSamePlateHoleFamily(family[0], candidate))
+                    {
+                        matched = family;
+                        break;
+                    }
+                }
+
+                if (matched == null)
+                {
+                    matched = new List<PlateHoleCandidate>();
+                    families.Add(matched);
+                }
+
+                matched.Add(candidate);
+            }
+
+            families.Sort(
+                delegate(List<PlateHoleCandidate> first, List<PlateHoleCandidate> second)
+                {
+                    return GetPlateHoleFamilyMinimumX(first)
+                        .CompareTo(GetPlateHoleFamilyMinimumX(second));
+                }
+            );
+
+            return families;
+        }
+
+        private static bool AreSamePlateHoleFamily(
+            PlateHoleCandidate first,
+            PlateHoleCandidate second
+        )
+        {
+            if (first == null || second == null)
+                return false;
+
+            return AreSamePlateOptionalHoleSize(first.HoleDiameter, second.HoleDiameter)
+                && AreSamePlateOptionalHoleSize(first.BoltSize, second.BoltSize)
+                && AreSamePlateOptionalHoleSize(first.SlotX, second.SlotX)
+                && AreSamePlateOptionalHoleSize(first.SlotY, second.SlotY)
+                && String.Equals(
+                    (first.HoleType ?? String.Empty).Trim(),
+                    (second.HoleType ?? String.Empty).Trim(),
+                    StringComparison.OrdinalIgnoreCase
+                );
+        }
+
+        private static bool AreSamePlateOptionalHoleSize(double first, double second)
+        {
+            bool firstValid = first > 1.0 && first < 500.0;
+            bool secondValid = second > 1.0 && second < 500.0;
+            if (firstValid != secondValid)
+                return false;
+
+            return Math.Abs(first - second) <= HOLE_FAMILY_SIZE_TOL;
+        }
+
+        private static double GetPlateHoleFamilyMinimumX(List<PlateHoleCandidate> family)
+        {
+            double minX = Double.MaxValue;
+            if (family != null)
+            {
+                foreach (PlateHoleCandidate item in family)
+                {
+                    if (item != null && item.Point != null && item.Point.X < minX)
+                        minX = item.Point.X;
+                }
+            }
+            return minX;
+        }
+
+        private static List<Point> ConvertPlateHoleFamilyToPoints(List<PlateHoleCandidate> family)
+        {
+            List<Point> result = new List<Point>();
+            if (family == null)
+                return result;
+
+            foreach (PlateHoleCandidate item in family)
+            {
+                if (item == null || item.Point == null)
+                    continue;
+                AddUniquePoint(
+                    result,
+                    // Giống Shape H: Z chỉ mang theo phi lỗ để tính khoảng hở
+                    // trình bày của mọi chân DIM lỗ; X/Y vẫn là tâm lỗ thật.
+                    new Point(item.Point.X, item.Point.Y, item.HoleDiameter),
+                    1.0
+                );
+            }
+            return result;
+        }
+
+        private static List<Point> BuildPlateHorizontalRepresentativeHoles(List<Point> holes)
+        {
+            List<Point> result = new List<Point>();
+            List<List<Point>> columns = GroupPlateHolePointsByX(holes, HOLE_ROW_COLUMN_TOL);
+
+            foreach (List<Point> column in columns)
+            {
+                Point lowest = null;
+                foreach (Point point in column)
+                {
+                    if (point != null && (lowest == null || point.Y < lowest.Y))
+                        lowest = point;
+                }
+                if (lowest != null)
+                {
+                    // Giữ phi lỗ trong Z để writer DIM ngang có thể tạo chân
+                    // presentation hở khỏi tâm giống Shape H/Shape L.
+                    AddUniquePoint(result, new Point(lowest.X, lowest.Y, lowest.Z), 1.0);
+                }
+            }
+
+            return result;
+        }
+
+        private static List<List<Point>> GroupPlateHolePointsByY(
+            List<Point> points,
+            double tolerance
+        )
+        {
+            List<List<Point>> groups = new List<List<Point>>();
+            if (points == null)
+                return groups;
+
+            List<Point> sorted = new List<Point>(points);
+            sorted.Sort(
+                delegate(Point first, Point second)
+                {
+                    int yCompare = first.Y.CompareTo(second.Y);
+                    if (yCompare != 0)
+                        return yCompare;
+                    return first.X.CompareTo(second.X);
+                }
+            );
+
+            foreach (Point point in sorted)
+            {
+                List<Point> matched = null;
+                foreach (List<Point> group in groups)
+                {
+                    if (group.Count > 0 && Math.Abs(group[0].Y - point.Y) <= tolerance)
+                    {
+                        matched = group;
+                        break;
+                    }
+                }
+
+                if (matched == null)
+                {
+                    matched = new List<Point>();
+                    groups.Add(matched);
+                }
+                matched.Add(point);
+            }
+            return groups;
+        }
+
+        private static List<List<Point>> GroupPlateHolePointsByX(
+            List<Point> points,
+            double tolerance
+        )
+        {
+            List<List<Point>> groups = new List<List<Point>>();
+            if (points == null)
+                return groups;
+
+            List<Point> sorted = new List<Point>(points);
+            sorted.Sort(
+                delegate(Point first, Point second)
+                {
+                    int xCompare = first.X.CompareTo(second.X);
+                    if (xCompare != 0)
+                        return xCompare;
+                    return first.Y.CompareTo(second.Y);
+                }
+            );
+
+            foreach (Point point in sorted)
+            {
+                List<Point> matched = null;
+                foreach (List<Point> group in groups)
+                {
+                    if (group.Count > 0 && Math.Abs(group[0].X - point.X) <= tolerance)
+                    {
+                        matched = group;
+                        break;
+                    }
+                }
+
+                if (matched == null)
+                {
+                    matched = new List<Point>();
+                    groups.Add(matched);
+                }
+                matched.Add(point);
+            }
+            return groups;
+        }
+
+        private static List<List<Point>> SplitPlateHoleFamilyIntoXClusters(
+            List<Point> holes,
+            double splitGap
+        )
+        {
+            List<List<Point>> result = new List<List<Point>>();
+            if (holes == null || holes.Count == 0)
+                return result;
+
+            List<List<Point>> columns = GroupPlateHolePointsByX(holes, HOLE_ROW_COLUMN_TOL);
+            columns.Sort(
+                delegate(List<Point> first, List<Point> second)
+                {
+                    return GetAverageX(first).CompareTo(GetAverageX(second));
+                }
+            );
+
+            List<Point> current = new List<Point>();
+            double previousX = Double.NaN;
+            foreach (List<Point> column in columns)
+            {
+                double currentX = GetAverageX(column);
+                if (
+                    current.Count > 0
+                    && !Double.IsNaN(previousX)
+                    && currentX - previousX >= splitGap
+                )
+                {
+                    result.Add(current);
+                    current = new List<Point>();
+                }
+
+                current.AddRange(column);
+                previousX = currentX;
+            }
+
+            if (current.Count > 0)
+                result.Add(current);
+            return result;
+        }
+
+        private static bool TryBuildPlateWideTwoRowSideLayout(
+            List<Point> familyPoints,
+            double minX,
+            double maxX,
+            out List<Point> leftRowFeet,
+            out List<Point> rightRowFeet,
+            out List<List<Point>> centerLineRows
+        )
+        {
+            // Trường hợp đặc biệt theo bố cục PHU_Shape mà user đã duyệt:
+            // một family tạo thành đúng hai hàng Y giống hệt nhau, trải qua nhiều
+            // cụm X và có cột ngoài cùng gần cả hai mép plate. Không tạo DIM Y
+            // lặp lại ở từng cột; chỉ giữ một chain bên trái, một chain bên phải
+            // và nối tâm ngoài cùng của từng hàng bằng center line.
+            leftRowFeet = new List<Point>();
+            rightRowFeet = new List<Point>();
+            centerLineRows = new List<List<Point>>();
+
+            if (familyPoints == null || familyPoints.Count == 0)
+                return false;
+
+            List<List<Point>> rows = GroupPlateHolePointsByY(familyPoints, HOLE_ROW_COLUMN_TOL);
+            List<List<Point>> columns = GroupPlateHolePointsByX(familyPoints, HOLE_ROW_COLUMN_TOL);
+
+            // Hai chân giữa trong chain Y tương ứng đúng hai hàng lỗ.
+            // Ít nhất bốn cột để nhánh này không thay đổi các cụm 2x2 thông thường.
+            if (rows.Count != 2 || columns.Count < 4)
+                return false;
+
+            List<List<Point>> legacyClusters = SplitPlateHoleFamilyIntoXClusters(
+                familyPoints,
+                HOLE_CLUSTER_SPLIT_GAP
+            );
+
+            // Chỉ can thiệp đúng lỗi nhiều DIM Y ở giữa. Nếu flow cũ chỉ tạo
+            // một/hai cụm thì giữ nguyên toàn bộ cách xử lý hiện tại.
+            if (legacyClusters.Count < 3)
+                return false;
+
+            columns.Sort(
+                delegate(List<Point> first, List<Point> second)
+                {
+                    return GetAverageX(first).CompareTo(GetAverageX(second));
+                }
+            );
+            rows.Sort(
+                delegate(List<Point> first, List<Point> second)
+                {
+                    return GetAverageY(first).CompareTo(GetAverageY(second));
+                }
+            );
+
+            // Xác nhận đây là lưới đầy đủ, không phải các lỗ rời vô tình cùng Y.
+            // Mỗi hàng phải chứa đúng một tâm tại từng cột X của family.
+            foreach (List<Point> row in rows)
+            {
+                List<List<Point>> rowColumns = GroupPlateHolePointsByX(row, HOLE_ROW_COLUMN_TOL);
+                rowColumns.Sort(
+                    delegate(List<Point> first, List<Point> second)
+                    {
+                        return GetAverageX(first).CompareTo(GetAverageX(second));
+                    }
+                );
+
+                if (rowColumns.Count != columns.Count)
+                    return false;
+
+                for (int i = 0; i < columns.Count; i++)
+                {
+                    if (
+                        Math.Abs(GetAverageX(rowColumns[i]) - GetAverageX(columns[i]))
+                        > HOLE_ROW_COLUMN_TOL
+                    )
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            double firstColumnX = GetAverageX(columns[0]);
+            double lastColumnX = GetAverageX(columns[columns.Count - 1]);
+            bool nearLeftEdge = Math.Abs(firstColumnX - minX) <= HOLE_END_ZONE;
+            bool nearRightEdge = Math.Abs(maxX - lastColumnX) <= HOLE_END_ZONE;
+
+            if (!nearLeftEdge || !nearRightEdge)
+                return false;
+
+            foreach (List<Point> row in rows)
+            {
+                Point left = null;
+                Point right = null;
+
+                foreach (Point point in row)
+                {
+                    if (point == null)
+                        continue;
+
+                    if (left == null || point.X < left.X)
+                        left = point;
+                    if (right == null || point.X > right.X)
+                        right = point;
+                }
+
+                if (left == null || right == null || Distance2D(left, right) <= HOLE_ROW_COLUMN_TOL)
+                {
+                    return false;
+                }
+
+                // Giữ phi lỗ trong Z tới writer. Center line phía dưới vẫn dùng
+                // X/Y tâm thật và không bị dịch theo chân DIM presentation.
+                leftRowFeet.Add(new Point(left.X, left.Y, left.Z));
+                rightRowFeet.Add(new Point(right.X, right.Y, right.Z));
+
+                List<Point> centerLineRow = new List<Point>();
+                centerLineRow.Add(new Point(left.X, left.Y, 0));
+                centerLineRow.Add(new Point(right.X, right.Y, 0));
+                centerLineRows.Add(centerLineRow);
+            }
+
+            return leftRowFeet.Count == 2 && rightRowFeet.Count == 2 && centerLineRows.Count == 2;
+        }
+
+        private static double GetAverageY(List<Point> points)
+        {
+            if (points == null || points.Count == 0)
+                return 0.0;
+
+            double sum = 0.0;
+            int count = 0;
+            foreach (Point point in points)
+            {
+                if (point == null)
+                    continue;
+                sum += point.Y;
+                count++;
+            }
+            return count > 0 ? sum / count : 0.0;
+        }
+
+        private static double GetAverageX(List<Point> points)
+        {
+            if (points == null || points.Count == 0)
+                return 0.0;
+
+            double sum = 0.0;
+            int count = 0;
+            foreach (Point point in points)
+            {
+                if (point == null)
+                    continue;
+                sum += point.X;
+                count++;
+            }
+            return count > 0 ? sum / count : 0.0;
+        }
+
+        private static bool TryResolvePlateHoleExternalSide(
+            List<Point> cluster,
+            double minX,
+            double maxX,
+            out bool dimOnRight
+        )
+        {
+            dimOnRight = false;
+            if (cluster == null || cluster.Count == 0)
+                return false;
+
+            // Giữ nguyên rule Shape L đang chạy ổn định: trước hết phân loại theo
+            // X trung bình của cụm. Đây vẫn là rule chính cho mọi cụm thông thường.
+            double averageX = GetAverageX(cluster);
+            double centerDistanceToLeft = Math.Abs(averageX - minX);
+            double centerDistanceToRight = Math.Abs(maxX - averageX);
+            bool centerNearLeft = centerDistanceToLeft <= HOLE_END_ZONE;
+            bool centerNearRight = centerDistanceToRight <= HOLE_END_ZONE;
+
+            if (centerNearLeft || centerNearRight)
+            {
+                dimOnRight =
+                    centerNearRight
+                    && (!centerNearLeft || centerDistanceToRight < centerDistanceToLeft);
+                return true;
+            }
+
+            // Fallback hẹp cho đúng trường hợp user chỉ định: family có X trung bình
+            // nằm giữa pallet nhưng dãy X trải rộng và lỗ ngoài cùng thực sự sát mép.
+            // Nếu không có lỗ ngoài cùng gần mép thì trả false để giữ nguyên nhánh nội bộ.
+            double clusterMinX = Double.MaxValue;
+            double clusterMaxX = -Double.MaxValue;
+            foreach (Point point in cluster)
+            {
+                if (point == null)
+                    continue;
+                if (point.X < clusterMinX)
+                    clusterMinX = point.X;
+                if (point.X > clusterMaxX)
+                    clusterMaxX = point.X;
+            }
+
+            if (clusterMinX == Double.MaxValue || clusterMaxX == -Double.MaxValue)
+                return false;
+
+            double edgeDistanceToLeft = Math.Abs(clusterMinX - minX);
+            double edgeDistanceToRight = Math.Abs(maxX - clusterMaxX);
+            bool outerHoleNearLeft = edgeDistanceToLeft <= HOLE_END_ZONE;
+            bool outerHoleNearRight = edgeDistanceToRight <= HOLE_END_ZONE;
+
+            if (!(outerHoleNearLeft || outerHoleNearRight))
+                return false;
+
+            // Khi đồng thời gần hai mép, chọn mép có khoảng hở nhỏ hơn; hòa thì ưu tiên
+            // trái để kết quả ổn định và đúng bố cục mẫu user đã duyệt.
+            dimOnRight =
+                outerHoleNearRight
+                && (!outerHoleNearLeft || edgeDistanceToRight < edgeDistanceToLeft);
+            return true;
+        }
+
+        private static double GetPlateHolePresentationGap(Point hole)
+        {
+            if (hole != null && hole.Z > 1.0 && hole.Z < 500.0)
+                return hole.Z;
+            return 0.0;
+        }
+
+        private static Point CreatePlateHolePresentationFoot(
+            Point hole,
+            double directionX,
+            double directionY
+        )
+        {
+            if (hole == null)
+                return null;
+
+            double gap = GetPlateHolePresentationGap(hole);
+            double length = Math.Sqrt(directionX * directionX + directionY * directionY);
+
+            if (gap <= 0.0 || length <= 0.000001)
+                return new Point(hole.X, hole.Y, 0);
+
+            // Dịch chân đúng bằng phi lỗ theo hướng đặt DIM. Vì dịch vuông góc
+            // trục đo nên trị số chuỗi X/Y vẫn giữ nguyên như khi lấy tại tâm.
+            return new Point(
+                hole.X + gap * directionX / length,
+                hole.Y + gap * directionY / length,
+                0
+            );
+        }
+
+        private static List<Point> SelectPlateVerticalRowFeet(List<Point> cluster, bool dimOnRight)
+        {
+            List<Point> result = new List<Point>();
+            List<List<Point>> rows = GroupPlateHolePointsByY(cluster, HOLE_ROW_COLUMN_TOL);
+
+            foreach (List<Point> row in rows)
+            {
+                Point selected = null;
+                foreach (Point point in row)
+                {
+                    if (point == null)
+                        continue;
+                    if (
+                        selected == null
+                        || (dimOnRight && point.X > selected.X)
+                        || (!dimOnRight && point.X < selected.X)
+                    )
+                    {
+                        selected = point;
+                    }
+                }
+                if (selected != null)
+                {
+                    result.Add(new Point(selected.X, selected.Y, selected.Z));
+                }
+            }
+
+            result.Sort(
+                delegate(Point first, Point second)
+                {
+                    return first.Y.CompareTo(second.Y);
+                }
+            );
+            return result;
+        }
+
+        private static List<List<Point>> BuildPlateHoleCenterLineSegments(List<Point> holes)
+        {
+            List<List<Point>> result = new List<List<Point>>();
+            if (holes == null || holes.Count < 2)
+                return result;
+
+            // Line ngang: tâm trái ngoài cùng -> tâm phải ngoài cùng của từng hàng.
+            List<List<Point>> rows = GroupPlateHolePointsByY(holes, HOLE_ROW_COLUMN_TOL);
+            foreach (List<Point> row in rows)
+            {
+                Point first = null;
+                Point last = null;
+                if (row != null)
+                {
+                    foreach (Point hole in row)
+                    {
+                        if (hole == null)
+                            continue;
+                        if (first == null || hole.X < first.X)
+                            first = hole;
+                        if (last == null || hole.X > last.X)
+                            last = hole;
+                    }
+                }
+
+                if (first != null && last != null && Distance2D(first, last) > HOLE_ROW_COLUMN_TOL)
+                {
+                    List<Point> segment = new List<Point>();
+                    segment.Add(new Point(first.X, first.Y, 0));
+                    segment.Add(new Point(last.X, last.Y, 0));
+                    result.Add(segment);
+                }
+            }
+
+            // Line dọc: tâm dưới ngoài cùng -> tâm trên ngoài cùng của từng cột.
+            List<List<Point>> columns = GroupPlateHolePointsByX(holes, HOLE_ROW_COLUMN_TOL);
+            foreach (List<Point> column in columns)
+            {
+                Point first = null;
+                Point last = null;
+                if (column != null)
+                {
+                    foreach (Point hole in column)
+                    {
+                        if (hole == null)
+                            continue;
+                        if (first == null || hole.Y < first.Y)
+                            first = hole;
+                        if (last == null || hole.Y > last.Y)
+                            last = hole;
+                    }
+                }
+
+                if (first != null && last != null && Distance2D(first, last) > HOLE_ROW_COLUMN_TOL)
+                {
+                    List<Point> segment = new List<Point>();
+                    segment.Add(new Point(first.X, first.Y, 0));
+                    segment.Add(new Point(last.X, last.Y, 0));
+                    result.Add(segment);
+                }
+            }
+
+            return result;
+        }
+
+        private static void CreatePlateHoleRowAndColumnCenterLines(View view, List<Point> holes)
+        {
+            CreatePlateHoleRowCenterLines(view, BuildPlateHoleCenterLineSegments(holes));
+        }
+
+        private static void CreatePlateHoleRowCenterLines(
+            View view,
+            List<List<Point>> centerLineRows
+        )
+        {
+            if (view == null || centerLineRows == null)
+                return;
+
+            foreach (List<Point> row in centerLineRows)
+            {
+                try
+                {
+                    if (
+                        row == null
+                        || row.Count != 2
+                        || row[0] == null
+                        || row[1] == null
+                        || Distance2D(row[0], row[1]) <= HOLE_ROW_COLUMN_TOL
+                    )
+                    {
+                        continue;
+                    }
+
+                    Point startPoint = new Point(row[0].X, row[0].Y, 0);
+                    Point endPoint = new Point(row[1].X, row[1].Y, 0);
+
+                    if (HasEquivalentPlateHoleCenterLine(view, startPoint, endPoint))
+                    {
+                        continue;
+                    }
+
+                    // Dùng đúng line attributes đang được PHU_Shape sử dụng cho
+                    // dãy lỗ cùng Y; không tự dựng thêm một kiểu line mới.
+                    TTSK_AutoDim_Plates.PHU_LineDistance.InsertLineWithLineDistanceAttributes(
+                        view,
+                        startPoint,
+                        endPoint
+                    );
+                }
+                catch { }
+            }
+        }
+
+        private static bool HasEquivalentPlateHoleCenterLine(
+            View view,
+            Point startPoint,
+            Point endPoint
+        )
+        {
+            try
+            {
+                if (view == null || startPoint == null || endPoint == null)
+                    return false;
+
+                DrawingObjectEnumerator objects = view.GetAllObjects(
+                    typeof(Tekla.Structures.Drawing.Line)
+                );
+
+                while (objects.MoveNext())
+                {
+                    Tekla.Structures.Drawing.Line line =
+                        objects.Current as Tekla.Structures.Drawing.Line;
+                    if (line == null)
+                        continue;
+
+                    Point existingStart;
+                    Point existingEnd;
+                    if (!TryGetPlateDrawingLinePoints(line, out existingStart, out existingEnd))
+                    {
+                        continue;
+                    }
+
+                    bool sameDirection =
+                        Distance2D(existingStart, startPoint) <= HOLE_ROW_COLUMN_TOL
+                        && Distance2D(existingEnd, endPoint) <= HOLE_ROW_COLUMN_TOL;
+                    bool reverseDirection =
+                        Distance2D(existingStart, endPoint) <= HOLE_ROW_COLUMN_TOL
+                        && Distance2D(existingEnd, startPoint) <= HOLE_ROW_COLUMN_TOL;
+
+                    if (sameDirection || reverseDirection)
+                        return true;
+                }
+            }
+            catch { }
+
+            return false;
+        }
+
+        private static bool TryGetPlateDrawingLinePoints(
+            Tekla.Structures.Drawing.Line line,
+            out Point startPoint,
+            out Point endPoint
+        )
+        {
+            startPoint = null;
+            endPoint = null;
+
+            if (line == null)
+                return false;
+
+            string[] startNames = new string[]
+            {
+                "StartPoint",
+                "Start",
+                "Point1",
+                "FirstPoint",
+                "P1"
+            };
+            string[] endNames = new string[] { "EndPoint", "End", "Point2", "SecondPoint", "P2" };
+
+            for (int i = 0; i < startNames.Length; i++)
+            {
+                startPoint = TryGetPointProperty(line, startNames[i]);
+                endPoint = TryGetPointProperty(line, endNames[i]);
+
+                if (startPoint != null && endPoint != null)
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static void GetPlateHoleExternalClusterCounts(
+            List<List<PlateHoleCandidate>> families,
+            double minX,
+            double maxX,
+            out int leftCount,
+            out int rightCount
+        )
+        {
+            leftCount = 0;
+            rightCount = 0;
+
+            if (families == null)
+                return;
+
+            foreach (List<PlateHoleCandidate> family in families)
+            {
+                List<Point> familyPoints = ConvertPlateHoleFamilyToPoints(family);
+                List<Point> leftRowFeet;
+                List<Point> rightRowFeet;
+                List<List<Point>> centerLineRows;
+
+                if (
+                    TryBuildPlateWideTwoRowSideLayout(
+                        familyPoints,
+                        minX,
+                        maxX,
+                        out leftRowFeet,
+                        out rightRowFeet,
+                        out centerLineRows
+                    )
+                )
+                {
+                    // Bộ quản lý tầng phải biết trước sẽ có đúng một DIM lỗ
+                    // ở mỗi phía, để DIM tổng dọc tiếp tục nằm ngoài cùng.
+                    leftCount++;
+                    rightCount++;
+                    continue;
+                }
+
+                List<List<Point>> clusters = SplitPlateHoleFamilyIntoXClusters(
+                    familyPoints,
+                    HOLE_CLUSTER_SPLIT_GAP
+                );
+
+                foreach (List<Point> cluster in clusters)
+                {
+                    bool dimOnRight;
+                    if (!TryResolvePlateHoleExternalSide(cluster, minX, maxX, out dimOnRight))
+                    {
+                        continue;
+                    }
+
+                    if (dimOnRight)
+                        rightCount++;
+                    else
+                        leftCount++;
+                }
+            }
+        }
+
+        private static int CreateInternalPlateHoleYDim(
+            StraightDimensionSetHandler handler,
+            View view,
+            List<Point> contour,
+            List<Point> cluster,
+            List<Point> rowFeet,
+            double minY,
+            double maxY
+        )
+        {
+            if (
+                handler == null
+                || view == null
+                || cluster == null
+                || cluster.Count == 0
+                || rowFeet == null
+                || rowFeet.Count == 0
+            )
+            {
+                return 0;
+            }
+
+            Point baselineFoot = CreatePlateHolePresentationFoot(rowFeet[0], -1.0, 0.0);
+            double baselineX = baselineFoot.X;
+            double bottomY = GetBoundaryExtremeYAtX(contour, baselineX, false, minY);
+            PointList points = new PointList();
+            points.Add(new Point(baselineX, bottomY, 0));
+            foreach (Point rowFoot in rowFeet)
+            {
+                points.Add(CreatePlateHolePresentationFoot(rowFoot, -1.0, 0.0));
+            }
+
+            if (rowFeet.Count > 1)
+            {
+                double topY = GetBoundaryExtremeYAtX(contour, baselineX, true, maxY);
+                points.Add(new Point(baselineX, topY, 0));
+            }
+
+            // Trước đây rowFeet lấy cột xa phía DIM nên phải cộng cả bề rộng cụm
+            // để kéo đường DIM trở ngược ra ngoài. Nay chân đã lấy ngay cột gần
+            // phía DIM; giữ phần bù cũ sẽ đẩy DIM xa thừa đúng một bề rộng cụm.
+            double distance = CurrentDimTierUnit * 0.5;
+            return handler.CreateDimensionSet(view, points, new Vector(-1, 0, 0), distance) != null
+                ? 1
+                : 0;
+        }
+
+        private static double GetBoundaryExtremeYAtX(
+            List<Point> contour,
+            double x,
+            bool highest,
+            double fallback
+        )
+        {
+            if (contour == null || contour.Count < 2)
+                return fallback;
+
+            double best = highest ? -Double.MaxValue : Double.MaxValue;
+            bool found = false;
+
+            for (int i = 0; i < contour.Count; i++)
+            {
+                Point a = contour[i];
+                Point b = contour[(i + 1) % contour.Count];
+                if (
+                    a == null
+                    || b == null
+                    || x < Math.Min(a.X, b.X) - 0.1
+                    || x > Math.Max(a.X, b.X) + 0.1
+                )
+                {
+                    continue;
+                }
+
+                if (Math.Abs(a.X - b.X) <= 0.1)
+                {
+                    double candidate = highest ? Math.Max(a.Y, b.Y) : Math.Min(a.Y, b.Y);
+                    best = highest ? Math.Max(best, candidate) : Math.Min(best, candidate);
+                    found = true;
+                    continue;
+                }
+
+                double ratio = (x - a.X) / (b.X - a.X);
+                double y = a.Y + ratio * (b.Y - a.Y);
+                best = highest ? Math.Max(best, y) : Math.Min(best, y);
+                found = true;
+            }
+
+            return found ? best : fallback;
+        }
+
+        private static double GetPlateBoltSize(ModelBoltGroup group)
+        {
+            if (group == null)
+                return 0.0;
+
+            double value = 0.0;
+            try
+            {
+                value = group.BoltSize;
+            }
+            catch { }
+            if (value > 1.0 && value < 200.0)
+                return value;
+
+            value = GetReportDouble(group, "BOLT_SIZE");
+            if (value > 1.0 && value < 200.0)
+                return value;
+            value = GetReportDouble(group, "BOLT_DIAMETER");
+            if (value > 1.0 && value < 200.0)
+                return value;
+            return GetDoublePropertyByReflection(group, "BoltSize");
+        }
+
+        private static double GetPlateHoleSlotX(ModelBoltGroup group)
+        {
+            double value = GetReportDouble(group, "SLOTTED_HOLE_X");
+            if (value > 0.0 && value < 500.0)
+                return value;
+            value = GetReportDouble(group, "LONG_HOLE_X");
+            if (value > 0.0 && value < 500.0)
+                return value;
+            value = GetDoublePropertyByReflection(group, "SlottedHoleX");
+            if (value > 0.0 && value < 500.0)
+                return value;
+            return GetDoublePropertyByReflection(group, "SlotX");
+        }
+
+        private static double GetPlateHoleSlotY(ModelBoltGroup group)
+        {
+            double value = GetReportDouble(group, "SLOTTED_HOLE_Y");
+            if (value > 0.0 && value < 500.0)
+                return value;
+            value = GetReportDouble(group, "LONG_HOLE_Y");
+            if (value > 0.0 && value < 500.0)
+                return value;
+            value = GetDoublePropertyByReflection(group, "SlottedHoleY");
+            if (value > 0.0 && value < 500.0)
+                return value;
+            return GetDoublePropertyByReflection(group, "SlotY");
+        }
+
+        private static string GetPlateHoleTypeText(ModelBoltGroup group)
+        {
+            string value = GetPlateReportString(group, "HOLE_TYPE");
+            if (!String.IsNullOrEmpty(value))
+                return value;
+            value = GetPlateReportString(group, "BOLT_HOLE_TYPE");
+            if (!String.IsNullOrEmpty(value))
+                return value;
+            value = GetStringPropertyByReflection(group, "HoleType");
+            if (!String.IsNullOrEmpty(value))
+                return value;
+            return GetStringPropertyByReflection(group, "BoltHoleType");
+        }
+
+        private static string GetPlateReportString(ModelBoltGroup group, string propertyName)
+        {
+            try
+            {
+                string value = String.Empty;
+                group.GetReportProperty(propertyName, ref value);
+                return (value ?? String.Empty).Trim();
+            }
+            catch
+            {
+                return String.Empty;
+            }
+        }
+
+        private static string GetStringPropertyByReflection(object target, string propertyName)
+        {
+            try
+            {
+                if (target == null)
+                    return String.Empty;
+                PropertyInfo property = target
+                    .GetType()
+                    .GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
+                if (property == null || !property.CanRead)
+                    return String.Empty;
+                object value = property.GetValue(target, null);
+                return value == null ? String.Empty : value.ToString().Trim();
+            }
+            catch
+            {
+                return String.Empty;
+            }
+        }
+
         private static int CreateHoleCenterDims(
             StraightDimensionSetHandler handler,
             View view,
-            ModelPart part,
+            List<List<PlateHoleCandidate>> families,
             List<Point> polygon,
             double minX,
             double maxX,
@@ -1232,7 +2550,8 @@ namespace Tekla.Technology.Akit.UserScript
             Point leftForLength,
             Point rightForLength,
             Point bottomForHeight,
-            Point topForHeight)
+            Point topForHeight
+        )
         {
             int count = 0;
 
@@ -1245,135 +2564,212 @@ namespace Tekla.Technology.Akit.UserScript
             if (rightHoleDimOffset <= 0.0)
                 rightHoleDimOffset = GetCleanDimOffsetByTier(1);
 
-            List<Point> holes = GetBoltHoleCenters(part, minX, maxX, minY, maxY);
-
-            if (holes.Count == 0)
+            if (families == null || families.Count == 0)
                 return count;
 
-            // Tách nhóm lỗ trái/phải theo khoảng cách X lớn nhất.
-            List<List<Point>> groups = SplitHoleGroupsByX(holes);
-
-            // DIM NGANG LỖ:
-            // PA11: offset tầng được cấp từ bộ quản lý tầng 4 hướng,
-            // không dùng hệ tầng cũ 63/125/190.
-            holes.Sort(delegate (Point a, Point b)
-            {
-                return a.X.CompareTo(b.X);
-            });
-
-            PointList xDim = new PointList();
-
-            // Với plate vạt góc:
-            // Điểm chân dim mép trái/phải phải bám vào đúng điểm vuông của mép thanh,
-            // không lấy cứng (minX, minY) vì điểm này có thể nằm ngoài plate.
-            // DIM NGANG LỖ:
-            // Phải lấy theo mép TRÁI/PHẢI ngoài cùng của plate.
-            // Không lấy mép dưới, vì plate vạt góc sẽ làm dim bị ngắn sai như 137.5.
             Point leftBottomEdgeForXDim = GetSidePointNearBottom(polygon, minX, true);
             Point rightBottomEdgeForXDim = GetSidePointNearBottom(polygon, maxX, false);
+            int horizontalTierIndex = 0;
+            int leftTierIndex = 0;
+            int rightTierIndex = 0;
 
-            xDim.Add(leftBottomEdgeForXDim);
-
-            foreach (Point h in holes)
+            foreach (List<PlateHoleCandidate> family in families)
             {
-                // DIM NGANG LỖ:
-                // Kích thước vẫn lấy đúng X tâm lỗ.
-                // Chỉ dịch chân dim xuống theo phi lỗ / BoltSize thật để không đè tâm lỗ.
-                double holeGap = GetHoleCenterDimGapByPhi(part, h);
-                xDim.Add(new Point(h.X, h.Y - holeGap, 0));
-            }
+                List<Point> familyPoints = ConvertPlateHoleFamilyToPoints(family);
+                if (familyPoints.Count == 0)
+                    continue;
 
-            xDim.Add(rightBottomEdgeForXDim);
+                // DIM chỉ neo tới lỗ gần phía đặt. Hai loại center line độc lập
+                // biểu diễn liên hệ toàn bộ dãy tâm theo hàng Y và cột X.
+                CreatePlateHoleRowAndColumnCenterLines(view, familyPoints);
 
-            // PA11: Không đảo PointList nữa.
-            // Tekla thường lấy chân đầu của chính DIM làm gốc distance,
-            // nên giữ nguyên thứ tự chân DIM và chỉ quy đổi distance về neo A/B/C/D.
-
-            double bottomHoleDistance = GetBottomDistanceByAnchor4Direction(
-                xDim,
-                leftForLength,
-                rightForLength,
-                bottomForHeight,
-                topForHeight,
-                bottomHoleDimOffset
-            );
-
-            StraightDimensionSet dimX =
-                handler.CreateDimensionSet(
-                    view,
-                    xDim,
-                    new Vector(0, -1, 0),
-                    bottomHoleDistance
+                // Shape L: một cột X chỉ lấy lỗ thấp nhất làm đại diện cho DIM ngang,
+                // sau đó mới gom theo hàng Y. Mỗi family kỹ thuật có chain riêng.
+                List<Point> horizontalRepresentatives = BuildPlateHorizontalRepresentativeHoles(
+                    familyPoints
+                );
+                List<List<Point>> rows = GroupPlateHolePointsByY(
+                    horizontalRepresentatives,
+                    HOLE_ROW_COLUMN_TOL
                 );
 
-            if (dimX != null)
-                count++;
+                foreach (List<Point> row in rows)
+                {
+                    if (row == null || row.Count == 0)
+                        continue;
 
-            // DIM DỌC LỖ:
-            // Quy tắc tầng:
-            // - Nếu chỉ có 1 cụm lỗ: đặt bên phải, tầng 2 = 126 ~ 125
-            // - Nếu có 2 cụm lỗ:
-            //     + cụm trái: tầng 1 = 63
-            //     + cụm phải: tầng 2 = 126 ~ 125
-            // Sau này nếu có nhiều tầng hơn:
-            //     tầng 3 = 189 ~ 190
-            //     tầng 4 = 252 ...
-            if (groups.Count == 1)
-            {
-                count += CreateOneSideHoleYDim(
-                    handler,
-                    view,
-                    polygon,
-                    part,
-                    groups[0],
-                    maxX,
-                    minY,
-                    maxY,
-                    new Vector(1, 0, 0),
-                    rightHoleDimOffset,
-                    leftForLength,
-                    rightForLength,
-                    bottomForHeight,
-                    topForHeight
-                );
-            }
-            else
-            {
-                // Cụm trái: tầng 1 = 63
-                count += CreateOneSideHoleYDim(
-                    handler,
-                    view,
-                    polygon,
-                    part,
-                    groups[0],
-                    minX,
-                    minY,
-                    maxY,
-                    new Vector(-1, 0, 0),
-                    leftHoleDimOffset,
-                    leftForLength,
-                    rightForLength,
-                    bottomForHeight,
-                    topForHeight
+                    row.Sort(
+                        delegate(Point a, Point b)
+                        {
+                            return a.X.CompareTo(b.X);
+                        }
+                    );
+                    // Không tạo DIM nếu không tìm được chân thật trên contour.
+                    // Tuyệt đối không dựng góc bounding box làm fallback.
+                    if (leftBottomEdgeForXDim == null || rightBottomEdgeForXDim == null)
+                    {
+                        continue;
+                    }
+
+                    PointList xDim = new PointList();
+                    xDim.Add(leftBottomEdgeForXDim);
+                    foreach (Point hole in row)
+                    {
+                        // DIM ngang đặt phía dưới: chân presentation tại lỗ dịch
+                        // xuống đúng bằng phi lỗ; X tâm và trị số chuỗi không đổi.
+                        xDim.Add(CreatePlateHolePresentationFoot(hole, 0.0, -1.0));
+                    }
+                    xDim.Add(rightBottomEdgeForXDim);
+
+                    double tierOffset =
+                        bottomHoleDimOffset + horizontalTierIndex * CurrentDimTierUnit;
+                    double distance = GetBottomDistanceByAnchor4Direction(
+                        xDim,
+                        leftForLength,
+                        rightForLength,
+                        bottomForHeight,
+                        topForHeight,
+                        tierOffset
+                    );
+
+                    if (
+                        handler.CreateDimensionSet(view, xDim, new Vector(0, -1, 0), distance)
+                        != null
+                    )
+                    {
+                        count++;
+                        horizontalTierIndex++;
+                    }
+                }
+
+                List<Point> leftWideRowFeet;
+                List<Point> rightWideRowFeet;
+                List<List<Point>> wideCenterLineRows;
+
+                if (
+                    TryBuildPlateWideTwoRowSideLayout(
+                        familyPoints,
+                        minX,
+                        maxX,
+                        out leftWideRowFeet,
+                        out rightWideRowFeet,
+                        out wideCenterLineRows
+                    )
+                )
+                {
+                    // Mẫu 4 cột x 2 hàng trải rộng:
+                    // - chỉ một chain Y ở mép trái, lấy tâm cột trái ngoài cùng;
+                    // - chỉ một chain Y ở mép phải, lấy tâm cột phải ngoài cùng;
+                    // - center line hàng/cột đã được tạo riêng phía trên.
+                    // Không đi tiếp vào SplitPlateHoleFamilyIntoXClusters vì đó
+                    // chính là nguyên nhân sinh các chain 85-330-85 ở giữa.
+                    double leftSideOffset = leftHoleDimOffset + leftTierIndex * CurrentDimTierUnit;
+                    leftTierIndex++;
+                    count += CreateOneSideHoleYDim(
+                        handler,
+                        view,
+                        polygon,
+                        leftWideRowFeet,
+                        minY,
+                        maxY,
+                        new Vector(-1, 0, 0),
+                        leftSideOffset,
+                        leftForLength,
+                        rightForLength,
+                        bottomForHeight,
+                        topForHeight
+                    );
+
+                    double rightSideOffset =
+                        rightHoleDimOffset + rightTierIndex * CurrentDimTierUnit;
+                    rightTierIndex++;
+                    count += CreateOneSideHoleYDim(
+                        handler,
+                        view,
+                        polygon,
+                        rightWideRowFeet,
+                        minY,
+                        maxY,
+                        new Vector(1, 0, 0),
+                        rightSideOffset,
+                        leftForLength,
+                        rightForLength,
+                        bottomForHeight,
+                        topForHeight
+                    );
+
+                    continue;
+                }
+
+                // Các family còn lại tiếp tục tách cụm X nguyên vẹn như Shape L.
+                List<List<Point>> xClusters = SplitPlateHoleFamilyIntoXClusters(
+                    familyPoints,
+                    HOLE_CLUSTER_SPLIT_GAP
                 );
 
-                // Cụm phải: tầng 2 = 126 ~ 125
-                count += CreateOneSideHoleYDim(
-                    handler,
-                    view,
-                    polygon,
-                    part,
-                    groups[groups.Count - 1],
-                    maxX,
-                    minY,
-                    maxY,
-                    new Vector(1, 0, 0),
-                    rightHoleDimOffset,
-                    leftForLength,
-                    rightForLength,
-                    bottomForHeight,
-                    topForHeight
-                );
+                foreach (List<Point> cluster in xClusters)
+                {
+                    if (cluster == null || cluster.Count == 0)
+                        continue;
+
+                    bool dimOnRight;
+                    bool isExternal = TryResolvePlateHoleExternalSide(
+                        cluster,
+                        minX,
+                        maxX,
+                        out dimOnRight
+                    );
+
+                    List<Point> rowFeet = SelectPlateVerticalRowFeet(cluster, dimOnRight);
+                    if (rowFeet.Count == 0)
+                        continue;
+
+                    if (isExternal)
+                    {
+                        double sideOffset;
+                        Vector sideDirection;
+
+                        if (dimOnRight)
+                        {
+                            sideOffset = rightHoleDimOffset + rightTierIndex * CurrentDimTierUnit;
+                            rightTierIndex++;
+                            sideDirection = new Vector(1, 0, 0);
+                        }
+                        else
+                        {
+                            sideOffset = leftHoleDimOffset + leftTierIndex * CurrentDimTierUnit;
+                            leftTierIndex++;
+                            sideDirection = new Vector(-1, 0, 0);
+                        }
+
+                        count += CreateOneSideHoleYDim(
+                            handler,
+                            view,
+                            polygon,
+                            rowFeet,
+                            minY,
+                            maxY,
+                            sideDirection,
+                            sideOffset,
+                            leftForLength,
+                            rightForLength,
+                            bottomForHeight,
+                            topForHeight
+                        );
+                    }
+                    else
+                    {
+                        count += CreateInternalPlateHoleYDim(
+                            handler,
+                            view,
+                            polygon,
+                            cluster,
+                            rowFeet,
+                            minY,
+                            maxY
+                        );
+                    }
+                }
             }
 
             return count;
@@ -1395,8 +2791,7 @@ namespace Tekla.Technology.Akit.UserScript
             CurrentDimTierUnit = NORMAL_NO_CHAMFER_DIM_OFFSET;
 
             double manualScale;
-            if (!TTSK_AutoDim_Plates.ManualDrawingScaleOverride.TryGet(
-                    out manualScale))
+            if (!TTSK_AutoDim_Plates.ManualDrawingScaleOverride.TryGet(out manualScale))
                 return;
 
             bool actualScaleFound = false;
@@ -1415,7 +2810,8 @@ namespace Tekla.Technology.Akit.UserScript
                     if (Math.Abs(actualScale - manualScale) > 0.001)
                     {
                         throw new InvalidOperationException(
-                            "Không áp dụng được manual scale cho toàn bộ target view.");
+                            "Không áp dụng được manual scale cho toàn bộ target view."
+                        );
                     }
                 }
             }
@@ -1423,72 +2819,18 @@ namespace Tekla.Technology.Akit.UserScript
             if (!actualScaleFound)
             {
                 throw new InvalidOperationException(
-                    "Không đọc lại được manual scale sau CommitChanges.");
+                    "Không đọc lại được manual scale sau CommitChanges."
+                );
             }
 
             CurrentDimTierUnit = manualScale * 10.0;
-        }
-
-        private static List<List<Point>> SplitHoleGroupsByX(List<Point> holes)
-        {
-            List<Point> sorted = new List<Point>();
-
-            foreach (Point h in holes)
-                sorted.Add(h);
-
-            sorted.Sort(delegate (Point a, Point b)
-            {
-                return a.X.CompareTo(b.X);
-            });
-
-            List<List<Point>> groups = new List<List<Point>>();
-
-            if (sorted.Count == 0)
-                return groups;
-
-            double maxGap = 0.0;
-            int splitIndex = -1;
-
-            for (int i = 0; i < sorted.Count - 1; i++)
-            {
-                double gap = Math.Abs(sorted[i + 1].X - sorted[i].X);
-
-                if (gap > maxGap)
-                {
-                    maxGap = gap;
-                    splitIndex = i;
-                }
-            }
-
-            if (splitIndex >= 0 && maxGap > HOLE_GROUP_SPLIT_DISTANCE)
-            {
-                List<Point> left = new List<Point>();
-                List<Point> right = new List<Point>();
-
-                for (int i = 0; i <= splitIndex; i++)
-                    left.Add(sorted[i]);
-
-                for (int i = splitIndex + 1; i < sorted.Count; i++)
-                    right.Add(sorted[i]);
-
-                groups.Add(left);
-                groups.Add(right);
-            }
-            else
-            {
-                groups.Add(sorted);
-            }
-
-            return groups;
         }
 
         private static int CreateOneSideHoleYDim(
             StraightDimensionSetHandler handler,
             View view,
             List<Point> polygon,
-            ModelPart part,
             List<Point> holes,
-            double edgeX,
             double minY,
             double maxY,
             Vector direction,
@@ -1496,45 +2838,75 @@ namespace Tekla.Technology.Akit.UserScript
             Point leftForLength,
             Point rightForLength,
             Point bottomForHeight,
-            Point topForHeight)
+            Point topForHeight
+        )
         {
             if (holes == null || holes.Count == 0)
                 return 0;
 
-            holes.Sort(delegate (Point a, Point b)
-            {
-                return a.Y.CompareTo(b.Y);
-            });
+            holes.Sort(
+                delegate(Point a, Point b)
+                {
+                    return a.Y.CompareTo(b.Y);
+                }
+            );
 
             PointList yDim = new PointList();
 
             bool isLeftSide = direction.X < 0;
 
-            // Với plate vạt góc:
-            // Chân dim ở mép thanh phải bám vào điểm vuông của cạnh trái/phải,
-            // không lấy cứng (edgeX, minY/maxY) vì điểm đó có thể nằm ngoài plate.
-            // DIM DỌC:
-            // Với plate vạt góc, không lấy cạnh đứng ngoài cùng vì đó có thể là cạnh nhỏ sau vạt.
-            // Phải lấy điểm ở MÉP DƯỚI / MÉP TRÊN thật của plate, rồi chọn trái/phải.
-            Point sideBottomPoint = GetHorizontalEdgePoint(polygon, minY, isLeftSide, true);
-            Point sideTopPoint = GetHorizontalEdgePoint(polygon, maxY, isLeftSide, false);
+            // Trái/phải chỉ do vị trí cụm lỗ quyết định ở flow phía trên.
+            // Sau khi đã chọn phía, tuyệt đối không tìm lại "mép gần nhất" trên
+            // contour: cạnh vát/notch gần lỗ có thể thắng và làm hai chân neo lệch phía.
+            //
+            // Hai chân DIM tổng dọc C/D đã đúng: dùng nguyên hai chân đó ở bên trái.
+            // Bên phải lấy endpoint đối diện của chính hai cạnh ngang C/D, bằng cùng
+            // resolver DIM tổng. Không dùng X của DIM tổng ngang/bounding-box.
+            Point sideBottomPoint;
+            Point sideTopPoint;
+            bool resolvedFromTotalDimensions =
+                TryResolvePlateHoleSideFeetFromTotalVerticalDimension(
+                    polygon,
+                    minY,
+                    maxY,
+                    isLeftSide,
+                    bottomForHeight,
+                    topForHeight,
+                    out sideBottomPoint,
+                    out sideTopPoint
+                );
+
+            // Fallback chỉ dành cho dữ liệu cũ/malformed thiếu chân DIM tổng.
+            // DIM lỗ vẫn là bắt buộc: không bỏ DIM chỉ vì resolver phụ thất bại.
+            if (!resolvedFromTotalDimensions)
+            {
+                sideBottomPoint = GetHorizontalEdgePoint(polygon, minY, isLeftSide, true);
+                sideTopPoint = GetHorizontalEdgePoint(polygon, maxY, isLeftSide, false);
+            }
+
+            if (sideBottomPoint == null || sideTopPoint == null)
+            {
+                double emergencyX = holes[0].X;
+                foreach (Point hole in holes)
+                {
+                    if (hole == null)
+                        continue;
+                    if (isLeftSide && hole.X < emergencyX)
+                        emergencyX = hole.X;
+                    if (!isLeftSide && hole.X > emergencyX)
+                        emergencyX = hole.X;
+                }
+                sideBottomPoint = new Point(emergencyX, minY, 0);
+                sideTopPoint = new Point(emergencyX, maxY, 0);
+            }
 
             yDim.Add(sideBottomPoint);
 
             foreach (Point h in holes)
             {
-                // DIM DỌC LỖ:
-                // Kích thước vẫn lấy đúng Y tâm lỗ.
-                // Chỉ dịch chân dim ra ngoài theo phi lỗ / BoltSize thật để không đè tâm lỗ.
-                double holeGap = GetHoleCenterDimGapByPhi(part, h);
-                double shiftedX = h.X;
-
-                if (direction.X < 0)
-                    shiftedX = h.X - holeGap;
-                else if (direction.X > 0)
-                    shiftedX = h.X + holeGap;
-
-                yDim.Add(new Point(shiftedX, h.Y, 0));
+                // DIM dọc: chân presentation dịch khỏi tâm đúng bằng phi lỗ
+                // về cùng phía với đường DIM; Y tâm và trị số chuỗi không đổi.
+                yDim.Add(CreatePlateHolePresentationFoot(h, direction.X, direction.Y));
             }
 
             yDim.Add(sideTopPoint);
@@ -1566,13 +2938,12 @@ namespace Tekla.Technology.Akit.UserScript
                 );
             }
 
-            StraightDimensionSet dimY =
-                handler.CreateDimensionSet(
-                    view,
-                    yDim,
-                    direction,
-                    yDimDistance
-                );
+            StraightDimensionSet dimY = handler.CreateDimensionSet(
+                view,
+                yDim,
+                direction,
+                yDimDistance
+            );
 
             if (dimY != null)
                 return 1;
@@ -1580,212 +2951,409 @@ namespace Tekla.Technology.Akit.UserScript
             return 0;
         }
 
+        private static bool TryResolvePlateHoleSideFeetFromTotalVerticalDimension(
+            List<Point> polygon,
+            double minY,
+            double maxY,
+            bool isLeftSide,
+            Point bottomForHeight,
+            Point topForHeight,
+            out Point sideBottomPoint,
+            out Point sideTopPoint
+        )
+        {
+            sideBottomPoint = null;
+            sideTopPoint = null;
 
+            if (bottomForHeight == null || topForHeight == null)
+                return false;
+
+            if (isLeftSide)
+            {
+                // Không resolve lại: đây chính là hai chân của DIM tổng dọc.
+                sideBottomPoint = new Point(bottomForHeight.X, bottomForHeight.Y, 0);
+                sideTopPoint = new Point(topForHeight.X, topForHeight.Y, 0);
+                return true;
+            }
+
+            // Cặp phải là hai endpoint còn lại trên đúng các mép ngang đã tạo C/D.
+            // Dùng Y của C/D làm nguồn chính; minY/maxY chỉ là fallback dữ liệu cũ.
+            sideBottomPoint = GetStraightHorizontalEdgePointForTotalDim(
+                polygon,
+                bottomForHeight == null ? minY : bottomForHeight.Y,
+                false
+            );
+            sideTopPoint = GetStraightHorizontalEdgePointForTotalDim(
+                polygon,
+                topForHeight == null ? maxY : topForHeight.Y,
+                false
+            );
+            return sideBottomPoint != null && sideTopPoint != null;
+        }
 
         private static Point GetHorizontalEdgePoint(
             List<Point> polygon,
             double edgeY,
             bool leftSide,
-            bool bottom)
+            bool bottom
+        )
         {
             if (polygon == null || polygon.Count == 0)
                 return null;
 
-            // Tìm Y thật của mép trên/dưới gần nhất.
-            // bottom=true  -> mép dưới
-            // bottom=false -> mép trên
-            double bestY = edgeY;
-            double bestDy = 999999999.0;
-
-            foreach (Point p in polygon)
+            // ROOT FIX:
+            // Flow cũ lấy bestY từ đúng một vertex rồi lọc bằng TOL=0. Hai đầu của
+            // cùng một mép sau phép chiếu có thể lệch vài phần nghìn mm, vì vậy chỉ
+            // còn đầu trái hoặc đầu phải trong candidates. Kết quả là DIM bên phải
+            // có chân trên bám phải nhưng chân dưới lại bám trái (hoặc ngược lại).
+            //
+            // Flow mới làm việc trực tiếp trong hệ tọa độ view: xác định Y biên thật,
+            // lấy mọi vertex/giao điểm contour trên dải 0.1 mm đó, rồi phía DIM quyết
+            // định cực trị X. Dung sai chỉ nhận "cùng mép"; không quyết định trái/phải.
+            double targetY = bottom ? Double.MaxValue : -Double.MaxValue;
+            foreach (Point point in polygon)
             {
-                double dy = Math.Abs(p.Y - edgeY);
+                if (point == null)
+                    continue;
 
-                if (dy < bestDy)
+                targetY = bottom ? Math.Min(targetY, point.Y) : Math.Max(targetY, point.Y);
+            }
+
+            if (targetY == Double.MaxValue || targetY == -Double.MaxValue)
+                targetY = edgeY;
+
+            List<Point> candidates = new List<Point>();
+            foreach (Point point in polygon)
+            {
+                if (point != null && Math.Abs(point.Y - targetY) <= PLATE_EDGE_FOOT_ALIGNMENT_TOL)
                 {
-                    bestDy = dy;
-                    bestY = p.Y;
+                    AddUniquePoint(
+                        candidates,
+                        new Point(point.X, point.Y, 0),
+                        PLATE_EDGE_FOOT_ALIGNMENT_TOL * 0.25
+                    );
                 }
             }
 
-            List<Point> candidates = new List<Point>();
-
-            foreach (Point p in polygon)
+            // Fallback hình học cho contour không có vertex đúng ngay dải biên:
+            // chiếu đường ngang Y=targetY và lấy giao điểm với từng segment thật.
+            if (candidates.Count == 0)
             {
-                if (Math.Abs(p.Y - bestY) <= TOL + 0.0)
-                    candidates.Add(p);
+                AddPlateContourIntersectionsAtY(polygon, targetY, candidates);
             }
 
             if (candidates.Count == 0)
                 return null;
 
             Point result = null;
-
-            foreach (Point p in candidates)
+            foreach (Point point in candidates)
             {
-                if (result == null)
-                {
-                    result = p;
+                if (point == null)
                     continue;
-                }
 
-                if (leftSide)
+                if (
+                    result == null
+                    || (leftSide && point.X < result.X)
+                    || (!leftSide && point.X > result.X)
+                )
                 {
-                    if (p.X < result.X)
-                        result = p;
-                }
-                else
-                {
-                    if (p.X > result.X)
-                        result = p;
+                    result = point;
                 }
             }
 
-            return new Point(result.X, edgeY, 0);
+            // Nếu dải dung sai vẫn chỉ thấy đầu ở nửa đối diện, không bỏ DIM.
+            // Fallback hẹp: giới hạn vertex vào đúng nửa trái/phải rồi lấy điểm
+            // có Y gần biên nhất. Đây là phương án cuối, sau dải mép và giao contour.
+            double minContourX = Double.MaxValue;
+            double maxContourX = -Double.MaxValue;
+            foreach (Point point in polygon)
+            {
+                if (point == null)
+                    continue;
+                if (point.X < minContourX)
+                    minContourX = point.X;
+                if (point.X > maxContourX)
+                    maxContourX = point.X;
+            }
+
+            if (result != null && minContourX < Double.MaxValue && maxContourX > -Double.MaxValue)
+            {
+                double centerX = (minContourX + maxContourX) * 0.5;
+                if (
+                    (leftSide && result.X > centerX + PLATE_EDGE_FOOT_ALIGNMENT_TOL)
+                    || (!leftSide && result.X < centerX - PLATE_EDGE_FOOT_ALIGNMENT_TOL)
+                )
+                {
+                    Point sideFallback = null;
+                    double bestDistanceToEdge = Double.MaxValue;
+                    foreach (Point point in polygon)
+                    {
+                        if (point == null)
+                            continue;
+
+                        bool onRequestedHalf = leftSide
+                            ? point.X <= centerX + PLATE_EDGE_FOOT_ALIGNMENT_TOL
+                            : point.X >= centerX - PLATE_EDGE_FOOT_ALIGNMENT_TOL;
+                        if (!onRequestedHalf)
+                            continue;
+
+                        double distanceToEdge = Math.Abs(point.Y - targetY);
+                        if (
+                            sideFallback == null
+                            || distanceToEdge < bestDistanceToEdge - PLATE_EDGE_FOOT_ALIGNMENT_TOL
+                            || (
+                                Math.Abs(distanceToEdge - bestDistanceToEdge)
+                                    <= PLATE_EDGE_FOOT_ALIGNMENT_TOL
+                                && (
+                                    (leftSide && point.X < sideFallback.X)
+                                    || (!leftSide && point.X > sideFallback.X)
+                                )
+                            )
+                        )
+                        {
+                            sideFallback = point;
+                            bestDistanceToEdge = distanceToEdge;
+                        }
+                    }
+
+                    if (sideFallback != null)
+                        result = sideFallback;
+                }
+            }
+
+            return result == null ? null : new Point(result.X, result.Y, 0);
         }
 
         private static Point GetSidePointNearBottom(
             List<Point> polygon,
             double edgeX,
-            bool leftSide)
+            bool leftSide
+        )
         {
-            Point p = GetSidePointByX(polygon, edgeX, leftSide, true);
-
-            if (p != null)
-                return p;
-
-            return new Point(edgeX, 0, 0);
-        }
-
-        private static Point GetSidePointNearTop(
-            List<Point> polygon,
-            double edgeX,
-            bool leftSide)
-        {
-            Point p = GetSidePointByX(polygon, edgeX, leftSide, false);
-
-            if (p != null)
-                return p;
-
-            return new Point(edgeX, 0, 0);
+            return GetSidePointByX(polygon, edgeX, leftSide, true);
         }
 
         private static Point GetSidePointByX(
             List<Point> polygon,
             double edgeX,
             bool leftSide,
-            bool bottom)
+            bool bottom
+        )
         {
             if (polygon == null || polygon.Count == 0)
                 return null;
 
-            // Tìm các vertex nằm sát cạnh trái/phải thật của plate.
-            // Với plate vạt góc, các điểm này chính là "điểm vuông" ở đầu cạnh đứng.
-            double bestX = edgeX;
-            double bestDx = 999999999.0;
-
-            foreach (Point p in polygon)
+            // Đối xứng với resolver Y ở trên: nhận cạnh trái/phải bằng một dải X
+            // cục bộ rồi chọn đầu dưới/trên. Không dùng equality tuyệt đối TOL=0.
+            double targetX = leftSide ? Double.MaxValue : -Double.MaxValue;
+            foreach (Point point in polygon)
             {
-                double dx = Math.Abs(p.X - edgeX);
+                if (point == null)
+                    continue;
 
-                if (dx < bestDx)
-                {
-                    bestDx = dx;
-                    bestX = p.X;
-                }
+                targetX = leftSide ? Math.Min(targetX, point.X) : Math.Max(targetX, point.X);
             }
 
-            List<Point> candidates = new List<Point>();
+            if (targetX == Double.MaxValue || targetX == -Double.MaxValue)
+                targetX = edgeX;
 
-            foreach (Point p in polygon)
+            List<Point> candidates = new List<Point>();
+            foreach (Point point in polygon)
             {
-                if (Math.Abs(p.X - bestX) <= TOL + 0.0)
-                    candidates.Add(p);
+                if (point != null && Math.Abs(point.X - targetX) <= PLATE_EDGE_FOOT_ALIGNMENT_TOL)
+                {
+                    AddUniquePoint(
+                        candidates,
+                        new Point(point.X, point.Y, 0),
+                        PLATE_EDGE_FOOT_ALIGNMENT_TOL * 0.25
+                    );
+                }
             }
 
             if (candidates.Count == 0)
             {
-                Point best = null;
-                double score = 999999999.0;
-
-                foreach (Point p in polygon)
-                {
-                    double s = Math.Abs(p.X - edgeX);
-
-                    if (best == null || s < score)
-                    {
-                        best = p;
-                        score = s;
-                    }
-                }
-
-                if (best != null)
-                    return new Point(edgeX, best.Y, 0);
-
-                return null;
+                AddPlateContourIntersectionsAtX(polygon, targetX, candidates);
             }
 
-            Point result = null;
+            if (candidates.Count == 0)
+                return null;
 
-            foreach (Point p in candidates)
+            Point result = null;
+            foreach (Point point in candidates)
             {
-                if (result == null)
+                if (point == null)
+                    continue;
+
+                if (
+                    result == null
+                    || (bottom && point.Y < result.Y)
+                    || (!bottom && point.Y > result.Y)
+                )
                 {
-                    result = p;
+                    result = point;
+                }
+            }
+
+            double minContourY = Double.MaxValue;
+            double maxContourY = -Double.MaxValue;
+            foreach (Point point in polygon)
+            {
+                if (point == null)
+                    continue;
+                if (point.Y < minContourY)
+                    minContourY = point.Y;
+                if (point.Y > maxContourY)
+                    maxContourY = point.Y;
+            }
+
+            if (result != null && minContourY < Double.MaxValue && maxContourY > -Double.MaxValue)
+            {
+                double centerY = (minContourY + maxContourY) * 0.5;
+                if (
+                    (bottom && result.Y > centerY + PLATE_EDGE_FOOT_ALIGNMENT_TOL)
+                    || (!bottom && result.Y < centerY - PLATE_EDGE_FOOT_ALIGNMENT_TOL)
+                )
+                {
+                    Point edgeFallback = null;
+                    double bestDistanceToEdge = Double.MaxValue;
+                    foreach (Point point in polygon)
+                    {
+                        if (point == null)
+                            continue;
+
+                        bool onRequestedHalf = bottom
+                            ? point.Y <= centerY + PLATE_EDGE_FOOT_ALIGNMENT_TOL
+                            : point.Y >= centerY - PLATE_EDGE_FOOT_ALIGNMENT_TOL;
+                        if (!onRequestedHalf)
+                            continue;
+
+                        double distanceToEdge = Math.Abs(point.X - targetX);
+                        if (
+                            edgeFallback == null
+                            || distanceToEdge < bestDistanceToEdge - PLATE_EDGE_FOOT_ALIGNMENT_TOL
+                            || (
+                                Math.Abs(distanceToEdge - bestDistanceToEdge)
+                                    <= PLATE_EDGE_FOOT_ALIGNMENT_TOL
+                                && (
+                                    (bottom && point.Y < edgeFallback.Y)
+                                    || (!bottom && point.Y > edgeFallback.Y)
+                                )
+                            )
+                        )
+                        {
+                            edgeFallback = point;
+                            bestDistanceToEdge = distanceToEdge;
+                        }
+                    }
+
+                    if (edgeFallback != null)
+                        result = edgeFallback;
+                }
+            }
+
+            return result == null ? null : new Point(result.X, result.Y, 0);
+        }
+
+        private static void AddPlateContourIntersectionsAtY(
+            List<Point> polygon,
+            double targetY,
+            List<Point> result
+        )
+        {
+            if (polygon == null || polygon.Count < 2 || result == null)
+                return;
+
+            for (int i = 0; i < polygon.Count; i++)
+            {
+                Point first = polygon[i];
+                Point second = polygon[(i + 1) % polygon.Count];
+                if (first == null || second == null)
+                    continue;
+
+                double deltaY = second.Y - first.Y;
+                if (Math.Abs(deltaY) <= PLATE_EDGE_FOOT_ALIGNMENT_TOL)
+                {
+                    if (
+                        Math.Min(Math.Abs(first.Y - targetY), Math.Abs(second.Y - targetY))
+                        <= PLATE_EDGE_FOOT_ALIGNMENT_TOL
+                    )
+                    {
+                        AddUniquePoint(result, new Point(first.X, first.Y, 0), 0.025);
+                        AddUniquePoint(result, new Point(second.X, second.Y, 0), 0.025);
+                    }
                     continue;
                 }
 
-                if (bottom)
+                if (
+                    targetY < Math.Min(first.Y, second.Y) - PLATE_EDGE_FOOT_ALIGNMENT_TOL
+                    || targetY > Math.Max(first.Y, second.Y) + PLATE_EDGE_FOOT_ALIGNMENT_TOL
+                )
                 {
-                    if (p.Y < result.Y)
-                        result = p;
+                    continue;
                 }
-                else
-                {
-                    if (p.Y > result.Y)
-                        result = p;
-                }
-            }
 
-            return new Point(edgeX, result.Y, 0);
+                double ratio = (targetY - first.Y) / deltaY;
+                if (ratio < -0.001 || ratio > 1.001)
+                    continue;
+
+                ratio = Math.Max(0.0, Math.Min(1.0, ratio));
+                AddUniquePoint(
+                    result,
+                    new Point(first.X + ratio * (second.X - first.X), targetY, 0),
+                    0.025
+                );
+            }
         }
 
-        private static double GetHoleCenterDimGapByPhi(ModelPart part, Point holeCenter)
+        private static void AddPlateContourIntersectionsAtX(
+            List<Point> polygon,
+            double targetX,
+            List<Point> result
+        )
         {
-            // V21: Khoảng hở chân DIM lỗ lấy theo phi lỗ / BoltSize thật.
-            // Không dùng hằng số cố định 22mm nữa.
-            try
+            if (polygon == null || polygon.Count < 2 || result == null)
+                return;
+
+            for (int i = 0; i < polygon.Count; i++)
             {
-                if (part == null || holeCenter == null)
-                    return 0.0;
+                Point first = polygon[i];
+                Point second = polygon[(i + 1) % polygon.Count];
+                if (first == null || second == null)
+                    continue;
 
-                ModelObjectEnumerator bolts = part.GetBolts();
-
-                while (bolts.MoveNext())
+                double deltaX = second.X - first.X;
+                if (Math.Abs(deltaX) <= PLATE_EDGE_FOOT_ALIGNMENT_TOL)
                 {
-                    ModelBoltGroup bg = bolts.Current as ModelBoltGroup;
-                    if (bg == null) continue;
-
-                    foreach (object obj in bg.BoltPositions)
+                    if (
+                        Math.Min(Math.Abs(first.X - targetX), Math.Abs(second.X - targetX))
+                        <= PLATE_EDGE_FOOT_ALIGNMENT_TOL
+                    )
                     {
-                        Point p = obj as Point;
-                        if (p == null) continue;
-
-                        if (Math.Abs(p.X - holeCenter.X) <= 1.0 &&
-                            Math.Abs(p.Y - holeCenter.Y) <= 1.0)
-                        {
-                            double d = GetBoltGroupPhiForDimGap(bg);
-                            if (d > 0.0)
-                                return d;
-                        }
+                        AddUniquePoint(result, new Point(first.X, first.Y, 0), 0.025);
+                        AddUniquePoint(result, new Point(second.X, second.Y, 0), 0.025);
                     }
+                    continue;
                 }
-            }
-            catch
-            {
-            }
 
-            return 0.0;
+                if (
+                    targetX < Math.Min(first.X, second.X) - PLATE_EDGE_FOOT_ALIGNMENT_TOL
+                    || targetX > Math.Max(first.X, second.X) + PLATE_EDGE_FOOT_ALIGNMENT_TOL
+                )
+                {
+                    continue;
+                }
+
+                double ratio = (targetX - first.X) / deltaX;
+                if (ratio < -0.001 || ratio > 1.001)
+                    continue;
+
+                ratio = Math.Max(0.0, Math.Min(1.0, ratio));
+                AddUniquePoint(
+                    result,
+                    new Point(targetX, first.Y + ratio * (second.Y - first.Y), 0),
+                    0.025
+                );
+            }
         }
 
         private static double GetBoltGroupPhiForDimGap(ModelBoltGroup bg)
@@ -1796,36 +3364,46 @@ namespace Tekla.Technology.Akit.UserScript
             // PA6: Ưu tiên PHI LỖ thật trước.
             // Chỉ khi không lấy được phi lỗ mới fallback về M/BoltSize.
             double v = GetReportDouble(bg, "HOLE_DIAMETER");
-            if (v > 0.0 && v < 500.0) return v;
+            if (v > 0.0 && v < 500.0)
+                return v;
 
             v = GetReportDouble(bg, "BOLT_HOLE_DIAMETER");
-            if (v > 0.0 && v < 500.0) return v;
+            if (v > 0.0 && v < 500.0)
+                return v;
 
             v = GetReportDouble(bg, "HOLE_SIZE");
-            if (v > 0.0 && v < 500.0) return v;
+            if (v > 0.0 && v < 500.0)
+                return v;
 
             v = GetDoublePropertyByReflection(bg, "HoleDiameter");
-            if (v > 0.0 && v < 500.0) return v;
+            if (v > 0.0 && v < 500.0)
+                return v;
 
             v = GetDoublePropertyByReflection(bg, "HoleSize");
-            if (v > 0.0 && v < 500.0) return v;
+            if (v > 0.0 && v < 500.0)
+                return v;
 
             // Một số môi trường Tekla trả phi qua DIAMETER/Diameter.
             v = GetReportDouble(bg, "DIAMETER");
-            if (v > 0.0 && v < 500.0) return v;
+            if (v > 0.0 && v < 500.0)
+                return v;
 
             v = GetDoublePropertyByReflection(bg, "Diameter");
-            if (v > 0.0 && v < 500.0) return v;
+            if (v > 0.0 && v < 500.0)
+                return v;
 
             // Fallback cuối cùng mới lấy theo M/BoltSize.
             v = GetReportDouble(bg, "BOLT_DIAMETER");
-            if (v > 0.0 && v < 500.0) return v;
+            if (v > 0.0 && v < 500.0)
+                return v;
 
             v = GetDoublePropertyByReflection(bg, "BoltSize");
-            if (v > 0.0 && v < 500.0) return v;
+            if (v > 0.0 && v < 500.0)
+                return v;
 
             v = GetReportDouble(bg, "BOLT_SIZE");
-            if (v > 0.0 && v < 500.0) return v;
+            if (v > 0.0 && v < 500.0)
+                return v;
 
             return 0.0;
         }
@@ -1854,10 +3432,8 @@ namespace Tekla.Technology.Akit.UserScript
                 if (obj == null || string.IsNullOrEmpty(propertyName))
                     return 0.0;
 
-                PropertyInfo prop = obj.GetType().GetProperty(
-                    propertyName,
-                    BindingFlags.Public | BindingFlags.Instance
-                );
+                PropertyInfo prop = obj.GetType()
+                    .GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
 
                 if (prop == null || !prop.CanRead)
                     return 0.0;
@@ -1876,16 +3452,17 @@ namespace Tekla.Technology.Akit.UserScript
                     return Convert.ToDouble((float)value);
 
                 double result;
-                if (double.TryParse(
-                    value.ToString().Replace(",", "."),
-                    System.Globalization.NumberStyles.Any,
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    out result))
+                if (
+                    double.TryParse(
+                        value.ToString().Replace(",", "."),
+                        System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out result
+                    )
+                )
                     return result;
             }
-            catch
-            {
-            }
+            catch { }
 
             return 0.0;
         }
@@ -1895,7 +3472,8 @@ namespace Tekla.Technology.Akit.UserScript
             double minX,
             double maxX,
             double minY,
-            double maxY)
+            double maxY
+        )
         {
             List<Point> result = new List<Point>();
 
@@ -1906,26 +3484,28 @@ namespace Tekla.Technology.Akit.UserScript
                 while (bolts.MoveNext())
                 {
                     ModelBoltGroup bg = bolts.Current as ModelBoltGroup;
-                    if (bg == null) continue;
+                    if (bg == null)
+                        continue;
 
                     foreach (object obj in bg.BoltPositions)
                     {
                         Point p = obj as Point;
-                        if (p == null) continue;
+                        if (p == null)
+                            continue;
 
-                        if (p.X >= minX - 5.0 &&
-                            p.X <= maxX + 5.0 &&
-                            p.Y >= minY - 5.0 &&
-                            p.Y <= maxY + 5.0)
+                        if (
+                            p.X >= minX - 5.0
+                            && p.X <= maxX + 5.0
+                            && p.Y >= minY - 5.0
+                            && p.Y <= maxY + 5.0
+                        )
                         {
                             AddUniquePoint(result, new Point(p.X, p.Y, 0), 1.0);
                         }
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return result;
         }
@@ -1945,8 +3525,7 @@ namespace Tekla.Technology.Akit.UserScript
         {
             foreach (Point q in list)
             {
-                if (Math.Abs(q.X - p.X) <= tol &&
-                    Math.Abs(q.Y - p.Y) <= tol)
+                if (Math.Abs(q.X - p.X) <= tol && Math.Abs(q.Y - p.Y) <= tol)
                     return;
             }
 
@@ -1956,6 +3535,527 @@ namespace Tekla.Technology.Akit.UserScript
         #endregion
 
         #region 05A - THIN VIEW FILLET / CHAMFER FEATURE BASE
+
+        private static List<Point> BuildExactProjectedOuterContour(
+            Solid solid,
+            List<List<Point>> boundaries
+        )
+        {
+            List<Point> projected = GetProjectedSolidPointsForTotalDims(solid);
+            List<Point> hull = BuildConvexHull2D(projected);
+
+            if (hull.Count >= 3)
+                return hull;
+
+            List<Point> best = new List<Point>();
+            double bestArea = 0.0;
+
+            if (boundaries != null)
+            {
+                foreach (List<Point> boundary in boundaries)
+                {
+                    List<Point> normalized = NormalizeThinBoundaryPolygon(boundary);
+                    double area = Math.Abs(GetSignedPolygonArea2(normalized));
+
+                    if (normalized.Count >= 3 && area > bestArea)
+                    {
+                        best = normalized;
+                        bestArea = area;
+                    }
+                }
+            }
+
+            return best;
+        }
+
+        private static List<Point> BuildConvexHull2D(List<Point> points)
+        {
+            List<Point> unique = new List<Point>();
+
+            if (points == null)
+                return unique;
+
+            foreach (Point point in points)
+            {
+                if (
+                    point == null
+                    || Double.IsNaN(point.X)
+                    || Double.IsInfinity(point.X)
+                    || Double.IsNaN(point.Y)
+                    || Double.IsInfinity(point.Y)
+                )
+                {
+                    continue;
+                }
+
+                AddUniquePoint(unique, new Point(point.X, point.Y, 0), 0.05);
+            }
+
+            unique.Sort(
+                delegate(Point first, Point second)
+                {
+                    int xCompare = first.X.CompareTo(second.X);
+                    if (xCompare != 0)
+                        return xCompare;
+                    return first.Y.CompareTo(second.Y);
+                }
+            );
+
+            if (unique.Count <= 2)
+                return unique;
+
+            List<Point> lower = new List<Point>();
+            foreach (Point point in unique)
+            {
+                while (
+                    lower.Count >= 2
+                    && Cross2D(lower[lower.Count - 2], lower[lower.Count - 1], point) <= 0.0001
+                )
+                {
+                    lower.RemoveAt(lower.Count - 1);
+                }
+                lower.Add(point);
+            }
+
+            List<Point> upper = new List<Point>();
+            for (int i = unique.Count - 1; i >= 0; i--)
+            {
+                Point point = unique[i];
+                while (
+                    upper.Count >= 2
+                    && Cross2D(upper[upper.Count - 2], upper[upper.Count - 1], point) <= 0.0001
+                )
+                {
+                    upper.RemoveAt(upper.Count - 1);
+                }
+                upper.Add(point);
+            }
+
+            lower.RemoveAt(lower.Count - 1);
+            upper.RemoveAt(upper.Count - 1);
+            lower.AddRange(upper);
+            return SimplifyNearlyCollinearContour(lower, 0.1);
+        }
+
+        private static double Cross2D(Point origin, Point first, Point second)
+        {
+            return (first.X - origin.X) * (second.Y - origin.Y)
+                - (first.Y - origin.Y) * (second.X - origin.X);
+        }
+
+        private static List<Point> SimplifyNearlyCollinearContour(
+            List<Point> contour,
+            double tolerance
+        )
+        {
+            List<Point> result = contour == null ? new List<Point>() : new List<Point>(contour);
+
+            bool changed = true;
+            int guard = 0;
+            while (changed && result.Count > 3 && guard < 1000)
+            {
+                changed = false;
+                guard++;
+
+                for (int i = 0; i < result.Count; i++)
+                {
+                    Point previous = result[(i - 1 + result.Count) % result.Count];
+                    Point current = result[i];
+                    Point next = result[(i + 1) % result.Count];
+                    double segmentLength = Distance2D(previous, next);
+                    if (segmentLength <= 0.05)
+                        continue;
+
+                    double perpendicularDistance =
+                        Math.Abs(Cross2D(previous, next, current)) / segmentLength;
+                    if (perpendicularDistance > tolerance)
+                        continue;
+
+                    double dot =
+                        (current.X - previous.X) * (next.X - previous.X)
+                        + (current.Y - previous.Y) * (next.Y - previous.Y);
+                    double squaredLength = segmentLength * segmentLength;
+                    if (dot < -0.01 || dot > squaredLength + 0.01)
+                        continue;
+
+                    result.RemoveAt(i);
+                    changed = true;
+                    break;
+                }
+            }
+
+            return result;
+        }
+
+        private static int CreateThinViewExactPlateDims(
+            StraightDimensionSetHandler handler,
+            View view,
+            List<Point> contour
+        )
+        {
+            int count = 0;
+
+            if (handler == null || view == null || contour == null || contour.Count < 3)
+                return count;
+
+            double minX;
+            double maxX;
+            double minY;
+            double maxY;
+            GetMinMax(contour, out minX, out maxX, out minY, out maxY);
+
+            double centerX = (minX + maxX) * 0.5;
+            double centerY = (minY + maxY) * 0.5;
+            bool hasLeftChamfer = false;
+            bool hasRightChamfer = false;
+            int chamferCount = 0;
+
+            for (int i = 0; i < contour.Count; i++)
+            {
+                Point a = contour[i];
+                Point b = contour[(i + 1) % contour.Count];
+                if (!IsValidChamferSegment(a, b, minX, maxX, minY, maxY))
+                    continue;
+
+                chamferCount++;
+                double midX = (a.X + b.X) * 0.5;
+                if (midX <= centerX)
+                    hasLeftChamfer = true;
+                else
+                    hasRightChamfer = true;
+            }
+
+            Point leftLengthFoot = FindExactExtremePoint(contour, minX, true);
+            Point rightLengthFoot = FindExactExtremePoint(contour, maxX, true);
+
+            if (chamferCount == 0)
+            {
+                if (
+                    CreateDim(
+                        handler,
+                        view,
+                        leftLengthFoot,
+                        rightLengthFoot,
+                        new Vector(0, 1, 0),
+                        GetCleanDimOffsetByTier(1)
+                    )
+                )
+                {
+                    count++;
+                }
+
+                Point flatBottom;
+                Point flatTop;
+                if (
+                    TryFindMaximumThicknessPair(
+                        contour,
+                        minY,
+                        maxY,
+                        false,
+                        out flatBottom,
+                        out flatTop
+                    )
+                    && CreateDim(
+                        handler,
+                        view,
+                        flatBottom,
+                        flatTop,
+                        new Vector(-1, 0, 0),
+                        GetCleanDimOffsetByTier(1)
+                    )
+                )
+                {
+                    count++;
+                }
+
+                return count;
+            }
+
+            // Theo BASE 1: mọi cạnh vát đều có DIM run theo X; phần chia độ dày
+            // chỉ đặt ở một đầu (ưu tiên trái) để không lặp, còn độ dày tổng đặt đầu đối diện.
+            bool detailOnLeft = hasLeftChamfer || !hasRightChamfer;
+            double chamferOffset = GetCleanDimOffsetByTier(1);
+
+            for (int i = 0; i < contour.Count; i++)
+            {
+                Point a = contour[i];
+                Point b = contour[(i + 1) % contour.Count];
+                if (!IsValidChamferSegment(a, b, minX, maxX, minY, maxY))
+                    continue;
+
+                double midX = (a.X + b.X) * 0.5;
+                bool isLeft = midX <= centerX;
+                bool isTop = ResolveThinChamferTopSideFromInnerEndpoint(a, b, !isLeft, centerY);
+
+                Point horizontalInner;
+                Point horizontalOuter;
+                OrderChamferFeetInnerToOuter(
+                    a,
+                    b,
+                    true,
+                    !isLeft,
+                    isTop,
+                    out horizontalInner,
+                    out horizontalOuter
+                );
+
+                if (
+                    CreateDim(
+                        handler,
+                        view,
+                        horizontalInner,
+                        horizontalOuter,
+                        isTop ? new Vector(0, 1, 0) : new Vector(0, -1, 0),
+                        chamferOffset
+                    )
+                )
+                {
+                    count++;
+                }
+
+                Point verticalInner;
+                Point verticalOuter;
+                OrderChamferFeetInnerToOuter(
+                    a,
+                    b,
+                    false,
+                    !isLeft,
+                    isTop,
+                    out verticalInner,
+                    out verticalOuter
+                );
+
+                if (
+                    isLeft == detailOnLeft
+                    && CreateDim(
+                        handler,
+                        view,
+                        verticalInner,
+                        verticalOuter,
+                        detailOnLeft ? new Vector(-1, 0, 0) : new Vector(1, 0, 0),
+                        chamferOffset
+                    )
+                )
+                {
+                    count++;
+                }
+            }
+
+            Point landA;
+            Point landB;
+            if (
+                TryFindExtremeVerticalLand(
+                    contour,
+                    detailOnLeft ? minX : maxX,
+                    out landA,
+                    out landB
+                )
+                && CreateDim(
+                    handler,
+                    view,
+                    landA,
+                    landB,
+                    detailOnLeft ? new Vector(-1, 0, 0) : new Vector(1, 0, 0),
+                    GetCleanDimOffsetByTier(2)
+                )
+            )
+            {
+                count++;
+            }
+
+            Point overallBottom;
+            Point overallTop;
+            bool overallOnRight = detailOnLeft;
+            if (
+                TryFindMaximumThicknessPair(
+                    contour,
+                    minY,
+                    maxY,
+                    overallOnRight,
+                    out overallBottom,
+                    out overallTop
+                )
+                && CreateDim(
+                    handler,
+                    view,
+                    overallBottom,
+                    overallTop,
+                    overallOnRight ? new Vector(1, 0, 0) : new Vector(-1, 0, 0),
+                    GetCleanDimOffsetByTier(2)
+                )
+            )
+            {
+                count++;
+            }
+
+            if (
+                CreateDim(
+                    handler,
+                    view,
+                    leftLengthFoot,
+                    rightLengthFoot,
+                    new Vector(0, 1, 0),
+                    GetCleanDimOffsetByTier(3)
+                )
+            )
+            {
+                count++;
+            }
+
+            return count;
+        }
+
+        private static bool ResolveThinChamferTopSideFromInnerEndpoint(
+            Point first,
+            Point second,
+            bool rightSide,
+            double centerY
+        )
+        {
+            if (first == null || second == null)
+                return false;
+
+            // Chamfer trái: endpoint có X lớn hơn là mép trong của thân plate.
+            // Chamfer phải: endpoint có X nhỏ hơn là mép trong của thân plate.
+            // Dùng endpoint này để xác định phía đặt DIM. Không dùng trung điểm:
+            // chamfer xuyên hết độ dày luôn có midY == centerY và từng bị ép lên TOP.
+            Point innerEndpoint;
+            if (Math.Abs(first.X - second.X) <= THIN_CHAMFER_EDGE_TOL)
+            {
+                // Fail-safe cho dữ liệu suy biến; chamfer hợp lệ bình thường không
+                // đi nhánh này vì luôn có horizontal run.
+                return (first.Y + second.Y) * 0.5 >= centerY;
+            }
+
+            if (rightSide)
+            {
+                innerEndpoint = first.X <= second.X ? first : second;
+            }
+            else
+            {
+                innerEndpoint = first.X >= second.X ? first : second;
+            }
+
+            return innerEndpoint.Y >= centerY;
+        }
+
+        private static Point FindExactExtremePoint(
+            List<Point> contour,
+            double targetX,
+            bool preferTop
+        )
+        {
+            Point best = null;
+
+            if (contour == null)
+                return best;
+
+            foreach (Point point in contour)
+            {
+                if (point == null || Math.Abs(point.X - targetX) > 0.1)
+                    continue;
+
+                if (
+                    best == null
+                    || (preferTop && point.Y > best.Y)
+                    || (!preferTop && point.Y < best.Y)
+                )
+                {
+                    best = point;
+                }
+            }
+
+            return best == null ? null : new Point(best.X, best.Y, 0);
+        }
+
+        private static bool TryFindExtremeVerticalLand(
+            List<Point> contour,
+            double targetX,
+            out Point first,
+            out Point second
+        )
+        {
+            first = null;
+            second = null;
+            double bestLength = 0.0;
+
+            if (contour == null || contour.Count < 2)
+                return false;
+
+            for (int i = 0; i < contour.Count; i++)
+            {
+                Point a = contour[i];
+                Point b = contour[(i + 1) % contour.Count];
+                if (
+                    a == null
+                    || b == null
+                    || Math.Abs(a.X - targetX) > 0.1
+                    || Math.Abs(b.X - targetX) > 0.1
+                )
+                {
+                    continue;
+                }
+
+                double length = Math.Abs(a.Y - b.Y);
+                if (length > bestLength)
+                {
+                    bestLength = length;
+                    first = new Point(a.X, a.Y, 0);
+                    second = new Point(b.X, b.Y, 0);
+                }
+            }
+
+            return first != null && second != null && bestLength >= 1.0;
+        }
+
+        private static bool TryFindMaximumThicknessPair(
+            List<Point> contour,
+            double minY,
+            double maxY,
+            bool preferRight,
+            out Point bottom,
+            out Point top
+        )
+        {
+            bottom = null;
+            top = null;
+            double bestDeltaX = Double.MaxValue;
+            double bestSideX = preferRight ? -Double.MaxValue : Double.MaxValue;
+
+            if (contour == null)
+                return false;
+
+            foreach (Point bottomCandidate in contour)
+            {
+                if (bottomCandidate == null || Math.Abs(bottomCandidate.Y - minY) > 0.1)
+                    continue;
+
+                foreach (Point topCandidate in contour)
+                {
+                    if (topCandidate == null || Math.Abs(topCandidate.Y - maxY) > 0.1)
+                        continue;
+
+                    double deltaX = Math.Abs(bottomCandidate.X - topCandidate.X);
+                    double sideX = (bottomCandidate.X + topCandidate.X) * 0.5;
+                    bool better = deltaX < bestDeltaX - 0.05;
+
+                    if (Math.Abs(deltaX - bestDeltaX) <= 0.05)
+                    {
+                        better = preferRight ? sideX > bestSideX : sideX < bestSideX;
+                    }
+
+                    if (!better)
+                        continue;
+
+                    bestDeltaX = deltaX;
+                    bestSideX = sideX;
+                    bottom = new Point(bottomCandidate.X, bottomCandidate.Y, 0);
+                    top = new Point(topCandidate.X, topCandidate.Y, 0);
+                }
+            }
+
+            return bottom != null && top != null;
+        }
 
         private enum ThinBoundaryFeatureKind
         {
@@ -1978,13 +4078,15 @@ namespace Tekla.Technology.Akit.UserScript
             public double BoundaryPathLength;
             public Point ChamferOrigin;
             public Point ChamferOtherPoint;
+
             // Giữ path đã được FilletArc nhận để chamfer sau này không xét lại các segment này.
             public List<Point> ClaimedBoundaryPath = new List<Point>();
         }
 
         private static double GetThinRadiusReferenceThickness(
             ModelPart part,
-            double fallbackThickness)
+            double fallbackThickness
+        )
         {
             try
             {
@@ -1998,9 +4100,7 @@ namespace Tekla.Technology.Akit.UserScript
                 if (parsedThickness > 0.0)
                     return parsedThickness;
             }
-            catch
-            {
-            }
+            catch { }
 
             return fallbackThickness;
         }
@@ -2027,11 +4127,15 @@ namespace Tekla.Technology.Akit.UserScript
                     continue;
 
                 double value;
-                if (Double.TryParse(
-                    numericToken,
-                    System.Globalization.NumberStyles.Any,
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    out value) && value > 0.0)
+                if (
+                    Double.TryParse(
+                        numericToken,
+                        System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out value
+                    )
+                    && value > 0.0
+                )
                 {
                     minimum = Math.Min(minimum, value);
                 }
@@ -2045,7 +4149,8 @@ namespace Tekla.Technology.Akit.UserScript
         private static List<List<Point>> GetThinViewIntersectionPolygons(
             Solid solid,
             Point min,
-            Point max)
+            Point max
+        )
         {
             List<List<Point>> result = new List<List<Point>>();
 
@@ -2065,27 +4170,18 @@ namespace Tekla.Technology.Akit.UserScript
                 try
                 {
 #pragma warning disable 618
-                    ArrayList intersectionPolygons = solid.Intersect(
-                        planeP1,
-                        planeP2,
-                        planeP3
-                    );
+                    ArrayList intersectionPolygons = solid.Intersect(planeP1, planeP2, planeP3);
 #pragma warning restore 618
                     CollectPointLists(intersectionPolygons, result, 0);
                 }
-                catch
-                {
-                }
+                catch { }
 
-                IEnumerator intersections =
-                    solid.IntersectAllFaces(planeP1, planeP2, planeP3);
+                IEnumerator intersections = solid.IntersectAllFaces(planeP1, planeP2, planeP3);
 
                 while (intersections != null && intersections.MoveNext())
                     CollectPointLists(intersections.Current, result, 0);
             }
-            catch
-            {
-            }
+            catch { }
 
             return result;
         }
@@ -2095,50 +4191,60 @@ namespace Tekla.Technology.Akit.UserScript
             Solid solid,
             List<List<Point>> boundaries,
             Point min,
-            Point max)
+            Point max
+        )
         {
             int count = 0;
 
             try
             {
-                List<ThinBoundaryFeature> features =
-                    CollectThinViewBoundaryFeatures(solid, boundaries, min, max);
+                List<ThinBoundaryFeature> features = CollectThinViewBoundaryFeatures(
+                    solid,
+                    boundaries,
+                    min,
+                    max
+                );
 
                 foreach (ThinBoundaryFeature feature in features)
                 {
                     if (feature == null)
                         continue;
 
-                    if (feature.Kind == ThinBoundaryFeatureKind.FilletArc &&
-                        AUTO_DIM_THIN_VIEW_FILLET_RADIUS)
+                    if (
+                        feature.Kind == ThinBoundaryFeatureKind.FilletArc
+                        && AUTO_DIM_THIN_VIEW_FILLET_RADIUS
+                    )
                     {
                         double distance = GetThinFilletDimensionDistance(
                             feature.IsLeftSide,
                             feature.IsTopSide
                         );
 
-                        if (CreateThinViewRadiusDimByReflection(
-                            view,
-                            feature.ArcPoint1,
-                            feature.ArcPoint2,
-                            feature.ArcPoint3,
-                            distance))
+                        if (
+                            CreateThinViewRadiusDimByReflection(
+                                view,
+                                feature.ArcPoint1,
+                                feature.ArcPoint2,
+                                feature.ArcPoint3,
+                                distance
+                            )
+                        )
                         {
                             count++;
                         }
                     }
 
-                    if (feature.Kind == ThinBoundaryFeatureKind.ChamferLine &&
-                        AUTO_DIM_THIN_VIEW_CHAMFER_ANGLE &&
-                        CreateThinViewChamferAngleDimension(view, feature))
+                    if (
+                        feature.Kind == ThinBoundaryFeatureKind.ChamferLine
+                        && AUTO_DIM_THIN_VIEW_CHAMFER_ANGLE
+                        && CreateThinViewChamferAngleDimension(view, feature)
+                    )
                     {
                         count++;
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return count;
         }
@@ -2147,7 +4253,8 @@ namespace Tekla.Technology.Akit.UserScript
             Solid solid,
             List<List<Point>> boundaries,
             Point min,
-            Point max)
+            Point max
+        )
         {
             List<ThinBoundaryFeature> result = new List<ThinBoundaryFeature>();
 
@@ -2161,8 +4268,7 @@ namespace Tekla.Technology.Akit.UserScript
 
                 try
                 {
-                    Tekla.Structures.Solid.EdgeEnumerator edges =
-                        solid.GetEdgeEnumerator();
+                    Tekla.Structures.Solid.EdgeEnumerator edges = solid.GetEdgeEnumerator();
 
                     while (edges != null && edges.MoveNext())
                     {
@@ -2175,9 +4281,7 @@ namespace Tekla.Technology.Akit.UserScript
                         curvedEdges.Add(edge);
                     }
                 }
-                catch
-                {
-                }
+                catch { }
 
                 foreach (List<Point> boundary in boundaries)
                 {
@@ -2203,15 +4307,18 @@ namespace Tekla.Technology.Akit.UserScript
                             continue;
 
                         ThinBoundaryFeature feature;
-                        if (!TryBuildThinFilletFeature(
-                            orderedBoundary,
-                            start2D,
-                            end2D,
-                            min.X,
-                            max.X,
-                            min.Y,
-                            max.Y,
-                            out feature))
+                        if (
+                            !TryBuildThinFilletFeature(
+                                orderedBoundary,
+                                start2D,
+                                end2D,
+                                min.X,
+                                max.X,
+                                min.Y,
+                                max.Y,
+                                out feature
+                            )
+                        )
                         {
                             continue;
                         }
@@ -2223,29 +4330,35 @@ namespace Tekla.Technology.Akit.UserScript
                     // chỉ nhận khi cả chuỗi biên cùng nằm trên một đường tròn.
                     // Chamfer thẳng vẫn bị loại bởi path >= 3, sagitta và circle residual.
                     ThinBoundaryFeature leftBoundaryFeature;
-                    if (!HasThinFilletFeatureOnSide(result, true) &&
-                        TryBuildThinFilletFeatureFromBoundarySide(
-                        orderedBoundary,
-                        true,
-                        min.X,
-                        max.X,
-                        min.Y,
-                        max.Y,
-                        out leftBoundaryFeature))
+                    if (
+                        !HasThinFilletFeatureOnSide(result, true)
+                        && TryBuildThinFilletFeatureFromBoundarySide(
+                            orderedBoundary,
+                            true,
+                            min.X,
+                            max.X,
+                            min.Y,
+                            max.Y,
+                            out leftBoundaryFeature
+                        )
+                    )
                     {
                         AddUniqueThinBoundaryFeature(result, leftBoundaryFeature);
                     }
 
                     ThinBoundaryFeature rightBoundaryFeature;
-                    if (!HasThinFilletFeatureOnSide(result, false) &&
-                        TryBuildThinFilletFeatureFromBoundarySide(
-                        orderedBoundary,
-                        false,
-                        min.X,
-                        max.X,
-                        min.Y,
-                        max.Y,
-                        out rightBoundaryFeature))
+                    if (
+                        !HasThinFilletFeatureOnSide(result, false)
+                        && TryBuildThinFilletFeatureFromBoundarySide(
+                            orderedBoundary,
+                            false,
+                            min.X,
+                            max.X,
+                            min.Y,
+                            max.Y,
+                            out rightBoundaryFeature
+                        )
+                    )
                     {
                         AddUniqueThinBoundaryFeature(result, rightBoundaryFeature);
                     }
@@ -2254,25 +4367,31 @@ namespace Tekla.Technology.Akit.UserScript
                 // Fallback cuối cho trường hợp API chỉ trả hai endpoint hoặc chia cung ra
                 // nhiều list: lấy 5 điểm silhouette trực tiếp từ Solid ở mặt cắt giữa.
                 ThinBoundaryFeature leftSampledFeature;
-                if (!HasThinFilletFeatureOnSide(result, true) &&
-                    TryBuildThinFilletFeatureFromSolidSideSamples(
-                    solid,
-                    true,
-                    min,
-                    max,
-                    out leftSampledFeature))
+                if (
+                    !HasThinFilletFeatureOnSide(result, true)
+                    && TryBuildThinFilletFeatureFromSolidSideSamples(
+                        solid,
+                        true,
+                        min,
+                        max,
+                        out leftSampledFeature
+                    )
+                )
                 {
                     AddUniqueThinBoundaryFeature(result, leftSampledFeature);
                 }
 
                 ThinBoundaryFeature rightSampledFeature;
-                if (!HasThinFilletFeatureOnSide(result, false) &&
-                    TryBuildThinFilletFeatureFromSolidSideSamples(
-                    solid,
-                    false,
-                    min,
-                    max,
-                    out rightSampledFeature))
+                if (
+                    !HasThinFilletFeatureOnSide(result, false)
+                    && TryBuildThinFilletFeatureFromSolidSideSamples(
+                        solid,
+                        false,
+                        min,
+                        max,
+                        out rightSampledFeature
+                    )
+                )
                 {
                     AddUniqueThinBoundaryFeature(result, rightSampledFeature);
                 }
@@ -2287,41 +4406,45 @@ namespace Tekla.Technology.Akit.UserScript
                     for (int i = 0; i < orderedBoundary.Count; i++)
                     {
                         ThinBoundaryFeature chamferFeature;
-                        if (TryBuildThinChamferFeature(
-                            orderedBoundary,
-                            i,
-                            curvedEdges,
-                            result,
-                            min.X,
-                            max.X,
-                            min.Y,
-                            max.Y,
-                            out chamferFeature))
+                        if (
+                            TryBuildThinChamferFeature(
+                                orderedBoundary,
+                                i,
+                                curvedEdges,
+                                result,
+                                min.X,
+                                max.X,
+                                min.Y,
+                                max.Y,
+                                out chamferFeature
+                            )
+                        )
                         {
                             AddUniqueThinBoundaryFeature(result, chamferFeature);
                         }
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return result;
         }
 
         private static bool HasThinFilletFeatureOnSide(
             List<ThinBoundaryFeature> features,
-            bool isLeftSide)
+            bool isLeftSide
+        )
         {
             if (features == null)
                 return false;
 
             foreach (ThinBoundaryFeature feature in features)
             {
-                if (feature != null &&
-                    feature.Kind == ThinBoundaryFeatureKind.FilletArc &&
-                    feature.IsLeftSide == isLeftSide)
+                if (
+                    feature != null
+                    && feature.Kind == ThinBoundaryFeatureKind.FilletArc
+                    && feature.IsLeftSide == isLeftSide
+                )
                 {
                     return true;
                 }
@@ -2339,12 +4462,17 @@ namespace Tekla.Technology.Akit.UserScript
             double maxX,
             double minY,
             double maxY,
-            out ThinBoundaryFeature feature)
+            out ThinBoundaryFeature feature
+        )
         {
             feature = null;
 
-            if (boundary == null || boundary.Count < 3 ||
-                segmentIndex < 0 || segmentIndex >= boundary.Count)
+            if (
+                boundary == null
+                || boundary.Count < 3
+                || segmentIndex < 0
+                || segmentIndex >= boundary.Count
+            )
             {
                 return false;
             }
@@ -2357,21 +4485,19 @@ namespace Tekla.Technology.Akit.UserScript
                 return false;
 
             double dx = Math.Abs(a.X - b.X);
+            double dy = Math.Abs(a.Y - b.Y);
             double height = Math.Abs(maxY - minY);
 
-            if (dx < THIN_CHAMFER_MIN_RUN || dx >= THIN_CHAMFER_MAX_RUN ||
-                height <= THIN_CHAMFER_EDGE_TOL * 2.0)
+            if (
+                dx < THIN_CHAMFER_MIN_RUN
+                || dx >= THIN_CHAMFER_MAX_RUN
+                || dy <= THIN_CHAMFER_EDGE_TOL
+                || dy >= THIN_CHAMFER_MAX_RUN
+                || height <= THIN_CHAMFER_EDGE_TOL * 2.0
+            )
             {
                 return false;
             }
-
-            bool aOnMinY = Math.Abs(a.Y - minY) <= THIN_CHAMFER_EDGE_TOL;
-            bool aOnMaxY = Math.Abs(a.Y - maxY) <= THIN_CHAMFER_EDGE_TOL;
-            bool bOnMinY = Math.Abs(b.Y - minY) <= THIN_CHAMFER_EDGE_TOL;
-            bool bOnMaxY = Math.Abs(b.Y - maxY) <= THIN_CHAMFER_EDGE_TOL;
-
-            if (!((aOnMinY && bOnMaxY) || (aOnMaxY && bOnMinY)))
-                return false;
 
             double segmentMinX = Math.Min(a.X, b.X);
             double segmentMaxX = Math.Max(a.X, b.X);
@@ -2385,8 +4511,7 @@ namespace Tekla.Technology.Akit.UserScript
             Point origin = originIsA ? a : b;
             Point other = originIsA ? b : a;
 
-            if (Math.Abs(origin.X - (isLeftSide ? minX : maxX)) >
-                THIN_CHAMFER_EDGE_TOL)
+            if (Math.Abs(origin.X - (isLeftSide ? minX : maxX)) > THIN_CHAMFER_EDGE_TOL)
             {
                 return false;
             }
@@ -2396,20 +4521,33 @@ namespace Tekla.Technology.Akit.UserScript
             Point originNeighbor = originIsA ? beforeA : afterB;
             Point otherNeighbor = originIsA ? afterB : beforeA;
 
-            if (!IsThinChamferHorizontalBodyNeighbor(
+            bool otherOnMinY = Math.Abs(other.Y - minY) <= THIN_CHAMFER_EDGE_TOL;
+            bool otherOnMaxY = Math.Abs(other.Y - maxY) <= THIN_CHAMFER_EDGE_TOL;
+            if (!(otherOnMinY || otherOnMaxY))
+                return false;
+
+            // Full-depth bevel: neighbor tại origin có thể là cạnh ngang của body.
+            // Partial-depth bevel: neighbor tại origin là đoạn land đứng còn lại.
+            bool validOriginNeighbor =
+                IsThinChamferHorizontalBodyNeighbor(origin, originNeighbor, isLeftSide)
+                || IsThinChamferVerticalLandNeighbor(
                     origin,
                     originNeighbor,
-                    isLeftSide) ||
-                !IsThinChamferHorizontalBodyNeighbor(
-                    other,
-                    otherNeighbor,
-                    isLeftSide))
+                    isLeftSide ? minX : maxX
+                );
+
+            if (
+                !validOriginNeighbor
+                || !IsThinChamferHorizontalBodyNeighbor(other, otherNeighbor, isLeftSide)
+            )
             {
                 return false;
             }
 
-            if (MatchesThinChamferCurvedEdge(a, b, curvedEdges) ||
-                HasThinFilletFeatureOnSide(existingFeatures, isLeftSide))
+            if (
+                MatchesThinChamferCurvedEdge(a, b, curvedEdges)
+                || HasThinFilletFeatureOnSide(existingFeatures, isLeftSide)
+            )
             {
                 return false;
             }
@@ -2417,7 +4555,7 @@ namespace Tekla.Technology.Akit.UserScript
             feature = new ThinBoundaryFeature();
             feature.Kind = ThinBoundaryFeatureKind.ChamferLine;
             feature.IsLeftSide = isLeftSide;
-            feature.IsTopSide = Math.Abs(origin.Y - minY) <= THIN_CHAMFER_EDGE_TOL;
+            feature.IsTopSide = otherOnMaxY;
             feature.ChamferOrigin = new Point(origin.X, origin.Y, 0);
             feature.ChamferOtherPoint = new Point(other.X, other.Y, 0);
             feature.BoundaryPathLength = Distance2D(origin, other);
@@ -2430,23 +4568,40 @@ namespace Tekla.Technology.Akit.UserScript
         private static bool IsThinChamferHorizontalBodyNeighbor(
             Point endpoint,
             Point neighbor,
-            bool isLeftSide)
+            bool isLeftSide
+        )
         {
-            if (endpoint == null || neighbor == null ||
-                Math.Abs(endpoint.Y - neighbor.Y) > THIN_CHAMFER_EDGE_TOL)
+            if (
+                endpoint == null
+                || neighbor == null
+                || Math.Abs(endpoint.Y - neighbor.Y) > THIN_CHAMFER_EDGE_TOL
+            )
             {
                 return false;
             }
 
-            return isLeftSide
-                ? neighbor.X > endpoint.X + 0.05
-                : neighbor.X < endpoint.X - 0.05;
+            return isLeftSide ? neighbor.X > endpoint.X + 0.05 : neighbor.X < endpoint.X - 0.05;
+        }
+
+        private static bool IsThinChamferVerticalLandNeighbor(
+            Point endpoint,
+            Point neighbor,
+            double sideX
+        )
+        {
+            if (endpoint == null || neighbor == null)
+                return false;
+
+            return Math.Abs(endpoint.X - sideX) <= THIN_CHAMFER_EDGE_TOL
+                && Math.Abs(neighbor.X - sideX) <= THIN_CHAMFER_EDGE_TOL
+                && Math.Abs(endpoint.Y - neighbor.Y) > 0.05;
         }
 
         private static bool MatchesThinChamferCurvedEdge(
             Point a,
             Point b,
-            List<Tekla.Structures.Solid.Edge> curvedEdges)
+            List<Tekla.Structures.Solid.Edge> curvedEdges
+        )
         {
             if (a == null || b == null || curvedEdges == null)
                 return false;
@@ -2462,18 +4617,16 @@ namespace Tekla.Technology.Akit.UserScript
                     Point end = new Point(edge.EndPoint.X, edge.EndPoint.Y, 0);
 
                     bool direct =
-                        Distance2D(a, start) <= THIN_FILLET_ENDPOINT_MATCH_TOL &&
-                        Distance2D(b, end) <= THIN_FILLET_ENDPOINT_MATCH_TOL;
+                        Distance2D(a, start) <= THIN_FILLET_ENDPOINT_MATCH_TOL
+                        && Distance2D(b, end) <= THIN_FILLET_ENDPOINT_MATCH_TOL;
                     bool reverse =
-                        Distance2D(a, end) <= THIN_FILLET_ENDPOINT_MATCH_TOL &&
-                        Distance2D(b, start) <= THIN_FILLET_ENDPOINT_MATCH_TOL;
+                        Distance2D(a, end) <= THIN_FILLET_ENDPOINT_MATCH_TOL
+                        && Distance2D(b, start) <= THIN_FILLET_ENDPOINT_MATCH_TOL;
 
                     if (direct || reverse)
                         return true;
                 }
-                catch
-                {
-                }
+                catch { }
             }
 
             return false;
@@ -2486,7 +4639,8 @@ namespace Tekla.Technology.Akit.UserScript
             double maxX,
             double minY,
             double maxY,
-            out ThinBoundaryFeature feature)
+            out ThinBoundaryFeature feature
+        )
         {
             feature = null;
 
@@ -2494,39 +4648,34 @@ namespace Tekla.Technology.Akit.UserScript
                 return false;
 
             double yBand = Math.Max(0.25, Math.Abs(maxY - minY) * 0.05);
-            int topIndex = FindThinBoundaryOuterPointIndex(
-                boundary,
-                isLeftSide,
-                maxY,
-                yBand
-            );
-            int bottomIndex = FindThinBoundaryOuterPointIndex(
-                boundary,
-                isLeftSide,
-                minY,
-                yBand
-            );
+            int topIndex = FindThinBoundaryOuterPointIndex(boundary, isLeftSide, maxY, yBand);
+            int bottomIndex = FindThinBoundaryOuterPointIndex(boundary, isLeftSide, minY, yBand);
 
             if (topIndex < 0 || bottomIndex < 0 || topIndex == bottomIndex)
                 return false;
 
             ThinBoundaryFeature candidate;
-            if (!TryBuildThinFilletFeature(
-                boundary,
-                boundary[topIndex],
-                boundary[bottomIndex],
-                minX,
-                maxX,
-                minY,
-                maxY,
-                out candidate))
+            if (
+                !TryBuildThinFilletFeature(
+                    boundary,
+                    boundary[topIndex],
+                    boundary[bottomIndex],
+                    minX,
+                    maxX,
+                    minY,
+                    maxY,
+                    out candidate
+                )
+            )
             {
                 return false;
             }
 
-            if (candidate == null ||
-                candidate.ClaimedBoundaryPath == null ||
-                candidate.ClaimedBoundaryPath.Count < 4)
+            if (
+                candidate == null
+                || candidate.ClaimedBoundaryPath == null
+                || candidate.ClaimedBoundaryPath.Count < 4
+            )
             {
                 return false;
             }
@@ -2539,7 +4688,8 @@ namespace Tekla.Technology.Akit.UserScript
             List<Point> boundary,
             bool isLeftSide,
             double targetY,
-            double yBand)
+            double yBand
+        )
         {
             int bestIndex = -1;
             double bestX = isLeftSide ? Double.MaxValue : Double.MinValue;
@@ -2553,9 +4703,11 @@ namespace Tekla.Technology.Akit.UserScript
                 if (point == null || Math.Abs(point.Y - targetY) > yBand)
                     continue;
 
-                if (bestIndex < 0 ||
-                    (isLeftSide && point.X < bestX) ||
-                    (!isLeftSide && point.X > bestX))
+                if (
+                    bestIndex < 0
+                    || (isLeftSide && point.X < bestX)
+                    || (!isLeftSide && point.X > bestX)
+                )
                 {
                     bestIndex = i;
                     bestX = point.X;
@@ -2570,7 +4722,8 @@ namespace Tekla.Technology.Akit.UserScript
             bool isLeftSide,
             Point min,
             Point max,
-            out ThinBoundaryFeature feature)
+            out ThinBoundaryFeature feature
+        )
         {
             feature = null;
 
@@ -2590,14 +4743,17 @@ namespace Tekla.Technology.Akit.UserScript
                 double y = min.Y + (max.Y - min.Y) * fraction;
                 Point silhouettePoint;
 
-                if (!TryGetThinSolidSideIntersectionPoint(
-                    solid,
-                    isLeftSide,
-                    min.X,
-                    max.X,
-                    y,
-                    midZ,
-                    out silhouettePoint))
+                if (
+                    !TryGetThinSolidSideIntersectionPoint(
+                        solid,
+                        isLeftSide,
+                        min.X,
+                        max.X,
+                        y,
+                        midZ,
+                        out silhouettePoint
+                    )
+                )
                 {
                     return false;
                 }
@@ -2605,13 +4761,7 @@ namespace Tekla.Technology.Akit.UserScript
                 sampledPath.Add(silhouettePoint);
             }
 
-            if (!TryEvaluateThinFilletPath(
-                sampledPath,
-                min.X,
-                max.X,
-                min.Y,
-                max.Y,
-                out feature))
+            if (!TryEvaluateThinFilletPath(sampledPath, min.X, max.X, min.Y, max.Y, out feature))
             {
                 return false;
             }
@@ -2626,7 +4776,8 @@ namespace Tekla.Technology.Akit.UserScript
             double maxX,
             double y,
             double z,
-            out Point result)
+            out Point result
+        )
         {
             result = null;
 
@@ -2659,9 +4810,11 @@ namespace Tekla.Technology.Akit.UserScript
                 if (point == null)
                     continue;
 
-                if (best == null ||
-                    (isLeftSide && point.X < best.X) ||
-                    (!isLeftSide && point.X > best.X))
+                if (
+                    best == null
+                    || (isLeftSide && point.X < best.X)
+                    || (!isLeftSide && point.X > best.X)
+                )
                 {
                     best = point;
                 }
@@ -2682,9 +4835,7 @@ namespace Tekla.Technology.Akit.UserScript
                     return false;
 
                 string edgeType = edge.Type.ToString();
-                return edgeType.IndexOf(
-                    "CURVED_SURFACE",
-                    StringComparison.OrdinalIgnoreCase) >= 0;
+                return edgeType.IndexOf("CURVED_SURFACE", StringComparison.OrdinalIgnoreCase) >= 0;
             }
             catch
             {
@@ -2701,23 +4852,25 @@ namespace Tekla.Technology.Akit.UserScript
 
             foreach (Point p in boundary)
             {
-                if (p == null ||
-                    Double.IsNaN(p.X) || Double.IsInfinity(p.X) ||
-                    Double.IsNaN(p.Y) || Double.IsInfinity(p.Y))
+                if (
+                    p == null
+                    || Double.IsNaN(p.X)
+                    || Double.IsInfinity(p.X)
+                    || Double.IsNaN(p.Y)
+                    || Double.IsInfinity(p.Y)
+                )
                 {
                     continue;
                 }
 
                 Point copy = new Point(p.X, p.Y, 0);
-                if (result.Count == 0 ||
-                    Distance2D(result[result.Count - 1], copy) > 0.05)
+                if (result.Count == 0 || Distance2D(result[result.Count - 1], copy) > 0.05)
                 {
                     result.Add(copy);
                 }
             }
 
-            if (result.Count > 1 &&
-                Distance2D(result[0], result[result.Count - 1]) <= 0.05)
+            if (result.Count > 1 && Distance2D(result[0], result[result.Count - 1]) <= 0.05)
             {
                 result.RemoveAt(result.Count - 1);
             }
@@ -2753,7 +4906,8 @@ namespace Tekla.Technology.Akit.UserScript
             double maxX,
             double minY,
             double maxY,
-            out ThinBoundaryFeature feature)
+            out ThinBoundaryFeature feature
+        )
         {
             feature = null;
 
@@ -2768,26 +4922,22 @@ namespace Tekla.Technology.Akit.UserScript
                 out startDistance
             );
 
-            endIndex = FindNearestThinBoundaryPointIndex(
-                boundary,
-                curvedEnd,
-                out endDistance
-            );
+            endIndex = FindNearestThinBoundaryPointIndex(boundary, curvedEnd, out endDistance);
 
             if (startIndex < 0 || endIndex < 0 || startIndex == endIndex)
                 return false;
 
-            if (startDistance > THIN_FILLET_ENDPOINT_MATCH_TOL ||
-                endDistance > THIN_FILLET_ENDPOINT_MATCH_TOL)
+            if (
+                startDistance > THIN_FILLET_ENDPOINT_MATCH_TOL
+                || endDistance > THIN_FILLET_ENDPOINT_MATCH_TOL
+            )
             {
                 return false;
             }
 
-            List<Point> forwardPath =
-                BuildThinBoundaryPath(boundary, startIndex, endIndex, 1);
+            List<Point> forwardPath = BuildThinBoundaryPath(boundary, startIndex, endIndex, 1);
 
-            List<Point> backwardPath =
-                BuildThinBoundaryPath(boundary, startIndex, endIndex, -1);
+            List<Point> backwardPath = BuildThinBoundaryPath(boundary, startIndex, endIndex, -1);
 
             ThinBoundaryFeature forwardFeature;
             ThinBoundaryFeature backwardFeature;
@@ -2815,9 +4965,10 @@ namespace Tekla.Technology.Akit.UserScript
 
             if (forwardOk && backwardOk)
             {
-                feature = forwardFeature.BoundaryPathLength <= backwardFeature.BoundaryPathLength
-                    ? forwardFeature
-                    : backwardFeature;
+                feature =
+                    forwardFeature.BoundaryPathLength <= backwardFeature.BoundaryPathLength
+                        ? forwardFeature
+                        : backwardFeature;
             }
             else
             {
@@ -2831,13 +4982,14 @@ namespace Tekla.Technology.Akit.UserScript
             return feature != null;
         }
 
-        private static Point GetThinBoundaryDimensionSegmentMidpoint(
-            ThinBoundaryFeature feature)
+        private static Point GetThinBoundaryDimensionSegmentMidpoint(ThinBoundaryFeature feature)
         {
-            if (feature == null ||
-                feature.ArcPoint2 == null ||
-                feature.ClaimedBoundaryPath == null ||
-                feature.ClaimedBoundaryPath.Count < 4)
+            if (
+                feature == null
+                || feature.ArcPoint2 == null
+                || feature.ClaimedBoundaryPath == null
+                || feature.ClaimedBoundaryPath.Count < 4
+            )
             {
                 return null;
             }
@@ -2873,15 +5025,17 @@ namespace Tekla.Technology.Akit.UserScript
 
                 double nextWalkedLength = walkedLength + segmentLength;
 
-                if (halfPathLength > walkedLength + 0.05 &&
-                    halfPathLength < nextWalkedLength - 0.05)
+                if (
+                    halfPathLength > walkedLength + 0.05
+                    && halfPathLength < nextWalkedLength - 0.05
+                )
                 {
                     if (i < 2 || i > path.Count - 2)
                         return null;
 
                     bool touchesCurrentMiddle =
-                        Distance2D(feature.ArcPoint2, segmentStart) <= 0.05 ||
-                        Distance2D(feature.ArcPoint2, segmentEnd) <= 0.05;
+                        Distance2D(feature.ArcPoint2, segmentStart) <= 0.05
+                        || Distance2D(feature.ArcPoint2, segmentEnd) <= 0.05;
 
                     if (!touchesCurrentMiddle)
                         return null;
@@ -2902,7 +5056,8 @@ namespace Tekla.Technology.Akit.UserScript
         private static int FindNearestThinBoundaryPointIndex(
             List<Point> boundary,
             Point target,
-            out double bestDistance)
+            out double bestDistance
+        )
         {
             int bestIndex = -1;
             bestDistance = Double.MaxValue;
@@ -2931,7 +5086,8 @@ namespace Tekla.Technology.Akit.UserScript
             List<Point> boundary,
             int startIndex,
             int endIndex,
-            int direction)
+            int direction
+        )
         {
             List<Point> path = new List<Point>();
 
@@ -2964,7 +5120,8 @@ namespace Tekla.Technology.Akit.UserScript
             double maxX,
             double minY,
             double maxY,
-            out ThinBoundaryFeature feature)
+            out ThinBoundaryFeature feature
+        )
         {
             feature = null;
 
@@ -2982,8 +5139,7 @@ namespace Tekla.Technology.Akit.UserScript
             for (int i = 1; i < path.Count; i++)
                 pathLength += Distance2D(path[i - 1], path[i]);
 
-            if (pathLength <= chord ||
-                pathLength > chord * THIN_FILLET_MAX_PATH_CHORD_RATIO)
+            if (pathLength <= chord || pathLength > chord * THIN_FILLET_MAX_PATH_CHORD_RATIO)
             {
                 return false;
             }
@@ -3001,8 +5157,7 @@ namespace Tekla.Technology.Akit.UserScript
                 }
             }
 
-            if (arcMiddle == null ||
-                maxSagitta / chord < THIN_FILLET_MIN_SAGITTA_CHORD_RATIO)
+            if (arcMiddle == null || maxSagitta / chord < THIN_FILLET_MIN_SAGITTA_CHORD_RATIO)
             {
                 return false;
             }
@@ -3034,14 +5189,8 @@ namespace Tekla.Technology.Akit.UserScript
             if (!HasConsistentThinCurveTurn(path))
                 return false;
 
-            double sweepDeg = GetArcSweepDegreesThroughPoint(
-                first,
-                arcMiddle,
-                last,
-                center
-            );
-            if (sweepDeg < THIN_FILLET_MIN_SWEEP_DEG ||
-                sweepDeg > THIN_FILLET_MAX_SWEEP_DEG)
+            double sweepDeg = GetArcSweepDegreesThroughPoint(first, arcMiddle, last, center);
+            if (sweepDeg < THIN_FILLET_MIN_SWEEP_DEG || sweepDeg > THIN_FILLET_MAX_SWEEP_DEG)
             {
                 return false;
             }
@@ -3082,8 +5231,10 @@ namespace Tekla.Technology.Akit.UserScript
             Point topEndpoint = first.Y >= last.Y ? first : last;
             Point bottomEndpoint = first.Y >= last.Y ? last : first;
 
-            if (Math.Abs(topEndpoint.Y - maxY) > edgeTol ||
-                Math.Abs(bottomEndpoint.Y - minY) > edgeTol)
+            if (
+                Math.Abs(topEndpoint.Y - maxY) > edgeTol
+                || Math.Abs(bottomEndpoint.Y - minY) > edgeTol
+            )
             {
                 return false;
             }
@@ -3092,9 +5243,7 @@ namespace Tekla.Technology.Akit.UserScript
             double bottomTangentError = Math.Abs(bottomEndpoint.X - center.X) / radius;
 
             bool isTopSide = topTangentError <= bottomTangentError;
-            double selectedTangentError = isTopSide
-                ? topTangentError
-                : bottomTangentError;
+            double selectedTangentError = isTopSide ? topTangentError : bottomTangentError;
 
             if (selectedTangentError > THIN_FILLET_TANGENT_SIN_TOL)
                 return false;
@@ -3114,13 +5263,7 @@ namespace Tekla.Technology.Akit.UserScript
             Point arc2 = new Point(arcMiddle.X, arcMiddle.Y, 0);
             Point arc3 = new Point(last.X, last.Y, 0);
 
-            NormalizeThinFilletArcPointOrder(
-                ref arc1,
-                arc2,
-                ref arc3,
-                isLeftSide,
-                isTopSide
-            );
+            NormalizeThinFilletArcPointOrder(ref arc1, arc2, ref arc3, isLeftSide, isTopSide);
 
             feature = new ThinBoundaryFeature();
             feature.Kind = ThinBoundaryFeatureKind.FilletArc;
@@ -3140,10 +5283,7 @@ namespace Tekla.Technology.Akit.UserScript
             return true;
         }
 
-        private static double DistancePointToInfiniteLine2D(
-            Point p,
-            Point lineStart,
-            Point lineEnd)
+        private static double DistancePointToInfiniteLine2D(Point p, Point lineStart, Point lineEnd)
         {
             double dx = lineEnd.X - lineStart.X;
             double dy = lineEnd.Y - lineStart.Y;
@@ -3152,9 +5292,7 @@ namespace Tekla.Technology.Akit.UserScript
             if (length <= 0.000001)
                 return 0.0;
 
-            double cross =
-                dx * (lineStart.Y - p.Y) -
-                (lineStart.X - p.X) * dy;
+            double cross = dx * (lineStart.Y - p.Y) - (lineStart.X - p.X) * dy;
 
             return Math.Abs(cross) / length;
         }
@@ -3164,16 +5302,13 @@ namespace Tekla.Technology.Akit.UserScript
             Point p2,
             Point p3,
             out Point center,
-            out double radius)
+            out double radius
+        )
         {
             center = null;
             radius = 0.0;
 
-            double d = 2.0 * (
-                p1.X * (p2.Y - p3.Y) +
-                p2.X * (p3.Y - p1.Y) +
-                p3.X * (p1.Y - p2.Y)
-            );
+            double d = 2.0 * (p1.X * (p2.Y - p3.Y) + p2.X * (p3.Y - p1.Y) + p3.X * (p1.Y - p2.Y));
 
             if (Math.Abs(d) <= 0.000001)
                 return false;
@@ -3182,20 +5317,18 @@ namespace Tekla.Technology.Akit.UserScript
             double p2Sq = p2.X * p2.X + p2.Y * p2.Y;
             double p3Sq = p3.X * p3.X + p3.Y * p3.Y;
 
-            double centerX = (
-                p1Sq * (p2.Y - p3.Y) +
-                p2Sq * (p3.Y - p1.Y) +
-                p3Sq * (p1.Y - p2.Y)
-            ) / d;
+            double centerX =
+                (p1Sq * (p2.Y - p3.Y) + p2Sq * (p3.Y - p1.Y) + p3Sq * (p1.Y - p2.Y)) / d;
 
-            double centerY = (
-                p1Sq * (p3.X - p2.X) +
-                p2Sq * (p1.X - p3.X) +
-                p3Sq * (p2.X - p1.X)
-            ) / d;
+            double centerY =
+                (p1Sq * (p3.X - p2.X) + p2Sq * (p1.X - p3.X) + p3Sq * (p2.X - p1.X)) / d;
 
-            if (Double.IsNaN(centerX) || Double.IsInfinity(centerX) ||
-                Double.IsNaN(centerY) || Double.IsInfinity(centerY))
+            if (
+                Double.IsNaN(centerX)
+                || Double.IsInfinity(centerX)
+                || Double.IsNaN(centerY)
+                || Double.IsInfinity(centerY)
+            )
             {
                 return false;
             }
@@ -3242,26 +5375,19 @@ namespace Tekla.Technology.Akit.UserScript
             Point start,
             Point middle,
             Point end,
-            Point center)
+            Point center
+        )
         {
-            double startAngle = Math.Atan2(
-                start.Y - center.Y,
-                start.X - center.X
-            );
-            double middleAngle = Math.Atan2(
-                middle.Y - center.Y,
-                middle.X - center.X
-            );
-            double endAngle = Math.Atan2(
-                end.Y - center.Y,
-                end.X - center.X
-            );
+            double startAngle = Math.Atan2(start.Y - center.Y, start.X - center.X);
+            double middleAngle = Math.Atan2(middle.Y - center.Y, middle.X - center.X);
+            double endAngle = Math.Atan2(end.Y - center.Y, end.X - center.X);
 
             double ccwStartToEnd = NormalizePositiveAngle(endAngle - startAngle);
             double ccwStartToMiddle = NormalizePositiveAngle(middleAngle - startAngle);
-            double sweepRadians = ccwStartToMiddle <= ccwStartToEnd + 0.000001
-                ? ccwStartToEnd
-                : 2.0 * Math.PI - ccwStartToEnd;
+            double sweepRadians =
+                ccwStartToMiddle <= ccwStartToEnd + 0.000001
+                    ? ccwStartToEnd
+                    : 2.0 * Math.PI - ccwStartToEnd;
 
             return sweepRadians * 180.0 / Math.PI;
         }
@@ -3282,7 +5408,8 @@ namespace Tekla.Technology.Akit.UserScript
             Point arc2,
             ref Point arc3,
             bool isLeftSide,
-            bool isTopSide)
+            bool isTopSide
+        )
         {
             bool swap = false;
 
@@ -3310,8 +5437,7 @@ namespace Tekla.Technology.Akit.UserScript
             }
 
             double cross =
-                (arc2.X - arc1.X) * (arc3.Y - arc1.Y) -
-                (arc2.Y - arc1.Y) * (arc3.X - arc1.X);
+                (arc2.X - arc1.X) * (arc3.Y - arc1.Y) - (arc2.Y - arc1.Y) * (arc3.X - arc1.X);
 
             // Bốn DIM mẫu đều dùng thứ tự clockwise (cross < 0).
             if (cross > 0.0)
@@ -3322,25 +5448,17 @@ namespace Tekla.Technology.Akit.UserScript
             }
         }
 
-        private static double GetThinFilletDimensionDistance(
-            bool isLeftSide,
-            bool isTopSide)
+        private static double GetThinFilletDimensionDistance(bool isLeftSide, bool isTopSide)
         {
             if (isLeftSide)
             {
-                return isTopSide
-                    ? THIN_FILLET_DISTANCE_LEFT_TOP
-                    : THIN_FILLET_DISTANCE_LEFT_BOTTOM;
+                return isTopSide ? THIN_FILLET_DISTANCE_LEFT_TOP : THIN_FILLET_DISTANCE_LEFT_BOTTOM;
             }
 
-            return isTopSide
-                ? THIN_FILLET_DISTANCE_RIGHT_TOP
-                : THIN_FILLET_DISTANCE_RIGHT_BOTTOM;
+            return isTopSide ? THIN_FILLET_DISTANCE_RIGHT_TOP : THIN_FILLET_DISTANCE_RIGHT_BOTTOM;
         }
 
-        private static double GetThinChamferDimensionDistance(
-            bool isLeftSide,
-            bool isTopSide)
+        private static double GetThinChamferDimensionDistance(bool isLeftSide, bool isTopSide)
         {
             if (isLeftSide)
             {
@@ -3349,14 +5467,10 @@ namespace Tekla.Technology.Akit.UserScript
                     : THIN_CHAMFER_DISTANCE_LEFT_BOTTOM;
             }
 
-            return isTopSide
-                ? THIN_CHAMFER_DISTANCE_RIGHT_TOP
-                : THIN_CHAMFER_DISTANCE_RIGHT_BOTTOM;
+            return isTopSide ? THIN_CHAMFER_DISTANCE_RIGHT_TOP : THIN_CHAMFER_DISTANCE_RIGHT_BOTTOM;
         }
 
-        private static double GetThinChamferVerticalRayLength(
-            bool isLeftSide,
-            bool isTopSide)
+        private static double GetThinChamferVerticalRayLength(bool isLeftSide, bool isTopSide)
         {
             if (isLeftSide)
             {
@@ -3372,7 +5486,8 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static void AddUniqueThinBoundaryFeature(
             List<ThinBoundaryFeature> features,
-            ThinBoundaryFeature candidate)
+            ThinBoundaryFeature candidate
+        )
         {
             if (features == null || candidate == null)
                 return;
@@ -3382,8 +5497,10 @@ namespace Tekla.Technology.Akit.UserScript
                 if (existing == null || existing.Kind != candidate.Kind)
                     continue;
 
-                if (existing.IsLeftSide != candidate.IsLeftSide ||
-                    existing.IsTopSide != candidate.IsTopSide)
+                if (
+                    existing.IsLeftSide != candidate.IsLeftSide
+                    || existing.IsTopSide != candidate.IsTopSide
+                )
                 {
                     continue;
                 }
@@ -3391,9 +5508,12 @@ namespace Tekla.Technology.Akit.UserScript
                 if (candidate.Kind == ThinBoundaryFeatureKind.ChamferLine)
                     return;
 
-                if (existing.Center != null && candidate.Center != null &&
-                    Distance2D(existing.Center, candidate.Center) <= 1.0 &&
-                    Math.Abs(existing.Radius - candidate.Radius) <= 0.5)
+                if (
+                    existing.Center != null
+                    && candidate.Center != null
+                    && Distance2D(existing.Center, candidate.Center) <= 1.0
+                    && Math.Abs(existing.Radius - candidate.Radius) <= 0.5
+                )
                 {
                     return;
                 }
@@ -3404,7 +5524,8 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static bool CreateThinViewChamferAngleDimension(
             View view,
-            ThinBoundaryFeature feature)
+            ThinBoundaryFeature feature
+        )
         {
             try
             {
@@ -3414,18 +5535,24 @@ namespace Tekla.Technology.Akit.UserScript
                 Point origin;
                 Point chamferAnchor;
                 Point perpendicularPoint;
-                if (!TryGetThinChamferAnglePoints(
-                    feature,
-                    out origin,
-                    out chamferAnchor,
-                    out perpendicularPoint))
+                if (
+                    !TryGetThinChamferAnglePoints(
+                        feature,
+                        out origin,
+                        out chamferAnchor,
+                        out perpendicularPoint
+                    )
+                )
                     return false;
 
-                if (HasMatchingThinChamferAngleDimension(
-                    view,
-                    origin,
-                    chamferAnchor,
-                    perpendicularPoint))
+                if (
+                    HasMatchingThinChamferAngleDimension(
+                        view,
+                        origin,
+                        chamferAnchor,
+                        perpendicularPoint
+                    )
+                )
                 {
                     return true;
                 }
@@ -3435,8 +5562,9 @@ namespace Tekla.Technology.Akit.UserScript
                 attributes.TransparentBackground = false;
                 if (attributes.Text != null)
                 {
-                    attributes.Text.TextPlacing =
-                        DimensionSetBaseAttributes.DimensionTextPlacings.AboveDimensionLine;
+                    attributes.Text.TextPlacing = DimensionSetBaseAttributes
+                        .DimensionTextPlacings
+                        .AboveDimensionLine;
                 }
 
                 double distance = GetThinChamferDimensionDistance(
@@ -3467,34 +5595,27 @@ namespace Tekla.Technology.Akit.UserScript
             ThinBoundaryFeature feature,
             out Point origin,
             out Point chamferAnchor,
-            out Point perpendicularPoint)
+            out Point perpendicularPoint
+        )
         {
             origin = null;
             chamferAnchor = null;
             perpendicularPoint = null;
 
-            if (feature == null ||
-                feature.ChamferOrigin == null ||
-                feature.ChamferOtherPoint == null)
+            if (
+                feature == null
+                || feature.ChamferOrigin == null
+                || feature.ChamferOtherPoint == null
+            )
             {
                 return false;
             }
 
-            origin = new Point(
-                feature.ChamferOrigin.X,
-                feature.ChamferOrigin.Y,
-                0
-            );
-            chamferAnchor = new Point(
-                feature.ChamferOtherPoint.X,
-                feature.ChamferOtherPoint.Y,
-                0
-            );
+            origin = new Point(feature.ChamferOrigin.X, feature.ChamferOrigin.Y, 0);
+            chamferAnchor = new Point(feature.ChamferOtherPoint.X, feature.ChamferOtherPoint.Y, 0);
 
             double rayLength = Math.Max(
-                GetThinChamferVerticalRayLength(
-                    feature.IsLeftSide,
-                    feature.IsTopSide),
+                GetThinChamferVerticalRayLength(feature.IsLeftSide, feature.IsTopSide),
                 Math.Abs(chamferAnchor.Y - origin.Y) + 1.0
             );
             perpendicularPoint = new Point(
@@ -3504,8 +5625,8 @@ namespace Tekla.Technology.Akit.UserScript
             );
 
             double cross =
-                (chamferAnchor.X - origin.X) * (perpendicularPoint.Y - origin.Y) -
-                (chamferAnchor.Y - origin.Y) * (perpendicularPoint.X - origin.X);
+                (chamferAnchor.X - origin.X) * (perpendicularPoint.Y - origin.Y)
+                - (chamferAnchor.Y - origin.Y) * (perpendicularPoint.X - origin.X);
 
             return Math.Abs(cross) > 0.000001;
         }
@@ -3514,34 +5635,36 @@ namespace Tekla.Technology.Akit.UserScript
             View view,
             Point origin,
             Point point1,
-            Point point2)
+            Point point2
+        )
         {
             try
             {
                 if (view == null || origin == null || point1 == null || point2 == null)
                     return false;
 
-                DrawingObjectEnumerator objects =
-                    view.GetAllObjects(typeof(AngleDimension));
+                DrawingObjectEnumerator objects = view.GetAllObjects(typeof(AngleDimension));
 
                 while (objects != null && objects.MoveNext())
                 {
                     AngleDimension existing = objects.Current as AngleDimension;
-                    if (existing == null ||
-                        existing.Origin == null ||
-                        existing.Point1 == null ||
-                        existing.Point2 == null ||
-                        Distance2D(existing.Origin, origin) > 0.5)
+                    if (
+                        existing == null
+                        || existing.Origin == null
+                        || existing.Point1 == null
+                        || existing.Point2 == null
+                        || Distance2D(existing.Origin, origin) > 0.5
+                    )
                     {
                         continue;
                     }
 
                     bool direct =
-                        Distance2D(existing.Point1, point1) <= 0.5 &&
-                        Distance2D(existing.Point2, point2) <= 0.5;
+                        Distance2D(existing.Point1, point1) <= 0.5
+                        && Distance2D(existing.Point2, point2) <= 0.5;
                     bool reverse =
-                        Distance2D(existing.Point1, point2) <= 0.5 &&
-                        Distance2D(existing.Point2, point1) <= 0.5;
+                        Distance2D(existing.Point1, point2) <= 0.5
+                        && Distance2D(existing.Point2, point1) <= 0.5;
 
                     if (direct)
                         return true;
@@ -3562,9 +5685,7 @@ namespace Tekla.Technology.Akit.UserScript
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return false;
         }
@@ -3574,7 +5695,8 @@ namespace Tekla.Technology.Akit.UserScript
             Point arc1,
             Point arc2,
             Point arc3,
-            double distance)
+            double distance
+        )
         {
             try
             {
@@ -3596,19 +5718,23 @@ namespace Tekla.Technology.Akit.UserScript
 
                         object[] args = null;
 
-                        if (parameters[0].ParameterType.IsAssignableFrom(view.GetType()) &&
-                            parameters[1].ParameterType.IsAssignableFrom(typeof(Point)) &&
-                            parameters[2].ParameterType.IsAssignableFrom(typeof(Point)) &&
-                            parameters[3].ParameterType.IsAssignableFrom(typeof(Point)) &&
-                            parameters[4].ParameterType == typeof(double))
+                        if (
+                            parameters[0].ParameterType.IsAssignableFrom(view.GetType())
+                            && parameters[1].ParameterType.IsAssignableFrom(typeof(Point))
+                            && parameters[2].ParameterType.IsAssignableFrom(typeof(Point))
+                            && parameters[3].ParameterType.IsAssignableFrom(typeof(Point))
+                            && parameters[4].ParameterType == typeof(double)
+                        )
                         {
                             args = new object[] { view, arc1, arc2, arc3, distance };
                         }
-                        else if (parameters[0].ParameterType.IsAssignableFrom(typeof(Point)) &&
-                                 parameters[1].ParameterType.IsAssignableFrom(typeof(Point)) &&
-                                 parameters[2].ParameterType.IsAssignableFrom(typeof(Point)) &&
-                                 parameters[3].ParameterType == typeof(double) &&
-                                 parameters[4].ParameterType.IsAssignableFrom(view.GetType()))
+                        else if (
+                            parameters[0].ParameterType.IsAssignableFrom(typeof(Point))
+                            && parameters[1].ParameterType.IsAssignableFrom(typeof(Point))
+                            && parameters[2].ParameterType.IsAssignableFrom(typeof(Point))
+                            && parameters[3].ParameterType == typeof(double)
+                            && parameters[4].ParameterType.IsAssignableFrom(view.GetType())
+                        )
                         {
                             args = new object[] { arc1, arc2, arc3, distance, view };
                         }
@@ -3623,14 +5749,10 @@ namespace Tekla.Technology.Akit.UserScript
 
                         return drawingObject.Insert();
                     }
-                    catch
-                    {
-                    }
+                    catch { }
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return false;
         }
@@ -3652,9 +5774,7 @@ namespace Tekla.Technology.Akit.UserScript
                 // Không dùng solid.MinimumPoint / MaximumPoint ở đây vì đó là bounding box ảo.
                 CollectRealSolidPointsForTotalDims(solid, result, 0);
             }
-            catch
-            {
-            }
+            catch { }
 
             return result;
         }
@@ -3662,7 +5782,8 @@ namespace Tekla.Technology.Akit.UserScript
         private static void CollectRealSolidPointsForTotalDims(
             object obj,
             List<Point> result,
-            int depth)
+            int depth
+        )
         {
             if (obj == null || result == null || depth > 8)
                 return;
@@ -3703,17 +5824,16 @@ namespace Tekla.Technology.Akit.UserScript
             object obj,
             List<Point> result,
             int depth,
-            string methodName)
+            string methodName
+        )
         {
             try
             {
                 if (obj == null || result == null || string.IsNullOrEmpty(methodName))
                     return;
 
-                MethodInfo method = obj.GetType().GetMethod(
-                    methodName,
-                    BindingFlags.Public | BindingFlags.Instance
-                );
+                MethodInfo method = obj.GetType()
+                    .GetMethod(methodName, BindingFlags.Public | BindingFlags.Instance);
 
                 if (method == null || method.GetParameters().Length != 0)
                     return;
@@ -3722,15 +5842,13 @@ namespace Tekla.Technology.Akit.UserScript
                 if (enumerator == null)
                     return;
 
-                MethodInfo moveNext = enumerator.GetType().GetMethod(
-                    "MoveNext",
-                    BindingFlags.Public | BindingFlags.Instance
-                );
+                MethodInfo moveNext = enumerator
+                    .GetType()
+                    .GetMethod("MoveNext", BindingFlags.Public | BindingFlags.Instance);
 
-                PropertyInfo currentProp = enumerator.GetType().GetProperty(
-                    "Current",
-                    BindingFlags.Public | BindingFlags.Instance
-                );
+                PropertyInfo currentProp = enumerator
+                    .GetType()
+                    .GetProperty("Current", BindingFlags.Public | BindingFlags.Instance);
 
                 if (moveNext == null || currentProp == null)
                     return;
@@ -3748,25 +5866,22 @@ namespace Tekla.Technology.Akit.UserScript
                     CollectRealSolidPointsForTotalDims(current, result, depth + 1);
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static void TryCollectPointProperty(
             object obj,
             List<Point> result,
-            string propertyName)
+            string propertyName
+        )
         {
             try
             {
                 if (obj == null || result == null || string.IsNullOrEmpty(propertyName))
                     return;
 
-                PropertyInfo prop = obj.GetType().GetProperty(
-                    propertyName,
-                    BindingFlags.Public | BindingFlags.Instance
-                );
+                PropertyInfo prop = obj.GetType()
+                    .GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
 
                 if (prop == null || !prop.CanRead)
                     return;
@@ -3780,9 +5895,7 @@ namespace Tekla.Technology.Akit.UserScript
 
                 AddUniquePoint(result, new Point(p.X, p.Y, 0), 0.5);
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static List<Point> GetLargestIntersectionPolygon(IEnumerator en)
@@ -3799,9 +5912,13 @@ namespace Tekla.Technology.Akit.UserScript
 
             foreach (List<Point> list in all)
             {
-                if (list.Count < 2) continue;
+                if (list.Count < 2)
+                    continue;
 
-                double minX, maxX, minY, maxY;
+                double minX,
+                    maxX,
+                    minY,
+                    maxY;
                 GetMinMax(list, out minX, out maxX, out minY, out maxY);
 
                 double score = Math.Abs(maxX - minX) * Math.Abs(maxY - minY);
@@ -3857,7 +5974,8 @@ namespace Tekla.Technology.Akit.UserScript
             out double minX,
             out double maxX,
             out double minY,
-            out double maxY)
+            out double maxY
+        )
         {
             minX = 999999999.0;
             maxX = -999999999.0;
@@ -3866,10 +5984,14 @@ namespace Tekla.Technology.Akit.UserScript
 
             foreach (Point p in pts)
             {
-                if (p.X < minX) minX = p.X;
-                if (p.X > maxX) maxX = p.X;
-                if (p.Y < minY) minY = p.Y;
-                if (p.Y > maxY) maxY = p.Y;
+                if (p.X < minX)
+                    minX = p.X;
+                if (p.X > maxX)
+                    maxX = p.X;
+                if (p.Y < minY)
+                    minY = p.Y;
+                if (p.Y > maxY)
+                    maxY = p.Y;
             }
         }
 
@@ -3882,9 +6004,11 @@ namespace Tekla.Technology.Akit.UserScript
             {
                 double dx = Math.Abs(p.X - x);
 
-                if (best == null ||
-                    dx < bestDx - TOL ||
-                    (Math.Abs(dx - bestDx) <= TOL && p.Y > best.Y))
+                if (
+                    best == null
+                    || dx < bestDx - TOL
+                    || (Math.Abs(dx - bestDx) <= TOL && p.Y > best.Y)
+                )
                 {
                     best = p;
                     bestDx = dx;
@@ -3903,9 +6027,11 @@ namespace Tekla.Technology.Akit.UserScript
             {
                 double dy = Math.Abs(p.Y - y);
 
-                if (best == null ||
-                    dy < bestDy - TOL ||
-                    (Math.Abs(dy - bestDy) <= TOL && p.X < best.X))
+                if (
+                    best == null
+                    || dy < bestDy - TOL
+                    || (Math.Abs(dy - bestDy) <= TOL && p.X < best.X)
+                )
                 {
                     best = p;
                     bestDy = dy;
@@ -3933,7 +6059,8 @@ namespace Tekla.Technology.Akit.UserScript
         private static Point GetStraightVerticalEdgePointForTotalDim(
             List<Point> polygon,
             double edgeX,
-            bool preferTop)
+            bool preferTop
+        )
         {
             try
             {
@@ -3963,8 +6090,7 @@ namespace Tekla.Technology.Akit.UserScript
 
                     // Chỉ nhận cạnh đứng thật nằm sát X ngoài cùng.
                     // Các đoạn cung bo thường rất ngắn hoặc không cùng X ổn định.
-                    if (Math.Abs(a.X - edgeX) > sideTol ||
-                        Math.Abs(b.X - edgeX) > sideTol)
+                    if (Math.Abs(a.X - edgeX) > sideTol || Math.Abs(b.X - edgeX) > sideTol)
                         continue;
 
                     double length = Math.Abs(a.Y - b.Y);
@@ -3974,8 +6100,10 @@ namespace Tekla.Technology.Akit.UserScript
 
                     double score = Math.Abs(a.X - edgeX) + Math.Abs(b.X - edgeX);
 
-                    if (length > bestLength + TOL ||
-                        (Math.Abs(length - bestLength) <= TOL && score < bestScore))
+                    if (
+                        length > bestLength + TOL
+                        || (Math.Abs(length - bestLength) <= TOL && score < bestScore)
+                    )
                     {
                         bestLength = length;
                         bestScore = score;
@@ -3987,9 +6115,7 @@ namespace Tekla.Technology.Akit.UserScript
                 if (bestA == null || bestB == null)
                     return null;
 
-                double y = preferTop
-                    ? Math.Max(bestA.Y, bestB.Y)
-                    : Math.Min(bestA.Y, bestB.Y);
+                double y = preferTop ? Math.Max(bestA.Y, bestB.Y) : Math.Min(bestA.Y, bestB.Y);
 
                 // X dùng đúng edgeX ngoài cùng để giá trị DIM tổng không đổi.
                 // Y lấy tại đầu cạnh thẳng thật để chân DIM không nằm trên cung bo.
@@ -4004,7 +6130,8 @@ namespace Tekla.Technology.Akit.UserScript
         private static Point GetStraightHorizontalEdgePointForTotalDim(
             List<Point> polygon,
             double edgeY,
-            bool preferLeft)
+            bool preferLeft
+        )
         {
             try
             {
@@ -4034,8 +6161,7 @@ namespace Tekla.Technology.Akit.UserScript
 
                     // Chỉ nhận cạnh ngang thật nằm sát Y ngoài cùng.
                     // Các đoạn cung bo thường rất ngắn hoặc không cùng Y ổn định.
-                    if (Math.Abs(a.Y - edgeY) > sideTol ||
-                        Math.Abs(b.Y - edgeY) > sideTol)
+                    if (Math.Abs(a.Y - edgeY) > sideTol || Math.Abs(b.Y - edgeY) > sideTol)
                         continue;
 
                     double length = Math.Abs(a.X - b.X);
@@ -4045,8 +6171,10 @@ namespace Tekla.Technology.Akit.UserScript
 
                     double score = Math.Abs(a.Y - edgeY) + Math.Abs(b.Y - edgeY);
 
-                    if (length > bestLength + TOL ||
-                        (Math.Abs(length - bestLength) <= TOL && score < bestScore))
+                    if (
+                        length > bestLength + TOL
+                        || (Math.Abs(length - bestLength) <= TOL && score < bestScore)
+                    )
                     {
                         bestLength = length;
                         bestScore = score;
@@ -4058,9 +6186,7 @@ namespace Tekla.Technology.Akit.UserScript
                 if (bestA == null || bestB == null)
                     return null;
 
-                double x = preferLeft
-                    ? Math.Min(bestA.X, bestB.X)
-                    : Math.Max(bestA.X, bestB.X);
+                double x = preferLeft ? Math.Min(bestA.X, bestB.X) : Math.Max(bestA.X, bestB.X);
 
                 // Y dùng đúng edgeY ngoài cùng để giá trị DIM tổng không đổi.
                 // X lấy tại đầu cạnh thẳng thật để chân DIM không nằm trên cung bo.
@@ -4072,14 +6198,14 @@ namespace Tekla.Technology.Akit.UserScript
             }
         }
 
-
         private static bool CreateDim(
             StraightDimensionSetHandler handler,
             View view,
             Point p1,
             Point p2,
             Vector direction,
-            double distance)
+            double distance
+        )
         {
             if (p1 == null || p2 == null)
                 return false;
@@ -4091,8 +6217,7 @@ namespace Tekla.Technology.Akit.UserScript
             list.Add(new Point(p1.X, p1.Y, 0));
             list.Add(new Point(p2.X, p2.Y, 0));
 
-            StraightDimensionSet dim =
-                handler.CreateDimensionSet(view, list, direction, distance);
+            StraightDimensionSet dim = handler.CreateDimensionSet(view, list, direction, distance);
 
             return dim != null;
         }
@@ -4104,8 +6229,6 @@ namespace Tekla.Technology.Akit.UserScript
 
             return Math.Sqrt(dx * dx + dy * dy);
         }
-
-
 
         // =====================================================================================
         // PA9 - RULE OFFSET DUY NHẤT CHO MỌI DIM THEO 4 CHÂN DIM TỔNG A/B/C/D
@@ -4124,7 +6247,8 @@ namespace Tekla.Technology.Akit.UserScript
             Point rightForLength,
             Point bottomForHeight,
             Point topForHeight,
-            double tierOffset)
+            double tierOffset
+        )
         {
             return GetDistanceFromFirstFootToAnchorTarget(
                 dimPoints,
@@ -4143,7 +6267,8 @@ namespace Tekla.Technology.Akit.UserScript
             Point rightForLength,
             Point bottomForHeight,
             Point topForHeight,
-            double tierOffset)
+            double tierOffset
+        )
         {
             return GetDistanceFromFirstFootToAnchorTarget(
                 dimPoints,
@@ -4162,7 +6287,8 @@ namespace Tekla.Technology.Akit.UserScript
             Point rightForLength,
             Point bottomForHeight,
             Point topForHeight,
-            double tierOffset)
+            double tierOffset
+        )
         {
             return GetDistanceFromFirstFootToAnchorTarget(
                 dimPoints,
@@ -4181,7 +6307,8 @@ namespace Tekla.Technology.Akit.UserScript
             Point rightForLength,
             Point bottomForHeight,
             Point topForHeight,
-            double tierOffset)
+            double tierOffset
+        )
         {
             return GetDistanceFromFirstFootToAnchorTarget(
                 dimPoints,
@@ -4201,7 +6328,8 @@ namespace Tekla.Technology.Akit.UserScript
             Point rightForLength,
             Point bottomForHeight,
             Point topForHeight,
-            double tierOffset)
+            double tierOffset
+        )
         {
             // PA11 - RULE DUY NHẤT:
             // 1) Neo chỉ lấy từ 4 chân DIM tổng A/B/C/D.
@@ -4233,15 +6361,27 @@ namespace Tekla.Technology.Akit.UserScript
                 {
                     if (direction.Y > 0)
                     {
-                        anchor = GetHighestYPoint(leftForLength, rightForLength, bottomForHeight, topForHeight);
-                        if (anchor == null) return tierOffset;
+                        anchor = GetHighestYPoint(
+                            leftForLength,
+                            rightForLength,
+                            bottomForHeight,
+                            topForHeight
+                        );
+                        if (anchor == null)
+                            return tierOffset;
 
                         distance = (anchor.Y + tierOffset) - firstFoot.Y;
                     }
                     else
                     {
-                        anchor = GetLowestYPoint(leftForLength, rightForLength, bottomForHeight, topForHeight);
-                        if (anchor == null) return tierOffset;
+                        anchor = GetLowestYPoint(
+                            leftForLength,
+                            rightForLength,
+                            bottomForHeight,
+                            topForHeight
+                        );
+                        if (anchor == null)
+                            return tierOffset;
 
                         distance = firstFoot.Y - (anchor.Y - tierOffset);
                     }
@@ -4250,15 +6390,27 @@ namespace Tekla.Technology.Akit.UserScript
                 {
                     if (direction.X < 0)
                     {
-                        anchor = GetLowestXPoint(leftForLength, rightForLength, bottomForHeight, topForHeight);
-                        if (anchor == null) return tierOffset;
+                        anchor = GetLowestXPoint(
+                            leftForLength,
+                            rightForLength,
+                            bottomForHeight,
+                            topForHeight
+                        );
+                        if (anchor == null)
+                            return tierOffset;
 
                         distance = firstFoot.X - (anchor.X - tierOffset);
                     }
                     else
                     {
-                        anchor = GetHighestXPoint(leftForLength, rightForLength, bottomForHeight, topForHeight);
-                        if (anchor == null) return tierOffset;
+                        anchor = GetHighestXPoint(
+                            leftForLength,
+                            rightForLength,
+                            bottomForHeight,
+                            topForHeight
+                        );
+                        if (anchor == null)
+                            return tierOffset;
 
                         distance = (anchor.X + tierOffset) - firstFoot.X;
                     }
@@ -4328,11 +6480,14 @@ namespace Tekla.Technology.Akit.UserScript
             Point rightForLength,
             Point bottomForHeight,
             Point topForHeight,
-            double tierOffset)
+            double tierOffset
+        )
         {
             PointList list = new PointList();
-            if (leftForLength != null) list.Add(leftForLength);
-            if (rightForLength != null) list.Add(rightForLength);
+            if (leftForLength != null)
+                list.Add(leftForLength);
+            if (rightForLength != null)
+                list.Add(rightForLength);
 
             return GetDistanceFromFirstFootToAnchorTarget(
                 list,
@@ -4350,11 +6505,14 @@ namespace Tekla.Technology.Akit.UserScript
             Point rightForLength,
             Point bottomForHeight,
             Point topForHeight,
-            double tierOffset)
+            double tierOffset
+        )
         {
             PointList list = new PointList();
-            if (leftForLength != null) list.Add(leftForLength);
-            if (rightForLength != null) list.Add(rightForLength);
+            if (leftForLength != null)
+                list.Add(leftForLength);
+            if (rightForLength != null)
+                list.Add(rightForLength);
 
             return GetDistanceFromFirstFootToAnchorTarget(
                 list,
@@ -4372,11 +6530,14 @@ namespace Tekla.Technology.Akit.UserScript
             Point topForHeight,
             Point leftForLength,
             Point rightForLength,
-            double tierOffset)
+            double tierOffset
+        )
         {
             PointList list = new PointList();
-            if (bottomForHeight != null) list.Add(bottomForHeight);
-            if (topForHeight != null) list.Add(topForHeight);
+            if (bottomForHeight != null)
+                list.Add(bottomForHeight);
+            if (topForHeight != null)
+                list.Add(topForHeight);
 
             return GetDistanceFromFirstFootToAnchorTarget(
                 list,
@@ -4394,11 +6555,14 @@ namespace Tekla.Technology.Akit.UserScript
             Point topForHeight,
             Point leftForLength,
             Point rightForLength,
-            double tierOffset)
+            double tierOffset
+        )
         {
             PointList list = new PointList();
-            if (bottomForHeight != null) list.Add(bottomForHeight);
-            if (topForHeight != null) list.Add(topForHeight);
+            if (bottomForHeight != null)
+                list.Add(bottomForHeight);
+            if (topForHeight != null)
+                list.Add(topForHeight);
 
             return GetDistanceFromFirstFootToAnchorTarget(
                 list,
@@ -4416,7 +6580,8 @@ namespace Tekla.Technology.Akit.UserScript
             Point rightForLength,
             Point bottomForHeight,
             Point topForHeight,
-            double tierOffset)
+            double tierOffset
+        )
         {
             return GetTotalTopDistanceByTotalFeetAnchor(
                 leftForLength,
@@ -4433,7 +6598,8 @@ namespace Tekla.Technology.Akit.UserScript
             Point topForHeight,
             Point leftForLength,
             Point rightForLength,
-            double tierOffset)
+            double tierOffset
+        )
         {
             return GetTotalLeftDistanceByTotalFeetAnchor(
                 bottomForHeight,
@@ -4456,9 +6622,11 @@ namespace Tekla.Technology.Akit.UserScript
                 if (p == null)
                     continue;
 
-                if (best == null ||
-                    p.Y > best.Y + TOL ||
-                    (Math.Abs(p.Y - best.Y) <= TOL && p.X < best.X))
+                if (
+                    best == null
+                    || p.Y > best.Y + TOL
+                    || (Math.Abs(p.Y - best.Y) <= TOL && p.X < best.X)
+                )
                 {
                     best = p;
                 }
@@ -4479,9 +6647,11 @@ namespace Tekla.Technology.Akit.UserScript
                 if (p == null)
                     continue;
 
-                if (best == null ||
-                    p.Y < best.Y - TOL ||
-                    (Math.Abs(p.Y - best.Y) <= TOL && p.X < best.X))
+                if (
+                    best == null
+                    || p.Y < best.Y - TOL
+                    || (Math.Abs(p.Y - best.Y) <= TOL && p.X < best.X)
+                )
                 {
                     best = p;
                 }
@@ -4502,9 +6672,11 @@ namespace Tekla.Technology.Akit.UserScript
                 if (p == null)
                     continue;
 
-                if (best == null ||
-                    p.X < best.X - TOL ||
-                    (Math.Abs(p.X - best.X) <= TOL && p.Y > best.Y))
+                if (
+                    best == null
+                    || p.X < best.X - TOL
+                    || (Math.Abs(p.X - best.X) <= TOL && p.Y > best.Y)
+                )
                 {
                     best = p;
                 }
@@ -4525,9 +6697,11 @@ namespace Tekla.Technology.Akit.UserScript
                 if (p == null)
                     continue;
 
-                if (best == null ||
-                    p.X > best.X + TOL ||
-                    (Math.Abs(p.X - best.X) <= TOL && p.Y > best.Y))
+                if (
+                    best == null
+                    || p.X > best.X + TOL
+                    || (Math.Abs(p.X - best.X) <= TOL && p.Y > best.Y)
+                )
                 {
                     best = p;
                 }
@@ -4562,12 +6736,17 @@ namespace Tekla.Technology.Akit.UserScript
             Point leftForLength,
             Point rightForLength,
             Point bottomForHeight,
-            Point topForHeight)
+            Point topForHeight
+        )
         {
-            if (SamePoint2D(leftForLength, bottomForHeight)) return leftForLength;
-            if (SamePoint2D(leftForLength, topForHeight)) return leftForLength;
-            if (SamePoint2D(rightForLength, bottomForHeight)) return rightForLength;
-            if (SamePoint2D(rightForLength, topForHeight)) return rightForLength;
+            if (SamePoint2D(leftForLength, bottomForHeight))
+                return leftForLength;
+            if (SamePoint2D(leftForLength, topForHeight))
+                return leftForLength;
+            if (SamePoint2D(rightForLength, bottomForHeight))
+                return rightForLength;
+            if (SamePoint2D(rightForLength, topForHeight))
+                return rightForLength;
 
             return null;
         }
@@ -4577,14 +6756,15 @@ namespace Tekla.Technology.Akit.UserScript
             if (a == null || b == null)
                 return false;
 
-            return Math.Abs(a.X - b.X) <= TOL &&
-                   Math.Abs(a.Y - b.Y) <= TOL;
+            return Math.Abs(a.X - b.X) <= TOL && Math.Abs(a.Y - b.Y) <= TOL;
         }
 
         private static Point GetHigherPoint(Point a, Point b)
         {
-            if (a == null) return b;
-            if (b == null) return a;
+            if (a == null)
+                return b;
+            if (b == null)
+                return a;
 
             if (a.Y > b.Y + TOL)
                 return a;
@@ -4599,8 +6779,10 @@ namespace Tekla.Technology.Akit.UserScript
         {
             double y = -999999999.0;
 
-            if (a != null && a.Y > y) y = a.Y;
-            if (b != null && b.Y > y) y = b.Y;
+            if (a != null && a.Y > y)
+                y = a.Y;
+            if (b != null && b.Y > y)
+                y = b.Y;
 
             if (y < -999999990.0)
                 return 0.0;
@@ -4612,15 +6794,16 @@ namespace Tekla.Technology.Akit.UserScript
         {
             double x = 999999999.0;
 
-            if (a != null && a.X < x) x = a.X;
-            if (b != null && b.X < x) x = b.X;
+            if (a != null && a.X < x)
+                x = a.X;
+            if (b != null && b.X < x)
+                x = b.X;
 
             if (x > 999999990.0)
                 return 0.0;
 
             return x;
         }
-
 
         #endregion
 
@@ -4631,7 +6814,8 @@ namespace Tekla.Technology.Akit.UserScript
             double minX,
             double maxX,
             double minY,
-            double maxY)
+            double maxY
+        )
         {
             try
             {
@@ -4681,21 +6865,11 @@ namespace Tekla.Technology.Akit.UserScript
                     SetPartMarkInsideHorizontal(partMarks[i]);
 
                     // 2) Sau đó mới di chuyển mark về giữa phía trên thanh
-                    MovePartMarkBoxToCenterTop(
-                        partMarks[i],
-                        i,
-                        minX,
-                        maxX,
-                        minY,
-                        maxY
-                    );
+                    MovePartMarkBoxToCenterTop(partMarks[i], i, minX, maxX, minY, maxY);
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
-
 
         private static void SetPartMarkInsideHorizontal(MarkBase mark)
         {
@@ -4715,10 +6889,8 @@ namespace Tekla.Technology.Akit.UserScript
                 }
                 else
                 {
-                    attrProp = mark.GetType().GetProperty(
-                        "Attributes",
-                        BindingFlags.Public | BindingFlags.Instance
-                    );
+                    attrProp = mark.GetType()
+                        .GetProperty("Attributes", BindingFlags.Public | BindingFlags.Instance);
 
                     if (attrProp != null && attrProp.CanRead)
                         attrs = attrProp.GetValue(mark, null);
@@ -4751,25 +6923,22 @@ namespace Tekla.Technology.Akit.UserScript
                     {
                         if (attrProp == null)
                         {
-                            attrProp = mark.GetType().GetProperty(
-                                "Attributes",
-                                BindingFlags.Public | BindingFlags.Instance
-                            );
+                            attrProp = mark.GetType()
+                                .GetProperty(
+                                    "Attributes",
+                                    BindingFlags.Public | BindingFlags.Instance
+                                );
                         }
 
                         if (attrProp != null && attrProp.CanWrite)
                             attrProp.SetValue(mark, attrs, null);
                     }
-                    catch
-                    {
-                    }
+                    catch { }
 
                     mark.Modify();
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static void ForcePartMarkLeaderLineInsideHorizontal(object attrs)
@@ -4792,9 +6961,7 @@ namespace Tekla.Technology.Akit.UserScript
                 // Ép option UI bằng index 3 cho các property liên quan Leader line / placing.
                 ForceIndex3OnLeaderLineProperties(attrs, 0);
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static void ForceIndex3OnLeaderLineProperties(object obj, int depth)
@@ -4804,9 +6971,8 @@ namespace Tekla.Technology.Akit.UserScript
 
             try
             {
-                PropertyInfo[] props = obj.GetType().GetProperties(
-                    BindingFlags.Public | BindingFlags.Instance
-                );
+                PropertyInfo[] props = obj.GetType()
+                    .GetProperties(BindingFlags.Public | BindingFlags.Instance);
 
                 foreach (PropertyInfo prop in props)
                 {
@@ -4817,9 +6983,9 @@ namespace Tekla.Technology.Akit.UserScript
 
                         string name = prop.Name;
                         bool isTargetName =
-                            name.IndexOf("Leader", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                            name.IndexOf("Placing", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                            name.IndexOf("Preferred", StringComparison.OrdinalIgnoreCase) >= 0;
+                            name.IndexOf("Leader", StringComparison.OrdinalIgnoreCase) >= 0
+                            || name.IndexOf("Placing", StringComparison.OrdinalIgnoreCase) >= 0
+                            || name.IndexOf("Preferred", StringComparison.OrdinalIgnoreCase) >= 0;
 
                         if (!isTargetName)
                             continue;
@@ -4873,14 +7039,10 @@ namespace Tekla.Technology.Akit.UserScript
                             ForceIndex3OnLeaderLineProperties(child, depth + 1);
                         }
                     }
-                    catch
-                    {
-                    }
+                    catch { }
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static void SetPropertyIfAssignable(object obj, string propertyName, object value)
@@ -4890,10 +7052,8 @@ namespace Tekla.Technology.Akit.UserScript
                 if (obj == null || value == null || string.IsNullOrEmpty(propertyName))
                     return;
 
-                PropertyInfo prop = obj.GetType().GetProperty(
-                    propertyName,
-                    BindingFlags.Public | BindingFlags.Instance
-                );
+                PropertyInfo prop = obj.GetType()
+                    .GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
 
                 if (prop == null || !prop.CanWrite)
                     return;
@@ -4903,9 +7063,7 @@ namespace Tekla.Technology.Akit.UserScript
 
                 prop.SetValue(obj, value, null);
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static void MovePartMarkBoxToCenterTop(
@@ -4914,7 +7072,8 @@ namespace Tekla.Technology.Akit.UserScript
             double minX,
             double maxX,
             double minY,
-            double maxY)
+            double maxY
+        )
         {
             if (mark == null)
                 return;
@@ -4926,7 +7085,8 @@ namespace Tekla.Technology.Akit.UserScript
 
                 // GIỮ NGUYÊN LOGIC MARK CŨ CHO MIẾNG RỘNG.
                 // Chỉ đổi vị trí mark xuống dưới khi chiều rộng miếng < 180.
-                bool placeBelow = plateWidth > 0.0 && plateWidth < PART_MARK_BELOW_IF_WIDTH_LESS_THAN;
+                bool placeBelow =
+                    plateWidth > 0.0 && plateWidth < PART_MARK_BELOW_IF_WIDTH_LESS_THAN;
 
                 // Nếu mark phía trên: đáy khung mark cách mép trên 15mm như logic cũ.
                 // Nếu mark phía dưới: đỉnh khung mark cách mép dưới 15mm.
@@ -4954,7 +7114,10 @@ namespace Tekla.Technology.Akit.UserScript
 
                     if (TryMoveObjectRelative(mark, move))
                     {
-                        try { mark.Modify(); }
+                        try
+                        {
+                            mark.Modify();
+                        }
                         catch { }
 
                         return;
@@ -4966,9 +7129,7 @@ namespace Tekla.Technology.Akit.UserScript
                 Point target = new Point(centerX, targetAnchorY, 0);
                 MoveMarkInsertionOnly(mark, target);
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static bool IsPartNameMarkV3(
@@ -4977,17 +7138,20 @@ namespace Tekla.Technology.Akit.UserScript
             double minX,
             double maxX,
             double minY,
-            double maxY)
+            double maxY
+        )
         {
             if (mark == null)
                 return false;
 
             string typeName = mark.GetType().FullName.ToUpper();
 
-            if (typeName.Contains("BOLTMARK") ||
-                typeName.Contains("HOLEMARK") ||
-                typeName.Contains("WELDMARK") ||
-                typeName.Contains("CONNECTIONMARK"))
+            if (
+                typeName.Contains("BOLTMARK")
+                || typeName.Contains("HOLEMARK")
+                || typeName.Contains("WELDMARK")
+                || typeName.Contains("CONNECTIONMARK")
+            )
                 return false;
 
             if (typeName.Contains("PARTMARK"))
@@ -4995,19 +7159,19 @@ namespace Tekla.Technology.Akit.UserScript
 
             string text = GetObjectTextByReflection(mark).ToUpper();
 
-            if (text.Contains("アンカー") ||
-                text.Contains("ルーズ") ||
-                text.Contains("HOLE") ||
-                text.Contains("BOLT") ||
-                text.Contains("Ø") ||
-                text.Contains("Φ") ||
-                text.Contains("M20") ||
-                text.Contains("M 20"))
+            if (
+                text.Contains("アンカー")
+                || text.Contains("ルーズ")
+                || text.Contains("HOLE")
+                || text.Contains("BOLT")
+                || text.Contains("Ø")
+                || text.Contains("Φ")
+                || text.Contains("M20")
+                || text.Contains("M 20")
+            )
                 return false;
 
-            if (text.Contains("PL") ||
-                text.Contains("BP") ||
-                text.Contains("*"))
+            if (text.Contains("PL") || text.Contains("BP") || text.Contains("*"))
                 return true;
 
             Point p = SafeGetInsertionPoint(mark);
@@ -5015,10 +7179,10 @@ namespace Tekla.Technology.Akit.UserScript
             if (p != null)
             {
                 bool nearTop =
-                    p.X >= minX - 100.0 &&
-                    p.X <= maxX + 100.0 &&
-                    p.Y >= maxY - 40.0 &&
-                    p.Y <= maxY + 120.0;
+                    p.X >= minX - 100.0
+                    && p.X <= maxX + 100.0
+                    && p.Y >= maxY - 40.0
+                    && p.Y <= maxY + 120.0;
 
                 if (nearTop && !IsPointNearAnyHole(p, holes, 120.0))
                     return true;
@@ -5033,16 +7197,13 @@ namespace Tekla.Technology.Akit.UserScript
             double minX,
             double maxX,
             double minY,
-            double maxY)
+            double maxY
+        )
         {
             MarkBase best = null;
             double bestScore = 999999999.0;
 
-            Point target = new Point(
-                (minX + maxX) / 2.0,
-                maxY + PART_MARK_GAP_FROM_PLATE,
-                0
-            );
+            Point target = new Point((minX + maxX) / 2.0, maxY + PART_MARK_GAP_FROM_PLATE, 0);
 
             foreach (MarkBase mark in marks)
             {
@@ -5051,9 +7212,11 @@ namespace Tekla.Technology.Akit.UserScript
 
                 string typeName = mark.GetType().FullName.ToUpper();
 
-                if (typeName.Contains("BOLTMARK") ||
-                    typeName.Contains("HOLEMARK") ||
-                    typeName.Contains("WELDMARK"))
+                if (
+                    typeName.Contains("BOLTMARK")
+                    || typeName.Contains("HOLEMARK")
+                    || typeName.Contains("WELDMARK")
+                )
                     continue;
 
                 Point boxMin;
@@ -5062,11 +7225,7 @@ namespace Tekla.Technology.Akit.UserScript
 
                 if (TryGetObjectBox(mark, out boxMin, out boxMax))
                 {
-                    p = new Point(
-                        (boxMin.X + boxMax.X) / 2.0,
-                        (boxMin.Y + boxMax.Y) / 2.0,
-                        0
-                    );
+                    p = new Point((boxMin.X + boxMax.X) / 2.0, (boxMin.Y + boxMax.Y) / 2.0, 0);
                 }
                 else
                 {
@@ -5091,20 +7250,18 @@ namespace Tekla.Technology.Akit.UserScript
             return best;
         }
 
-        private static bool TryGetObjectBox(
-            DrawingObject obj,
-            out Point min,
-            out Point max)
+        private static bool TryGetObjectBox(DrawingObject obj, out Point min, out Point max)
         {
             min = null;
             max = null;
 
             try
             {
-                MethodInfo method = obj.GetType().GetMethod(
-                    "GetAxisAlignedBoundingBox",
-                    BindingFlags.Public | BindingFlags.Instance
-                );
+                MethodInfo method = obj.GetType()
+                    .GetMethod(
+                        "GetAxisAlignedBoundingBox",
+                        BindingFlags.Public | BindingFlags.Instance
+                    );
 
                 if (method != null)
                 {
@@ -5114,16 +7271,12 @@ namespace Tekla.Technology.Akit.UserScript
                         return true;
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             try
             {
-                PropertyInfo prop = obj.GetType().GetProperty(
-                    "BoundingBox",
-                    BindingFlags.Public | BindingFlags.Instance
-                );
+                PropertyInfo prop = obj.GetType()
+                    .GetProperty("BoundingBox", BindingFlags.Public | BindingFlags.Instance);
 
                 if (prop != null && prop.CanRead)
                 {
@@ -5133,16 +7286,12 @@ namespace Tekla.Technology.Akit.UserScript
                         return true;
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             try
             {
-                PropertyInfo prop = obj.GetType().GetProperty(
-                    "RestrictionBox",
-                    BindingFlags.Public | BindingFlags.Instance
-                );
+                PropertyInfo prop = obj.GetType()
+                    .GetProperty("RestrictionBox", BindingFlags.Public | BindingFlags.Instance);
 
                 if (prop != null && prop.CanRead)
                 {
@@ -5152,17 +7301,12 @@ namespace Tekla.Technology.Akit.UserScript
                         return true;
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return false;
         }
 
-        private static bool TryExtractBoxMinMax(
-            object box,
-            out Point min,
-            out Point max)
+        private static bool TryExtractBoxMinMax(object box, out Point min, out Point max)
         {
             min = null;
             max = null;
@@ -5172,15 +7316,11 @@ namespace Tekla.Technology.Akit.UserScript
 
             try
             {
-                PropertyInfo minProp = box.GetType().GetProperty(
-                    "MinPoint",
-                    BindingFlags.Public | BindingFlags.Instance
-                );
+                PropertyInfo minProp = box.GetType()
+                    .GetProperty("MinPoint", BindingFlags.Public | BindingFlags.Instance);
 
-                PropertyInfo maxProp = box.GetType().GetProperty(
-                    "MaxPoint",
-                    BindingFlags.Public | BindingFlags.Instance
-                );
+                PropertyInfo maxProp = box.GetType()
+                    .GetProperty("MaxPoint", BindingFlags.Public | BindingFlags.Instance);
 
                 if (minProp != null && maxProp != null)
                 {
@@ -5195,23 +7335,17 @@ namespace Tekla.Technology.Akit.UserScript
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return false;
         }
 
-        private static bool TryMoveObjectRelative(
-            DrawingObject obj,
-            Vector move)
+        private static bool TryMoveObjectRelative(DrawingObject obj, Vector move)
         {
             try
             {
-                MethodInfo method = obj.GetType().GetMethod(
-                    "MoveObjectRelative",
-                    BindingFlags.Public | BindingFlags.Instance
-                );
+                MethodInfo method = obj.GetType()
+                    .GetMethod("MoveObjectRelative", BindingFlags.Public | BindingFlags.Instance);
 
                 if (method == null)
                     return false;
@@ -5225,9 +7359,7 @@ namespace Tekla.Technology.Akit.UserScript
             }
         }
 
-        private static void MoveMarkInsertionOnly(
-            MarkBase mark,
-            Point target)
+        private static void MoveMarkInsertionOnly(MarkBase mark, Point target)
         {
             if (mark == null || target == null)
                 return;
@@ -5247,9 +7379,7 @@ namespace Tekla.Technology.Akit.UserScript
                     TrySetPointProperty(mark, "Origin", target);
                     mark.Modify();
                 }
-                catch
-                {
-                }
+                catch { }
             }
         }
 
@@ -5273,10 +7403,7 @@ namespace Tekla.Technology.Akit.UserScript
             }
         }
 
-        private static bool IsPointNearAnyHole(
-            Point p,
-            List<Point> holes,
-            double distance)
+        private static bool IsPointNearAnyHole(Point p, List<Point> holes, double distance)
         {
             if (p == null || holes == null)
                 return false;
@@ -5293,17 +7420,12 @@ namespace Tekla.Technology.Akit.UserScript
             return false;
         }
 
-        private static bool TrySetPointProperty(
-            object obj,
-            string propertyName,
-            Point value)
+        private static bool TrySetPointProperty(object obj, string propertyName, Point value)
         {
             try
             {
-                PropertyInfo prop = obj.GetType().GetProperty(
-                    propertyName,
-                    BindingFlags.Public | BindingFlags.Instance
-                );
+                PropertyInfo prop = obj.GetType()
+                    .GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
 
                 if (prop == null || !prop.CanWrite)
                     return false;
@@ -5320,16 +7442,12 @@ namespace Tekla.Technology.Akit.UserScript
             }
         }
 
-        private static Point TryGetPointProperty(
-            object obj,
-            string propertyName)
+        private static Point TryGetPointProperty(object obj, string propertyName)
         {
             try
             {
-                PropertyInfo prop = obj.GetType().GetProperty(
-                    propertyName,
-                    BindingFlags.Public | BindingFlags.Instance
-                );
+                PropertyInfo prop = obj.GetType()
+                    .GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
 
                 if (prop == null || !prop.CanRead)
                     return null;
@@ -5370,10 +7488,7 @@ namespace Tekla.Technology.Akit.UserScript
             }
         }
 
-        private static void CollectStringsByReflection(
-            object obj,
-            List<string> texts,
-            int depth)
+        private static void CollectStringsByReflection(object obj, List<string> texts, int depth)
         {
             if (obj == null || depth > 4)
                 return;
@@ -5398,10 +7513,7 @@ namespace Tekla.Technology.Akit.UserScript
 
             Type t = obj.GetType();
 
-            PropertyInfo[] props = t.GetProperties(
-                BindingFlags.Public |
-                BindingFlags.Instance
-            );
+            PropertyInfo[] props = t.GetProperties(BindingFlags.Public | BindingFlags.Instance);
 
             foreach (PropertyInfo prop in props)
             {
@@ -5410,11 +7522,15 @@ namespace Tekla.Technology.Akit.UserScript
 
                 string name = prop.Name.ToUpper();
 
-                if (!(name.Contains("TEXT") ||
-                      name.Contains("CONTENT") ||
-                      name.Contains("VALUE") ||
-                      name.Contains("STRING") ||
-                      name.Contains("TAG")))
+                if (
+                    !(
+                        name.Contains("TEXT")
+                        || name.Contains("CONTENT")
+                        || name.Contains("VALUE")
+                        || name.Contains("STRING")
+                        || name.Contains("TAG")
+                    )
+                )
                     continue;
 
                 try
@@ -5422,13 +7538,9 @@ namespace Tekla.Technology.Akit.UserScript
                     object value = prop.GetValue(obj, null);
                     CollectStringsByReflection(value, texts, depth + 1);
                 }
-                catch
-                {
-                }
+                catch { }
             }
         }
-
-
 
         #endregion
 
@@ -5441,8 +7553,14 @@ namespace Tekla.Technology.Akit.UserScript
                     return;
 
                 object attrs = null;
-                try { attrs = view.Attributes; }
-                catch { attrs = null; }
+                try
+                {
+                    attrs = view.Attributes;
+                }
+                catch
+                {
+                    attrs = null;
+                }
 
                 if (attrs != null)
                 {
@@ -5452,12 +7570,13 @@ namespace Tekla.Technology.Akit.UserScript
                 // Một số phiên bản Tekla expose property trực tiếp ở View.
                 ForceSafeViewSizeSettings(view, extension);
 
-                try { view.Modify(); }
+                try
+                {
+                    view.Modify();
+                }
                 catch { }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static void ForceSafeViewSizeSettings(object obj, double extension)
@@ -5480,9 +7599,8 @@ namespace Tekla.Technology.Akit.UserScript
                     TrySetDoublePropertyIfExists(shortening, "Distance", 0.0);
                 }
 
-                PropertyInfo[] props = obj.GetType().GetProperties(
-                    BindingFlags.Public | BindingFlags.Instance
-                );
+                PropertyInfo[] props = obj.GetType()
+                    .GetProperties(BindingFlags.Public | BindingFlags.Instance);
 
                 foreach (PropertyInfo prop in props)
                 {
@@ -5492,25 +7610,35 @@ namespace Tekla.Technology.Akit.UserScript
                     string name = prop.Name.ToUpper();
 
                     // View extension for neighbor parts = 20.
-                    if (name.IndexOf("EXTENSION") >= 0 ||
-                        name.IndexOf("MARGIN") >= 0 ||
-                        name.IndexOf("PADDING") >= 0)
+                    if (
+                        name.IndexOf("EXTENSION") >= 0
+                        || name.IndexOf("MARGIN") >= 0
+                        || name.IndexOf("PADDING") >= 0
+                    )
                     {
                         TrySetNumericProperty(prop, obj, extension);
                         continue;
                     }
 
                     // Cố gắng set Size = Fit by parts nếu API expose enum/int/string.
-                    if ((name.IndexOf("SIZE") >= 0 || name.IndexOf("BOUND") >= 0) &&
-                        prop.PropertyType.IsEnum)
+                    if (
+                        (name.IndexOf("SIZE") >= 0 || name.IndexOf("BOUND") >= 0)
+                        && prop.PropertyType.IsEnum
+                    )
                     {
-                        TrySetEnumByName(prop, obj, new string[] { "FITBYPARTS", "FIT_BY_PARTS", "BYPARTS", "PARTS" });
+                        TrySetEnumByName(
+                            prop,
+                            obj,
+                            new string[] { "FITBYPARTS", "FIT_BY_PARTS", "BYPARTS", "PARTS" }
+                        );
                         continue;
                     }
 
                     // Một số API dùng bool kiểu FitByParts.
-                    if ((name.IndexOf("FIT") >= 0 && name.IndexOf("PART") >= 0) ||
-                        (name.IndexOf("BYPART") >= 0))
+                    if (
+                        (name.IndexOf("FIT") >= 0 && name.IndexOf("PART") >= 0)
+                        || (name.IndexOf("BYPART") >= 0)
+                    )
                     {
                         TrySetBoolPropertyIfExists(obj, prop.Name, true);
                         continue;
@@ -5524,9 +7652,7 @@ namespace Tekla.Technology.Akit.UserScript
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static void TrySetNumericProperty(PropertyInfo prop, object obj, double value)
@@ -5545,9 +7671,7 @@ namespace Tekla.Technology.Akit.UserScript
                 else if (t == typeof(int))
                     prop.SetValue(obj, Convert.ToInt32(value), null);
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static void TrySetEnumByName(PropertyInfo prop, object obj, string[] preferredNames)
@@ -5578,19 +7702,15 @@ namespace Tekla.Technology.Akit.UserScript
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static bool TrySetBoolPropertyIfExists(object obj, string propertyName, bool value)
         {
             try
             {
-                PropertyInfo prop = obj.GetType().GetProperty(
-                    propertyName,
-                    BindingFlags.Public | BindingFlags.Instance
-                );
+                PropertyInfo prop = obj.GetType()
+                    .GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
 
                 if (prop == null || !prop.CanWrite || prop.PropertyType != typeof(bool))
                     return false;
@@ -5604,14 +7724,16 @@ namespace Tekla.Technology.Akit.UserScript
             }
         }
 
-        private static bool TrySetDoublePropertyIfExists(object obj, string propertyName, double value)
+        private static bool TrySetDoublePropertyIfExists(
+            object obj,
+            string propertyName,
+            double value
+        )
         {
             try
             {
-                PropertyInfo prop = obj.GetType().GetProperty(
-                    propertyName,
-                    BindingFlags.Public | BindingFlags.Instance
-                );
+                PropertyInfo prop = obj.GetType()
+                    .GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
 
                 if (prop == null || !prop.CanWrite)
                     return false;
@@ -5634,9 +7756,7 @@ namespace Tekla.Technology.Akit.UserScript
                     return true;
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return false;
         }
@@ -5655,14 +7775,19 @@ namespace Tekla.Technology.Akit.UserScript
                 // 4) Không copy Cut area / RestrictionBox / Shortening / Scale / Depth.
                 View.ViewAttributes currentAttributes = null;
 
-                try { currentAttributes = view.Attributes; }
-                catch { currentAttributes = null; }
+                try
+                {
+                    currentAttributes = view.Attributes;
+                }
+                catch
+                {
+                    currentAttributes = null;
+                }
 
                 if (currentAttributes == null)
                     return false;
 
-                View.ViewAttributes standardAttributes =
-                    new View.ViewAttributes(attributeFile);
+                View.ViewAttributes standardAttributes = new View.ViewAttributes(attributeFile);
 
                 if (standardAttributes == null)
                     return false;
@@ -5677,8 +7802,14 @@ namespace Tekla.Technology.Akit.UserScript
                 view.Attributes = currentAttributes;
                 ForceSafeViewSizeSettings(view, VIEW_PADDING);
 
-                try { return view.Modify(); }
-                catch { return false; }
+                try
+                {
+                    return view.Modify();
+                }
+                catch
+                {
+                    return false;
+                }
             }
             catch
             {
@@ -5693,9 +7824,9 @@ namespace Tekla.Technology.Akit.UserScript
 
             try
             {
-                PropertyInfo[] sourceProps = source.GetType().GetProperties(
-                    BindingFlags.Public | BindingFlags.Instance
-                );
+                PropertyInfo[] sourceProps = source
+                    .GetType()
+                    .GetProperties(BindingFlags.Public | BindingFlags.Instance);
 
                 foreach (PropertyInfo sp in sourceProps)
                 {
@@ -5707,10 +7838,9 @@ namespace Tekla.Technology.Akit.UserScript
                     if (IsDangerousViewStandardProperty(propName))
                         continue;
 
-                    PropertyInfo tp = target.GetType().GetProperty(
-                        propName,
-                        BindingFlags.Public | BindingFlags.Instance
-                    );
+                    PropertyInfo tp = target
+                        .GetType()
+                        .GetProperty(propName, BindingFlags.Public | BindingFlags.Instance);
 
                     if (tp == null || !tp.CanWrite)
                         continue;
@@ -5729,14 +7859,10 @@ namespace Tekla.Technology.Akit.UserScript
 
                         tp.SetValue(target, value, null);
                     }
-                    catch
-                    {
-                    }
+                    catch { }
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static bool IsSafeSimplePropertyType(Type t)
@@ -5747,11 +7873,13 @@ namespace Tekla.Technology.Akit.UserScript
             if (t.IsEnum)
                 return true;
 
-            if (t == typeof(bool) ||
-                t == typeof(int) ||
-                t == typeof(double) ||
-                t == typeof(float) ||
-                t == typeof(string))
+            if (
+                t == typeof(bool)
+                || t == typeof(int)
+                || t == typeof(double)
+                || t == typeof(float)
+                || t == typeof(string)
+            )
                 return true;
 
             return false;
@@ -5766,23 +7894,40 @@ namespace Tekla.Technology.Akit.UserScript
 
             // Những property này có thể làm Tekla rebuild cut area / crop / depth / scale.
             // Không copy từ file tiêu chuẩn để tránh lỗi Illegal length of cut area.
-            if (name.IndexOf("RESTRICTION") >= 0) return true;
-            if (name.IndexOf("BOUND") >= 0) return true;
-            if (name.IndexOf("BOX") >= 0) return true;
-            if (name.IndexOf("CUT") >= 0) return true;
-            if (name.IndexOf("SHORTEN") >= 0) return true;
-            if (name.IndexOf("DEPTH") >= 0) return true;
-            if (name.IndexOf("CLIP") >= 0) return true;
-            if (name.IndexOf("SCALE") >= 0) return true;
-            if (name.IndexOf("SIZE") >= 0) return true;
-            if (name.IndexOf("EXTENSION") >= 0) return true;
-            if (name.IndexOf("MARGIN") >= 0) return true;
-            if (name.IndexOf("PADDING") >= 0) return true;
-            if (name.IndexOf("ORIGIN") >= 0) return true;
-            if (name.IndexOf("PLANE") >= 0) return true;
-            if (name.IndexOf("COORDINATE") >= 0) return true;
-            if (name.IndexOf("PLAC") >= 0) return true;
-            if (name.IndexOf("MIN") == 0 || name.IndexOf("MAX") == 0) return true;
+            if (name.IndexOf("RESTRICTION") >= 0)
+                return true;
+            if (name.IndexOf("BOUND") >= 0)
+                return true;
+            if (name.IndexOf("BOX") >= 0)
+                return true;
+            if (name.IndexOf("CUT") >= 0)
+                return true;
+            if (name.IndexOf("SHORTEN") >= 0)
+                return true;
+            if (name.IndexOf("DEPTH") >= 0)
+                return true;
+            if (name.IndexOf("CLIP") >= 0)
+                return true;
+            if (name.IndexOf("SCALE") >= 0)
+                return true;
+            if (name.IndexOf("SIZE") >= 0)
+                return true;
+            if (name.IndexOf("EXTENSION") >= 0)
+                return true;
+            if (name.IndexOf("MARGIN") >= 0)
+                return true;
+            if (name.IndexOf("PADDING") >= 0)
+                return true;
+            if (name.IndexOf("ORIGIN") >= 0)
+                return true;
+            if (name.IndexOf("PLANE") >= 0)
+                return true;
+            if (name.IndexOf("COORDINATE") >= 0)
+                return true;
+            if (name.IndexOf("PLAC") >= 0)
+                return true;
+            if (name.IndexOf("MIN") == 0 || name.IndexOf("MAX") == 0)
+                return true;
 
             return false;
         }
@@ -5794,10 +7939,8 @@ namespace Tekla.Technology.Akit.UserScript
                 if (obj == null)
                     return null;
 
-                PropertyInfo prop = obj.GetType().GetProperty(
-                    propertyName,
-                    BindingFlags.Public | BindingFlags.Instance
-                );
+                PropertyInfo prop = obj.GetType()
+                    .GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
 
                 if (prop == null || !prop.CanRead)
                     return null;
@@ -5817,10 +7960,8 @@ namespace Tekla.Technology.Akit.UserScript
                 if (obj == null || value == null)
                     return false;
 
-                PropertyInfo prop = obj.GetType().GetProperty(
-                    propertyName,
-                    BindingFlags.Public | BindingFlags.Instance
-                );
+                PropertyInfo prop = obj.GetType()
+                    .GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
 
                 if (prop == null || !prop.CanWrite)
                     return false;
@@ -5837,7 +7978,6 @@ namespace Tekla.Technology.Akit.UserScript
             }
         }
 
-
         #endregion
 
         #region 09 - SCALE / ARRANGE / SELECT VIEW
@@ -5845,7 +7985,8 @@ namespace Tekla.Technology.Akit.UserScript
             Model model,
             Drawing drawing,
             ModelPart part,
-            View view)
+            View view
+        )
         {
             TransformationPlane oldPlane = null;
 
@@ -5855,8 +7996,7 @@ namespace Tekla.Technology.Akit.UserScript
                     return;
 
                 double manualScale;
-                if (TTSK_AutoDim_Plates.ManualDrawingScaleOverride.TryGet(
-                        out manualScale))
+                if (TTSK_AutoDim_Plates.ManualDrawingScaleOverride.TryGet(out manualScale))
                 {
                     SetViewScale(view, manualScale);
                     return;
@@ -5877,7 +8017,9 @@ namespace Tekla.Technology.Akit.UserScript
 
                 oldPlane = model.GetWorkPlaneHandler().GetCurrentTransformationPlane();
 
-                TransformationPlane viewPlane = new TransformationPlane(view.DisplayCoordinateSystem);
+                TransformationPlane viewPlane = new TransformationPlane(
+                    view.DisplayCoordinateSystem
+                );
                 model.GetWorkPlaneHandler().SetCurrentTransformationPlane(viewPlane);
 
                 Solid solid = part.GetSolid();
@@ -5895,9 +8037,7 @@ namespace Tekla.Technology.Akit.UserScript
 
                 SetViewScale(view, selectedScale);
             }
-            catch
-            {
-            }
+            catch { }
             finally
             {
                 try
@@ -5905,18 +8045,32 @@ namespace Tekla.Technology.Akit.UserScript
                     if (model != null && oldPlane != null)
                         model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane);
                 }
-                catch
-                {
-                }
+                catch { }
             }
         }
 
         private static double GetAutoScaleMarginTotal(double sheetWidth, double sheetHeight)
         {
-            if (IsSheetSize(sheetWidth, sheetHeight, A1_SHEET_WIDTH, A1_SHEET_HEIGHT, SHEET_SIZE_TOLERANCE))
+            if (
+                IsSheetSize(
+                    sheetWidth,
+                    sheetHeight,
+                    A1_SHEET_WIDTH,
+                    A1_SHEET_HEIGHT,
+                    SHEET_SIZE_TOLERANCE
+                )
+            )
                 return AUTO_SCALE_A1_MARGIN_TOTAL;
 
-            if (IsSheetSize(sheetWidth, sheetHeight, A3_SHEET_WIDTH, A3_SHEET_HEIGHT, SHEET_SIZE_TOLERANCE))
+            if (
+                IsSheetSize(
+                    sheetWidth,
+                    sheetHeight,
+                    A3_SHEET_WIDTH,
+                    A3_SHEET_HEIGHT,
+                    SHEET_SIZE_TOLERANCE
+                )
+            )
                 return AUTO_SCALE_A3_MARGIN_TOTAL;
 
             return AUTO_SCALE_DEFAULT_MARGIN_TOTAL;
@@ -5927,13 +8081,17 @@ namespace Tekla.Technology.Akit.UserScript
             double sheetHeight,
             double targetWidth,
             double targetHeight,
-            double tolerance)
+            double tolerance
+        )
         {
-            return
-                (Math.Abs(sheetWidth - targetWidth) <= tolerance &&
-                 Math.Abs(sheetHeight - targetHeight) <= tolerance) ||
-                (Math.Abs(sheetWidth - targetHeight) <= tolerance &&
-                 Math.Abs(sheetHeight - targetWidth) <= tolerance);
+            return (
+                    Math.Abs(sheetWidth - targetWidth) <= tolerance
+                    && Math.Abs(sheetHeight - targetHeight) <= tolerance
+                )
+                || (
+                    Math.Abs(sheetWidth - targetHeight) <= tolerance
+                    && Math.Abs(sheetHeight - targetWidth) <= tolerance
+                );
         }
 
         private static double ChooseAllowedViewScale(double requiredScale)
@@ -5952,7 +8110,8 @@ namespace Tekla.Technology.Akit.UserScript
         private static bool TryGetDrawingSheetSize(
             Drawing drawing,
             out double width,
-            out double height)
+            out double height
+        )
         {
             width = 0.0;
             height = 0.0;
@@ -5999,8 +8158,14 @@ namespace Tekla.Technology.Akit.UserScript
                 // Ưu tiên set scale trong Attributes.
                 object attrs = null;
 
-                try { attrs = view.Attributes; }
-                catch { attrs = null; }
+                try
+                {
+                    attrs = view.Attributes;
+                }
+                catch
+                {
+                    attrs = null;
+                }
 
                 if (attrs != null)
                 {
@@ -6010,12 +8175,13 @@ namespace Tekla.Technology.Akit.UserScript
                 // Nếu Tekla có property Scale trực tiếp trên View thì set luôn.
                 SetScaleProperties(view, scale);
 
-                try { view.Modify(); }
+                try
+                {
+                    view.Modify();
+                }
                 catch { }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static void SetScaleProperties(object obj, double scale)
@@ -6025,9 +8191,8 @@ namespace Tekla.Technology.Akit.UserScript
 
             try
             {
-                PropertyInfo[] props = obj.GetType().GetProperties(
-                    BindingFlags.Public | BindingFlags.Instance
-                );
+                PropertyInfo[] props = obj.GetType()
+                    .GetProperties(BindingFlags.Public | BindingFlags.Instance);
 
                 foreach (PropertyInfo prop in props)
                 {
@@ -6062,28 +8227,24 @@ namespace Tekla.Technology.Akit.UserScript
 
                             if (scaleObj != null)
                             {
-                                TrySetObjectProperty(scaleObj, "Denominator", Convert.ToInt32(scale));
+                                TrySetObjectProperty(
+                                    scaleObj,
+                                    "Denominator",
+                                    Convert.ToInt32(scale)
+                                );
                                 TrySetObjectProperty(scaleObj, "Numerator", 1);
                                 TrySetObjectProperty(scaleObj, "X", 1.0);
                                 TrySetObjectProperty(scaleObj, "Y", scale);
                             }
                         }
                     }
-                    catch
-                    {
-                    }
+                    catch { }
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
-
-
-        private static void UpdateDrawingTitle3ScaleFromViews(
-            Drawing drawing,
-            List<View> views)
+        private static void UpdateDrawingTitle3ScaleFromViews(Drawing drawing, List<View> views)
         {
             try
             {
@@ -6110,13 +8271,14 @@ namespace Tekla.Technology.Akit.UserScript
 
                 if (SetDrawingTitle3Text(drawing, scaleText))
                 {
-                    try { drawing.Modify(); }
+                    try
+                    {
+                        drawing.Modify();
+                    }
                     catch { }
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static double GetViewScaleNumberForTitle3(View view)
@@ -6131,16 +8293,20 @@ namespace Tekla.Technology.Akit.UserScript
                     return scale;
 
                 object attrs = null;
-                try { attrs = view.Attributes; }
-                catch { attrs = null; }
+                try
+                {
+                    attrs = view.Attributes;
+                }
+                catch
+                {
+                    attrs = null;
+                }
 
                 scale = GetScaleNumberFromObject(attrs);
                 if (scale > 0.0)
                     return scale;
             }
-            catch
-            {
-            }
+            catch { }
 
             return 0.0;
         }
@@ -6152,9 +8318,10 @@ namespace Tekla.Technology.Akit.UserScript
 
             try
             {
-                PropertyInfo[] props = obj.GetType().GetProperties(
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
-                );
+                PropertyInfo[] props = obj.GetType()
+                    .GetProperties(
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    );
 
                 foreach (PropertyInfo prop in props)
                 {
@@ -6176,14 +8343,10 @@ namespace Tekla.Technology.Akit.UserScript
                         if (scale > 0.0)
                             return scale;
                     }
-                    catch
-                    {
-                    }
+                    catch { }
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return 0.0;
         }
@@ -6195,10 +8358,7 @@ namespace Tekla.Technology.Akit.UserScript
 
             try
             {
-                if (value is int ||
-                    value is double ||
-                    value is float ||
-                    value is decimal)
+                if (value is int || value is double || value is float || value is decimal)
                 {
                     double number = Convert.ToDouble(
                         value,
@@ -6246,19 +8406,20 @@ namespace Tekla.Technology.Akit.UserScript
                 text = text.Replace(" ", "").Replace(",", ".");
 
                 double numberText = 0.0;
-                if (double.TryParse(
-                    text,
-                    System.Globalization.NumberStyles.Any,
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    out numberText))
+                if (
+                    double.TryParse(
+                        text,
+                        System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out numberText
+                    )
+                )
                 {
                     if (numberText > 0.0)
                         return numberText;
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return 0.0;
         }
@@ -6272,10 +8433,8 @@ namespace Tekla.Technology.Akit.UserScript
                 if (Math.Abs(rounded - Math.Round(rounded)) < 0.001)
                     return "1:" + ((int)Math.Round(rounded)).ToString();
 
-                return "1:" + rounded.ToString(
-                    "0.###",
-                    System.Globalization.CultureInfo.InvariantCulture
-                );
+                return "1:"
+                    + rounded.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
             }
             catch
             {
@@ -6288,13 +8447,7 @@ namespace Tekla.Technology.Akit.UserScript
             if (drawing == null || string.IsNullOrWhiteSpace(text))
                 return false;
 
-            string[] propNames = new string[]
-            {
-                "Title3",
-                "TITLE3",
-                "TitleThree",
-                "DrawingTitle3"
-            };
+            string[] propNames = new string[] { "Title3", "TITLE3", "TitleThree", "DrawingTitle3" };
 
             foreach (string propName in propNames)
             {
@@ -6308,17 +8461,19 @@ namespace Tekla.Technology.Akit.UserScript
         private static bool TrySetObjectPropertyFlexible(
             object obj,
             string propertyName,
-            string value)
+            string value
+        )
         {
             try
             {
                 if (obj == null || string.IsNullOrWhiteSpace(propertyName))
                     return false;
 
-                PropertyInfo prop = obj.GetType().GetProperty(
-                    propertyName,
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
-                );
+                PropertyInfo prop = obj.GetType()
+                    .GetProperty(
+                        propertyName,
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    );
 
                 if (prop == null || !prop.CanWrite)
                     return false;
@@ -6333,8 +8488,14 @@ namespace Tekla.Technology.Akit.UserScript
                 }
 
                 object current = null;
-                try { current = prop.GetValue(obj, null); }
-                catch { current = null; }
+                try
+                {
+                    current = prop.GetValue(obj, null);
+                }
+                catch
+                {
+                    current = null;
+                }
 
                 if (current != null)
                 {
@@ -6345,18 +8506,12 @@ namespace Tekla.Technology.Akit.UserScript
                         return true;
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return false;
         }
 
-
-
-        private static void CenterProcessedViewsBySheetSize(
-            Drawing drawing,
-            List<View> views)
+        private static void CenterProcessedViewsBySheetSize(Drawing drawing, List<View> views)
         {
             try
             {
@@ -6409,8 +8564,12 @@ namespace Tekla.Technology.Akit.UserScript
                 if (count == 0)
                     return;
 
-                if (minX == double.MaxValue || maxX == double.MinValue ||
-                    minY == double.MaxValue || maxY == double.MinValue)
+                if (
+                    minX == double.MaxValue
+                    || maxX == double.MinValue
+                    || minY == double.MaxValue
+                    || maxY == double.MinValue
+                )
                     return;
 
                 if (maxX <= minX + 1.0 || maxY <= minY + 1.0)
@@ -6445,181 +8604,148 @@ namespace Tekla.Technology.Akit.UserScript
                         if (oldOrigin == null)
                             continue;
 
-                        v.Origin = new Point(
-                            oldOrigin.X + dx,
-                            oldOrigin.Y + dy,
-                            oldOrigin.Z
-                        );
+                        v.Origin = new Point(oldOrigin.X + dx, oldOrigin.Y + dy, oldOrigin.Z);
 
                         v.Modify();
                     }
-                    catch
-                    {
-                    }
+                    catch { }
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static void ArrangeProcessedViewsVerticalGap(
-            List<View> views,
-            double gap)
+            View topView,
+            View frontView,
+            double gap
+        )
         {
-            try
-            {
-                if (views == null || views.Count < 2)
-                    return;
-
-                List<ViewPaperBox> boxes = new List<ViewPaperBox>();
-
-                foreach (View v in views)
-                {
-                    if (v == null)
-                        continue;
-
-                    try { v.Select(); }
-                    catch { }
-
-                    // Đảm bảo view có thể được đặt thủ công.
-                    TrySetFixedViewPlacing(v, true);
-
-                    ViewPaperBox b;
-                    // ARRANGE dùng khung xanh/view frame để giữ khoảng hở có tính cả DIM như OK-V3.
-                    // MOVE CENTER vẫn dùng khung tím ở CenterProcessedViewsBySheetSize().
-                    if (TryGetViewPaperBox(v, out b))
-                        boxes.Add(b);
-                }
-
-                if (boxes.Count < 2)
-                    return;
-
-                // YÊU CẦU MỚI:
-                // Mặt độ dày / view mỏng phải luôn nằm phía trên view chính.
-                // Nhận diện view mỏng bằng chiều cao khung nhỏ nhất.
-                boxes.Sort(delegate (ViewPaperBox a, ViewPaperBox b)
-                {
-                    return a.Height.CompareTo(b.Height);
-                });
-
-                ViewPaperBox thicknessView = boxes[0];
-                ViewPaperBox mainView = boxes[boxes.Count - 1];
-
-                if (thicknessView == null || mainView == null)
-                    return;
-
-                if (thicknessView.View == null || mainView.View == null)
-                    return;
-
-                if (thicknessView.Height <= 1.0 || mainView.Height <= 1.0)
-                    return;
-
-                // Trong paper coordinate của Tekla, so sánh bằng box thực tế:
-                // Đưa đáy của view mỏng lên cách đỉnh của view chính đúng gap.
-                // Công thức này không phụ thuộc view hiện đang nằm trên hay dưới.
-                double desiredThicknessMinY = mainView.MaxY + gap;
-                double moveY = desiredThicknessMinY - thicknessView.MinY;
-
-                if (Math.Abs(moveY) < 0.1)
-                    return;
-
-                // Bảo vệ move view: nếu tính toán ra bước nhảy quá lớn thì không move.
-                // Tránh view bị văng lung tung trên sheet.
-                if (Math.Abs(moveY) > 300.0)
-                    return;
-
-                MoveViewByOriginOnly(thicknessView.View, 0.0, moveY);
-
-                try { thicknessView.View.Select(); }
-                catch { }
-
-                thicknessView.View.Modify();
-            }
-            catch
-            {
-            }
+            ArrangeSinglePlateTopFrontBySemanticRole(topView, frontView, gap);
         }
 
-
         private static void ForceFinalEqualArrangeTopFrontGap15(
-            List<View> views,
-            double gap)
+            View topView,
+            View frontView,
+            double gap
+        )
+        {
+            ArrangeSinglePlateTopFrontBySemanticRole(topView, frontView, gap);
+        }
+
+        private static void ArrangeSinglePlateTopFrontBySemanticRole(
+            View topView,
+            View frontView,
+            double gap
+        )
         {
             try
             {
-                if (views == null || views.Count < 2)
-                    return;
-
-                List<ViewPaperBox> boxes = new List<ViewPaperBox>();
-
-                foreach (View v in views)
-                {
-                    if (v == null)
-                        continue;
-
-                    try { v.Select(); }
-                    catch { }
-
-                    TrySetFixedViewPlacing(v, true);
-
-                    ViewPaperBox b;
-                    // ARRANGE CUỐI dùng khung xanh/view frame để khoảng hở 15 tính cả vùng DIM.
-                    // Không dùng khung tím ở đây vì tím quá sát plate, dễ làm DIM top chồng vào front.
-                    if (TryGetViewPaperBox(v, out b))
-                    {
-                        if (b != null && b.Width > 1.0 && b.Height > 1.0)
-                            boxes.Add(b);
-                    }
-                }
-
-                if (boxes.Count < 2)
-                    return;
-
-                // TOP thường là view mỏng nhất; FRONT là view cao nhất.
-                boxes.Sort(delegate (ViewPaperBox a, ViewPaperBox b)
-                {
-                    return a.Height.CompareTo(b.Height);
-                });
-
-                ViewPaperBox topView = boxes[0];
-                ViewPaperBox frontView = boxes[boxes.Count - 1];
-
                 if (topView == null || frontView == null)
                     return;
 
-                if (topView.View == null || frontView.View == null)
+                if (object.ReferenceEquals(topView, frontView))
                     return;
 
-                if (topView.View == frontView.View)
-                    return;
-
-                // Ép TOP nằm trên FRONT, mép dưới TOP cách mép trên FRONT đúng gap.
-                double currentGap = topView.MinY - frontView.MaxY;
-                double delta = gap - currentGap;
-
-                if (Math.Abs(delta) < 0.1)
-                    return;
-
-                // Chia đều: TOP đi lên 1/2, FRONT đi xuống 1/2.
-                // Nếu TOP/FRONT đang dính sát/đè nhau thì delta dương, 2 view sẽ tách ra.
-                double half = delta * 0.5;
-
-                if (Math.Abs(half) > 300.0)
-                    return;
-
-                MoveViewByOriginOnly(topView.View, 0.0, half);
-                MoveViewByOriginOnly(frontView.View, 0.0, -half);
-
-                try { topView.View.Modify(); }
+                try
+                {
+                    topView.Select();
+                }
+                catch { }
+                try
+                {
+                    frontView.Select();
+                }
                 catch { }
 
-                try { frontView.View.Modify(); }
+                TrySetFixedViewPlacing(topView, true);
+                TrySetFixedViewPlacing(frontView, true);
+
+                ViewPaperBox topBox;
+                ViewPaperBox frontBox;
+
+                // Khung xanh vẫn là nguồn đúng để giữ GAP tính cả DIM/mark.
+                // Vai trò TOP/FRONT đã được khóa bằng ViewType, không lấy từ box.
+                if (
+                    !TryGetViewPaperBox(topView, out topBox)
+                    || !TryGetViewPaperBox(frontView, out frontBox)
+                )
+                    return;
+
+                if (
+                    topBox == null
+                    || frontBox == null
+                    || topBox.Width <= 1.0
+                    || topBox.Height <= 1.0
+                    || frontBox.Width <= 1.0
+                    || frontBox.Height <= 1.0
+                )
+                    return;
+
+                double[] targetCenters = BuildSinglePlateTopFrontTargetCenters(
+                    topBox.MinY,
+                    topBox.MaxY,
+                    frontBox.MinY,
+                    frontBox.MaxY,
+                    gap
+                );
+                if (targetCenters == null || targetCenters.Length != 2)
+                    return;
+
+                double topMoveY = targetCenters[0] - (topBox.MinY + topBox.MaxY) * 0.5;
+                double frontMoveY = targetCenters[1] - (frontBox.MinY + frontBox.MaxY) * 0.5;
+
+                // Tính xong cả hai bước trước khi move để không bao giờ chỉ move một view.
+                // Giữ cùng giới hạn an toàn đã được Shape H kiểm chứng.
+                if (Math.Abs(topMoveY) > 300.0 || Math.Abs(frontMoveY) > 300.0)
+                    return;
+
+                if (Math.Abs(topMoveY) >= 0.1)
+                    MoveViewByOriginOnly(topView, 0.0, topMoveY);
+                if (Math.Abs(frontMoveY) >= 0.1)
+                    MoveViewByOriginOnly(frontView, 0.0, frontMoveY);
+
+                try
+                {
+                    topView.Modify();
+                }
+                catch { }
+
+                try
+                {
+                    frontView.Modify();
+                }
                 catch { }
             }
-            catch
-            {
-            }
+            catch { }
+        }
+
+        private static double[] BuildSinglePlateTopFrontTargetCenters(
+            double topMinY,
+            double topMaxY,
+            double frontMinY,
+            double frontMaxY,
+            double gap
+        )
+        {
+            double topHeight = Math.Abs(topMaxY - topMinY);
+            double frontHeight = Math.Abs(frontMaxY - frontMinY);
+            if (topHeight <= 1.0 || frontHeight <= 1.0)
+                return null;
+
+            if (gap < 0.0)
+                gap = 0.0;
+
+            // Dựng lại cả stack quanh tâm cụm hiện tại giống Shape H.
+            // Công thức không phụ thuộc TOP/FRONT đang nằm ở đâu hoặc box nào cao hơn.
+            double currentMinY = Math.Min(topMinY, frontMinY);
+            double currentMaxY = Math.Max(topMaxY, frontMaxY);
+            double currentCenterY = (currentMinY + currentMaxY) * 0.5;
+            double totalStackHeight = topHeight + gap + frontHeight;
+
+            double topTargetCenterY = currentCenterY + totalStackHeight * 0.5 - topHeight * 0.5;
+            double frontTargetCenterY = currentCenterY - totalStackHeight * 0.5 + frontHeight * 0.5;
+
+            return new double[] { topTargetCenterY, frontTargetCenterY };
         }
 
         private class ViewPaperBox
@@ -6633,9 +8759,7 @@ namespace Tekla.Technology.Akit.UserScript
             public double Height;
         }
 
-        private static bool TryGetViewPurplePaperBox(
-            View view,
-            out ViewPaperBox box)
+        private static bool TryGetViewPurplePaperBox(View view, out ViewPaperBox box)
         {
             box = null;
 
@@ -6648,15 +8772,27 @@ namespace Tekla.Technology.Akit.UserScript
                 // Tuyệt đối không fallback sang GetAxisAlignedBoundingBox vì đó là khung xanh/view frame,
                 // khi view xanh to ra sẽ kéo tâm bị lệch như ảnh bạn gửi.
                 AABB rb = null;
-                try { rb = view.RestrictionBox; }
-                catch { rb = null; }
+                try
+                {
+                    rb = view.RestrictionBox;
+                }
+                catch
+                {
+                    rb = null;
+                }
 
                 if (rb == null || rb.MinPoint == null || rb.MaxPoint == null)
                     return false;
 
                 Point origin = null;
-                try { origin = view.Origin; }
-                catch { origin = null; }
+                try
+                {
+                    origin = view.Origin;
+                }
+                catch
+                {
+                    origin = null;
+                }
 
                 if (origin == null)
                     return false;
@@ -6699,9 +8835,7 @@ namespace Tekla.Technology.Akit.UserScript
         }
 
         /* KHUNG XANH: chỉ dùng cho ARRANGE gap, không dùng cho MOVE CENTER */
-        private static bool TryGetViewPaperBox(
-            View view,
-            out ViewPaperBox box)
+        private static bool TryGetViewPaperBox(View view, out ViewPaperBox box)
         {
             box = null;
 
@@ -6757,10 +8891,7 @@ namespace Tekla.Technology.Akit.UserScript
             }
         }
 
-        private static void MoveViewByOriginOnly(
-            View view,
-            double dx,
-            double dy)
+        private static void MoveViewByOriginOnly(View view, double dx, double dy)
         {
             if (view == null)
                 return;
@@ -6780,28 +8911,20 @@ namespace Tekla.Technology.Akit.UserScript
                 if (Math.Abs(dx) > 300.0 || Math.Abs(dy) > 300.0)
                     return;
 
-                view.Origin = new Point(
-                    oldOrigin.X + dx,
-                    oldOrigin.Y + dy,
-                    oldOrigin.Z
-                );
+                view.Origin = new Point(oldOrigin.X + dx, oldOrigin.Y + dy, oldOrigin.Z);
 
                 view.Modify();
                 return;
             }
-            catch
-            {
-            }
+            catch { }
 
             try
             {
                 Vector move = new Vector(dx, dy, 0);
 
                 // Nếu môi trường Tekla expose MoveObjectRelative cho View thì dùng fallback này.
-                MethodInfo m = view.GetType().GetMethod(
-                    "MoveObjectRelative",
-                    BindingFlags.Public | BindingFlags.Instance
-                );
+                MethodInfo m = view.GetType()
+                    .GetMethod("MoveObjectRelative", BindingFlags.Public | BindingFlags.Instance);
 
                 if (m != null)
                 {
@@ -6809,9 +8932,7 @@ namespace Tekla.Technology.Akit.UserScript
                     view.Modify();
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static void TrySetFixedViewPlacing(View view, bool fixedPlacing)
@@ -6821,10 +8942,9 @@ namespace Tekla.Technology.Akit.UserScript
                 if (view == null || view.Attributes == null)
                     return;
 
-                PropertyInfo p = view.Attributes.GetType().GetProperty(
-                    "FixedViewPlacing",
-                    BindingFlags.Public | BindingFlags.Instance
-                );
+                PropertyInfo p = view
+                    .Attributes.GetType()
+                    .GetProperty("FixedViewPlacing", BindingFlags.Public | BindingFlags.Instance);
 
                 if (p != null && p.CanWrite && p.PropertyType == typeof(bool))
                 {
@@ -6832,9 +8952,7 @@ namespace Tekla.Technology.Akit.UserScript
                     view.Modify();
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static void SelectProcessedViews(DrawingHandler dh, List<View> views)
@@ -6858,9 +8976,7 @@ namespace Tekla.Technology.Akit.UserScript
                 DrawingObjectSelector selector = dh.GetDrawingObjectSelector();
                 selector.SelectObjects(objectsToSelect, false);
             }
-            catch
-            {
-            }
+            catch { }
         }
         #endregion
 
@@ -6923,15 +9039,11 @@ namespace Tekla.Technology.Akit.UserScript
                             mark.Modify();
                             fixedCount++;
                         }
-                        catch
-                        {
-                        }
+                        catch { }
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static bool IsBadJapaneseBoltMarkForAutoFix(Mark mark)
@@ -6943,8 +9055,8 @@ namespace Tekla.Technology.Akit.UserScript
                 if (string.IsNullOrEmpty(text))
                     return false;
 
-                return text.Contains(PHU_BAD_BOLT_MARK_TEXT_1) ||
-                       text.Contains(PHU_BAD_BOLT_MARK_TEXT_2);
+                return text.Contains(PHU_BAD_BOLT_MARK_TEXT_1)
+                    || text.Contains(PHU_BAD_BOLT_MARK_TEXT_2);
             }
             catch
             {
@@ -6961,9 +9073,7 @@ namespace Tekla.Technology.Akit.UserScript
                 if (mark != null && mark.Attributes != null)
                     CollectMarkTextsForAutoFix(mark.Attributes.Content, texts);
             }
-            catch
-            {
-            }
+            catch { }
 
             return string.Join(" ", texts.ToArray());
         }
@@ -7028,7 +9138,9 @@ namespace Tekla.Technology.Akit.UserScript
                 CreatePropertyElementFromDumpForAutoFix(
                     "Tekla.Structures.Drawing.PropertyElement",
                     "albl_Number_of_bolts",
-                    "GR_BOLT_NUMBER"));
+                    "GR_BOLT_NUMBER"
+                )
+            );
 
             AddElementForceForAutoFix(content, CreateSpaceElementForAutoFix());
             AddElementForceForAutoFix(content, MakeTextElementForAutoFix("-"));
@@ -7038,9 +9150,8 @@ namespace Tekla.Technology.Akit.UserScript
 
             AddElementForceForAutoFix(
                 content,
-                CreateLengthPropertyElementFromDumpForAutoFix(
-                    "HOLE.DIAMETER",
-                    "GR_HOLE_DIAMETER"));
+                CreateLengthPropertyElementFromDumpForAutoFix("HOLE.DIAMETER", "GR_HOLE_DIAMETER")
+            );
 
             mark.Attributes.Content = content;
         }
@@ -7048,7 +9159,8 @@ namespace Tekla.Technology.Akit.UserScript
         private static object CreatePropertyElementFromDumpForAutoFix(
             string elementTypeName,
             string name,
-            string propertyTypeEnumName)
+            string propertyTypeEnumName
+        )
         {
             Type elementType = FindTeklaDrawingTypeForAutoFix(elementTypeName);
 
@@ -7061,9 +9173,7 @@ namespace Tekla.Technology.Akit.UserScript
             {
                 obj = Activator.CreateInstance(elementType, true);
             }
-            catch
-            {
-            }
+            catch { }
 
             if (obj == null)
             {
@@ -7074,9 +9184,7 @@ namespace Tekla.Technology.Akit.UserScript
                     if (ci != null)
                         obj = ci.Invoke(new object[] { name });
                 }
-                catch
-                {
-                }
+                catch { }
             }
 
             if (obj == null)
@@ -7090,17 +9198,20 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static object CreateLengthPropertyElementFromDumpForAutoFix(
             string name,
-            string propertyTypeEnumName)
+            string propertyTypeEnumName
+        )
         {
             Type elementType = FindTeklaDrawingTypeForAutoFix(
-                "Tekla.Structures.Drawing.LengthPropertyElement");
+                "Tekla.Structures.Drawing.LengthPropertyElement"
+            );
 
             if (elementType == null)
             {
                 return CreatePropertyElementFromDumpForAutoFix(
                     "Tekla.Structures.Drawing.PropertyElement",
                     name,
-                    propertyTypeEnumName);
+                    propertyTypeEnumName
+                );
             }
 
             object obj = null;
@@ -7109,9 +9220,7 @@ namespace Tekla.Technology.Akit.UserScript
             {
                 obj = Activator.CreateInstance(elementType, true);
             }
-            catch
-            {
-            }
+            catch { }
 
             if (obj == null)
             {
@@ -7122,9 +9231,7 @@ namespace Tekla.Technology.Akit.UserScript
                     if (ci != null)
                         obj = ci.Invoke(new object[] { name });
                 }
-                catch
-                {
-                }
+                catch { }
             }
 
             if (obj == null)
@@ -7132,7 +9239,8 @@ namespace Tekla.Technology.Akit.UserScript
                 return CreatePropertyElementFromDumpForAutoFix(
                     "Tekla.Structures.Drawing.PropertyElement",
                     name,
-                    propertyTypeEnumName);
+                    propertyTypeEnumName
+                );
             }
 
             ForcePropertyElementFieldsForAutoFix(obj, name, propertyTypeEnumName);
@@ -7145,7 +9253,8 @@ namespace Tekla.Technology.Akit.UserScript
         private static void ForcePropertyElementFieldsForAutoFix(
             object obj,
             string name,
-            string propertyTypeEnumName)
+            string propertyTypeEnumName
+        )
         {
             if (obj == null)
                 return;
@@ -7169,7 +9278,8 @@ namespace Tekla.Technology.Akit.UserScript
         private static object CreatePropertyElementTypeForAutoFix(string enumName)
         {
             Type propElementType = FindTeklaDrawingTypeForAutoFix(
-                "Tekla.Structures.Drawing.PropertyElement+PropertyElementType");
+                "Tekla.Structures.Drawing.PropertyElement+PropertyElementType"
+            );
 
             if (propElementType == null)
                 return null;
@@ -7180,15 +9290,14 @@ namespace Tekla.Technology.Akit.UserScript
             {
                 propTypeObj = Activator.CreateInstance(propElementType, true);
             }
-            catch
-            {
-            }
+            catch { }
 
             if (propTypeObj == null)
                 return null;
 
             Type enumType = FindTeklaDrawingTypeForAutoFix(
-                "Tekla.Structures.Drawing.PropertyElement+PropertyElementType+PropertyTypes");
+                "Tekla.Structures.Drawing.PropertyElement+PropertyElementType+PropertyTypes"
+            );
 
             if (enumType == null)
                 return null;
@@ -7199,9 +9308,7 @@ namespace Tekla.Technology.Akit.UserScript
             {
                 enumValue = Enum.Parse(enumType, enumName, true);
             }
-            catch
-            {
-            }
+            catch { }
 
             if (enumValue == null)
                 return null;
@@ -7221,7 +9328,8 @@ namespace Tekla.Technology.Akit.UserScript
                 if (unit == null)
                 {
                     Type unitType = FindTeklaDrawingTypeForAutoFix(
-                        "Tekla.Structures.Drawing.UnitAttributes");
+                        "Tekla.Structures.Drawing.UnitAttributes"
+                    );
 
                     if (unitType != null)
                     {
@@ -7229,9 +9337,7 @@ namespace Tekla.Technology.Akit.UserScript
                         {
                             unit = Activator.CreateInstance(unitType, true);
                         }
-                        catch
-                        {
-                        }
+                        catch { }
                     }
                 }
 
@@ -7243,14 +9349,16 @@ namespace Tekla.Technology.Akit.UserScript
                     "_Unit",
                     "Unit",
                     "Tekla.Structures.Drawing.Units",
-                    "Automatic");
+                    "Automatic"
+                );
 
                 SetEnumPropertyOrFieldForAutoFix(
                     unit,
                     "_Format",
                     "Format",
                     "Tekla.Structures.Drawing.FormatTypes",
-                    "Automatic");
+                    "Automatic"
+                );
 
                 TrySetFieldForAutoFix(unit, "_Precision", 0);
                 TrySetPropertyForAutoFix(unit, "Precision", 0);
@@ -7258,9 +9366,7 @@ namespace Tekla.Technology.Akit.UserScript
                 TrySetFieldForAutoFix(lengthElement, "_Unit", unit);
                 TrySetPropertyForAutoFix(lengthElement, "Unit", unit);
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static void SetEnumPropertyOrFieldForAutoFix(
@@ -7268,7 +9374,8 @@ namespace Tekla.Technology.Akit.UserScript
             string fieldName,
             string propName,
             string enumTypeName,
-            string enumName)
+            string enumName
+        )
         {
             Type enumType = FindTeklaDrawingTypeForAutoFix(enumTypeName);
 
@@ -7281,9 +9388,7 @@ namespace Tekla.Technology.Akit.UserScript
             {
                 enumValue = Enum.Parse(enumType, enumName, true);
             }
-            catch
-            {
-            }
+            catch { }
 
             if (enumValue == null)
                 return;
@@ -7294,8 +9399,7 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static object CreateSpaceElementForAutoFix()
         {
-            Type t = FindTeklaDrawingTypeForAutoFix(
-                "Tekla.Structures.Drawing.SpaceElement");
+            Type t = FindTeklaDrawingTypeForAutoFix("Tekla.Structures.Drawing.SpaceElement");
 
             if (t == null)
                 return MakeTextElementForAutoFix(" ");
@@ -7327,16 +9431,15 @@ namespace Tekla.Technology.Akit.UserScript
                 content.Add((dynamic)element);
                 return;
             }
-            catch
-            {
-            }
+            catch { }
 
             try
             {
-                MethodInfo[] methods = content.GetType().GetMethods(
-                    BindingFlags.Public |
-                    BindingFlags.NonPublic |
-                    BindingFlags.Instance);
+                MethodInfo[] methods = content
+                    .GetType()
+                    .GetMethods(
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    );
 
                 foreach (MethodInfo m in methods)
                 {
@@ -7353,14 +9456,10 @@ namespace Tekla.Technology.Akit.UserScript
                         m.Invoke(content, new object[] { element });
                         return;
                     }
-                    catch
-                    {
-                    }
+                    catch { }
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static Type FindTeklaDrawingTypeForAutoFix(string fullName)
@@ -7372,9 +9471,7 @@ namespace Tekla.Technology.Akit.UserScript
                 if (t != null)
                     return t;
             }
-            catch
-            {
-            }
+            catch { }
 
             try
             {
@@ -7397,9 +9494,7 @@ namespace Tekla.Technology.Akit.UserScript
                         return x;
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return null;
         }
@@ -7411,16 +9506,56 @@ namespace Tekla.Technology.Akit.UserScript
 
             dynamic a = mark.Attributes;
 
-            TrySetForAutoFix(delegate { a.Font.Name = PHU_BOLT_MARK_FONT_NAME; });
-            TrySetForAutoFix(delegate { a.Font.FontName = PHU_BOLT_MARK_FONT_NAME; });
-            TrySetForAutoFix(delegate { a.Font.Height = PHU_BOLT_MARK_FONT_HEIGHT; });
-            TrySetForAutoFix(delegate { a.Font.Color = DrawingColors.Black; });
+            TrySetForAutoFix(
+                delegate
+                {
+                    a.Font.Name = PHU_BOLT_MARK_FONT_NAME;
+                }
+            );
+            TrySetForAutoFix(
+                delegate
+                {
+                    a.Font.FontName = PHU_BOLT_MARK_FONT_NAME;
+                }
+            );
+            TrySetForAutoFix(
+                delegate
+                {
+                    a.Font.Height = PHU_BOLT_MARK_FONT_HEIGHT;
+                }
+            );
+            TrySetForAutoFix(
+                delegate
+                {
+                    a.Font.Color = DrawingColors.Black;
+                }
+            );
 
-            TrySetForAutoFix(delegate { a.Frame.Type = FrameTypes.Line; });
-            TrySetForAutoFix(delegate { a.Frame.Color = DrawingColors.Black; });
+            TrySetForAutoFix(
+                delegate
+                {
+                    a.Frame.Type = FrameTypes.Line;
+                }
+            );
+            TrySetForAutoFix(
+                delegate
+                {
+                    a.Frame.Color = DrawingColors.Black;
+                }
+            );
 
-            TrySetForAutoFix(delegate { a.Transparent = false; });
-            TrySetForAutoFix(delegate { a.TransparentBackground = false; });
+            TrySetForAutoFix(
+                delegate
+                {
+                    a.Transparent = false;
+                }
+            );
+            TrySetForAutoFix(
+                delegate
+                {
+                    a.TransparentBackground = false;
+                }
+            );
         }
 
         private static void SetElementFontForAutoFix(object element)
@@ -7446,11 +9581,11 @@ namespace Tekla.Technology.Akit.UserScript
                 if (obj == null || string.IsNullOrEmpty(propName))
                     return null;
 
-                PropertyInfo p = obj.GetType().GetProperty(
-                    propName,
-                    BindingFlags.Public |
-                    BindingFlags.NonPublic |
-                    BindingFlags.Instance);
+                PropertyInfo p = obj.GetType()
+                    .GetProperty(
+                        propName,
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    );
 
                 if (p == null)
                     return null;
@@ -7473,11 +9608,11 @@ namespace Tekla.Technology.Akit.UserScript
                 if (obj == null || string.IsNullOrEmpty(propName))
                     return;
 
-                PropertyInfo p = obj.GetType().GetProperty(
-                    propName,
-                    BindingFlags.Public |
-                    BindingFlags.NonPublic |
-                    BindingFlags.Instance);
+                PropertyInfo p = obj.GetType()
+                    .GetProperty(
+                        propName,
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    );
 
                 if (p == null || !p.CanWrite)
                     return;
@@ -7520,9 +9655,7 @@ namespace Tekla.Technology.Akit.UserScript
 
                 p.SetValue(obj, value, null);
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static void TrySetFieldForAutoFix(object obj, string fieldName, object value)
@@ -7532,11 +9665,11 @@ namespace Tekla.Technology.Akit.UserScript
                 if (obj == null || string.IsNullOrEmpty(fieldName))
                     return;
 
-                FieldInfo f = obj.GetType().GetField(
-                    fieldName,
-                    BindingFlags.Public |
-                    BindingFlags.NonPublic |
-                    BindingFlags.Instance);
+                FieldInfo f = obj.GetType()
+                    .GetField(
+                        fieldName,
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    );
 
                 if (f == null)
                     return;
@@ -7576,9 +9709,7 @@ namespace Tekla.Technology.Akit.UserScript
 
                 f.SetValue(obj, value);
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static void TrySetForAutoFix(Action action)
@@ -7588,13 +9719,9 @@ namespace Tekla.Technology.Akit.UserScript
                 if (action != null)
                     action();
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         #endregion
-
-
     }
 }

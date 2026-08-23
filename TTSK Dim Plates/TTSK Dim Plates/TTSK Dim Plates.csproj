@@ -192,6 +192,13 @@
     <Compile Include="PHU_AutoDimSlot08.cs" />
     <Compile Include="PHU_AutoDimSlot08.Type2.cs" />
     <Compile Include="PHU_BeamGridDimensionEngine.cs" />
+    <Compile Include="PHU_ColumnProjectRouter.cs" />
+    <Compile Include="PHU_ColumnDimensionTierContext.cs" />
+    <Compile Include="PHU_GeneralColumnGridPlanner.cs" />
+    <Compile Include="PHU_ColumnGridDimensionEngine.cs" />
+    <Compile Include="PHU_InzaiColumnNeighborDimensionEngine.cs" />
+    <Compile Include="PHU_VerticalShapeViewLayoutContext.cs" />
+    <Compile Include="PHU_Slot09_DataCenterContext.cs" />
     <Compile Include="PHU_LineDistance.cs" />
     <Compile Include="PHU_OpenGridView.cs" />
     <Compile Include="PHU_Slot02_Select-Main-neighbor-Plate.cs" />

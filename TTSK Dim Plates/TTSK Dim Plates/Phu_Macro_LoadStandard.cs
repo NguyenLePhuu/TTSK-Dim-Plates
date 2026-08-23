@@ -15,18 +15,13 @@ namespace UserMacros
                 runtime.Get<Tekla.Macros.Akit.IAkitScriptHost>();
 
             bool isSinglePartDrawing = IsSinglePartDrawing();
-            string standardName = isSinglePartDrawing
-                ? "()_Geo_Standard_Part"
-                : "()_Geo_Standard";
+            string standardName = isSinglePartDrawing ? "()_Geo_Standard_Part" : "()_Geo_Standard";
 
             // Single part macro recorder had this step before Edit settings.
             // Assembly macro recorder did not have it, so only run it for SinglePartDrawing.
             if (isSinglePartDrawing)
             {
-                akit.TreeSelect(
-                    "view_dial",
-                    "gratCastUnitDrawingAttributesMenuTree",
-                    "Attributes");
+                akit.TreeSelect("view_dial", "gratCastUnitDrawingAttributesMenuTree", "Attributes");
             }
 
             akit.PushButton("btnEditSettings", "view_dial");
@@ -47,8 +42,7 @@ namespace UserMacros
                 Tekla.Structures.Drawing.DrawingHandler drawingHandler =
                     new Tekla.Structures.Drawing.DrawingHandler();
 
-                Tekla.Structures.Drawing.Drawing drawing =
-                    drawingHandler.GetActiveDrawing();
+                Tekla.Structures.Drawing.Drawing drawing = drawingHandler.GetActiveDrawing();
 
                 if (drawing is Tekla.Structures.Drawing.SinglePartDrawing)
                     return true;
@@ -65,9 +59,7 @@ namespace UserMacros
                         return true;
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             // Safe default: Assembly standard, because the assembly recorder does not need TreeSelect.
             return false;

@@ -18,16 +18,22 @@ namespace TTSK_AutoDim_Plates
         private const double BOTTOM_BLOCK_HEIGHT_RATIO = 0.18;
         private const double TOP_BLOCK_HEIGHT_RATIO = 0.08;
         private const double BLOCK_EXTRA_GAP = 5.0;
+
         //Khoảng cách tối thiểu tới mép giấy.
         private const double MIN_EDGE_SAFE = 15.0;
+
         //Khoảng cách từ cụm dọc tới mép trên vùng khả dụng.
         private const double VERTICAL_TOP_INSET = 15.0;
+
         //Khoảng cách main thếp nhất đến sectuon cao nhất
         private const double HORIZONTAL_EXTRA_DOWN = 30.0;
+
         //Tỉ lệ view chiếm để đủ kích hoạt auto center
         private const double AUTO_CENTER_FILL_RATIO = 0.60;
+
         //Khoảng hở giữa cụm ngang và block GRID dưới.
         private const double HORIZONTAL_BLOCK_CLEARANCE = 40.0;
+
         //Né GRID
         private const double VERTICAL_GRID_CLEARANCE = 15.0;
 
@@ -43,9 +49,7 @@ namespace TTSK_AutoDim_Plates
                 if (!string.IsNullOrEmpty(Message))
                     return Message;
 
-                return Success
-                    ? "Section: " + SectionCount
-                    : "Arrange section view lỗi.";
+                return Success ? "Section: " + SectionCount : "Arrange section view lỗi.";
             }
         }
 
@@ -73,7 +77,12 @@ namespace TTSK_AutoDim_Plates
             return Run(mainHorizontal, sectionHorizontal, gap, false);
         }
 
-        public static Result Run(bool mainHorizontal, bool sectionHorizontal, double gap, bool verticalBottomUp)
+        public static Result Run(
+            bool mainHorizontal,
+            bool sectionHorizontal,
+            double gap,
+            bool verticalBottomUp
+        )
         {
             Result result = new Result();
 
@@ -104,9 +113,19 @@ namespace TTSK_AutoDim_Plates
                 ClassifyViews(allViews, out mainViews, out regularSectionViews);
 
                 // SECTION ONLY: không move Main View / Top / Bottom / Front / special section.
-                ArrangeRegularSectionViews(drawing, mainViews, regularSectionViews, sectionHorizontal, gap, verticalBottomUp);
+                ArrangeRegularSectionViews(
+                    drawing,
+                    mainViews,
+                    regularSectionViews,
+                    sectionHorizontal,
+                    gap,
+                    verticalBottomUp
+                );
 
-                try { drawing.CommitChanges(); }
+                try
+                {
+                    drawing.CommitChanges();
+                }
                 catch { }
 
                 SelectViews(dh, regularSectionViews);
@@ -114,9 +133,10 @@ namespace TTSK_AutoDim_Plates
                 result.Success = true;
                 result.MainCount = mainViews.Count;
                 result.SectionCount = regularSectionViews.Count;
-                result.Message = result.SectionCount > 0
-                    ? "Đã arrange " + result.SectionCount + " section view."
-                    : "Không tìm thấy section thường để arrange.";
+                result.Message =
+                    result.SectionCount > 0
+                        ? "Đã arrange " + result.SectionCount + " section view."
+                        : "Không tìm thấy section thường để arrange.";
                 return result;
             }
             catch (Exception ex)
@@ -147,9 +167,7 @@ namespace TTSK_AutoDim_Plates
                     AddUniqueView(views, v);
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return views;
         }
@@ -157,7 +175,8 @@ namespace TTSK_AutoDim_Plates
         private static void ClassifyViews(
             List<View> allViews,
             out List<View> mainViews,
-            out List<View> regularSectionViews)
+            out List<View> regularSectionViews
+        )
         {
             mainViews = new List<View>();
             regularSectionViews = new List<View>();
@@ -202,19 +221,28 @@ namespace TTSK_AutoDim_Plates
             // Fallback: một số view section trong Tekla không trả ViewType/Name có chữ Section.
             // Khi đó chọn các view nhỏ/hẹp hơn Front làm section thường, nhưng vẫn không đụng main view lớn.
             if (regularSectionViews.Count == 0)
-                AddRegularSectionsByGeometry(allViews, mainViews, regularSectionViews, frontView, frontWidth);
+                AddRegularSectionsByGeometry(
+                    allViews,
+                    mainViews,
+                    regularSectionViews,
+                    frontView,
+                    frontWidth
+                );
 
-            mainViews.Sort(delegate (View a, View b)
-            {
-                ViewBox ba;
-                ViewBox bb;
-                if (!TryGetViewBox(a, out ba) || !TryGetViewBox(b, out bb))
-                    return 0;
+            mainViews.Sort(
+                delegate(View a, View b)
+                {
+                    ViewBox ba;
+                    ViewBox bb;
+                    if (!TryGetViewBox(a, out ba) || !TryGetViewBox(b, out bb))
+                        return 0;
 
-                int cy = bb.CenterY.CompareTo(ba.CenterY);
-                if (cy != 0) return cy;
-                return ba.CenterX.CompareTo(bb.CenterX);
-            });
+                    int cy = bb.CenterY.CompareTo(ba.CenterY);
+                    if (cy != 0)
+                        return cy;
+                    return ba.CenterX.CompareTo(bb.CenterX);
+                }
+            );
 
             regularSectionViews.Sort(CompareSectionViewsByNameThenPosition);
         }
@@ -224,7 +252,8 @@ namespace TTSK_AutoDim_Plates
             List<View> mainViews,
             List<View> regularSectionViews,
             View frontView,
-            double frontWidth)
+            double frontWidth
+        )
         {
             try
             {
@@ -249,7 +278,8 @@ namespace TTSK_AutoDim_Plates
                     // Section thường hay là mặt cắt nhỏ ở hai bên: hẹp hơn rõ so với front.
                     // Không dùng rule này để move Top/Bottom vì Top/Bottom thường dài gần Front.
                     bool narrowSection = frontWidth > 1.0 && b.Width <= frontWidth * 0.45;
-                    bool tallSmallSection = b.Height > b.Width * 1.15 && b.Width <= frontWidth * 0.60;
+                    bool tallSmallSection =
+                        b.Height > b.Width * 1.15 && b.Width <= frontWidth * 0.60;
 
                     if (!narrowSection && !tallSmallSection)
                         continue;
@@ -264,9 +294,7 @@ namespace TTSK_AutoDim_Plates
                     AddUniqueView(regularSectionViews, v);
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static bool IsKnownMainView(View view)
@@ -274,14 +302,21 @@ namespace TTSK_AutoDim_Plates
             string type = GetViewTypeText(view);
             string name = SafeViewName(view);
 
-            if (ContainsIgnoreCase(type, "Front") || ContainsIgnoreCase(name, "Front")) return true;
-            if (ContainsIgnoreCase(type, "Top") || ContainsIgnoreCase(name, "Top")) return true;
-            if (ContainsIgnoreCase(type, "Bottom") || ContainsIgnoreCase(name, "Bottom")) return true;
+            if (ContainsIgnoreCase(type, "Front") || ContainsIgnoreCase(name, "Front"))
+                return true;
+            if (ContainsIgnoreCase(type, "Top") || ContainsIgnoreCase(name, "Top"))
+                return true;
+            if (ContainsIgnoreCase(type, "Bottom") || ContainsIgnoreCase(name, "Bottom"))
+                return true;
 
             return false;
         }
 
-        private static bool IsSpecialTopBottomSection(View section, View frontView, double frontWidth)
+        private static bool IsSpecialTopBottomSection(
+            View section,
+            View frontView,
+            double frontWidth
+        )
         {
             try
             {
@@ -304,9 +339,7 @@ namespace TTSK_AutoDim_Plates
                         return true;
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return false;
         }
@@ -317,7 +350,8 @@ namespace TTSK_AutoDim_Plates
             List<View> sectionViews,
             bool horizontal,
             double gap,
-            bool verticalBottomUp)
+            bool verticalBottomUp
+        )
         {
             try
             {
@@ -347,9 +381,12 @@ namespace TTSK_AutoDim_Plates
                 ViewBox highestMain = GetHighestMainBox(mainBoxes);
                 ViewBox rightMostMain = GetRightMostMainBox(mainBoxes);
 
-                if (lowestMain == null) lowestMain = mainCluster;
-                if (highestMain == null) highestMain = mainCluster;
-                if (rightMostMain == null) rightMostMain = mainCluster;
+                if (lowestMain == null)
+                    lowestMain = mainCluster;
+                if (highestMain == null)
+                    highestMain = mainCluster;
+                if (rightMostMain == null)
+                    rightMostMain = mainCluster;
 
                 if (usable == null)
                 {
@@ -366,7 +403,15 @@ namespace TTSK_AutoDim_Plates
                     // 1) Ưu tiên dàn từ bên trái usable.Left, không canh giữa / không dồn qua phải.
                     // 2) Nếu hàng quá dài thì tự xuống hàng, không vượt margin / title block.
                     // 3) Toàn bộ cụm đặt dưới MAIN VIEW thấp nhất, nếu đụng block thì đẩy lên khỏi block.
-                    ArrangeHorizontalLeftPriority(sectionBoxes, mainBoxes, rightMostMain, highestMain, lowestMain, usable, arrangeGap);
+                    ArrangeHorizontalLeftPriority(
+                        sectionBoxes,
+                        mainBoxes,
+                        rightMostMain,
+                        highestMain,
+                        lowestMain,
+                        usable,
+                        arrangeGap
+                    );
                 }
                 else
                 {
@@ -374,12 +419,18 @@ namespace TTSK_AutoDim_Plates
                     // 1) Bắt đầu bên phải main view xa nhất + safeGap.
                     // 2) Cách margin phải / top / bottom xa hơn.
                     // 3) Nếu dự kiến chạm main view thì tự dịch sang phải thêm safeGap.
-                    ArrangeVerticalRightOfMain(sectionBoxes, mainBoxes, rightMostMain, highestMain, usable, arrangeGap, verticalBottomUp);
+                    ArrangeVerticalRightOfMain(
+                        sectionBoxes,
+                        mainBoxes,
+                        rightMostMain,
+                        highestMain,
+                        usable,
+                        arrangeGap,
+                        verticalBottomUp
+                    );
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private class ArrangeRow
@@ -396,9 +447,15 @@ namespace TTSK_AutoDim_Plates
             ViewBox highestMain,
             ViewBox lowestMain,
             UsableRect usable,
-            double gap)
+            double gap
+        )
         {
-            if (sectionBoxes == null || sectionBoxes.Count == 0 || lowestMain == null || usable == null)
+            if (
+                sectionBoxes == null
+                || sectionBoxes.Count == 0
+                || lowestMain == null
+                || usable == null
+            )
                 return;
 
             // PHU FIX GAP:
@@ -436,7 +493,10 @@ namespace TTSK_AutoDim_Plates
 
                 // Sau khi đã hết chỗ một lần, toàn bộ view còn lại phải qua vùng phải.
                 // Nếu cho view sau quay lại hàng ngang thì thứ tự và gap sẽ rất dễ chồng nhau.
-                if (overflowStarted || (firstRow.Count > 0 && usedWidth + addWidth > firstRowWidthLimit))
+                if (
+                    overflowStarted
+                    || (firstRow.Count > 0 && usedWidth + addWidth > firstRowWidthLimit)
+                )
                 {
                     overflowStarted = true;
                     overflow.Add(b);
@@ -512,7 +572,11 @@ namespace TTSK_AutoDim_Plates
                     ViewBox b = firstRow[i];
                     double targetCenterX = x + b.Width * 0.5;
                     double targetCenterY = targetBottom + b.Height * 0.5;
-                    MoveViewBySheetDelta(b.View, targetCenterX - b.CenterX, targetCenterY - b.CenterY);
+                    MoveViewBySheetDelta(
+                        b.View,
+                        targetCenterX - b.CenterX,
+                        targetCenterY - b.CenterY
+                    );
                     x += b.Width + gap;
                 }
             }
@@ -525,7 +589,8 @@ namespace TTSK_AutoDim_Plates
                     rightMostMain,
                     highestMain,
                     usable,
-                    gap);
+                    gap
+                );
             }
         }
 
@@ -535,9 +600,15 @@ namespace TTSK_AutoDim_Plates
             ViewBox rightMostMain,
             ViewBox highestMain,
             UsableRect usable,
-            double gap)
+            double gap
+        )
         {
-            if (sectionBoxes == null || sectionBoxes.Count == 0 || rightMostMain == null || usable == null)
+            if (
+                sectionBoxes == null
+                || sectionBoxes.Count == 0
+                || rightMostMain == null
+                || usable == null
+            )
                 return;
 
             // PHU FIX GAP CHỒNG VIEW:
@@ -562,7 +633,8 @@ namespace TTSK_AutoDim_Plates
             double gridHeight = 0.0;
             for (int i = 0; i < rows; i++)
             {
-                if (i > 0) gridHeight += gap;
+                if (i > 0)
+                    gridHeight += gap;
                 gridHeight += rowHeights[i];
             }
 
@@ -590,7 +662,9 @@ namespace TTSK_AutoDim_Plates
             double testTop = bottom + gridHeight;
 
             int guard = 0;
-            while (IntersectsAnyMain(testLeft, testRight, testBottom, testTop, mainBoxes) && guard < 50)
+            while (
+                IntersectsAnyMain(testLeft, testRight, testBottom, testTop, mainBoxes) && guard < 50
+            )
             {
                 guard++;
                 if (testRight + gap <= usable.Right)
@@ -629,7 +703,11 @@ namespace TTSK_AutoDim_Plates
 
                     double targetCenterX = targetLeft + b.Width * 0.5;
                     double targetCenterY = targetBottom + b.Height * 0.5;
-                    MoveViewBySheetDelta(b.View, targetCenterX - b.CenterX, targetCenterY - b.CenterY);
+                    MoveViewBySheetDelta(
+                        b.View,
+                        targetCenterX - b.CenterX,
+                        targetCenterY - b.CenterY
+                    );
                 }
 
                 yBottom += rowHeights[row] + gap;
@@ -666,8 +744,22 @@ namespace TTSK_AutoDim_Plates
                 Point oa = null;
                 Point ob = null;
 
-                try { oa = a.View.Origin; } catch { oa = null; }
-                try { ob = b.View.Origin; } catch { ob = null; }
+                try
+                {
+                    oa = a.View.Origin;
+                }
+                catch
+                {
+                    oa = null;
+                }
+                try
+                {
+                    ob = b.View.Origin;
+                }
+                catch
+                {
+                    ob = null;
+                }
 
                 double ax = oa != null ? oa.X : a.CenterX;
                 double ay = oa != null ? oa.Y : a.CenterY;
@@ -686,9 +778,7 @@ namespace TTSK_AutoDim_Plates
                 if (dy <= tol && dx > tol)
                     return false;
             }
-            catch
-            {
-            }
+            catch { }
 
             return false;
         }
@@ -707,7 +797,11 @@ namespace TTSK_AutoDim_Plates
             return max;
         }
 
-        private static List<ArrangeRow> BuildRowsByWidth(List<ViewBox> boxes, double usableWidth, double gap)
+        private static List<ArrangeRow> BuildRowsByWidth(
+            List<ViewBox> boxes,
+            double usableWidth,
+            double gap
+        )
         {
             List<ArrangeRow> rows = new List<ArrangeRow>();
             ArrangeRow row = new ArrangeRow();
@@ -759,9 +853,7 @@ namespace TTSK_AutoDim_Plates
 
                 selector.SelectObjects(arr, false);
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static double GetRowsTotalHeight(List<ArrangeRow> rows, double gap)
@@ -772,7 +864,8 @@ namespace TTSK_AutoDim_Plates
 
             for (int i = 0; i < rows.Count; i++)
             {
-                if (i > 0) h += gap;
+                if (i > 0)
+                    h += gap;
                 h += rows[i].Height;
             }
             return h;
@@ -785,9 +878,16 @@ namespace TTSK_AutoDim_Plates
             ViewBox highestMain,
             UsableRect usable,
             double gap,
-            bool verticalBottomUp)
+            bool verticalBottomUp
+        )
         {
-            if (sectionBoxes == null || sectionBoxes.Count == 0 || rightMostMain == null || highestMain == null || usable == null)
+            if (
+                sectionBoxes == null
+                || sectionBoxes.Count == 0
+                || rightMostMain == null
+                || highestMain == null
+                || usable == null
+            )
                 return;
 
             UsableRect verticalUsable = new UsableRect();
@@ -822,18 +922,21 @@ namespace TTSK_AutoDim_Plates
             // Luôn giảm theo cặp để không làm vỡ quy tắc 2 x X.
             while (keepCount > 0)
             {
-                if (TryFindVerticalPlacement(
-                    sectionBoxes,
-                    keepCount,
-                    mainBoxes,
-                    rightMostMain,
-                    verticalUsable,
-                    gap,
-                    preferredTop,
-                    out keepLeft,
-                    out keepTop,
-                    out keepGridWidth,
-                    out keepGridHeight))
+                if (
+                    TryFindVerticalPlacement(
+                        sectionBoxes,
+                        keepCount,
+                        mainBoxes,
+                        rightMostMain,
+                        verticalUsable,
+                        gap,
+                        preferredTop,
+                        out keepLeft,
+                        out keepTop,
+                        out keepGridWidth,
+                        out keepGridHeight
+                    )
+                )
                 {
                     break;
                 }
@@ -852,7 +955,8 @@ namespace TTSK_AutoDim_Plates
                     keepLeft,
                     keepTop,
                     gap,
-                    verticalBottomUp);
+                    verticalBottomUp
+                );
             }
 
             if (keepCount < sectionBoxes.Count)
@@ -870,12 +974,7 @@ namespace TTSK_AutoDim_Plates
                 if (lowestMain == null)
                     lowestMain = rightMostMain;
 
-                ArrangeBottomOverflowRow(
-                    overflow,
-                    lowestMain,
-                    verticalUsable,
-                    gap,
-                    keepLeft);
+                ArrangeBottomOverflowRow(overflow, lowestMain, verticalUsable, gap, keepLeft);
             }
         }
 
@@ -890,7 +989,8 @@ namespace TTSK_AutoDim_Plates
             out double col0Left,
             out double rowTop,
             out double gridWidth,
-            out double gridHeight)
+            out double gridHeight
+        )
         {
             col0Left = 0.0;
             rowTop = 0.0;
@@ -947,7 +1047,9 @@ namespace TTSK_AutoDim_Plates
 
             // Nếu chạm main thì đẩy nguyên cụm sang phải từng gap.
             int guard = 0;
-            while (IntersectsAnyMain(testLeft, testRight, testBottom, testTop, mainBoxes) && guard < 80)
+            while (
+                IntersectsAnyMain(testLeft, testRight, testBottom, testTop, mainBoxes) && guard < 80
+            )
             {
                 guard++;
                 if (testRight + gap <= usable.Right)
@@ -979,7 +1081,8 @@ namespace TTSK_AutoDim_Plates
             double col0Left,
             double rowTop,
             double gap,
-            bool verticalBottomUp)
+            bool verticalBottomUp
+        )
         {
             if (boxes == null || count <= 0)
                 return;
@@ -995,7 +1098,8 @@ namespace TTSK_AutoDim_Plates
                 double totalHeight = 0.0;
                 for (int i = 0; i < rows; i++)
                 {
-                    if (i > 0) totalHeight += gap;
+                    if (i > 0)
+                        totalHeight += gap;
                     totalHeight += rowHeights[i];
                 }
 
@@ -1015,13 +1119,18 @@ namespace TTSK_AutoDim_Plates
                             continue;
 
                         double left = col == 0 ? col0Left : col1Left;
-                        double cellWidth = col == 0 ? col0Width : GetColumnWidthForPrefix(boxes, count, 1);
+                        double cellWidth =
+                            col == 0 ? col0Width : GetColumnWidthForPrefix(boxes, count, 1);
                         double targetLeft = left;
                         double targetBottom = rowBottomY;
 
                         double targetCenterX = targetLeft + b.Width * 0.5;
                         double targetCenterY = targetBottom + b.Height * 0.5;
-                        MoveViewBySheetDelta(b.View, targetCenterX - b.CenterX, targetCenterY - b.CenterY);
+                        MoveViewBySheetDelta(
+                            b.View,
+                            targetCenterX - b.CenterX,
+                            targetCenterY - b.CenterY
+                        );
                     }
 
                     yBottom += rowHeights[row] + gap;
@@ -1045,13 +1154,18 @@ namespace TTSK_AutoDim_Plates
                             continue;
 
                         double left = col == 0 ? col0Left : col1Left;
-                        double cellWidth = col == 0 ? col0Width : GetColumnWidthForPrefix(boxes, count, 1);
+                        double cellWidth =
+                            col == 0 ? col0Width : GetColumnWidthForPrefix(boxes, count, 1);
                         double targetLeft = left;
                         double targetBottom = rowBottomY;
 
                         double targetCenterX = targetLeft + b.Width * 0.5;
                         double targetCenterY = targetBottom + b.Height * 0.5;
-                        MoveViewBySheetDelta(b.View, targetCenterX - b.CenterX, targetCenterY - b.CenterY);
+                        MoveViewBySheetDelta(
+                            b.View,
+                            targetCenterX - b.CenterX,
+                            targetCenterY - b.CenterY
+                        );
                     }
 
                     yTop = rowBottomY - gap;
@@ -1064,7 +1178,8 @@ namespace TTSK_AutoDim_Plates
             ViewBox lowestMain,
             UsableRect usable,
             double gap,
-            double rightClusterLeft)
+            double rightClusterLeft
+        )
         {
             if (overflow == null || overflow.Count == 0 || lowestMain == null || usable == null)
                 return;
@@ -1122,7 +1237,8 @@ namespace TTSK_AutoDim_Plates
         private static double[] GetRowHeightsForPrefix(List<ViewBox> boxes, int count)
         {
             int rows = (count + 1) / 2;
-            if (rows < 1) rows = 1;
+            if (rows < 1)
+                rows = 1;
 
             double[] rowHeights = new double[rows];
             if (boxes == null)
@@ -1139,19 +1255,30 @@ namespace TTSK_AutoDim_Plates
             return rowHeights;
         }
 
-        private static double GetVerticalGridHeightForPrefix(List<ViewBox> boxes, int count, double gap)
+        private static double GetVerticalGridHeightForPrefix(
+            List<ViewBox> boxes,
+            int count,
+            double gap
+        )
         {
             double[] rowHeights = GetRowHeightsForPrefix(boxes, count);
             double h = 0.0;
             for (int i = 0; i < rowHeights.Length; i++)
             {
-                if (i > 0) h += gap;
+                if (i > 0)
+                    h += gap;
                 h += rowHeights[i];
             }
             return h;
         }
 
-        private static bool IntersectsAnyMain(double minX, double maxX, double minY, double maxY, List<ViewBox> mainBoxes)
+        private static bool IntersectsAnyMain(
+            double minX,
+            double maxX,
+            double minY,
+            double maxY,
+            List<ViewBox> mainBoxes
+        )
         {
             if (mainBoxes == null)
                 return false;
@@ -1185,7 +1312,8 @@ namespace TTSK_AutoDim_Plates
                 return 0;
 
             int cx = ba.CenterX.CompareTo(bb.CenterX);
-            if (cx != 0) return cx;
+            if (cx != 0)
+                return cx;
             return bb.CenterY.CompareTo(ba.CenterY);
         }
 
@@ -1202,7 +1330,8 @@ namespace TTSK_AutoDim_Plates
                 return 0;
 
             int cx = a.CenterX.CompareTo(b.CenterX);
-            if (cx != 0) return cx;
+            if (cx != 0)
+                return cx;
             return b.CenterY.CompareTo(a.CenterY);
         }
 
@@ -1254,7 +1383,10 @@ namespace TTSK_AutoDim_Plates
             }
         }
 
-        private static void AddSectionTextCandidatesFromViewObjects(View view, List<string> candidates)
+        private static void AddSectionTextCandidatesFromViewObjects(
+            View view,
+            List<string> candidates
+        )
         {
             // PHU OPTIMIZE: giữ hàm để không phá cấu trúc file, nhưng không dùng nữa.
             // Không quét object trong view để tránh chậm.
@@ -1286,9 +1418,7 @@ namespace TTSK_AutoDim_Plates
                 if (p != null && p.CanRead)
                     return p.GetValue(enumerator, null);
             }
-            catch
-            {
-            }
+            catch { }
 
             return null;
         }
@@ -1346,7 +1476,14 @@ namespace TTSK_AutoDim_Plates
                     for (int j = i + 1; j < upper.Length; j++)
                     {
                         char cj = upper[j];
-                        if (cj == '-' || cj == '－' || cj == '–' || cj == '_' || cj == ' ' || cj == '=')
+                        if (
+                            cj == '-'
+                            || cj == '－'
+                            || cj == '–'
+                            || cj == '_'
+                            || cj == ' '
+                            || cj == '='
+                        )
                             hasPairSeparator = true;
 
                         if (cj == ch && hasPairSeparator)
@@ -1361,7 +1498,6 @@ namespace TTSK_AutoDim_Plates
 
             return "";
         }
-
 
         private class UsableRect
         {
@@ -1382,7 +1518,8 @@ namespace TTSK_AutoDim_Plates
                 if (sheet == null)
                     return null;
 
-                double paperW, paperH;
+                double paperW,
+                    paperH;
                 GetPaperSize(drawing, sheet, out paperW, out paperH);
 
                 UsableRect rect;
@@ -1414,7 +1551,8 @@ namespace TTSK_AutoDim_Plates
                 if (FORCE_SAFE_BY_TOP_BOTTOM_BLOCKS)
                 {
                     double h = rect.Top - rect.Bottom;
-                    double bottomByRatio = rect.Bottom + h * BOTTOM_BLOCK_HEIGHT_RATIO + BLOCK_EXTRA_GAP;
+                    double bottomByRatio =
+                        rect.Bottom + h * BOTTOM_BLOCK_HEIGHT_RATIO + BLOCK_EXTRA_GAP;
                     double topByRatio = rect.Top - h * TOP_BLOCK_HEIGHT_RATIO - BLOCK_EXTRA_GAP;
 
                     if (bottomByRatio < rect.Top - 1.0)
@@ -1441,7 +1579,11 @@ namespace TTSK_AutoDim_Plates
             }
         }
 
-        private static bool TryGetReservedRectByPaperSize(double paperW, double paperH, out UsableRect rect)
+        private static bool TryGetReservedRectByPaperSize(
+            double paperW,
+            double paperH,
+            out UsableRect rect
+        )
         {
             rect = null;
 
@@ -1460,7 +1602,12 @@ namespace TTSK_AutoDim_Plates
             return false;
         }
 
-        private static bool IsPaperSize(double paperW, double paperH, double targetW, double targetH)
+        private static bool IsPaperSize(
+            double paperW,
+            double paperH,
+            double targetW,
+            double targetH
+        )
         {
             const double tol = 2.0;
             bool same = Math.Abs(paperW - targetW) <= tol && Math.Abs(paperH - targetH) <= tol;
@@ -1474,7 +1621,8 @@ namespace TTSK_AutoDim_Plates
             double leftReserve,
             double rightReserve,
             double bottomReserve,
-            double topReserve)
+            double topReserve
+        )
         {
             UsableRect rect = new UsableRect();
             rect.Left = leftReserve;
@@ -1484,7 +1632,12 @@ namespace TTSK_AutoDim_Plates
             return rect;
         }
 
-        private static bool TryFindInnerFrameRect(ContainerView sheet, double paperW, double paperH, out UsableRect rect)
+        private static bool TryFindInnerFrameRect(
+            ContainerView sheet,
+            double paperW,
+            double paperH,
+            out UsableRect rect
+        )
         {
             rect = null;
 
@@ -1493,14 +1646,19 @@ namespace TTSK_AutoDim_Plates
                 List<double> xs = new List<double>();
                 List<double> ys = new List<double>();
 
-                DrawingObjectEnumerator e = sheet.GetAllObjects(typeof(Tekla.Structures.Drawing.Line));
+                DrawingObjectEnumerator e = sheet.GetAllObjects(
+                    typeof(Tekla.Structures.Drawing.Line)
+                );
                 while (e.MoveNext())
                 {
                     Tekla.Structures.Drawing.Line ln = e.Current as Tekla.Structures.Drawing.Line;
-                    if (ln == null) continue;
+                    if (ln == null)
+                        continue;
 
-                    Point a, b;
-                    if (!TryGetLinePoints(ln, out a, out b)) continue;
+                    Point a,
+                        b;
+                    if (!TryGetLinePoints(ln, out a, out b))
+                        continue;
 
                     bool vertical = Math.Abs(a.X - b.X) < 0.5 && Math.Abs(a.Y - b.Y) > 20.0;
                     bool horizontal = Math.Abs(a.Y - b.Y) < 0.5 && Math.Abs(a.X - b.X) > 20.0;
@@ -1508,16 +1666,19 @@ namespace TTSK_AutoDim_Plates
                     if (vertical)
                     {
                         double x = (a.X + b.X) / 2.0;
-                        if (x > 0.5 && x < paperW - 0.5) AddUniqueNear(xs, x, 1.0);
+                        if (x > 0.5 && x < paperW - 0.5)
+                            AddUniqueNear(xs, x, 1.0);
                     }
                     else if (horizontal)
                     {
                         double y = (a.Y + b.Y) / 2.0;
-                        if (y > 0.5 && y < paperH - 0.5) AddUniqueNear(ys, y, 1.0);
+                        if (y > 0.5 && y < paperH - 0.5)
+                            AddUniqueNear(ys, y, 1.0);
                     }
                 }
 
-                if (xs.Count < 2 || ys.Count < 2) return false;
+                if (xs.Count < 2 || ys.Count < 2)
+                    return false;
 
                 xs.Sort();
                 ys.Sort();
@@ -1527,8 +1688,10 @@ namespace TTSK_AutoDim_Plates
                 double bottom = ys[0];
                 double top = ys[ys.Count - 1];
 
-                if ((right - left) < paperW * 0.60) return false;
-                if ((top - bottom) < paperH * 0.60) return false;
+                if ((right - left) < paperW * 0.60)
+                    return false;
+                if ((top - bottom) < paperH * 0.60)
+                    return false;
 
                 rect = new UsableRect();
                 rect.Left = left;
@@ -1543,7 +1706,13 @@ namespace TTSK_AutoDim_Plates
             }
         }
 
-        private static bool TryFindTitleBlockTop(ContainerView sheet, UsableRect frame, double paperW, double paperH, out double titleTop)
+        private static bool TryFindTitleBlockTop(
+            ContainerView sheet,
+            UsableRect frame,
+            double paperW,
+            double paperH,
+            out double titleTop
+        )
         {
             titleTop = 0.0;
 
@@ -1557,16 +1726,22 @@ namespace TTSK_AutoDim_Plates
                 double upperLimit = frame.Bottom + (frame.Top - frame.Bottom) * 0.38;
                 double minLongLine = Math.Max(80.0, (frame.Right - frame.Left) * 0.35);
 
-                DrawingObjectEnumerator e = sheet.GetAllObjects(typeof(Tekla.Structures.Drawing.Line));
+                DrawingObjectEnumerator e = sheet.GetAllObjects(
+                    typeof(Tekla.Structures.Drawing.Line)
+                );
                 while (e.MoveNext())
                 {
                     Tekla.Structures.Drawing.Line ln = e.Current as Tekla.Structures.Drawing.Line;
-                    if (ln == null) continue;
+                    if (ln == null)
+                        continue;
 
-                    Point a, b;
-                    if (!TryGetLinePoints(ln, out a, out b)) continue;
+                    Point a,
+                        b;
+                    if (!TryGetLinePoints(ln, out a, out b))
+                        continue;
 
-                    bool horizontal = Math.Abs(a.Y - b.Y) < 0.5 && Math.Abs(a.X - b.X) >= minLongLine;
+                    bool horizontal =
+                        Math.Abs(a.Y - b.Y) < 0.5 && Math.Abs(a.X - b.X) >= minLongLine;
                     if (!horizontal)
                         continue;
 
@@ -1598,20 +1773,45 @@ namespace TTSK_AutoDim_Plates
             }
         }
 
-        private static void GetPaperSize(Drawing drawing, ContainerView sheet, out double width, out double height)
+        private static void GetPaperSize(
+            Drawing drawing,
+            ContainerView sheet,
+            out double width,
+            out double height
+        )
         {
             width = 420.0;
             height = 297.0;
 
-            object[] sources = new object[] { drawing, sheet, GetProp(drawing, "Layout"), GetProp(drawing, "DrawingAttributes"), GetProp(drawing, "Attributes") };
+            object[] sources = new object[]
+            {
+                drawing,
+                sheet,
+                GetProp(drawing, "Layout"),
+                GetProp(drawing, "DrawingAttributes"),
+                GetProp(drawing, "Attributes")
+            };
             string[] wNames = new string[] { "Width", "PaperWidth", "SheetWidth", "DrawingWidth" };
-            string[] hNames = new string[] { "Height", "PaperHeight", "SheetHeight", "DrawingHeight" };
+            string[] hNames = new string[]
+            {
+                "Height",
+                "PaperHeight",
+                "SheetHeight",
+                "DrawingHeight"
+            };
 
             foreach (object s in sources)
             {
-                if (s == null) continue;
-                double w, h;
-                if (TryReadDoubleAny(s, wNames, out w) && TryReadDoubleAny(s, hNames, out h) && w > 50 && h > 50)
+                if (s == null)
+                    continue;
+                double w,
+                    h;
+                if (
+                    TryReadDoubleAny(s, wNames, out w)
+                    && TryReadDoubleAny(s, hNames, out h)
+                    && w > 50
+                    && h > 50
+                )
                 {
                     width = w;
                     height = h;
@@ -1619,19 +1819,55 @@ namespace TTSK_AutoDim_Plates
                 }
             }
 
-            string paperName = Convert.ToString(GetProp(GetProp(drawing, "Layout"), "Name") ?? "").ToUpperInvariant();
-            if (paperName.Contains("A1")) { width = 841; height = 594; return; }
-            if (paperName.Contains("A2")) { width = 594; height = 420; return; }
-            if (paperName.Contains("A3")) { width = 420; height = 297; return; }
-            if (paperName.Contains("A4")) { width = 297; height = 210; return; }
+            string paperName = Convert
+                .ToString(GetProp(GetProp(drawing, "Layout"), "Name") ?? "")
+                .ToUpperInvariant();
+            if (paperName.Contains("A1"))
+            {
+                width = 841;
+                height = 594;
+                return;
+            }
+            if (paperName.Contains("A2"))
+            {
+                width = 594;
+                height = 420;
+                return;
+            }
+            if (paperName.Contains("A3"))
+            {
+                width = 420;
+                height = 297;
+                return;
+            }
+            if (paperName.Contains("A4"))
+            {
+                width = 297;
+                height = 210;
+                return;
+            }
         }
 
         private static object GetProp(object target, string name)
         {
-            if (target == null) return null;
-            PropertyInfo p = target.GetType().GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-            if (p == null || !p.CanRead) return null;
-            try { return p.GetValue(target, null); } catch { return null; }
+            if (target == null)
+                return null;
+            PropertyInfo p = target
+                .GetType()
+                .GetProperty(
+                    name,
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                );
+            if (p == null || !p.CanRead)
+                return null;
+            try
+            {
+                return p.GetValue(target, null);
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         private static bool TryReadDoubleAny(object target, string[] names, out double value)
@@ -1640,7 +1876,8 @@ namespace TTSK_AutoDim_Plates
             foreach (string n in names)
             {
                 object v = GetProp(target, n);
-                if (v == null) continue;
+                if (v == null)
+                    continue;
                 try
                 {
                     value = Convert.ToDouble(v);
@@ -1651,7 +1888,11 @@ namespace TTSK_AutoDim_Plates
             return false;
         }
 
-        private static bool TryGetLinePoints(Tekla.Structures.Drawing.Line line, out Point a, out Point b)
+        private static bool TryGetLinePoints(
+            Tekla.Structures.Drawing.Line line,
+            out Point a,
+            out Point b
+        )
         {
             a = null;
             b = null;
@@ -1665,7 +1906,8 @@ namespace TTSK_AutoDim_Plates
                 object bv = GetProp(line, bNames[i]);
                 a = av as Point;
                 b = bv as Point;
-                if (a != null && b != null) return true;
+                if (a != null && b != null)
+                    return true;
             }
 
             return false;
@@ -1686,8 +1928,10 @@ namespace TTSK_AutoDim_Plates
 
         private static double Clamp(double value, double min, double max)
         {
-            if (value < min) return min;
-            if (value > max) return max;
+            if (value < min)
+                return min;
+            if (value > max)
+                return max;
             return value;
         }
 
@@ -1778,10 +2022,14 @@ namespace TTSK_AutoDim_Plates
                 if (b == null)
                     continue;
 
-                if (b.MinX < c.MinX) c.MinX = b.MinX;
-                if (b.MaxX > c.MaxX) c.MaxX = b.MaxX;
-                if (b.MinY < c.MinY) c.MinY = b.MinY;
-                if (b.MaxY > c.MaxY) c.MaxY = b.MaxY;
+                if (b.MinX < c.MinX)
+                    c.MinX = b.MinX;
+                if (b.MaxX > c.MaxX)
+                    c.MaxX = b.MaxX;
+                if (b.MinY < c.MinY)
+                    c.MinY = b.MinY;
+                if (b.MaxY > c.MaxY)
+                    c.MaxY = b.MaxY;
             }
 
             if (c.MinX == double.MaxValue || c.MinY == double.MaxValue)
@@ -1825,10 +2073,14 @@ namespace TTSK_AutoDim_Plates
 
             foreach (ViewBox b in boxes)
             {
-                if (b.MinX < c.MinX) c.MinX = b.MinX;
-                if (b.MaxX > c.MaxX) c.MaxX = b.MaxX;
-                if (b.MinY < c.MinY) c.MinY = b.MinY;
-                if (b.MaxY > c.MaxY) c.MaxY = b.MaxY;
+                if (b.MinX < c.MinX)
+                    c.MinX = b.MinX;
+                if (b.MaxX > c.MaxX)
+                    c.MaxX = b.MaxX;
+                if (b.MinY < c.MinY)
+                    c.MinY = b.MinY;
+                if (b.MaxY > c.MaxY)
+                    c.MaxY = b.MaxY;
             }
 
             c.Width = c.MaxX - c.MinX;
@@ -1848,8 +2100,14 @@ namespace TTSK_AutoDim_Plates
                     return false;
 
                 AABB bb = null;
-                try { bb = view.GetAxisAlignedBoundingBox(); }
-                catch { bb = null; }
+                try
+                {
+                    bb = view.GetAxisAlignedBoundingBox();
+                }
+                catch
+                {
+                    bb = null;
+                }
 
                 if (bb == null || bb.MinPoint == null || bb.MaxPoint == null)
                     return TryGetRestrictionBoxOnSheet(view, out box);
@@ -1941,13 +2199,14 @@ namespace TTSK_AutoDim_Plates
                 Point newOrigin = new Point(origin.X + dx, origin.Y + dy, origin.Z);
                 if (TrySetViewOrigin(view, newOrigin))
                 {
-                    try { view.Modify(); }
+                    try
+                    {
+                        view.Modify();
+                    }
                     catch { }
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static bool TrySetViewOrigin(View view, Point origin)
@@ -1957,9 +2216,8 @@ namespace TTSK_AutoDim_Plates
                 if (view == null || origin == null)
                     return false;
 
-                PropertyInfo prop = view.GetType().GetProperty(
-                    "Origin",
-                    BindingFlags.Public | BindingFlags.Instance);
+                PropertyInfo prop = view.GetType()
+                    .GetProperty("Origin", BindingFlags.Public | BindingFlags.Instance);
 
                 if (prop == null || !prop.CanWrite)
                     return false;
@@ -2118,18 +2376,19 @@ namespace TTSK_AutoDim_Plates
                 if (attr != null)
                 {
                     string text = ReadAnyPropertyAsString(attr, "ViewType");
-                    if (!string.IsNullOrEmpty(text)) return text;
+                    if (!string.IsNullOrEmpty(text))
+                        return text;
 
                     text = ReadAnyPropertyAsString(attr, "Type");
-                    if (!string.IsNullOrEmpty(text)) return text;
+                    if (!string.IsNullOrEmpty(text))
+                        return text;
                 }
 
                 string direct = ReadAnyPropertyAsString(view, "ViewType");
-                if (!string.IsNullOrEmpty(direct)) return direct;
+                if (!string.IsNullOrEmpty(direct))
+                    return direct;
             }
-            catch
-            {
-            }
+            catch { }
 
             return "";
         }
@@ -2137,10 +2396,12 @@ namespace TTSK_AutoDim_Plates
         private static string SafeViewName(View view)
         {
             string name = ReadAnyPropertyAsString(view, "Name");
-            if (!string.IsNullOrEmpty(name)) return name;
+            if (!string.IsNullOrEmpty(name))
+                return name;
 
             name = ReadAnyPropertyAsString(view, "ViewName");
-            if (!string.IsNullOrEmpty(name)) return name;
+            if (!string.IsNullOrEmpty(name))
+                return name;
 
             return "";
         }
@@ -2152,9 +2413,8 @@ namespace TTSK_AutoDim_Plates
                 if (obj == null)
                     return "";
 
-                PropertyInfo prop = obj.GetType().GetProperty(
-                    propertyName,
-                    BindingFlags.Public | BindingFlags.Instance);
+                PropertyInfo prop = obj.GetType()
+                    .GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
 
                 if (prop == null || !prop.CanRead)
                     return "";
@@ -2200,9 +2460,7 @@ namespace TTSK_AutoDim_Plates
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return 1.0;
         }

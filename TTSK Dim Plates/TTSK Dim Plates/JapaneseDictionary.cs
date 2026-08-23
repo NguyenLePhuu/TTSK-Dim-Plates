@@ -63,7 +63,8 @@ namespace TTSK_AutoDim_Plates
             _grid.CellBorderStyle = DataGridViewCellBorderStyle.Single;
             _grid.ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.Single;
             _grid.ColumnHeadersHeight = 38;
-            _grid.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
+            _grid.ColumnHeadersHeightSizeMode =
+                DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
             _grid.EnableHeadersVisualStyles = false;
             _grid.MultiSelect = false;
             _grid.ReadOnly = true;
@@ -134,7 +135,8 @@ namespace TTSK_AutoDim_Plates
             _emptyLabel.Location = new Point(1, _grid.ColumnHeadersHeight + 1);
             _emptyLabel.Size = new Size(
                 Math.Max(0, ClientSize.Width - 2),
-                Math.Max(0, ClientSize.Height - _grid.ColumnHeadersHeight - 2));
+                Math.Max(0, ClientSize.Height - _grid.ColumnHeadersHeight - 2)
+            );
             _emptyLabel.BringToFront();
         }
 
@@ -160,14 +162,20 @@ namespace TTSK_AutoDim_Plates
                 if (invalidLineCount > 0)
                 {
                     RaiseStatus(
-                        "Đã tải " + entries.Count + " từ; bỏ qua " + invalidLineCount + " dòng sai định dạng.",
-                        JapaneseDictionaryStatusKind.Warning);
+                        "Đã tải "
+                            + entries.Count
+                            + " từ; bỏ qua "
+                            + invalidLineCount
+                            + " dòng sai định dạng.",
+                        JapaneseDictionaryStatusKind.Warning
+                    );
                 }
                 else
                 {
                     RaiseStatus(
                         "Đã tải " + entries.Count + " từ tiếng Nhật.",
-                        JapaneseDictionaryStatusKind.Information);
+                        JapaneseDictionaryStatusKind.Information
+                    );
                 }
             }
             catch (FileNotFoundException)
@@ -175,7 +183,10 @@ namespace TTSK_AutoDim_Plates
                 _grid.Rows.Clear();
                 _emptyLabel.Text = "Không tìm thấy file từ điển.";
                 _emptyLabel.Visible = true;
-                RaiseStatus("Không tìm thấy Data\\JapaneseDictionary.tsv.", JapaneseDictionaryStatusKind.Error);
+                RaiseStatus(
+                    "Không tìm thấy Data\\JapaneseDictionary.tsv.",
+                    JapaneseDictionaryStatusKind.Error
+                );
             }
             catch (Exception ex)
             {
@@ -191,9 +202,13 @@ namespace TTSK_AutoDim_Plates
             _darkMode = darkMode;
 
             Color panelBack = darkMode ? Color.FromArgb(18, 18, 18) : Color.White;
-            Color headerBack = darkMode ? Color.FromArgb(24, 24, 24) : Color.FromArgb(248, 250, 252);
+            Color headerBack = darkMode
+                ? Color.FromArgb(24, 24, 24)
+                : Color.FromArgb(248, 250, 252);
             Color rowBack = darkMode ? Color.FromArgb(15, 15, 15) : Color.White;
-            Color alternateBack = darkMode ? Color.FromArgb(20, 20, 20) : Color.FromArgb(250, 252, 255);
+            Color alternateBack = darkMode
+                ? Color.FromArgb(20, 20, 20)
+                : Color.FromArgb(250, 252, 255);
             Color text = darkMode ? Color.FromArgb(226, 232, 240) : Color.FromArgb(15, 23, 42);
             Color muted = darkMode ? Color.FromArgb(148, 163, 184) : Color.FromArgb(100, 116, 139);
             Color accent = darkMode ? Color.FromArgb(224, 156, 96) : Color.FromArgb(30, 58, 138);
@@ -221,7 +236,8 @@ namespace TTSK_AutoDim_Plates
             _grid.ColumnHeadersDefaultCellStyle.SelectionBackColor = headerBack;
             _grid.ColumnHeadersDefaultCellStyle.SelectionForeColor = accent;
             _grid.ColumnHeadersDefaultCellStyle.Font = new Font("Segoe UI", 8.5F, FontStyle.Bold);
-            _grid.ColumnHeadersDefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+            _grid.ColumnHeadersDefaultCellStyle.Alignment =
+                DataGridViewContentAlignment.MiddleCenter;
 
             _grid.DefaultCellStyle.BackColor = rowBack;
             _grid.DefaultCellStyle.ForeColor = text;
@@ -262,7 +278,10 @@ namespace TTSK_AutoDim_Plates
             _grid.Invalidate();
         }
 
-        private void LoadEntries(out List<JapaneseDictionaryEntry> entries, out int invalidLineCount)
+        private void LoadEntries(
+            out List<JapaneseDictionaryEntry> entries,
+            out int invalidLineCount
+        )
         {
             entries = new List<JapaneseDictionaryEntry>();
             invalidLineCount = 0;
@@ -305,8 +324,8 @@ namespace TTSK_AutoDim_Plates
 
         private static bool IsHeader(string vietnamese, string japanese)
         {
-            return string.Equals(vietnamese, VietnameseHeader, StringComparison.OrdinalIgnoreCase) &&
-                   string.Equals(japanese, JapaneseHeader, StringComparison.OrdinalIgnoreCase);
+            return string.Equals(vietnamese, VietnameseHeader, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(japanese, JapaneseHeader, StringComparison.OrdinalIgnoreCase);
         }
 
         private void Grid_CellContentClick(object sender, DataGridViewCellEventArgs e)
@@ -333,31 +352,27 @@ namespace TTSK_AutoDim_Plates
 
         private void Grid_CellPainting(object sender, DataGridViewCellPaintingEventArgs e)
         {
-            if (e.RowIndex < 0 || e.ColumnIndex < 0 ||
-                _grid.Columns[e.ColumnIndex].Name != "COPY")
+            if (e.RowIndex < 0 || e.ColumnIndex < 0 || _grid.Columns[e.ColumnIndex].Name != "COPY")
             {
                 return;
             }
 
             e.Paint(
                 e.ClipBounds,
-                DataGridViewPaintParts.Background |
-                DataGridViewPaintParts.Border);
+                DataGridViewPaintParts.Background | DataGridViewPaintParts.Border
+            );
 
             Padding padding = e.CellStyle.Padding;
             Rectangle buttonBounds = new Rectangle(
                 e.CellBounds.X + padding.Left,
                 e.CellBounds.Y + padding.Top,
                 Math.Max(1, e.CellBounds.Width - padding.Horizontal),
-                Math.Max(1, e.CellBounds.Height - padding.Vertical));
+                Math.Max(1, e.CellBounds.Height - padding.Vertical)
+            );
 
             bool hovered = e.RowIndex == _hoveredCopyRowIndex;
-            Color buttonBack = hovered
-                ? _copyButtonHoverBackColor
-                : e.CellStyle.BackColor;
-            Color buttonText = hovered
-                ? _copyButtonHoverTextColor
-                : _copyButtonTextColor;
+            Color buttonBack = hovered ? _copyButtonHoverBackColor : e.CellStyle.BackColor;
+            Color buttonText = hovered ? _copyButtonHoverTextColor : _copyButtonTextColor;
 
             using (SolidBrush backBrush = new SolidBrush(buttonBack))
                 e.Graphics.FillRectangle(backBrush, buttonBounds);
@@ -368,7 +383,8 @@ namespace TTSK_AutoDim_Plates
                     buttonBounds.X,
                     buttonBounds.Y,
                     buttonBounds.Width - 1,
-                    buttonBounds.Height - 1);
+                    buttonBounds.Height - 1
+                );
 
             TextRenderer.DrawText(
                 e.Graphics,
@@ -376,18 +392,22 @@ namespace TTSK_AutoDim_Plates
                 e.CellStyle.Font ?? _grid.Font,
                 buttonBounds,
                 buttonText,
-                TextFormatFlags.HorizontalCenter |
-                TextFormatFlags.VerticalCenter |
-                TextFormatFlags.SingleLine |
-                TextFormatFlags.NoPadding);
+                TextFormatFlags.HorizontalCenter
+                    | TextFormatFlags.VerticalCenter
+                    | TextFormatFlags.SingleLine
+                    | TextFormatFlags.NoPadding
+            );
 
             e.Handled = true;
         }
 
         private void Grid_CellMouseEnter(object sender, DataGridViewCellEventArgs e)
         {
-            if (e.RowIndex >= 0 && e.ColumnIndex >= 0 &&
-                _grid.Columns[e.ColumnIndex].Name == "COPY")
+            if (
+                e.RowIndex >= 0
+                && e.ColumnIndex >= 0
+                && _grid.Columns[e.ColumnIndex].Name == "COPY"
+            )
             {
                 _grid.Cursor = Cursors.Hand;
                 _hoveredCopyRowIndex = e.RowIndex;
@@ -397,9 +417,12 @@ namespace TTSK_AutoDim_Plates
 
         private void Grid_CellMouseLeave(object sender, DataGridViewCellEventArgs e)
         {
-            if (e.RowIndex >= 0 && e.ColumnIndex >= 0 &&
-                _grid.Columns[e.ColumnIndex].Name == "COPY" &&
-                _hoveredCopyRowIndex == e.RowIndex)
+            if (
+                e.RowIndex >= 0
+                && e.ColumnIndex >= 0
+                && _grid.Columns[e.ColumnIndex].Name == "COPY"
+                && _hoveredCopyRowIndex == e.RowIndex
+            )
             {
                 _hoveredCopyRowIndex = -1;
                 _grid.InvalidateCell(e.ColumnIndex, e.RowIndex);
@@ -470,9 +493,7 @@ namespace TTSK_AutoDim_Plates
                     if (RowCount > 0)
                         FirstDisplayedScrollingRowIndex = next;
                 }
-                catch
-                {
-                }
+                catch { }
 
                 Invalidate();
             }
@@ -486,12 +507,7 @@ namespace TTSK_AutoDim_Plates
 
                 using (Pen borderPen = new Pen(SoftOuterBorderColor, 1.0f))
                 {
-                    e.Graphics.DrawRectangle(
-                        borderPen,
-                        0,
-                        0,
-                        Width - 1,
-                        Height - 1);
+                    e.Graphics.DrawRectangle(borderPen, 0, 0, Width - 1, Height - 1);
                 }
 
                 try
@@ -504,7 +520,8 @@ namespace TTSK_AutoDim_Plates
                         Width - scrollWidth - 2,
                         0,
                         scrollWidth + 2,
-                        Height);
+                        Height
+                    );
 
                     Color trackColor = DarkMode
                         ? Color.FromArgb(18, 18, 18)
@@ -522,7 +539,8 @@ namespace TTSK_AutoDim_Plates
                     int totalRows = Math.Max(1, RowCount);
                     int thumbHeight = Math.Max(
                         34,
-                        (int)(Height * (visibleRows / (double)totalRows)));
+                        (int)(Height * (visibleRows / (double)totalRows))
+                    );
 
                     int first = 0;
                     try
@@ -542,21 +560,23 @@ namespace TTSK_AutoDim_Plates
                         Width - scrollWidth + 1,
                         thumbY,
                         7,
-                        thumbHeight);
+                        thumbHeight
+                    );
 
                     e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
 
-                    using (GraphicsPath path = RoundedRectF(
-                        new RectangleF(thumb.X, thumb.Y, thumb.Width, thumb.Height),
-                        5f))
+                    using (
+                        GraphicsPath path = RoundedRectF(
+                            new RectangleF(thumb.X, thumb.Y, thumb.Width, thumb.Height),
+                            5f
+                        )
+                    )
                     using (SolidBrush thumbBrush = new SolidBrush(thumbColor))
                     {
                         e.Graphics.FillPath(thumbBrush, path);
                     }
                 }
-                catch
-                {
-                }
+                catch { }
             }
 
             protected override void OnScroll(ScrollEventArgs e)
@@ -590,7 +610,14 @@ namespace TTSK_AutoDim_Plates
 
                 path.AddArc(bounds.Left, bounds.Top, diameter, diameter, 180, 90);
                 path.AddArc(bounds.Right - diameter, bounds.Top, diameter, diameter, 270, 90);
-                path.AddArc(bounds.Right - diameter, bounds.Bottom - diameter, diameter, diameter, 0, 90);
+                path.AddArc(
+                    bounds.Right - diameter,
+                    bounds.Bottom - diameter,
+                    diameter,
+                    diameter,
+                    0,
+                    90
+                );
                 path.AddArc(bounds.Left, bounds.Bottom - diameter, diameter, diameter, 90, 90);
                 path.CloseFigure();
 

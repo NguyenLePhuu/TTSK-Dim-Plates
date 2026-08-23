@@ -19,39 +19,74 @@ public static class PHU_AllPartsDeletedMarker
 
     public static bool IsAllPartsDeleted(string changes)
     {
-        return string.Equals((changes ?? string.Empty).Trim(), "All Parts Deleted", StringComparison.OrdinalIgnoreCase);
+        return string.Equals(
+            (changes ?? string.Empty).Trim(),
+            "All Parts Deleted",
+            StringComparison.OrdinalIgnoreCase
+        );
     }
 
     public static bool Run(string mark)
     {
-        return Run(mark, DefaultLeftMargin, DefaultRightMargin, DefaultBottomMargin, DefaultTopMargin);
+        return Run(
+            mark,
+            DefaultLeftMargin,
+            DefaultRightMargin,
+            DefaultBottomMargin,
+            DefaultTopMargin
+        );
     }
 
-    public static bool Run(string mark, double leftMargin, double rightMargin, double bottomMargin, double topMargin)
+    public static bool Run(
+        string mark,
+        double leftMargin,
+        double rightMargin,
+        double bottomMargin,
+        double topMargin
+    )
     {
         DrawingHandler dh = new DrawingHandler();
-        if (!dh.GetConnectionStatus()) return false;
+        if (!dh.GetConnectionStatus())
+            return false;
 
         Drawing drawing = dh.GetActiveDrawing();
-        if (drawing == null) return false;
+        if (drawing == null)
+            return false;
 
         return Run(drawing, mark, leftMargin, rightMargin, bottomMargin, topMargin);
     }
 
     public static bool Run(Drawing drawing, string mark)
     {
-        return Run(drawing, mark, DefaultLeftMargin, DefaultRightMargin, DefaultBottomMargin, DefaultTopMargin);
+        return Run(
+            drawing,
+            mark,
+            DefaultLeftMargin,
+            DefaultRightMargin,
+            DefaultBottomMargin,
+            DefaultTopMargin
+        );
     }
 
-    public static bool Run(Drawing drawing, string mark, double leftMargin, double rightMargin, double bottomMargin, double topMargin)
+    public static bool Run(
+        Drawing drawing,
+        string mark,
+        double leftMargin,
+        double rightMargin,
+        double bottomMargin,
+        double topMargin
+    )
     {
-        if (drawing == null) return false;
+        if (drawing == null)
+            return false;
 
         ContainerView sheet = drawing.GetSheet();
-        if (sheet == null) return false;
+        if (sheet == null)
+            return false;
 
         // Tìm khung trong trước khi vẽ X. Sau khi xóa view, title/frame vẫn còn nên vẫn quét được.
-        double paperW, paperH;
+        double paperW,
+            paperH;
         GetPaperSize(drawing, sheet, out paperW, out paperH);
 
         UsableRect rect;
@@ -124,7 +159,6 @@ public static class PHU_AllPartsDeletedMarker
         public double Top;
     }
 
-
     private static double GetTextAboveCenterByPaperSize(double paperW, double paperH)
     {
         // A3 420 x 297: giữ nguyên vị trí đã chạy ổn.
@@ -139,7 +173,11 @@ public static class PHU_AllPartsDeletedMarker
         return TextAboveCenter;
     }
 
-    private static bool TryGetReservedRectByPaperSize(double paperW, double paperH, out UsableRect rect)
+    private static bool TryGetReservedRectByPaperSize(
+        double paperW,
+        double paperH,
+        out UsableRect rect
+    )
     {
         rect = null;
 
@@ -178,7 +216,8 @@ public static class PHU_AllPartsDeletedMarker
         double leftReserve,
         double rightReserve,
         double bottomReserve,
-        double topReserve)
+        double topReserve
+    )
     {
         UsableRect rect = new UsableRect();
         rect.Left = leftReserve;
@@ -188,7 +227,6 @@ public static class PHU_AllPartsDeletedMarker
         return rect;
     }
 
-
     private static void DeleteAllViews(ContainerView sheet)
     {
         DrawingObjectEnumerator e = sheet.GetAllObjects(typeof(View));
@@ -197,22 +235,32 @@ public static class PHU_AllPartsDeletedMarker
         while (e.MoveNext())
         {
             View v = e.Current as View;
-            if (v != null) views.Add(v);
+            if (v != null)
+                views.Add(v);
         }
 
         foreach (View v in views)
         {
-            try { v.Delete(); }
+            try
+            {
+                v.Delete();
+            }
             catch { }
         }
     }
 
     private static void DeleteAllSheetLinesAndTexts(ContainerView sheet)
     {
-        try { DeleteAllSheetObjects(sheet, typeof(Tekla.Structures.Drawing.Line)); }
+        try
+        {
+            DeleteAllSheetObjects(sheet, typeof(Tekla.Structures.Drawing.Line));
+        }
         catch { }
 
-        try { DeleteAllSheetObjects(sheet, typeof(Text)); }
+        try
+        {
+            DeleteAllSheetObjects(sheet, typeof(Text));
+        }
         catch { }
     }
 
@@ -224,25 +272,36 @@ public static class PHU_AllPartsDeletedMarker
         while (e.MoveNext())
         {
             DrawingObject drawingObject = e.Current as DrawingObject;
-            if (drawingObject != null) objects.Add(drawingObject);
+            if (drawingObject != null)
+                objects.Add(drawingObject);
         }
 
         foreach (DrawingObject drawingObject in objects)
         {
-            try { drawingObject.Delete(); }
+            try
+            {
+                drawingObject.Delete();
+            }
             catch { }
         }
     }
 
     private static void InsertRedDashDotLine(ContainerView sheet, Point a, Point b)
     {
-        Tekla.Structures.Drawing.Line.LineAttributes attr = new Tekla.Structures.Drawing.Line.LineAttributes();
+        Tekla.Structures.Drawing.Line.LineAttributes attr =
+            new Tekla.Structures.Drawing.Line.LineAttributes();
 
         // Ép đúng cấu hình line theo yêu cầu:
         // Color = Red, Line type/style = giá trị 4, Arrow position = None.
         ApplyDeletedLineAttributes(attr);
 
-        Tekla.Structures.Drawing.Line line = new Tekla.Structures.Drawing.Line(sheet, a, b, 0.0, attr);
+        Tekla.Structures.Drawing.Line line = new Tekla.Structures.Drawing.Line(
+            sheet,
+            a,
+            b,
+            0.0,
+            attr
+        );
         line.Insert();
 
         // Một số môi trường Tekla không ăn LineType nếu chỉ set trước Insert,
@@ -253,9 +312,7 @@ public static class PHU_AllPartsDeletedMarker
             ApplyDeletedLineAttributes(insertedAttr);
             line.Modify();
         }
-        catch
-        {
-        }
+        catch { }
     }
 
     private static void ApplyDeletedLineAttributes(object attr)
@@ -307,13 +364,17 @@ public static class PHU_AllPartsDeletedMarker
 
     private static void SetLineTypePropTo3OrXkit(object target, string propName)
     {
-        if (target == null) return;
+        if (target == null)
+            return;
 
         try
         {
-            PropertyInfo p = target.GetType().GetProperty(
-                propName,
-                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            PropertyInfo p = target
+                .GetType()
+                .GetProperty(
+                    propName,
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                );
 
             if (p == null || !p.CanWrite)
                 return;
@@ -323,30 +384,37 @@ public static class PHU_AllPartsDeletedMarker
             if (t.IsEnum)
             {
                 object v = GetEnumValueByNameOrNumber(t, "XKITLINE04", 4);
-                if (v != null) p.SetValue(target, v, null);
+                if (v != null)
+                    p.SetValue(target, v, null);
                 return;
             }
 
             // Nếu Type là class LineTypes/NormalLineType, thử lấy object hiện tại rồi ép field bên trong.
             object current = null;
-            try { current = p.GetValue(target, null); } catch { }
+            try
+            {
+                current = p.GetValue(target, null);
+            }
+            catch { }
             if (current != null)
                 SetLineTypeFieldTo3OrXkit(current, "_LineType");
         }
-        catch
-        {
-        }
+        catch { }
     }
 
     private static void SetLineTypeFieldTo3OrXkit(object target, string fieldName)
     {
-        if (target == null) return;
+        if (target == null)
+            return;
 
         try
         {
-            FieldInfo f = target.GetType().GetField(
-                fieldName,
-                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            FieldInfo f = target
+                .GetType()
+                .GetField(
+                    fieldName,
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                );
 
             if (f == null)
                 return;
@@ -356,23 +424,30 @@ public static class PHU_AllPartsDeletedMarker
             if (t.IsEnum)
             {
                 object v = GetEnumValueByNameOrNumber(t, "XKITLINE04", 4);
-                if (v != null) f.SetValue(target, v);
+                if (v != null)
+                    f.SetValue(target, v);
                 return;
             }
 
             // Có trường hợp field type là wrapper class Tekla.Structures.Drawing.LineTypes.
             // Khi đó field hiện tại thường là NormalLineType, ta ép sâu field _LineType của object hiện tại.
             object current = null;
-            try { current = f.GetValue(target); } catch { }
+            try
+            {
+                current = f.GetValue(target);
+            }
+            catch { }
             if (current != null && !object.ReferenceEquals(current, target))
                 SetLineTypeFieldTo3OrXkit(current, "_LineType");
         }
-        catch
-        {
-        }
+        catch { }
     }
 
-    private static object GetEnumValueByNameOrNumber(Type enumType, string preferredName, int number)
+    private static object GetEnumValueByNameOrNumber(
+        Type enumType,
+        string preferredName,
+        int number
+    )
     {
         if (enumType == null || !enumType.IsEnum)
             return null;
@@ -385,22 +460,20 @@ public static class PHU_AllPartsDeletedMarker
                     return Enum.Parse(enumType, name);
             }
         }
-        catch
-        {
-        }
+        catch { }
 
         try
         {
             foreach (string name in Enum.GetNames(enumType))
             {
-                if (name.IndexOf("XKITLINE04", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    name.IndexOf("LINE04", StringComparison.OrdinalIgnoreCase) >= 0)
+                if (
+                    name.IndexOf("XKITLINE04", StringComparison.OrdinalIgnoreCase) >= 0
+                    || name.IndexOf("LINE04", StringComparison.OrdinalIgnoreCase) >= 0
+                )
                     return Enum.Parse(enumType, name);
             }
         }
-        catch
-        {
-        }
+        catch { }
 
         try
         {
@@ -414,31 +487,37 @@ public static class PHU_AllPartsDeletedMarker
 
     private static void SetStringField(object target, string fieldName, string value)
     {
-        if (target == null) return;
+        if (target == null)
+            return;
 
         try
         {
-            FieldInfo f = target.GetType().GetField(
-                fieldName,
-                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            FieldInfo f = target
+                .GetType()
+                .GetField(
+                    fieldName,
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                );
 
             if (f != null && f.FieldType == typeof(string))
                 f.SetValue(target, value);
         }
-        catch
-        {
-        }
+        catch { }
     }
 
     private static void SetEnumField(object target, string fieldName, string enumName)
     {
-        if (target == null) return;
+        if (target == null)
+            return;
 
         try
         {
-            FieldInfo f = target.GetType().GetField(
-                fieldName,
-                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            FieldInfo f = target
+                .GetType()
+                .GetField(
+                    fieldName,
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                );
 
             if (f == null)
                 return;
@@ -449,20 +528,25 @@ public static class PHU_AllPartsDeletedMarker
 
             foreach (string n in Enum.GetNames(t))
             {
-                if (string.Equals(n, enumName, StringComparison.OrdinalIgnoreCase) ||
-                    n.IndexOf(enumName, StringComparison.OrdinalIgnoreCase) >= 0)
+                if (
+                    string.Equals(n, enumName, StringComparison.OrdinalIgnoreCase)
+                    || n.IndexOf(enumName, StringComparison.OrdinalIgnoreCase) >= 0
+                )
                 {
                     f.SetValue(target, Enum.Parse(t, n));
                     return;
                 }
             }
         }
-        catch
-        {
-        }
+        catch { }
     }
 
-    private static void InsertMarkText(ContainerView sheet, Point p, string markText, bool isAssembly)
+    private static void InsertMarkText(
+        ContainerView sheet,
+        Point p,
+        string markText,
+        bool isAssembly
+    )
     {
         Text.TextAttributes attr = new Text.TextAttributes();
 
@@ -487,7 +571,12 @@ public static class PHU_AllPartsDeletedMarker
         t.Insert();
     }
 
-    private static bool TryFindInnerFrameRect(ContainerView sheet, double paperW, double paperH, out UsableRect rect)
+    private static bool TryFindInnerFrameRect(
+        ContainerView sheet,
+        double paperW,
+        double paperH,
+        out UsableRect rect
+    )
     {
         rect = null;
 
@@ -500,10 +589,13 @@ public static class PHU_AllPartsDeletedMarker
             while (e.MoveNext())
             {
                 Tekla.Structures.Drawing.Line ln = e.Current as Tekla.Structures.Drawing.Line;
-                if (ln == null) continue;
+                if (ln == null)
+                    continue;
 
-                Point a, b;
-                if (!TryGetLinePoints(ln, out a, out b)) continue;
+                Point a,
+                    b;
+                if (!TryGetLinePoints(ln, out a, out b))
+                    continue;
 
                 bool vertical = Math.Abs(a.X - b.X) < 0.5 && Math.Abs(a.Y - b.Y) > 20.0;
                 bool horizontal = Math.Abs(a.Y - b.Y) < 0.5 && Math.Abs(a.X - b.X) > 20.0;
@@ -511,16 +603,19 @@ public static class PHU_AllPartsDeletedMarker
                 if (vertical)
                 {
                     double x = (a.X + b.X) / 2.0;
-                    if (x > 0.5 && x < paperW - 0.5) AddUniqueNear(xs, x, 1.0);
+                    if (x > 0.5 && x < paperW - 0.5)
+                        AddUniqueNear(xs, x, 1.0);
                 }
                 else if (horizontal)
                 {
                     double y = (a.Y + b.Y) / 2.0;
-                    if (y > 0.5 && y < paperH - 0.5) AddUniqueNear(ys, y, 1.0);
+                    if (y > 0.5 && y < paperH - 0.5)
+                        AddUniqueNear(ys, y, 1.0);
                 }
             }
 
-            if (xs.Count < 2 || ys.Count < 2) return false;
+            if (xs.Count < 2 || ys.Count < 2)
+                return false;
 
             xs.Sort();
             ys.Sort();
@@ -531,8 +626,10 @@ public static class PHU_AllPartsDeletedMarker
             double top = ys[ys.Count - 1];
 
             // Chỉ nhận nếu khung tìm được đủ lớn, tránh bắt nhầm title block nhỏ.
-            if ((right - left) < paperW * 0.60) return false;
-            if ((top - bottom) < paperH * 0.60) return false;
+            if ((right - left) < paperW * 0.60)
+                return false;
+            if ((top - bottom) < paperH * 0.60)
+                return false;
 
             rect = new UsableRect();
             rect.Left = left;
@@ -551,12 +648,17 @@ public static class PHU_AllPartsDeletedMarker
     {
         for (int i = 0; i < values.Count; i++)
         {
-            if (Math.Abs(values[i] - value) <= tol) return;
+            if (Math.Abs(values[i] - value) <= tol)
+                return;
         }
         values.Add(value);
     }
 
-    private static bool TryGetLinePoints(Tekla.Structures.Drawing.Line line, out Point a, out Point b)
+    private static bool TryGetLinePoints(
+        Tekla.Structures.Drawing.Line line,
+        out Point a,
+        out Point b
+    )
     {
         a = null;
         b = null;
@@ -570,26 +672,46 @@ public static class PHU_AllPartsDeletedMarker
             object bv = GetProp(line, bNames[i]);
             a = av as Point;
             b = bv as Point;
-            if (a != null && b != null) return true;
+            if (a != null && b != null)
+                return true;
         }
 
         return false;
     }
 
-    private static void GetPaperSize(Drawing drawing, ContainerView sheet, out double width, out double height)
+    private static void GetPaperSize(
+        Drawing drawing,
+        ContainerView sheet,
+        out double width,
+        out double height
+    )
     {
         width = 420.0;
         height = 297.0;
 
-        object[] sources = new object[] { drawing, sheet, GetProp(drawing, "Layout"), GetProp(drawing, "DrawingAttributes"), GetProp(drawing, "Attributes") };
+        object[] sources = new object[]
+        {
+            drawing,
+            sheet,
+            GetProp(drawing, "Layout"),
+            GetProp(drawing, "DrawingAttributes"),
+            GetProp(drawing, "Attributes")
+        };
         string[] wNames = new string[] { "Width", "PaperWidth", "SheetWidth", "DrawingWidth" };
         string[] hNames = new string[] { "Height", "PaperHeight", "SheetHeight", "DrawingHeight" };
 
         foreach (object s in sources)
         {
-            if (s == null) continue;
-            double w, h;
-            if (TryReadDoubleAny(s, wNames, out w) && TryReadDoubleAny(s, hNames, out h) && w > 50 && h > 50)
+            if (s == null)
+                continue;
+            double w,
+                h;
+            if (
+                TryReadDoubleAny(s, wNames, out w)
+                && TryReadDoubleAny(s, hNames, out h)
+                && w > 50
+                && h > 50
+            )
             {
                 width = w;
                 height = h;
@@ -597,11 +719,33 @@ public static class PHU_AllPartsDeletedMarker
             }
         }
 
-        string paperName = Convert.ToString(GetProp(GetProp(drawing, "Layout"), "Name") ?? "").ToUpperInvariant();
-        if (paperName.Contains("A1")) { width = 841; height = 594; return; }
-        if (paperName.Contains("A2")) { width = 594; height = 420; return; }
-        if (paperName.Contains("A3")) { width = 420; height = 297; return; }
-        if (paperName.Contains("A4")) { width = 297; height = 210; return; }
+        string paperName = Convert
+            .ToString(GetProp(GetProp(drawing, "Layout"), "Name") ?? "")
+            .ToUpperInvariant();
+        if (paperName.Contains("A1"))
+        {
+            width = 841;
+            height = 594;
+            return;
+        }
+        if (paperName.Contains("A2"))
+        {
+            width = 594;
+            height = 420;
+            return;
+        }
+        if (paperName.Contains("A3"))
+        {
+            width = 420;
+            height = 297;
+            return;
+        }
+        if (paperName.Contains("A4"))
+        {
+            width = 297;
+            height = 210;
+            return;
+        }
     }
 
     private static string CleanMarkText(string mark)
@@ -627,12 +771,15 @@ public static class PHU_AllPartsDeletedMarker
 
         try
         {
-            MethodInfo m = target.GetType().GetMethod(
-                "LoadAttributes",
-                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
-                null,
-                new Type[] { typeof(string) },
-                null);
+            MethodInfo m = target
+                .GetType()
+                .GetMethod(
+                    "LoadAttributes",
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
+                    null,
+                    new Type[] { typeof(string) },
+                    null
+                );
 
             if (m != null)
             {
@@ -640,33 +787,46 @@ public static class PHU_AllPartsDeletedMarker
                 return;
             }
         }
-        catch
-        {
-        }
+        catch { }
 
         try
         {
-            MethodInfo m = target.GetType().GetMethod(
-                "Load",
-                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
-                null,
-                new Type[] { typeof(string) },
-                null);
+            MethodInfo m = target
+                .GetType()
+                .GetMethod(
+                    "Load",
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
+                    null,
+                    new Type[] { typeof(string) },
+                    null
+                );
 
             if (m != null)
                 m.Invoke(target, new object[] { attributeName });
         }
-        catch
-        {
-        }
+        catch { }
     }
 
     private static object GetProp(object target, string name)
     {
-        if (target == null) return null;
-        PropertyInfo p = target.GetType().GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-        if (p == null || !p.CanRead) return null;
-        try { return p.GetValue(target, null); } catch { return null; }
+        if (target == null)
+            return null;
+        PropertyInfo p = target
+            .GetType()
+            .GetProperty(
+                name,
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+            );
+        if (p == null || !p.CanRead)
+            return null;
+        try
+        {
+            return p.GetValue(target, null);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static bool TryReadDoubleAny(object target, string[] names, out double value)
@@ -675,7 +835,8 @@ public static class PHU_AllPartsDeletedMarker
         foreach (string n in names)
         {
             object v = GetProp(target, n);
-            if (v == null) continue;
+            if (v == null)
+                continue;
             try
             {
                 value = Convert.ToDouble(v);
@@ -703,9 +864,16 @@ public static class PHU_AllPartsDeletedMarker
 
     private static void SetEnumProp(object target, string name, string enumName)
     {
-        if (target == null) return;
-        PropertyInfo p = target.GetType().GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-        if (p == null || !p.CanWrite) return;
+        if (target == null)
+            return;
+        PropertyInfo p = target
+            .GetType()
+            .GetProperty(
+                name,
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+            );
+        if (p == null || !p.CanWrite)
+            return;
 
         try
         {
@@ -714,8 +882,10 @@ public static class PHU_AllPartsDeletedMarker
             {
                 foreach (string n in Enum.GetNames(t))
                 {
-                    if (string.Equals(n, enumName, StringComparison.OrdinalIgnoreCase) ||
-                        n.IndexOf(enumName, StringComparison.OrdinalIgnoreCase) >= 0)
+                    if (
+                        string.Equals(n, enumName, StringComparison.OrdinalIgnoreCase)
+                        || n.IndexOf(enumName, StringComparison.OrdinalIgnoreCase) >= 0
+                    )
                     {
                         p.SetValue(target, Enum.Parse(t, n), null);
                         return;
@@ -728,9 +898,16 @@ public static class PHU_AllPartsDeletedMarker
 
     private static void SetIntOrEnumProp(object target, string name, int value)
     {
-        if (target == null) return;
-        PropertyInfo p = target.GetType().GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-        if (p == null || !p.CanWrite) return;
+        if (target == null)
+            return;
+        PropertyInfo p = target
+            .GetType()
+            .GetProperty(
+                name,
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+            );
+        if (p == null || !p.CanWrite)
+            return;
 
         try
         {
@@ -754,14 +931,22 @@ public static class PHU_AllPartsDeletedMarker
 
     private static void SetProp(object target, string name, object value)
     {
-        if (target == null || value == null) return;
-        PropertyInfo p = target.GetType().GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-        if (p == null || !p.CanWrite) return;
+        if (target == null || value == null)
+            return;
+        PropertyInfo p = target
+            .GetType()
+            .GetProperty(
+                name,
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+            );
+        if (p == null || !p.CanWrite)
+            return;
         try
         {
             object v = value;
             Type t = Nullable.GetUnderlyingType(p.PropertyType) ?? p.PropertyType;
-            if (t != value.GetType()) v = Convert.ChangeType(value, t);
+            if (t != value.GetType())
+                v = Convert.ChangeType(value, t);
             p.SetValue(target, v, null);
         }
         catch { }

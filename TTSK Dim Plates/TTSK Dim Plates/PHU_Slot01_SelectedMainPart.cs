@@ -28,6 +28,7 @@ namespace Tekla.Technology.Akit.UserScript
         }
     }
 }
+
 namespace Tekla.Technology.Akit.UserScript
 {
     using System;
@@ -46,17 +47,19 @@ namespace Tekla.Technology.Akit.UserScript
     using DrawingPart = Tekla.Structures.Drawing.Part;
     using ModelBoltGroup = Tekla.Structures.Model.BoltGroup;
 
-
     public static class PHU_UnifiedDimRuntime
     {
+        private sealed class ViewTierState
+        {
+            public readonly int[] Tiers = new int[] { 0, 0, 0, 0 };
+            public double TierBase = 150.0;
+            public double TierStep = 150.0;
+        }
+
         private static bool _active = false;
         private static string _currentViewKey = "__GLOBAL__";
-        private static Dictionary<string, int[]> _tiersByView = new Dictionary<string, int[]>();
-        // Giữ đúng nền tầng Shape hiện có.
-        private const double STEEL_DIM_TIER_0 = 150.0;
-        private const double STEEL_DIM_TIER_STEP = 150.0;
-        private const double SHORT_BEAM_DIM_SCALE_LIMIT = 2000.0;
-        private const double SHORT_BEAM_DIM_SCALE = 1.0 / 2.0;
+        private static Dictionary<string, ViewTierState> _tiersByView =
+            new Dictionary<string, ViewTierState>();
 
         public static bool IsActive
         {
@@ -81,8 +84,14 @@ namespace Tekla.Technology.Akit.UserScript
         // Lý do: TOP/BOTTOM/LEFT/RIGHT của Front view không được bị Plate ở Top/Bottom view đẩy tầng.
         public static void SetCurrentView(TSD.View view)
         {
+            SetCurrentView(view, null);
+        }
+
+        public static void SetCurrentView(TSD.View view, ModelPart shapePart)
+        {
             _currentViewKey = GetViewKey(view);
-            EnsureCurrentView();
+            ViewTierState state = EnsureCurrentView();
+            ResolveShapeTierSpacing(view, shapePart, state);
         }
 
         private static string GetViewKey(TSD.View view)
@@ -98,11 +107,12 @@ namespace Tekla.Technology.Akit.UserScript
             try
             {
                 if (view.Origin != null)
-                    originText = Math.Round(view.Origin.X, 3).ToString() + ":" + Math.Round(view.Origin.Y, 3).ToString();
+                    originText =
+                        Math.Round(view.Origin.X, 3).ToString()
+                        + ":"
+                        + Math.Round(view.Origin.Y, 3).ToString();
             }
-            catch
-            {
-            }
+            catch { }
 
             string nameText = "";
             try
@@ -110,9 +120,7 @@ namespace Tekla.Technology.Akit.UserScript
                 if (!string.IsNullOrEmpty(view.Name))
                     nameText = view.Name.Trim();
             }
-            catch
-            {
-            }
+            catch { }
 
             string key = idText + "|" + nameText + "|" + originText;
             if (string.IsNullOrEmpty(key.Trim('|', ' ')))
@@ -121,63 +129,258 @@ namespace Tekla.Technology.Akit.UserScript
             return key;
         }
 
-        private static int[] EnsureCurrentView()
+        private static ViewTierState EnsureCurrentView()
         {
             string key = string.IsNullOrEmpty(_currentViewKey) ? "__GLOBAL__" : _currentViewKey;
 
-            int[] tiers;
-            if (!_tiersByView.TryGetValue(key, out tiers) || tiers == null || tiers.Length < 4)
+            ViewTierState state;
+            if (!_tiersByView.TryGetValue(key, out state) || state == null)
             {
-                tiers = new int[] { 0, 0, 0, 0 }; // 0=Top, 1=Bottom, 2=Left, 3=Right
-                _tiersByView[key] = tiers;
+                state = new ViewTierState();
+                _tiersByView[key] = state;
             }
 
-            return tiers;
+            return state;
         }
 
-        private static double GetDimScaleByBeamLength(double beamLength)
+        private static void ResolveShapeTierSpacing(
+            TSD.View view,
+            ModelPart shapePart,
+            ViewTierState state
+        )
         {
-            if (beamLength > 0.0 && beamLength < SHORT_BEAM_DIM_SCALE_LIMIT)
-                return SHORT_BEAM_DIM_SCALE;
+            if (state == null)
+                return;
 
-            return 1.0;
+            // H/I, C, Box và L hiện cùng dùng nhịp tầng theo scale của Shape:
+            // 1:5=50, 1:10=100, 1:15=150, 1:20=200, 1:30=300.
+            // shapePart được truyền vào để contract có thể tách riêng từng family
+            // về sau mà không phải sửa lại flow Plate.
+            double rawScale = TryGetViewScale(view);
+            int scale = 15;
+            if (!double.IsNaN(rawScale) && !double.IsInfinity(rawScale) && rawScale > 0.0)
+            {
+                scale = Convert.ToInt32(Math.Round(rawScale));
+            }
+
+            switch (scale)
+            {
+                case 5:
+                case 10:
+                case 15:
+                case 20:
+                case 30:
+                    state.TierBase = scale * 10.0;
+                    state.TierStep = scale * 10.0;
+                    break;
+                default:
+                    state.TierBase = 150.0;
+                    state.TierStep = 150.0;
+                    break;
+            }
         }
 
-        private static double OffsetByTier(int tier, double beamLength)
+        private static double TryGetViewScale(TSD.View view)
         {
-            double scale = GetDimScaleByBeamLength(beamLength);
-            double baseOffset = STEEL_DIM_TIER_0 * scale;
-            double stepOffset = STEEL_DIM_TIER_STEP * scale;
+            if (view == null)
+                return double.NaN;
 
-            if (tier <= 0)
-                return baseOffset;
+            try
+            {
+                PropertyInfo p = view.GetType()
+                    .GetProperty(
+                        "Scale",
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    );
+                if (p != null && p.CanRead)
+                {
+                    object value = p.GetValue(view, null);
+                    if (value != null)
+                        return Convert.ToDouble(value);
+                }
+            }
+            catch { }
 
-            return baseOffset + tier * stepOffset;
+            try
+            {
+                object attributes = view.Attributes;
+                if (attributes != null)
+                {
+                    PropertyInfo p = attributes
+                        .GetType()
+                        .GetProperty(
+                            "Scale",
+                            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                        );
+                    if (p != null && p.CanRead)
+                    {
+                        object value = p.GetValue(attributes, null);
+                        if (value != null)
+                            return Convert.ToDouble(value);
+                    }
+                }
+            }
+            catch { }
+
+            return double.NaN;
         }
 
-        public static double PeekTop(double beamLength) { return OffsetByTier(EnsureCurrentView()[0], beamLength); }
-        public static double PeekBottom(double beamLength) { return OffsetByTier(EnsureCurrentView()[1], beamLength); }
-        public static double PeekLeft(double beamLength) { return OffsetByTier(EnsureCurrentView()[2], beamLength); }
-        public static double PeekRight(double beamLength) { return OffsetByTier(EnsureCurrentView()[3], beamLength); }
+        private static double OffsetByTier(int tier)
+        {
+            ViewTierState state = EnsureCurrentView();
+            int safeTier = Math.Max(0, tier);
+            double offset = state.TierBase + safeTier * state.TierStep;
 
-        public static void CommitTop() { if (_active) EnsureCurrentView()[0]++; }
-        public static void CommitBottom() { if (_active) EnsureCurrentView()[1]++; }
-        public static void CommitLeft() { if (_active) EnsureCurrentView()[2]++; }
-        public static void CommitRight() { if (_active) EnsureCurrentView()[3]++; }
+            if (double.IsNaN(offset) || double.IsInfinity(offset) || offset <= 0.0)
+                return 150.0 + safeTier * 150.0;
 
-        // Shape chạy sau Plate: trả base độc lập theo từng VIEW + từng hướng.
-        // Mỗi view/hướng luôn bắt đầu từ tầng 0 nếu view/hướng đó chưa có dim chiếm.
-        // Giữ lại để không phá nếu còn chỗ gọi cũ; không dùng cho Shape nữa.
+            return offset;
+        }
+
+        public static double PeekTop(double beamLength)
+        {
+            return OffsetByTier(EnsureCurrentView().Tiers[0]);
+        }
+
+        public static double PeekBottom(double beamLength)
+        {
+            return OffsetByTier(EnsureCurrentView().Tiers[1]);
+        }
+
+        public static double PeekLeft(double beamLength)
+        {
+            return OffsetByTier(EnsureCurrentView().Tiers[2]);
+        }
+
+        public static double PeekRight(double beamLength)
+        {
+            return OffsetByTier(EnsureCurrentView().Tiers[3]);
+        }
+
+        public static double PeekTop(double beamLength, int relativeTier)
+        {
+            return OffsetByTier(EnsureCurrentView().Tiers[0] + Math.Max(0, relativeTier));
+        }
+
+        public static double PeekBottom(double beamLength, int relativeTier)
+        {
+            return OffsetByTier(EnsureCurrentView().Tiers[1] + Math.Max(0, relativeTier));
+        }
+
+        public static double PeekLeft(double beamLength, int relativeTier)
+        {
+            return OffsetByTier(EnsureCurrentView().Tiers[2] + Math.Max(0, relativeTier));
+        }
+
+        public static double PeekRight(double beamLength, int relativeTier)
+        {
+            return OffsetByTier(EnsureCurrentView().Tiers[3] + Math.Max(0, relativeTier));
+        }
+
+        public static void CommitTop()
+        {
+            if (_active)
+                EnsureCurrentView().Tiers[0]++;
+        }
+
+        public static void CommitBottom()
+        {
+            if (_active)
+                EnsureCurrentView().Tiers[1]++;
+        }
+
+        public static void CommitLeft()
+        {
+            if (_active)
+                EnsureCurrentView().Tiers[2]++;
+        }
+
+        public static void CommitRight()
+        {
+            if (_active)
+                EnsureCurrentView().Tiers[3]++;
+        }
+
+        // Contract tầng độc lập theo từng VIEW + từng hướng. Plate nội bộ chiếm
+        // một tier chung theo phía; chain dầm lấy tier kế tiếp của chính view đó.
     }
 
     // Slot 02 cho MainForm:
     // Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot02.Run()
     public class PHU_PlateShapeInternal
     {
+        private sealed class PlateDimSnapshot
+        {
+            public List<Point> Polygon;
+            public List<Point> Holes;
+            public double MinX;
+            public double MaxX;
+            public double MinY;
+            public double MaxY;
+            public bool HasHolesOnBothBeamSides;
+        }
+
+        /// <summary>
+        /// Slot01 legacy tinh toan tren he truc noi bo co main nam ngang.
+        /// Khi main dung, adapter chi doi X/Y trong buoc analyze va doi nguoc
+        /// chan dim/huong dim ve toa do view ngay truoc khi ghi Drawing API.
+        /// </summary>
+        private sealed class Slot01AxisAdapter
+        {
+            public readonly bool Transpose;
+
+            public Slot01AxisAdapter(bool transpose)
+            {
+                Transpose = transpose;
+            }
+
+            public Point ToLocal(Point point)
+            {
+                if (point == null)
+                    return null;
+
+                return Transpose
+                    ? new Point(point.Y, point.X, point.Z)
+                    : new Point(point.X, point.Y, point.Z);
+            }
+
+            public Point ToView(Point point)
+            {
+                // Phep doi X/Y la nghich dao cua chinh no.
+                return ToLocal(point);
+            }
+
+            public Vector ToView(Vector vector)
+            {
+                if (vector == null)
+                    return null;
+
+                return Transpose
+                    ? new Vector(vector.Y, vector.X, vector.Z)
+                    : new Vector(vector.X, vector.Y, vector.Z);
+            }
+
+            public List<Point> ToLocal(List<Point> points)
+            {
+                List<Point> result = new List<Point>();
+                if (points == null)
+                    return result;
+
+                for (int i = 0; i < points.Count; i++)
+                {
+                    Point converted = ToLocal(points[i]);
+                    if (converted != null)
+                        result.Add(converted);
+                }
+
+                return result;
+            }
+        }
+
         private const double TOL = 1.0;
 
-        // Tầng DIM độc lập theo từng hướng của plate.
-        // Hướng ngang chưa có dim nào chiếm -> dùng tầng 1 = 100.
+        // Fallback legacy khi RunInternal được gọi ngoài unified flow.
+        // Luồng Slot 01 bình thường lấy base/step theo scale Shape từ runtime.
         private const double PLATE_HORIZONTAL_DIM_TIER_1 = 100.0;
         private const double PLATE_VERTICAL_DIM_TIER_1 = 100.0;
         private const double PLATE_VERTICAL_DIM_TIER_2 = 200.0;
@@ -217,17 +420,21 @@ namespace Tekla.Technology.Akit.UserScript
             }
 
             List<DrawingPart> selectedParts = GetSelectedDrawingParts(dh);
-            if (selectedParts.Count < 2)
+            if (selectedParts.Count < 1)
             {
-                Msg("Slot 02: Hãy chọn ít nhất 2 part trong drawing: 1 dầm/thép hình + 1 hoặc nhiều plate.");
+                Msg("Slot 01: Hãy chọn 1 hoặc nhiều plate liên quan.");
                 return;
             }
 
             List<ModelPart> plates = new List<ModelPart>();
             List<DrawingPart> plateDrawingParts = new List<DrawingPart>();
-            ModelPart beam = null;
-            DrawingPart beamDrawingPart = null;
-            int beamCount = 0;
+            ModelPart beam = PHU_MainPartResolver.Resolve(model, drawing);
+
+            if (beam == null || beam.Identifier == null)
+            {
+                Msg("Slot 01: Không xác định được Main Part từ bản vẽ đang mở.");
+                return;
+            }
 
             for (int i = 0; i < selectedParts.Count; i++)
             {
@@ -242,74 +449,116 @@ namespace Tekla.Technology.Akit.UserScript
                     plates.Add(mp);
                     plateDrawingParts.Add(dp);
                 }
-                else
-                {
-                    beam = mp;
-                    beamDrawingPart = dp;
-                    beamCount++;
-                }
             }
 
-            if (beamCount != 1 || beam == null || plates.Count == 0)
+            if (plates.Count == 0)
             {
-                Msg("Slot 02: Hãy chọn đúng 1 dầm/thép hình và 1 hoặc nhiều plate.");
+                Msg("Slot 01: Không nhận diện được plate trong selection.");
                 return;
             }
 
-            // Ưu tiên đúng view mà user đang click chọn các part.
+            // Main authoritative khong can duoc pick. Uu tien view cua plate
+            // ma user chon, nhung chi dung view do khi main that su hien dien.
             TSD.View view = null;
             if (plateDrawingParts.Count > 0)
-                view = TryGetSelectedPartsView(plateDrawingParts[0], beamDrawingPart);
+                view = TryGetDrawingObjectView(plateDrawingParts[0]);
+
+            if (view != null && !ViewContainsPart(view, beam.Identifier))
+                view = null;
 
             if (view == null)
                 view = FindViewContainingBothParts(drawing, plates[0].Identifier, beam.Identifier);
 
             if (view == null)
             {
-                Msg("Slot 02: Không tìm thấy view chứa đồng thời plate và dầm đã chọn.");
+                Msg("Slot 01: Không tìm thấy view chứa đồng thời plate đã chọn và Main Part.");
                 return;
             }
 
             int created = CreatePlatesToBeamDims(model, view, plates, beam);
 
-            try { drawing.CommitChanges(); } catch { }
+            try
+            {
+                drawing.CommitChanges();
+            }
+            catch { }
 
-            Msg("Slot 02 DONE. DIM đã tạo: " + created.ToString());
+            Msg("Slot 01 DONE. DIM đã tạo: " + created.ToString());
         }
-
 
         private static int CreatePlatesToBeamDims(
             TSM.Model model,
             TSD.View view,
             List<ModelPart> plates,
-            ModelPart beam)
+            ModelPart beam
+        )
         {
             int count = 0;
 
             if (plates == null || plates.Count == 0 || beam == null)
                 return count;
 
-            TSM.TransformationPlane oldPlane =
-                model.GetWorkPlaneHandler().GetCurrentTransformationPlane();
+            TSM.TransformationPlane oldPlane = model
+                .GetWorkPlaneHandler()
+                .GetCurrentTransformationPlane();
 
             try
             {
-                try { if (PHU_UnifiedDimRuntime.IsActive) PHU_UnifiedDimRuntime.SetCurrentView(view); } catch { }
-                model.GetWorkPlaneHandler().SetCurrentTransformationPlane(
-                    new TSM.TransformationPlane(view.DisplayCoordinateSystem));
+                try
+                {
+                    if (PHU_UnifiedDimRuntime.IsActive)
+                        PHU_UnifiedDimRuntime.SetCurrentView(view, beam);
+                }
+                catch { }
+                model
+                    .GetWorkPlaneHandler()
+                    .SetCurrentTransformationPlane(
+                        new TSM.TransformationPlane(view.DisplayCoordinateSystem)
+                    );
 
                 Solid beamSolid = beam.GetSolid();
                 Point beamMin = beamSolid.MinimumPoint;
                 Point beamMax = beamSolid.MaximumPoint;
-                List<Point> beamPolygon = GetFrontSectionPolygon(beamSolid, beamMin, beamMax);
+                List<Point> beamPolygonInView = GetFrontSectionPolygon(beamSolid, beamMin, beamMax);
 
-                double beamMinX = Math.Min(beamMin.X, beamMax.X);
-                double beamMaxX = Math.Max(beamMin.X, beamMax.X);
-                double beamMinY = Math.Min(beamMin.Y, beamMax.Y);
-                double beamMaxY = Math.Max(beamMin.Y, beamMax.Y);
+                double beamMinXInView = Math.Min(beamMin.X, beamMax.X);
+                double beamMaxXInView = Math.Max(beamMin.X, beamMax.X);
+                double beamMinYInView = Math.Min(beamMin.Y, beamMax.Y);
+                double beamMaxYInView = Math.Max(beamMin.Y, beamMax.Y);
+
+                if (beamPolygonInView != null && beamPolygonInView.Count >= 2)
+                {
+                    GetMinMax2D(
+                        beamPolygonInView,
+                        out beamMinXInView,
+                        out beamMaxXInView,
+                        out beamMinYInView,
+                        out beamMaxYInView
+                    );
+                }
+
+                double beamWidthInView = Math.Abs(beamMaxXInView - beamMinXInView);
+                double beamHeightInView = Math.Abs(beamMaxYInView - beamMinYInView);
+                bool mainIsVertical = beamHeightInView > beamWidthInView * 1.20;
+                Slot01AxisAdapter axes = new Slot01AxisAdapter(mainIsVertical);
+
+                List<Point> beamPolygon = axes.ToLocal(beamPolygonInView);
+                Point localBeamMin = axes.ToLocal(beamMin);
+                Point localBeamMax = axes.ToLocal(beamMax);
+
+                double beamMinX = Math.Min(localBeamMin.X, localBeamMax.X);
+                double beamMaxX = Math.Max(localBeamMin.X, localBeamMax.X);
+                double beamMinY = Math.Min(localBeamMin.Y, localBeamMax.Y);
+                double beamMaxY = Math.Max(localBeamMin.Y, localBeamMax.Y);
 
                 if (beamPolygon != null && beamPolygon.Count >= 2)
-                    GetMinMax2D(beamPolygon, out beamMinX, out beamMaxX, out beamMinY, out beamMaxY);
+                    GetMinMax2D(
+                        beamPolygon,
+                        out beamMinX,
+                        out beamMaxX,
+                        out beamMinY,
+                        out beamMaxY
+                    );
 
                 double beamCenterY = (beamMinY + beamMaxY) / 2.0;
                 double unifiedBeamLength = Math.Abs(beamMaxX - beamMinX);
@@ -319,9 +568,131 @@ namespace Tekla.Technology.Akit.UserScript
                 List<Point> allPlateHolesForBeamDim = new List<Point>();
                 List<Point> topNoHolePlateEdgesForBeamChain = new List<Point>();
                 List<Point> bottomNoHolePlateEdgesForBeamChain = new List<Point>();
+                List<PlateDimSnapshot> plateSnapshots = new List<PlateDimSnapshot>();
 
                 double allPlateMinY = 999999999.0;
                 double allPlateMaxY = -999999999.0;
+                double topHolePlateOuterY = -999999999.0;
+                double bottomHolePlateOuterY = 999999999.0;
+
+                // ANALYZE trước, APPLY sau: đọc hình học mỗi plate đúng một lần.
+                // Đồng thời chốt biên chung theo từng phía để mọi dim nội bộ
+                // cùng phía dùng đúng một tọa độ đường dim tuyệt đối.
+                for (int pIndex = 0; pIndex < plates.Count; pIndex++)
+                {
+                    ModelPart plate = plates[pIndex];
+                    if (plate == null)
+                        continue;
+
+                    Solid plateSolid = plate.GetSolid();
+                    Point plateMin = plateSolid.MinimumPoint;
+                    Point plateMax = plateSolid.MaximumPoint;
+                    List<Point> platePolygonInView = GetFrontSectionPolygon(
+                        plateSolid,
+                        plateMin,
+                        plateMax
+                    );
+
+                    double plateMinXInView = Math.Min(plateMin.X, plateMax.X);
+                    double plateMaxXInView = Math.Max(plateMin.X, plateMax.X);
+                    double plateMinYInView = Math.Min(plateMin.Y, plateMax.Y);
+                    double plateMaxYInView = Math.Max(plateMin.Y, plateMax.Y);
+
+                    if (platePolygonInView != null && platePolygonInView.Count >= 2)
+                    {
+                        GetMinMax2D(
+                            platePolygonInView,
+                            out plateMinXInView,
+                            out plateMaxXInView,
+                            out plateMinYInView,
+                            out plateMaxYInView
+                        );
+                    }
+
+                    List<Point> holesInView = GetPlateHoleCentersFromView(
+                        model,
+                        view,
+                        plate,
+                        plateMinXInView,
+                        plateMaxXInView,
+                        plateMinYInView,
+                        plateMaxYInView
+                    );
+
+                    List<Point> platePolygon = axes.ToLocal(platePolygonInView);
+                    List<Point> holes = axes.ToLocal(holesInView);
+                    Point localPlateMin = axes.ToLocal(plateMin);
+                    Point localPlateMax = axes.ToLocal(plateMax);
+
+                    double plateMinX = Math.Min(localPlateMin.X, localPlateMax.X);
+                    double plateMaxX = Math.Max(localPlateMin.X, localPlateMax.X);
+                    double plateMinY = Math.Min(localPlateMin.Y, localPlateMax.Y);
+                    double plateMaxY = Math.Max(localPlateMin.Y, localPlateMax.Y);
+
+                    if (platePolygon != null && platePolygon.Count >= 2)
+                    {
+                        GetMinMax2D(
+                            platePolygon,
+                            out plateMinX,
+                            out plateMaxX,
+                            out plateMinY,
+                            out plateMaxY
+                        );
+                    }
+
+                    if (holes.Count > 1)
+                    {
+                        holes = SelectRepresentativePlateHolesByBeamSide(
+                            holes,
+                            platePolygon,
+                            beamPolygon,
+                            plateMinX,
+                            plateMaxX,
+                            plateMinY,
+                            plateMaxY,
+                            beamMinX,
+                            beamMaxX,
+                            beamMinY,
+                            beamMaxY
+                        );
+                    }
+
+                    PlateDimSnapshot snapshot = new PlateDimSnapshot();
+                    snapshot.Polygon = platePolygon;
+                    snapshot.Holes = holes;
+                    snapshot.MinX = plateMinX;
+                    snapshot.MaxX = plateMaxX;
+                    snapshot.MinY = plateMinY;
+                    snapshot.MaxY = plateMaxY;
+                    snapshot.HasHolesOnBothBeamSides = HasHolesOnBothBeamSides(holes, beamCenterY);
+                    plateSnapshots.Add(snapshot);
+
+                    if (plateMinY < allPlateMinY)
+                        allPlateMinY = plateMinY;
+                    if (plateMaxY > allPlateMaxY)
+                        allPlateMaxY = plateMaxY;
+
+                    for (int hIndex = 0; hIndex < holes.Count; hIndex++)
+                    {
+                        Point hole = holes[hIndex];
+                        if (hole == null)
+                            continue;
+
+                        if (hole.Y >= beamCenterY)
+                        {
+                            if (plateMaxY > topHolePlateOuterY)
+                                topHolePlateOuterY = plateMaxY;
+                        }
+                        else
+                        {
+                            if (plateMinY < bottomHolePlateOuterY)
+                                bottomHolePlateOuterY = plateMinY;
+                        }
+                    }
+                }
+
+                if (plateSnapshots.Count == 0)
+                    return count;
 
                 // UNIFIED V8:
                 // Dim ngang nội bộ của các Plate cùng phía dùng CHUNG 1 tầng.
@@ -334,62 +705,51 @@ namespace Tekla.Technology.Akit.UserScript
                 bool sharedPlateBottomHorizontalTierReady = false;
                 bool sharedPlateTopHorizontalTierUsed = false;
                 bool sharedPlateBottomHorizontalTierUsed = false;
+                double sharedPlateTopHorizontalLineY = double.NaN;
+                double sharedPlateBottomHorizontalLineY = double.NaN;
 
-                for (int pIndex = 0; pIndex < plates.Count; pIndex++)
+                bool sharedPlateLeftVerticalTier1Used = false;
+                bool sharedPlateLeftVerticalTier2Used = false;
+                bool sharedPlateRightVerticalTier1Used = false;
+                bool sharedPlateRightVerticalTier2Used = false;
+
+                for (int pIndex = 0; pIndex < plateSnapshots.Count; pIndex++)
                 {
-                    ModelPart plate = plates[pIndex];
-                    if (plate == null)
+                    PlateDimSnapshot snapshot = plateSnapshots[pIndex];
+                    if (snapshot == null)
                         continue;
 
-                    Solid plateSolid = plate.GetSolid();
-                    Point plateMin = plateSolid.MinimumPoint;
-                    Point plateMax = plateSolid.MaximumPoint;
-
-                    List<Point> platePolygon = GetFrontSectionPolygon(plateSolid, plateMin, plateMax);
-
-                    double plateMinX = Math.Min(plateMin.X, plateMax.X);
-                    double plateMaxX = Math.Max(plateMin.X, plateMax.X);
-                    double plateMinY = Math.Min(plateMin.Y, plateMax.Y);
-                    double plateMaxY = Math.Max(plateMin.Y, plateMax.Y);
-
-                    if (platePolygon != null && platePolygon.Count >= 2)
-                        GetMinMax2D(platePolygon, out plateMinX, out plateMaxX, out plateMinY, out plateMaxY);
-
-                    if (plateMinY < allPlateMinY) allPlateMinY = plateMinY;
-                    if (plateMaxY > allPlateMaxY) allPlateMaxY = plateMaxY;
-
-                    List<Point> holes = GetPlateHoleCentersFromView(
-                        model,
-                        view,
-                        plate,
-                        plateMinX,
-                        plateMaxX,
-                        plateMinY,
-                        plateMaxY);
+                    List<Point> platePolygon = snapshot.Polygon;
+                    List<Point> holes = snapshot.Holes;
+                    double plateMinX = snapshot.MinX;
+                    double plateMaxX = snapshot.MaxX;
+                    double plateMinY = snapshot.MinY;
+                    double plateMaxY = snapshot.MaxY;
 
                     if (holes.Count == 0)
                     {
                         double plateCenterY = (plateMinY + plateMaxY) / 2.0;
-                        Vector horizontalDimDirection = plateCenterY >= beamCenterY
-                            ? new Vector(0, 1, 0)
-                            : new Vector(0, -1, 0);
+                        Vector horizontalDimDirection =
+                            plateCenterY >= beamCenterY
+                                ? new Vector(0, 1, 0)
+                                : new Vector(0, -1, 0);
                         bool preferTopPlateAnchor = horizontalDimDirection.Y >= 0.0;
 
                         Point hLeft = GetRealPlateSideAnchorForHorizontalDim(
                             platePolygon,
                             plateMinX,
                             true,
-                            preferTopPlateAnchor);
+                            preferTopPlateAnchor
+                        );
 
                         Point hRight = GetRealPlateSideAnchorForHorizontalDim(
                             platePolygon,
                             plateMaxX,
                             false,
-                            preferTopPlateAnchor);
+                            preferTopPlateAnchor
+                        );
 
-                        double fallbackHorizontalY = preferTopPlateAnchor
-                            ? plateMaxY
-                            : plateMinY;
+                        double fallbackHorizontalY = preferTopPlateAnchor ? plateMaxY : plateMinY;
 
                         if (hLeft == null)
                             hLeft = new Point(plateMinX, fallbackHorizontalY, 0);
@@ -409,75 +769,62 @@ namespace Tekla.Technology.Akit.UserScript
                             plateMinX,
                             plateMinY,
                             plateMaxY,
-                            beamCenterY);
+                            beamCenterY
+                        );
 
                         if (plateOuterPoint != null)
                         {
-                            Point beamCenterPoint = new Point(
-                                plateOuterPoint.X,
-                                beamCenterY,
-                                0);
+                            Point beamCenterPoint = new Point(plateOuterPoint.X, beamCenterY, 0);
 
                             double verticalTier = PLATE_VERTICAL_DIM_TIER_1;
+                            if (PHU_UnifiedDimRuntime.IsActive)
+                                verticalTier = PeekLocalLeft(axes, unifiedBeamLength, 0);
 
                             double verticalDistance = GetLeftDistanceByFeet(
                                 new Point[] { plateOuterPoint, beamCenterPoint },
                                 plateMinX,
-                                verticalTier);
+                                verticalTier
+                            );
 
-                            if (CreateDimChain(
-                                handler,
-                                view,
-                                new Point[] { plateOuterPoint, beamCenterPoint },
-                                new Vector(-1, 0, 0),
-                                verticalDistance))
+                            if (
+                                CreateDimChain(
+                                    handler,
+                                    view,
+                                    new Point[] { plateOuterPoint, beamCenterPoint },
+                                    new Vector(-1, 0, 0),
+                                    verticalDistance,
+                                    axes
+                                )
+                            )
                             {
                                 count++;
+                                if (PHU_UnifiedDimRuntime.IsActive)
+                                    sharedPlateLeftVerticalTier1Used = true;
                             }
                         }
 
                         continue;
                     }
 
-                    // Plate có đúng 1 lỗ giữ nguyên thuật toán cũ.
-                    // Plate có nhiều lỗ chỉ chọn 1 lỗ đại diện ở phía liên kết với dầm.
-                    if (holes.Count > 1)
-                    {
-                        Point representativeHole = SelectRepresentativePlateHole(
-                            holes,
-                            platePolygon,
-                            beamPolygon,
-                            plateMinX,
-                            plateMaxX,
-                            plateMinY,
-                            plateMaxY,
-                            beamMinX,
-                            beamMaxX,
-                            beamMinY,
-                            beamMaxY);
-
-                        if (representativeHole == null)
-                            representativeHole = holes[0];
-
-                        holes.Clear();
-                        holes.Add(representativeHole);
-                    }
+                    bool combineVerticalTier2 = snapshot.HasHolesOnBothBeamSides;
 
                     foreach (Point hole in holes)
                     {
                         if (hole == null)
                             continue;
 
-                        AddUniquePoint2D(allPlateHolesForBeamDim, new Point(hole.X, hole.Y, 0), UNIQUE_HOLE_TOL);
+                        AddUniquePoint2D(
+                            allPlateHolesForBeamDim,
+                            new Point(hole.X, hole.Y, 0),
+                            UNIQUE_HOLE_TOL
+                        );
 
                         // =========================
                         // PLATE - PHƯƠNG NGANG
                         // GIỮ NGUYÊN thuật toán hiện tại của từng plate.
                         // =========================
                         Vector horizontalDimDirection =
-                            hole.Y >= beamCenterY
-                            ? new Vector(0, 1, 0)
-                            : new Vector(0, -1, 0);
+                            hole.Y >= beamCenterY ? new Vector(0, 1, 0) : new Vector(0, -1, 0);
 
                         bool preferTopPlateAnchor = horizontalDimDirection.Y >= 0.0;
 
@@ -485,13 +832,15 @@ namespace Tekla.Technology.Akit.UserScript
                             platePolygon,
                             plateMinX,
                             true,
-                            preferTopPlateAnchor);
+                            preferTopPlateAnchor
+                        );
 
                         Point hRight = GetRealPlateSideAnchorForHorizontalDim(
                             platePolygon,
                             plateMaxX,
                             false,
-                            preferTopPlateAnchor);
+                            preferTopPlateAnchor
+                        );
 
                         if (hLeft == null)
                             hLeft = new Point(plateMinX, hole.Y, 0);
@@ -509,7 +858,13 @@ namespace Tekla.Technology.Akit.UserScript
                             {
                                 if (!sharedPlateTopHorizontalTierReady)
                                 {
-                                    sharedPlateTopHorizontalTier = PHU_UnifiedDimRuntime.PeekTop(unifiedBeamLength);
+                                    sharedPlateTopHorizontalTier = PeekLocalTop(
+                                        axes,
+                                        unifiedBeamLength,
+                                        0
+                                    );
+                                    sharedPlateTopHorizontalLineY =
+                                        topHolePlateOuterY + sharedPlateTopHorizontalTier;
                                     sharedPlateTopHorizontalTierReady = true;
                                 }
 
@@ -519,7 +874,13 @@ namespace Tekla.Technology.Akit.UserScript
                             {
                                 if (!sharedPlateBottomHorizontalTierReady)
                                 {
-                                    sharedPlateBottomHorizontalTier = PHU_UnifiedDimRuntime.PeekBottom(unifiedBeamLength);
+                                    sharedPlateBottomHorizontalTier = PeekLocalBottom(
+                                        axes,
+                                        unifiedBeamLength,
+                                        0
+                                    );
+                                    sharedPlateBottomHorizontalLineY =
+                                        bottomHolePlateOuterY - sharedPlateBottomHorizontalTier;
                                     sharedPlateBottomHorizontalTierReady = true;
                                 }
 
@@ -527,28 +888,51 @@ namespace Tekla.Technology.Akit.UserScript
                             }
                         }
 
-                        double horizontalDistance = GetOffsetFromPlateOuterBoundary(
-                            horizontalDimDirection,
-                            hole.X,
-                            hole.Y,
-                            plateMinX,
-                            plateMaxX,
-                            plateMinY,
-                            plateMaxY,
-                            horizontalTier);
+                        double horizontalDistance;
+                        if (PHU_UnifiedDimRuntime.IsActive)
+                        {
+                            double sharedLineY = horizontalUnifiedTop
+                                ? sharedPlateTopHorizontalLineY
+                                : sharedPlateBottomHorizontalLineY;
+                            horizontalDistance = GetDistanceToSharedHorizontalLine(
+                                horizontalDimDirection,
+                                hLeft,
+                                sharedLineY,
+                                horizontalTier
+                            );
+                        }
+                        else
+                        {
+                            horizontalDistance = GetOffsetFromPlateOuterBoundary(
+                                horizontalDimDirection,
+                                hole.X,
+                                hole.Y,
+                                plateMinX,
+                                plateMaxX,
+                                plateMinY,
+                                plateMaxY,
+                                horizontalTier
+                            );
+                        }
 
-                        if (CreateDimChain(
-                            handler,
-                            view,
-                            new Point[] { hLeft, hHole, hRight },
-                            horizontalDimDirection,
-                            horizontalDistance))
+                        if (
+                            CreateDimChain(
+                                handler,
+                                view,
+                                new Point[] { hLeft, hHole, hRight },
+                                horizontalDimDirection,
+                                horizontalDistance,
+                                axes
+                            )
+                        )
                         {
                             count++;
                             if (PHU_UnifiedDimRuntime.IsActive)
                             {
-                                if (horizontalUnifiedTop) sharedPlateTopHorizontalTierUsed = true;
-                                else sharedPlateBottomHorizontalTierUsed = true;
+                                if (horizontalUnifiedTop)
+                                    sharedPlateTopHorizontalTierUsed = true;
+                                else
+                                    sharedPlateBottomHorizontalTierUsed = true;
                             }
                         }
 
@@ -581,83 +965,169 @@ namespace Tekla.Technology.Akit.UserScript
                                 beamPolygon,
                                 beamSideX,
                                 useLeftBeamEdge,
-                                beamEdgeY);
+                                beamEdgeY
+                            );
 
                             if (realBeamEdgePoint == null)
                                 realBeamEdgePoint = new Point(beamSideX, beamEdgeY, 0);
 
                             beamEdgePointForVertical = realBeamEdgePoint;
-                            beamCenterPointForVertical = new Point(realBeamEdgePoint.X, beamCenterY, 0);
+                            beamCenterPointForVertical = new Point(
+                                realBeamEdgePoint.X,
+                                beamCenterY,
+                                0
+                            );
 
                             verticalDimDirection = useLeftBeamEdge
                                 ? new Vector(-1, 0, 0)
                                 : new Vector(1, 0, 0);
                         }
 
+                        bool verticalUnifiedRight = verticalDimDirection.X > 0.0;
                         double verticalTier1 = PLATE_VERTICAL_DIM_TIER_1;
+                        if (PHU_UnifiedDimRuntime.IsActive)
+                        {
+                            verticalTier1 = verticalUnifiedRight
+                                ? PeekLocalRight(axes, unifiedBeamLength, 0)
+                                : PeekLocalLeft(axes, unifiedBeamLength, 0);
+                        }
 
                         double verticalDistance1 = useBeamOutsideEdge
                             ? (
                                 useLeftBeamEdge
-                                ? GetLeftDistanceByFeet(
-                                    new Point[] { beamEdgePointForVertical, verticalHolePoint },
-                                    beamEdgePointForVertical.X,
-                                    verticalTier1)
-                                : GetRightDistanceByFeet(
-                                    new Point[] { beamEdgePointForVertical, verticalHolePoint },
-                                    beamEdgePointForVertical.X,
-                                    verticalTier1)
-                              )
+                                    ? GetLeftDistanceByFeet(
+                                        new Point[] { beamEdgePointForVertical, verticalHolePoint },
+                                        beamEdgePointForVertical.X,
+                                        verticalTier1
+                                    )
+                                    : GetRightDistanceByFeet(
+                                        new Point[] { beamEdgePointForVertical, verticalHolePoint },
+                                        beamEdgePointForVertical.X,
+                                        verticalTier1
+                                    )
+                            )
                             : GetLeftDistanceByFeet(
                                 new Point[] { beamEdgePointForVertical, verticalHolePoint },
                                 plateMinX,
-                                verticalTier1);
+                                verticalTier1
+                            );
 
-                        if (CreateDimChain(
-                            handler,
-                            view,
-                            new Point[]
-                            {
-                                beamEdgePointForVertical,
-                                verticalHolePoint
-                            },
-                            verticalDimDirection,
-                            verticalDistance1))
+                        if (
+                            CreateDimChain(
+                                handler,
+                                view,
+                                new Point[] { beamEdgePointForVertical, verticalHolePoint },
+                                verticalDimDirection,
+                                verticalDistance1,
+                                axes
+                            )
+                        )
                         {
                             count++;
+                            if (PHU_UnifiedDimRuntime.IsActive)
+                            {
+                                if (verticalUnifiedRight)
+                                    sharedPlateRightVerticalTier1Used = true;
+                                else
+                                    sharedPlateLeftVerticalTier1Used = true;
+                            }
                         }
 
-                        double verticalTier2 = PLATE_VERTICAL_DIM_TIER_2;
+                        // Plate một phía giữ nguyên dim tầng 2 cũ.
+                        // Plate hai phía sẽ gộp sau vòng lặp thành đúng một chain
+                        // lỗ dưới -> tâm dầm -> lỗ trên để tránh 2 set chồng nhau.
+                        if (!combineVerticalTier2)
+                        {
+                            double verticalTier2 = PLATE_VERTICAL_DIM_TIER_2;
+                            if (PHU_UnifiedDimRuntime.IsActive)
+                            {
+                                verticalTier2 = verticalUnifiedRight
+                                    ? PeekLocalRight(axes, unifiedBeamLength, 1)
+                                    : PeekLocalLeft(axes, unifiedBeamLength, 1);
+                            }
 
-                        double verticalDistance2 = useBeamOutsideEdge
-                            ? (
-                                useLeftBeamEdge
-                                ? GetLeftDistanceByFeet(
-                                    new Point[] { beamCenterPointForVertical, verticalHolePoint, beamEdgePointForVertical },
-                                    beamEdgePointForVertical.X,
-                                    verticalTier2)
-                                : GetRightDistanceByFeet(
-                                    new Point[] { beamCenterPointForVertical, verticalHolePoint, beamEdgePointForVertical },
-                                    beamEdgePointForVertical.X,
-                                    verticalTier2)
-                              )
-                            : GetLeftDistanceByFeet(
-                                new Point[] { beamCenterPointForVertical, verticalHolePoint, beamEdgePointForVertical },
-                                plateMinX,
-                                verticalTier2);
+                            double verticalDistance2 = useBeamOutsideEdge
+                                ? (
+                                    useLeftBeamEdge
+                                        ? GetLeftDistanceByFeet(
+                                            new Point[]
+                                            {
+                                                beamCenterPointForVertical,
+                                                verticalHolePoint,
+                                                beamEdgePointForVertical
+                                            },
+                                            beamEdgePointForVertical.X,
+                                            verticalTier2
+                                        )
+                                        : GetRightDistanceByFeet(
+                                            new Point[]
+                                            {
+                                                beamCenterPointForVertical,
+                                                verticalHolePoint,
+                                                beamEdgePointForVertical
+                                            },
+                                            beamEdgePointForVertical.X,
+                                            verticalTier2
+                                        )
+                                )
+                                : GetLeftDistanceByFeet(
+                                    new Point[]
+                                    {
+                                        beamCenterPointForVertical,
+                                        verticalHolePoint,
+                                        beamEdgePointForVertical
+                                    },
+                                    plateMinX,
+                                    verticalTier2
+                                );
 
-                        if (CreateDimChain(
+                            if (
+                                CreateDimChain(
+                                    handler,
+                                    view,
+                                    new Point[] { beamCenterPointForVertical, verticalHolePoint },
+                                    verticalDimDirection,
+                                    verticalDistance2,
+                                    axes
+                                )
+                            )
+                            {
+                                count++;
+                                if (PHU_UnifiedDimRuntime.IsActive)
+                                {
+                                    if (verticalUnifiedRight)
+                                        sharedPlateRightVerticalTier2Used = true;
+                                    else
+                                        sharedPlateLeftVerticalTier2Used = true;
+                                }
+                            }
+                        }
+                    }
+
+                    if (combineVerticalTier2)
+                    {
+                        bool usedRightSide;
+                        int combinedCreated = CreateCombinedTwoSideVerticalTier2(
                             handler,
                             view,
-                            new Point[]
-                            {
-                                beamCenterPointForVertical,
-                                verticalHolePoint
-                            },
-                            verticalDimDirection,
-                            verticalDistance2))
+                            holes,
+                            plateMinX,
+                            beamPolygon,
+                            beamMinX,
+                            beamMaxX,
+                            beamCenterY,
+                            unifiedBeamLength,
+                            axes,
+                            out usedRightSide
+                        );
+
+                        count += combinedCreated;
+                        if (combinedCreated > 0 && PHU_UnifiedDimRuntime.IsActive)
                         {
-                            count++;
+                            if (usedRightSide)
+                                sharedPlateRightVerticalTier2Used = true;
+                            else
+                                sharedPlateLeftVerticalTier2Used = true;
                         }
                     }
                 }
@@ -668,10 +1138,30 @@ namespace Tekla.Technology.Akit.UserScript
                 if (PHU_UnifiedDimRuntime.IsActive)
                 {
                     if (sharedPlateTopHorizontalTierUsed)
-                        PHU_UnifiedDimRuntime.CommitTop();
+                        CommitLocalTop(axes);
 
                     if (sharedPlateBottomHorizontalTierUsed)
-                        PHU_UnifiedDimRuntime.CommitBottom();
+                        CommitLocalBottom(axes);
+
+                    if (sharedPlateLeftVerticalTier2Used)
+                    {
+                        CommitLocalLeft(axes);
+                        CommitLocalLeft(axes);
+                    }
+                    else if (sharedPlateLeftVerticalTier1Used)
+                    {
+                        CommitLocalLeft(axes);
+                    }
+
+                    if (sharedPlateRightVerticalTier2Used)
+                    {
+                        CommitLocalRight(axes);
+                        CommitLocalRight(axes);
+                    }
+                    else if (sharedPlateRightVerticalTier1Used)
+                    {
+                        CommitLocalRight(axes);
+                    }
                 }
 
                 // =========================
@@ -710,7 +1200,9 @@ namespace Tekla.Technology.Akit.UserScript
                         beamMaxY,
                         allPlateMinY,
                         allPlateMaxY,
-                        unifiedBeamLength);
+                        unifiedBeamLength,
+                        axes
+                    );
 
                     count += CreateBeamHorizontalChainForPlateHoles(
                         handler,
@@ -724,7 +1216,9 @@ namespace Tekla.Technology.Akit.UserScript
                         beamMaxY,
                         allPlateMinY,
                         allPlateMaxY,
-                        unifiedBeamLength);
+                        unifiedBeamLength,
+                        axes
+                    );
                 }
 
                 count += CreateBeamHorizontalChainForNoHolePlateEdges(
@@ -739,7 +1233,9 @@ namespace Tekla.Technology.Akit.UserScript
                     beamMaxY,
                     allPlateMinY,
                     allPlateMaxY,
-                    unifiedBeamLength);
+                    unifiedBeamLength,
+                    axes
+                );
 
                 count += CreateBeamHorizontalChainForNoHolePlateEdges(
                     handler,
@@ -753,15 +1249,21 @@ namespace Tekla.Technology.Akit.UserScript
                     beamMaxY,
                     allPlateMinY,
                     allPlateMaxY,
-                    unifiedBeamLength);
+                    unifiedBeamLength,
+                    axes
+                );
             }
             catch (Exception ex)
             {
-                Msg("Slot 02 ERROR:\n" + ex.Message);
+                Msg("Slot 01 ERROR:\n" + ex.Message);
             }
             finally
             {
-                try { model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane); } catch { }
+                try
+                {
+                    model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane);
+                }
+                catch { }
             }
 
             return count;
@@ -779,42 +1281,47 @@ namespace Tekla.Technology.Akit.UserScript
             double beamMaxY,
             double allPlateMinY,
             double allPlateMaxY,
-            double unifiedBeamLength)
+            double unifiedBeamLength,
+            Slot01AxisAdapter axes
+        )
         {
             int count = 0;
 
             try
             {
-                if (handler == null || view == null ||
-                    plateEdges == null || plateEdges.Count == 0)
+                if (handler == null || view == null || plateEdges == null || plateEdges.Count == 0)
                 {
                     return count;
                 }
 
-                plateEdges.Sort(delegate (Point a, Point b)
-                {
-                    int c = a.X.CompareTo(b.X);
-                    if (c != 0) return c;
-                    return a.Y.CompareTo(b.Y);
-                });
+                plateEdges.Sort(
+                    delegate(Point a, Point b)
+                    {
+                        int c = a.X.CompareTo(b.X);
+                        if (c != 0)
+                            return c;
+                        return a.Y.CompareTo(b.Y);
+                    }
+                );
 
-                Vector direction = useTopSide
-                    ? new Vector(0, 1, 0)
-                    : new Vector(0, -1, 0);
+                Vector direction = useTopSide ? new Vector(0, 1, 0) : new Vector(0, -1, 0);
 
                 double targetY = useTopSide ? beamMaxY : beamMinY;
                 Point beamLeftPoint;
                 Point beamRightPoint;
 
-                if (!TryGetBeamHorizontalRealEdgePoints(
-                    beamPolygon,
-                    targetY,
-                    beamMinX,
-                    beamMaxX,
-                    beamMinY,
-                    beamMaxY,
-                    out beamLeftPoint,
-                    out beamRightPoint))
+                if (
+                    !TryGetBeamHorizontalRealEdgePoints(
+                        beamPolygon,
+                        targetY,
+                        beamMinX,
+                        beamMaxX,
+                        beamMinY,
+                        beamMaxY,
+                        out beamLeftPoint,
+                        out beamRightPoint
+                    )
+                )
                 {
                     beamLeftPoint = new Point(beamMinX, targetY, 0);
                     beamRightPoint = new Point(beamMaxX, targetY, 0);
@@ -843,8 +1350,8 @@ namespace Tekla.Technology.Akit.UserScript
                 double tier = BEAM_HORIZONTAL_DIM_TIER_2;
                 if (PHU_UnifiedDimRuntime.IsActive)
                     tier = useTopSide
-                        ? PHU_UnifiedDimRuntime.PeekTop(unifiedBeamLength)
-                        : PHU_UnifiedDimRuntime.PeekBottom(unifiedBeamLength);
+                        ? PeekLocalTop(axes, unifiedBeamLength, 0)
+                        : PeekLocalBottom(axes, unifiedBeamLength, 0);
 
                 double distance = GetHorizontalDistanceFromOuterBoundary(
                     direction,
@@ -853,28 +1360,22 @@ namespace Tekla.Technology.Akit.UserScript
                     allPlateMaxY,
                     beamMinY,
                     beamMaxY,
-                    tier);
+                    tier
+                );
 
-                if (CreateDimChain(
-                    handler,
-                    view,
-                    chain.ToArray(),
-                    direction,
-                    distance))
+                if (CreateDimChain(handler, view, chain.ToArray(), direction, distance, axes))
                 {
                     count++;
                     if (PHU_UnifiedDimRuntime.IsActive)
                     {
                         if (useTopSide)
-                            PHU_UnifiedDimRuntime.CommitTop();
+                            CommitLocalTop(axes);
                         else
-                            PHU_UnifiedDimRuntime.CommitBottom();
+                            CommitLocalBottom(axes);
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return count;
         }
@@ -891,7 +1392,9 @@ namespace Tekla.Technology.Akit.UserScript
             double beamMaxY,
             double allPlateMinY,
             double allPlateMaxY,
-            double unifiedBeamLength)
+            double unifiedBeamLength,
+            Slot01AxisAdapter axes
+        )
         {
             int count = 0;
 
@@ -900,12 +1403,15 @@ namespace Tekla.Technology.Akit.UserScript
                 if (handler == null || view == null || holes == null || holes.Count == 0)
                     return count;
 
-                holes.Sort(delegate (Point a, Point b)
-                {
-                    int c = a.X.CompareTo(b.X);
-                    if (c != 0) return c;
-                    return a.Y.CompareTo(b.Y);
-                });
+                holes.Sort(
+                    delegate(Point a, Point b)
+                    {
+                        int c = a.X.CompareTo(b.X);
+                        if (c != 0)
+                            return c;
+                        return a.Y.CompareTo(b.Y);
+                    }
+                );
 
                 Vector beamHorizontalDirection = useTopSide
                     ? new Vector(0, 1, 0)
@@ -915,15 +1421,18 @@ namespace Tekla.Technology.Akit.UserScript
 
                 Point beamLeftPoint;
                 Point beamRightPoint;
-                if (!TryGetBeamHorizontalRealEdgePoints(
-                    beamPolygon,
-                    targetY,
-                    beamMinX,
-                    beamMaxX,
-                    beamMinY,
-                    beamMaxY,
-                    out beamLeftPoint,
-                    out beamRightPoint))
+                if (
+                    !TryGetBeamHorizontalRealEdgePoints(
+                        beamPolygon,
+                        targetY,
+                        beamMinX,
+                        beamMaxX,
+                        beamMinY,
+                        beamMaxY,
+                        out beamLeftPoint,
+                        out beamRightPoint
+                    )
+                )
                 {
                     beamLeftPoint = new Point(beamMinX, targetY, 0);
                     beamRightPoint = new Point(beamMaxX, targetY, 0);
@@ -944,8 +1453,8 @@ namespace Tekla.Technology.Akit.UserScript
                 double beamHorizontalTier = BEAM_HORIZONTAL_DIM_TIER_2;
                 if (PHU_UnifiedDimRuntime.IsActive)
                     beamHorizontalTier = useTopSide
-                        ? PHU_UnifiedDimRuntime.PeekTop(unifiedBeamLength)
-                        : PHU_UnifiedDimRuntime.PeekBottom(unifiedBeamLength);
+                        ? PeekLocalTop(axes, unifiedBeamLength, 0)
+                        : PeekLocalBottom(axes, unifiedBeamLength, 0);
 
                 double beamHorizontalDistance = GetHorizontalDistanceFromOuterBoundary(
                     beamHorizontalDirection,
@@ -954,26 +1463,31 @@ namespace Tekla.Technology.Akit.UserScript
                     allPlateMaxY,
                     allPlateMinY,
                     allPlateMaxY,
-                    beamHorizontalTier);
+                    beamHorizontalTier
+                );
 
-                if (CreateDimChain(
-                    handler,
-                    view,
-                    chain.ToArray(),
-                    beamHorizontalDirection,
-                    beamHorizontalDistance))
+                if (
+                    CreateDimChain(
+                        handler,
+                        view,
+                        chain.ToArray(),
+                        beamHorizontalDirection,
+                        beamHorizontalDistance,
+                        axes
+                    )
+                )
                 {
                     count++;
                     if (PHU_UnifiedDimRuntime.IsActive)
                     {
-                        if (useTopSide) PHU_UnifiedDimRuntime.CommitTop();
-                        else PHU_UnifiedDimRuntime.CommitBottom();
+                        if (useTopSide)
+                            CommitLocalTop(axes);
+                        else
+                            CommitLocalBottom(axes);
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return count;
         }
@@ -982,17 +1496,22 @@ namespace Tekla.Technology.Akit.UserScript
             TSM.Model model,
             TSD.View view,
             ModelPart plate,
-            ModelPart beam)
+            ModelPart beam
+        )
         {
             int count = 0;
 
-            TSM.TransformationPlane oldPlane =
-                model.GetWorkPlaneHandler().GetCurrentTransformationPlane();
+            TSM.TransformationPlane oldPlane = model
+                .GetWorkPlaneHandler()
+                .GetCurrentTransformationPlane();
 
             try
             {
-                model.GetWorkPlaneHandler().SetCurrentTransformationPlane(
-                    new TSM.TransformationPlane(view.DisplayCoordinateSystem));
+                model
+                    .GetWorkPlaneHandler()
+                    .SetCurrentTransformationPlane(
+                        new TSM.TransformationPlane(view.DisplayCoordinateSystem)
+                    );
 
                 Solid plateSolid = plate.GetSolid();
                 Solid beamSolid = beam.GetSolid();
@@ -1011,7 +1530,13 @@ namespace Tekla.Technology.Akit.UserScript
                 double plateMaxY = Math.Max(plateMin.Y, plateMax.Y);
 
                 if (platePolygon != null && platePolygon.Count >= 2)
-                    GetMinMax2D(platePolygon, out plateMinX, out plateMaxX, out plateMinY, out plateMaxY);
+                    GetMinMax2D(
+                        platePolygon,
+                        out plateMinX,
+                        out plateMaxX,
+                        out plateMinY,
+                        out plateMaxY
+                    );
 
                 double beamMinX = Math.Min(beamMin.X, beamMax.X);
                 double beamMaxX = Math.Max(beamMin.X, beamMax.X);
@@ -1019,7 +1544,13 @@ namespace Tekla.Technology.Akit.UserScript
                 double beamMaxY = Math.Max(beamMin.Y, beamMax.Y);
 
                 if (beamPolygon != null && beamPolygon.Count >= 2)
-                    GetMinMax2D(beamPolygon, out beamMinX, out beamMaxX, out beamMinY, out beamMaxY);
+                    GetMinMax2D(
+                        beamPolygon,
+                        out beamMinX,
+                        out beamMaxX,
+                        out beamMinY,
+                        out beamMaxY
+                    );
 
                 double beamCenterY = (beamMinY + beamMaxY) / 2.0;
 
@@ -1030,7 +1561,8 @@ namespace Tekla.Technology.Akit.UserScript
                     plateMinX,
                     plateMaxX,
                     plateMinY,
-                    plateMaxY);
+                    plateMaxY
+                );
 
                 if (holes.Count == 0)
                     return 0;
@@ -1048,9 +1580,7 @@ namespace Tekla.Technology.Akit.UserScript
                     // Hướng ngang có tầng riêng: tầng 1 = 100.
                     // =========================
                     Vector horizontalDimDirection =
-                        hole.Y >= beamCenterY
-                        ? new Vector(0, 1, 0)
-                        : new Vector(0, -1, 0);
+                        hole.Y >= beamCenterY ? new Vector(0, 1, 0) : new Vector(0, -1, 0);
 
                     // FIX MÉP THỰC PLATE:
                     // Không ép 3 chân DIM nằm thẳng hàng theo Y tâm lỗ nữa.
@@ -1063,13 +1593,15 @@ namespace Tekla.Technology.Akit.UserScript
                         platePolygon,
                         plateMinX,
                         true,
-                        preferTopPlateAnchor);
+                        preferTopPlateAnchor
+                    );
 
                     Point hRight = GetRealPlateSideAnchorForHorizontalDim(
                         platePolygon,
                         plateMaxX,
                         false,
-                        preferTopPlateAnchor);
+                        preferTopPlateAnchor
+                    );
 
                     if (hLeft == null)
                         hLeft = new Point(plateMinX, hole.Y, 0);
@@ -1087,14 +1619,18 @@ namespace Tekla.Technology.Akit.UserScript
                         plateMaxX,
                         plateMinY,
                         plateMaxY,
-                        PLATE_HORIZONTAL_DIM_TIER_1);
+                        PLATE_HORIZONTAL_DIM_TIER_1
+                    );
 
-                    if (CreateDimChain(
-                        handler,
-                        view,
-                        new Point[] { hLeft, hHole, hRight },
-                        horizontalDimDirection,
-                        horizontalDistance))
+                    if (
+                        CreateDimChain(
+                            handler,
+                            view,
+                            new Point[] { hLeft, hHole, hRight },
+                            horizontalDimDirection,
+                            horizontalDistance
+                        )
+                    )
                     {
                         count++;
                     }
@@ -1106,15 +1642,18 @@ namespace Tekla.Technology.Akit.UserScript
                     // =========================
                     Point beamLeftPoint;
                     Point beamRightPoint;
-                    if (TryGetBeamHorizontalRealEdgePoints(
-                        beamPolygon,
-                        hole.Y,
-                        beamMinX,
-                        beamMaxX,
-                        beamMinY,
-                        beamMaxY,
-                        out beamLeftPoint,
-                        out beamRightPoint))
+                    if (
+                        TryGetBeamHorizontalRealEdgePoints(
+                            beamPolygon,
+                            hole.Y,
+                            beamMinX,
+                            beamMaxX,
+                            beamMinY,
+                            beamMaxY,
+                            out beamLeftPoint,
+                            out beamRightPoint
+                        )
+                    )
                     {
                         // DIM ngang dầm dùng tầng riêng của hướng ngang.
                         // Plate đã chiếm tầng 1, nên dầm lấy tầng 2 tính từ biên ngoài xa nhất
@@ -1126,19 +1665,23 @@ namespace Tekla.Technology.Akit.UserScript
                             plateMaxY,
                             beamMinY,
                             beamMaxY,
-                            BEAM_HORIZONTAL_DIM_TIER_2);
+                            BEAM_HORIZONTAL_DIM_TIER_2
+                        );
 
-                        if (CreateDimChain(
-                            handler,
-                            view,
-                            new Point[]
-                            {
-                                beamLeftPoint,
-                                new Point(hole.X, hole.Y, 0),
-                                beamRightPoint
-                            },
-                            horizontalDimDirection,
-                            beamHorizontalDistance))
+                        if (
+                            CreateDimChain(
+                                handler,
+                                view,
+                                new Point[]
+                                {
+                                    beamLeftPoint,
+                                    new Point(hole.X, hole.Y, 0),
+                                    beamRightPoint
+                                },
+                                horizontalDimDirection,
+                                beamHorizontalDistance
+                            )
+                        )
                         {
                             count++;
                         }
@@ -1177,7 +1720,8 @@ namespace Tekla.Technology.Akit.UserScript
                             beamPolygon,
                             beamSideX,
                             useLeftBeamEdge,
-                            beamEdgeY);
+                            beamEdgeY
+                        );
 
                         if (realBeamEdgePoint == null)
                             realBeamEdgePoint = new Point(beamSideX, beamEdgeY, 0);
@@ -1196,30 +1740,32 @@ namespace Tekla.Technology.Akit.UserScript
                     double verticalDistance1 = useBeamOutsideEdge
                         ? (
                             useLeftBeamEdge
-                            ? GetLeftDistanceByFeet(
-                                new Point[] { beamEdgePointForVertical, verticalHolePoint },
-                                beamEdgePointForVertical.X,
-                                PLATE_VERTICAL_DIM_TIER_1)
-                            : GetRightDistanceByFeet(
-                                new Point[] { beamEdgePointForVertical, verticalHolePoint },
-                                beamEdgePointForVertical.X,
-                                PLATE_VERTICAL_DIM_TIER_1)
-                          )
+                                ? GetLeftDistanceByFeet(
+                                    new Point[] { beamEdgePointForVertical, verticalHolePoint },
+                                    beamEdgePointForVertical.X,
+                                    PLATE_VERTICAL_DIM_TIER_1
+                                )
+                                : GetRightDistanceByFeet(
+                                    new Point[] { beamEdgePointForVertical, verticalHolePoint },
+                                    beamEdgePointForVertical.X,
+                                    PLATE_VERTICAL_DIM_TIER_1
+                                )
+                        )
                         : GetLeftDistanceByFeet(
                             new Point[] { beamEdgePointForVertical, verticalHolePoint },
                             plateMinX,
-                            PLATE_VERTICAL_DIM_TIER_1);
+                            PLATE_VERTICAL_DIM_TIER_1
+                        );
 
-                    if (CreateDimChain(
-                        handler,
-                        view,
-                        new Point[]
-                        {
-                            beamEdgePointForVertical,
-                            verticalHolePoint
-                        },
-                        verticalDimDirection,
-                        verticalDistance1))
+                    if (
+                        CreateDimChain(
+                            handler,
+                            view,
+                            new Point[] { beamEdgePointForVertical, verticalHolePoint },
+                            verticalDimDirection,
+                            verticalDistance1
+                        )
+                    )
                     {
                         count++;
                     }
@@ -1232,34 +1778,50 @@ namespace Tekla.Technology.Akit.UserScript
                     double verticalDistance2 = useBeamOutsideEdge
                         ? (
                             useLeftBeamEdge
-                            ? GetLeftDistanceByFeet(
-                                new Point[] { beamCenterPointForVertical, verticalHolePoint, beamEdgePointForVertical },
-                                beamEdgePointForVertical.X,
-                                PLATE_VERTICAL_DIM_TIER_2)
-                            : GetRightDistanceByFeet(
-                                new Point[] { beamCenterPointForVertical, verticalHolePoint, beamEdgePointForVertical },
-                                beamEdgePointForVertical.X,
-                                PLATE_VERTICAL_DIM_TIER_2)
-                          )
+                                ? GetLeftDistanceByFeet(
+                                    new Point[]
+                                    {
+                                        beamCenterPointForVertical,
+                                        verticalHolePoint,
+                                        beamEdgePointForVertical
+                                    },
+                                    beamEdgePointForVertical.X,
+                                    PLATE_VERTICAL_DIM_TIER_2
+                                )
+                                : GetRightDistanceByFeet(
+                                    new Point[]
+                                    {
+                                        beamCenterPointForVertical,
+                                        verticalHolePoint,
+                                        beamEdgePointForVertical
+                                    },
+                                    beamEdgePointForVertical.X,
+                                    PLATE_VERTICAL_DIM_TIER_2
+                                )
+                        )
                         : GetLeftDistanceByFeet(
-                            new Point[] { beamCenterPointForVertical, verticalHolePoint, beamEdgePointForVertical },
+                            new Point[]
+                            {
+                                beamCenterPointForVertical,
+                                verticalHolePoint,
+                                beamEdgePointForVertical
+                            },
                             plateMinX,
-                            PLATE_VERTICAL_DIM_TIER_2);
+                            PLATE_VERTICAL_DIM_TIER_2
+                        );
 
-                    if (CreateDimChain(
-                        handler,
-                        view,
-                        new Point[]
-                        {
-                            beamCenterPointForVertical,
-                            verticalHolePoint
-                        },
-                        verticalDimDirection,
-                        verticalDistance2))
+                    if (
+                        CreateDimChain(
+                            handler,
+                            view,
+                            new Point[] { beamCenterPointForVertical, verticalHolePoint },
+                            verticalDimDirection,
+                            verticalDistance2
+                        )
+                    )
                     {
                         count++;
                     }
-
                 }
             }
             catch (Exception ex)
@@ -1268,7 +1830,11 @@ namespace Tekla.Technology.Akit.UserScript
             }
             finally
             {
-                try { model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane); } catch { }
+                try
+                {
+                    model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane);
+                }
+                catch { }
             }
 
             return count;
@@ -1281,14 +1847,14 @@ namespace Tekla.Technology.Akit.UserScript
             double plateMinX,
             double plateMaxX,
             double plateMinY,
-            double plateMaxY)
+            double plateMaxY
+        )
         {
             List<Point> result = new List<Point>();
 
             try
             {
-                TSD.DrawingObjectEnumerator e =
-                    view.GetAllObjects(typeof(TSD.Bolt));
+                TSD.DrawingObjectEnumerator e = view.GetAllObjects(typeof(TSD.Bolt));
 
                 while (e != null && e.MoveNext())
                 {
@@ -1326,16 +1892,17 @@ namespace Tekla.Technology.Akit.UserScript
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
-            result.Sort(delegate (Point a, Point b)
-            {
-                int c = a.X.CompareTo(b.X);
-                if (c != 0) return c;
-                return a.Y.CompareTo(b.Y);
-            });
+            result.Sort(
+                delegate(Point a, Point b)
+                {
+                    int c = a.X.CompareTo(b.X);
+                    if (c != 0)
+                        return c;
+                    return a.Y.CompareTo(b.Y);
+                }
+            );
 
             return result;
         }
@@ -1345,11 +1912,11 @@ namespace Tekla.Technology.Akit.UserScript
             double plateMinX,
             double plateMinY,
             double plateMaxY,
-            double beamCenterY)
+            double beamCenterY
+        )
         {
             bool useTopOuterEdge =
-                Math.Abs(plateMaxY - beamCenterY) >=
-                Math.Abs(plateMinY - beamCenterY);
+                Math.Abs(plateMaxY - beamCenterY) >= Math.Abs(plateMinY - beamCenterY);
 
             Point best = null;
 
@@ -1360,10 +1927,12 @@ namespace Tekla.Technology.Akit.UserScript
                     if (p == null)
                         continue;
 
-                    if (best == null ||
-                        (useTopOuterEdge && p.Y > best.Y + TOL) ||
-                        (!useTopOuterEdge && p.Y < best.Y - TOL) ||
-                        (Math.Abs(p.Y - best.Y) <= TOL && p.X < best.X))
+                    if (
+                        best == null
+                        || (useTopOuterEdge && p.Y > best.Y + TOL)
+                        || (!useTopOuterEdge && p.Y < best.Y - TOL)
+                        || (Math.Abs(p.Y - best.Y) <= TOL && p.X < best.X)
+                    )
                     {
                         best = p;
                     }
@@ -1373,10 +1942,7 @@ namespace Tekla.Technology.Akit.UserScript
             if (best != null)
                 return new Point(best.X, best.Y, 0);
 
-            return new Point(
-                plateMinX,
-                useTopOuterEdge ? plateMaxY : plateMinY,
-                0);
+            return new Point(plateMinX, useTopOuterEdge ? plateMaxY : plateMinY, 0);
         }
 
         private static Point SelectRepresentativePlateHole(
@@ -1390,7 +1956,8 @@ namespace Tekla.Technology.Akit.UserScript
             double beamMinX,
             double beamMaxX,
             double beamMinY,
-            double beamMaxY)
+            double beamMaxY
+        )
         {
             try
             {
@@ -1403,7 +1970,8 @@ namespace Tekla.Technology.Akit.UserScript
                 Point plateCenter = new Point(
                     (plateMinX + plateMaxX) / 2.0,
                     (plateMinY + plateMaxY) / 2.0,
-                    0);
+                    0
+                );
 
                 Point beamTarget = GetClosestPointOnPolygon2D(beamPolygon, plateCenter);
                 if (beamTarget == null)
@@ -1411,7 +1979,8 @@ namespace Tekla.Technology.Akit.UserScript
                     beamTarget = new Point(
                         ClampDouble(plateCenter.X, beamMinX, beamMaxX),
                         ClampDouble(plateCenter.Y, beamMinY, beamMaxY),
-                        0);
+                        0
+                    );
                 }
 
                 Point plateConnectionPoint = GetClosestPointOnPolygon2D(platePolygon, beamTarget);
@@ -1421,14 +1990,14 @@ namespace Tekla.Technology.Akit.UserScript
                 double directionX = beamTarget.X - plateCenter.X;
                 double directionY = beamTarget.Y - plateCenter.Y;
                 double directionLength = Math.Sqrt(
-                    directionX * directionX + directionY * directionY);
+                    directionX * directionX + directionY * directionY
+                );
 
                 if (directionLength <= 0.0001)
                 {
                     directionX = ((beamMinX + beamMaxX) / 2.0) - plateCenter.X;
                     directionY = ((beamMinY + beamMaxY) / 2.0) - plateCenter.Y;
-                    directionLength = Math.Sqrt(
-                        directionX * directionX + directionY * directionY);
+                    directionLength = Math.Sqrt(directionX * directionX + directionY * directionY);
                 }
 
                 if (directionLength > 0.0001)
@@ -1454,22 +2023,23 @@ namespace Tekla.Technology.Akit.UserScript
                         beamMinX,
                         beamMaxX,
                         beamMinY,
-                        beamMaxY);
+                        beamMaxY
+                    );
 
                     double connectionDistance = Distance2D(hole, plateConnectionPoint);
                     double towardBeam =
-                        (hole.X - plateCenter.X) * directionX +
-                        (hole.Y - plateCenter.Y) * directionY;
+                        (hole.X - plateCenter.X) * directionX
+                        + (hole.Y - plateCenter.Y) * directionY;
 
                     double lowerEdgeDistance = GetDistanceToLowerPlateBoundary2D(
                         platePolygon,
                         hole,
-                        plateCenter.Y);
+                        plateCenter.Y
+                    );
 
                     bool better = false;
 
-                    if (best == null ||
-                        beamDistance < bestBeamDistance - MULTI_HOLE_SELECTION_TOL)
+                    if (best == null || beamDistance < bestBeamDistance - MULTI_HOLE_SELECTION_TOL)
                     {
                         better = true;
                     }
@@ -1479,7 +2049,10 @@ namespace Tekla.Technology.Akit.UserScript
                         {
                             better = true;
                         }
-                        else if (Math.Abs(connectionDistance - bestConnectionDistance) <= MULTI_HOLE_SELECTION_TOL)
+                        else if (
+                            Math.Abs(connectionDistance - bestConnectionDistance)
+                            <= MULTI_HOLE_SELECTION_TOL
+                        )
                         {
                             if (towardBeam > bestTowardBeam + 0.5)
                             {
@@ -1494,8 +2067,10 @@ namespace Tekla.Technology.Akit.UserScript
                                 else if (Math.Abs(lowerEdgeDistance - bestLowerEdgeDistance) <= 0.5)
                                 {
                                     // Tie-break cuối chỉ để kết quả ổn định giữa các lần chạy.
-                                    if (hole.X < best.X - 0.01 ||
-                                        (Math.Abs(hole.X - best.X) <= 0.01 && hole.Y < best.Y))
+                                    if (
+                                        hole.X < best.X - 0.01
+                                        || (Math.Abs(hole.X - best.X) <= 0.01 && hole.Y < best.Y)
+                                    )
                                         better = true;
                                 }
                             }
@@ -1515,11 +2090,252 @@ namespace Tekla.Technology.Akit.UserScript
                 if (best != null)
                     return new Point(best.X, best.Y, 0);
             }
-            catch
-            {
-            }
+            catch { }
 
             return null;
+        }
+
+        private static List<Point> SelectRepresentativePlateHolesByBeamSide(
+            List<Point> holes,
+            List<Point> platePolygon,
+            List<Point> beamPolygon,
+            double plateMinX,
+            double plateMaxX,
+            double plateMinY,
+            double plateMaxY,
+            double beamMinX,
+            double beamMaxX,
+            double beamMinY,
+            double beamMaxY
+        )
+        {
+            List<Point> selected = new List<Point>();
+
+            if (holes == null || holes.Count == 0)
+                return selected;
+
+            if (holes.Count == 1)
+            {
+                selected.Add(holes[0]);
+                return selected;
+            }
+
+            double beamCenterY = (beamMinY + beamMaxY) / 2.0;
+            List<Point> topHoles = new List<Point>();
+            List<Point> bottomHoles = new List<Point>();
+
+            foreach (Point hole in holes)
+            {
+                if (hole == null)
+                    continue;
+
+                if (hole.Y >= beamCenterY)
+                    topHoles.Add(hole);
+                else
+                    bottomHoles.Add(hole);
+            }
+
+            // Không có lỗ ở cả hai phía: giữ nguyên lựa chọn đại diện cũ.
+            if (topHoles.Count == 0 || bottomHoles.Count == 0)
+            {
+                Point representativeHole = SelectRepresentativePlateHole(
+                    holes,
+                    platePolygon,
+                    beamPolygon,
+                    plateMinX,
+                    plateMaxX,
+                    plateMinY,
+                    plateMaxY,
+                    beamMinX,
+                    beamMaxX,
+                    beamMinY,
+                    beamMaxY
+                );
+
+                if (representativeHole == null)
+                    representativeHole = holes[0];
+
+                AddUniquePoint2D(selected, representativeHole, UNIQUE_HOLE_TOL);
+                return selected;
+            }
+
+            // Có lỗ ở hai phía: tái sử dụng nguyên bộ chọn cũ cho từng phía.
+            Point topRepresentative = SelectRepresentativePlateHole(
+                topHoles,
+                platePolygon,
+                beamPolygon,
+                plateMinX,
+                plateMaxX,
+                plateMinY,
+                plateMaxY,
+                beamMinX,
+                beamMaxX,
+                beamMinY,
+                beamMaxY
+            );
+
+            Point bottomRepresentative = SelectRepresentativePlateHole(
+                bottomHoles,
+                platePolygon,
+                beamPolygon,
+                plateMinX,
+                plateMaxX,
+                plateMinY,
+                plateMaxY,
+                beamMinX,
+                beamMaxX,
+                beamMinY,
+                beamMaxY
+            );
+
+            if (topRepresentative == null)
+                topRepresentative = topHoles[0];
+
+            if (bottomRepresentative == null)
+                bottomRepresentative = bottomHoles[0];
+
+            AddUniquePoint2D(selected, topRepresentative, UNIQUE_HOLE_TOL);
+            AddUniquePoint2D(selected, bottomRepresentative, UNIQUE_HOLE_TOL);
+
+            // Thứ tự ổn định giữa các lần chạy; không thay đổi thứ tự chân trong từng chain.
+            selected.Sort(
+                delegate(Point a, Point b)
+                {
+                    int c = a.X.CompareTo(b.X);
+                    if (c != 0)
+                        return c;
+                    return a.Y.CompareTo(b.Y);
+                }
+            );
+
+            return selected;
+        }
+
+        private static bool HasHolesOnBothBeamSides(List<Point> holes, double beamCenterY)
+        {
+            bool hasTop = false;
+            bool hasBottom = false;
+
+            if (holes == null)
+                return false;
+
+            for (int i = 0; i < holes.Count; i++)
+            {
+                Point hole = holes[i];
+                if (hole == null)
+                    continue;
+
+                if (hole.Y >= beamCenterY)
+                    hasTop = true;
+                else
+                    hasBottom = true;
+            }
+
+            return hasTop && hasBottom;
+        }
+
+        private static int CreateCombinedTwoSideVerticalTier2(
+            StraightDimensionSetHandler handler,
+            TSD.View view,
+            List<Point> holes,
+            double plateMinX,
+            List<Point> beamPolygon,
+            double beamMinX,
+            double beamMaxX,
+            double beamCenterY,
+            double beamLength,
+            Slot01AxisAdapter axes,
+            out bool usedRightSide
+        )
+        {
+            usedRightSide = false;
+
+            if (handler == null || view == null || holes == null || holes.Count < 2)
+                return 0;
+
+            Point topHole = null;
+            Point bottomHole = null;
+
+            for (int i = 0; i < holes.Count; i++)
+            {
+                Point hole = holes[i];
+                if (hole == null)
+                    continue;
+
+                if (hole.Y >= beamCenterY)
+                {
+                    if (
+                        topHole == null
+                        || hole.Y > topHole.Y + TOL
+                        || (Math.Abs(hole.Y - topHole.Y) <= TOL && hole.X < topHole.X)
+                    )
+                        topHole = hole;
+                }
+                else
+                {
+                    if (
+                        bottomHole == null
+                        || hole.Y < bottomHole.Y - TOL
+                        || (Math.Abs(hole.Y - bottomHole.Y) <= TOL && hole.X < bottomHole.X)
+                    )
+                        bottomHole = hole;
+                }
+            }
+
+            if (topHole == null || bottomHole == null)
+                return 0;
+
+            double averageHoleX = (topHole.X + bottomHole.X) / 2.0;
+            double distToBeamLeft = Math.Abs(averageHoleX - beamMinX);
+            double distToBeamRight = Math.Abs(beamMaxX - averageHoleX);
+            bool nearLeftBeamEdge = distToBeamLeft < BEAM_EDGE_TO_HOLE_NEAR_LIMIT;
+            bool nearRightBeamEdge = distToBeamRight < BEAM_EDGE_TO_HOLE_NEAR_LIMIT;
+            bool useBeamOutsideEdge = nearLeftBeamEdge || nearRightBeamEdge;
+            bool useLeftBeamEdge = distToBeamLeft <= distToBeamRight;
+
+            Vector direction = new Vector(-1, 0, 0);
+            Point beamCenterPoint = new Point(averageHoleX, beamCenterY, 0);
+            double distanceBaseX = plateMinX;
+
+            if (useBeamOutsideEdge)
+            {
+                double beamSideX = useLeftBeamEdge ? beamMinX : beamMaxX;
+                Point realBeamCenterSidePoint = GetRealBeamSidePointNearY(
+                    beamPolygon,
+                    beamSideX,
+                    useLeftBeamEdge,
+                    beamCenterY
+                );
+
+                if (realBeamCenterSidePoint == null)
+                    realBeamCenterSidePoint = new Point(beamSideX, beamCenterY, 0);
+
+                beamCenterPoint = realBeamCenterSidePoint;
+                distanceBaseX = realBeamCenterSidePoint.X;
+                direction = useLeftBeamEdge ? new Vector(-1, 0, 0) : new Vector(1, 0, 0);
+            }
+
+            usedRightSide = direction.X > 0.0;
+            double verticalTier2 = PLATE_VERTICAL_DIM_TIER_2;
+            if (PHU_UnifiedDimRuntime.IsActive)
+            {
+                verticalTier2 = usedRightSide
+                    ? PeekLocalRight(axes, beamLength, 1)
+                    : PeekLocalLeft(axes, beamLength, 1);
+            }
+
+            Point[] feet = new Point[]
+            {
+                new Point(bottomHole.X, bottomHole.Y, 0),
+                new Point(beamCenterPoint.X, beamCenterPoint.Y, 0),
+                new Point(topHole.X, topHole.Y, 0)
+            };
+
+            double distance = usedRightSide
+                ? GetRightDistanceByFeet(feet, distanceBaseX, verticalTier2)
+                : GetLeftDistanceByFeet(feet, distanceBaseX, verticalTier2);
+
+            return CreateDimChain(handler, view, feet, direction, distance, axes) ? 1 : 0;
         }
 
         private static double GetDistanceToPolygonOrBounds2D(
@@ -1528,7 +2344,8 @@ namespace Tekla.Technology.Akit.UserScript
             double minX,
             double maxX,
             double minY,
-            double maxY)
+            double maxY
+        )
         {
             if (point == null)
                 return 999999999.0;
@@ -1556,9 +2373,7 @@ namespace Tekla.Technology.Akit.UserScript
                         return best;
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             double nearestX = ClampDouble(point.X, minX, maxX);
             double nearestY = ClampDouble(point.Y, minY, maxY);
@@ -1568,7 +2383,8 @@ namespace Tekla.Technology.Akit.UserScript
         private static double GetDistanceToLowerPlateBoundary2D(
             List<Point> polygon,
             Point point,
-            double plateCenterY)
+            double plateCenterY
+        )
         {
             if (polygon == null || polygon.Count < 2 || point == null)
                 return 999999999.0;
@@ -1594,9 +2410,7 @@ namespace Tekla.Technology.Akit.UserScript
                         best = distance;
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return best;
         }
@@ -1610,8 +2424,10 @@ namespace Tekla.Technology.Akit.UserScript
                 max = temp;
             }
 
-            if (value < min) return min;
-            if (value > max) return max;
+            if (value < min)
+                return min;
+            if (value > max)
+                return max;
             return value;
         }
 
@@ -1622,7 +2438,8 @@ namespace Tekla.Technology.Akit.UserScript
             double plateMaxY,
             double beamMinY,
             double beamMaxY,
-            double tier)
+            double tier
+        )
         {
             if (direction == null || firstDimPoint == null)
                 return tier;
@@ -1647,10 +2464,7 @@ namespace Tekla.Technology.Akit.UserScript
             return distance;
         }
 
-        private static double GetLeftDistanceByFeet(
-            Point[] feet,
-            double plateMinX,
-            double tier)
+        private static double GetLeftDistanceByFeet(Point[] feet, double plateMinX, double tier)
         {
             double minX = plateMinX;
             double firstX = 0.0;
@@ -1685,11 +2499,7 @@ namespace Tekla.Technology.Akit.UserScript
             return distance;
         }
 
-
-        private static double GetRightDistanceByFeet(
-            Point[] feet,
-            double beamMaxX,
-            double tier)
+        private static double GetRightDistanceByFeet(Point[] feet, double beamMaxX, double tier)
         {
             double maxX = beamMaxX;
             double firstX = 0.0;
@@ -1728,7 +2538,8 @@ namespace Tekla.Technology.Akit.UserScript
             List<Point> polygon,
             double sideX,
             bool leftSide,
-            double targetY)
+            double targetY
+        )
         {
             try
             {
@@ -1751,9 +2562,7 @@ namespace Tekla.Technology.Akit.UserScript
                     if (a == null || b == null)
                         continue;
 
-                    double edgeX = leftSide
-                        ? Math.Min(a.X, b.X)
-                        : Math.Max(a.X, b.X);
+                    double edgeX = leftSide ? Math.Min(a.X, b.X) : Math.Max(a.X, b.X);
 
                     if (Math.Abs(edgeX - sideX) > edgeTol)
                         continue;
@@ -1796,9 +2605,7 @@ namespace Tekla.Technology.Akit.UserScript
                 if (best != null)
                     return new Point(best.X, best.Y, 0);
             }
-            catch
-            {
-            }
+            catch { }
 
             return null;
         }
@@ -1839,9 +2646,7 @@ namespace Tekla.Technology.Akit.UserScript
                 if (best != null)
                     return new Point(best.X, best.Y, 0);
             }
-            catch
-            {
-            }
+            catch { }
 
             return null;
         }
@@ -1866,8 +2671,10 @@ namespace Tekla.Technology.Akit.UserScript
                 return new Point(ax, ay, 0);
 
             double t = ((px - ax) * vx + (py - ay) * vy) / len2;
-            if (t < 0.0) t = 0.0;
-            if (t > 1.0) t = 1.0;
+            if (t < 0.0)
+                t = 0.0;
+            if (t > 1.0)
+                t = 1.0;
 
             return new Point(ax + vx * t, ay + vy * t, 0);
         }
@@ -1880,7 +2687,8 @@ namespace Tekla.Technology.Akit.UserScript
             double plateMaxX,
             double plateMinY,
             double plateMaxY,
-            double tier)
+            double tier
+        )
         {
             if (direction == null)
                 return tier;
@@ -1902,11 +2710,36 @@ namespace Tekla.Technology.Akit.UserScript
             return Math.Max(tier, (baseY - plateMinY) + tier);
         }
 
+        private static double GetDistanceToSharedHorizontalLine(
+            Vector direction,
+            Point firstDimPoint,
+            double sharedLineY,
+            double fallbackTier
+        )
+        {
+            if (
+                direction == null
+                || firstDimPoint == null
+                || double.IsNaN(sharedLineY)
+                || double.IsInfinity(sharedLineY)
+            )
+                return fallbackTier;
+
+            double distance =
+                direction.Y >= 0.0 ? sharedLineY - firstDimPoint.Y : firstDimPoint.Y - sharedLineY;
+
+            if (double.IsNaN(distance) || double.IsInfinity(distance) || distance <= 0.0)
+                return fallbackTier;
+
+            return distance;
+        }
+
         private static Point GetRealPlateSideAnchorForHorizontalDim(
             List<Point> polygon,
             double fallbackEdgeX,
             bool leftSide,
-            bool preferTop)
+            bool preferTop
+        )
         {
             try
             {
@@ -1983,9 +2816,7 @@ namespace Tekla.Technology.Akit.UserScript
                 if (outermost != null)
                     return new Point(sideX, outermost.Y, 0);
             }
-            catch
-            {
-            }
+            catch { }
 
             return null;
         }
@@ -1998,7 +2829,8 @@ namespace Tekla.Technology.Akit.UserScript
             double fallbackMinY,
             double fallbackMaxY,
             out Point leftPoint,
-            out Point rightPoint)
+            out Point rightPoint
+        )
         {
             double centerY = (fallbackMinY + fallbackMaxY) / 2.0;
             leftPoint = new Point(fallbackMinX, centerY, 0);
@@ -2010,13 +2842,16 @@ namespace Tekla.Technology.Akit.UserScript
                 double rightX;
 
                 // Ưu tiên bắt đúng giao điểm mép dầm tại cao độ tâm lỗ.
-                if (TryGetHorizontalRealEdgesAtY(
-                    polygon,
-                    holeY,
-                    fallbackMinX,
-                    fallbackMaxX,
-                    out leftX,
-                    out rightX))
+                if (
+                    TryGetHorizontalRealEdgesAtY(
+                        polygon,
+                        holeY,
+                        fallbackMinX,
+                        fallbackMaxX,
+                        out leftX,
+                        out rightX
+                    )
+                )
                 {
                     leftPoint = new Point(leftX, holeY, 0);
                     rightPoint = new Point(rightX, holeY, 0);
@@ -2051,7 +2886,11 @@ namespace Tekla.Technology.Akit.UserScript
                     }
                 }
 
-                if (leftMost != null && rightMost != null && Math.Abs(rightMost.X - leftMost.X) > 1.0)
+                if (
+                    leftMost != null
+                    && rightMost != null
+                    && Math.Abs(rightMost.X - leftMost.X) > 1.0
+                )
                 {
                     leftPoint = new Point(leftMost.X, leftMost.Y, 0);
                     rightPoint = new Point(rightMost.X, rightMost.Y, 0);
@@ -2072,7 +2911,8 @@ namespace Tekla.Technology.Akit.UserScript
             double fallbackMinX,
             double fallbackMaxX,
             out double leftX,
-            out double rightX)
+            out double rightX
+        )
         {
             leftX = fallbackMinX;
             rightX = fallbackMaxX;
@@ -2177,12 +3017,16 @@ namespace Tekla.Technology.Akit.UserScript
                     Point p3 = new Point(min.X - 1000.0, max.Y + 1000.0, z);
 
                     List<Point> poly = GetLargestIntersectionPolygon(
-                        solid.IntersectAllFaces(p1, p2, p3));
+                        solid.IntersectAllFaces(p1, p2, p3)
+                    );
 
                     if (poly.Count < 2)
                         continue;
 
-                    double minX, maxX, minY, maxY;
+                    double minX,
+                        maxX,
+                        minY,
+                        maxY;
                     GetMinMax2D(poly, out minX, out maxX, out minY, out maxY);
 
                     double width = Math.Abs(maxX - minX);
@@ -2199,9 +3043,7 @@ namespace Tekla.Technology.Akit.UserScript
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return best;
         }
@@ -2215,9 +3057,7 @@ namespace Tekla.Technology.Akit.UserScript
                 while (en != null && en.MoveNext())
                     CollectPointLists(en.Current, all, 0);
             }
-            catch
-            {
-            }
+            catch { }
 
             List<Point> best = new List<Point>();
             double bestScore = -1.0;
@@ -2227,7 +3067,10 @@ namespace Tekla.Technology.Akit.UserScript
                 if (list == null || list.Count < 2)
                     continue;
 
-                double minX, maxX, minY, maxY;
+                double minX,
+                    maxX,
+                    minY,
+                    maxY;
                 GetMinMax2D(list, out minX, out maxX, out minY, out maxY);
 
                 double score = Math.Abs(maxX - minX) * Math.Abs(maxY - minY);
@@ -2306,12 +3149,14 @@ namespace Tekla.Technology.Akit.UserScript
                     result.Add(new Point(p.X, p.Y, p.Z));
             }
 
-            result.Sort(delegate (Point p1, Point p2)
-            {
-                double a1 = Math.Atan2(p1.Y - cy, p1.X - cx);
-                double a2 = Math.Atan2(p2.Y - cy, p2.X - cx);
-                return a1.CompareTo(a2);
-            });
+            result.Sort(
+                delegate(Point p1, Point p2)
+                {
+                    double a1 = Math.Atan2(p1.Y - cy, p1.X - cx);
+                    double a2 = Math.Atan2(p2.Y - cy, p2.X - cx);
+                    return a1.CompareTo(a2);
+                }
+            );
 
             return result;
         }
@@ -2321,7 +3166,8 @@ namespace Tekla.Technology.Akit.UserScript
             out double minX,
             out double maxX,
             out double minY,
-            out double maxY)
+            out double maxY
+        )
         {
             minX = 999999999.0;
             maxX = -999999999.0;
@@ -2336,11 +3182,91 @@ namespace Tekla.Technology.Akit.UserScript
                 if (p == null)
                     continue;
 
-                if (p.X < minX) minX = p.X;
-                if (p.X > maxX) maxX = p.X;
-                if (p.Y < minY) minY = p.Y;
-                if (p.Y > maxY) maxY = p.Y;
+                if (p.X < minX)
+                    minX = p.X;
+                if (p.X > maxX)
+                    maxX = p.X;
+                if (p.Y < minY)
+                    minY = p.Y;
+                if (p.Y > maxY)
+                    maxY = p.Y;
             }
+        }
+
+        private static double PeekLocalTop(
+            Slot01AxisAdapter axes,
+            double beamLength,
+            int relativeTier
+        )
+        {
+            return axes != null && axes.Transpose
+                ? PHU_UnifiedDimRuntime.PeekRight(beamLength, relativeTier)
+                : PHU_UnifiedDimRuntime.PeekTop(beamLength, relativeTier);
+        }
+
+        private static double PeekLocalBottom(
+            Slot01AxisAdapter axes,
+            double beamLength,
+            int relativeTier
+        )
+        {
+            return axes != null && axes.Transpose
+                ? PHU_UnifiedDimRuntime.PeekLeft(beamLength, relativeTier)
+                : PHU_UnifiedDimRuntime.PeekBottom(beamLength, relativeTier);
+        }
+
+        private static double PeekLocalLeft(
+            Slot01AxisAdapter axes,
+            double beamLength,
+            int relativeTier
+        )
+        {
+            return axes != null && axes.Transpose
+                ? PHU_UnifiedDimRuntime.PeekBottom(beamLength, relativeTier)
+                : PHU_UnifiedDimRuntime.PeekLeft(beamLength, relativeTier);
+        }
+
+        private static double PeekLocalRight(
+            Slot01AxisAdapter axes,
+            double beamLength,
+            int relativeTier
+        )
+        {
+            return axes != null && axes.Transpose
+                ? PHU_UnifiedDimRuntime.PeekTop(beamLength, relativeTier)
+                : PHU_UnifiedDimRuntime.PeekRight(beamLength, relativeTier);
+        }
+
+        private static void CommitLocalTop(Slot01AxisAdapter axes)
+        {
+            if (axes != null && axes.Transpose)
+                PHU_UnifiedDimRuntime.CommitRight();
+            else
+                PHU_UnifiedDimRuntime.CommitTop();
+        }
+
+        private static void CommitLocalBottom(Slot01AxisAdapter axes)
+        {
+            if (axes != null && axes.Transpose)
+                PHU_UnifiedDimRuntime.CommitLeft();
+            else
+                PHU_UnifiedDimRuntime.CommitBottom();
+        }
+
+        private static void CommitLocalLeft(Slot01AxisAdapter axes)
+        {
+            if (axes != null && axes.Transpose)
+                PHU_UnifiedDimRuntime.CommitBottom();
+            else
+                PHU_UnifiedDimRuntime.CommitLeft();
+        }
+
+        private static void CommitLocalRight(Slot01AxisAdapter axes)
+        {
+            if (axes != null && axes.Transpose)
+                PHU_UnifiedDimRuntime.CommitTop();
+            else
+                PHU_UnifiedDimRuntime.CommitRight();
         }
 
         private static bool CreateDimChain(
@@ -2348,7 +3274,27 @@ namespace Tekla.Technology.Akit.UserScript
             TSD.View view,
             Point[] points,
             Vector direction,
-            double distance)
+            double distance,
+            Slot01AxisAdapter axes
+        )
+        {
+            if (axes == null || !axes.Transpose)
+                return CreateDimChain(handler, view, points, direction, distance);
+
+            Point[] viewPoints = new Point[points == null ? 0 : points.Length];
+            for (int i = 0; i < viewPoints.Length; i++)
+                viewPoints[i] = axes.ToView(points[i]);
+
+            return CreateDimChain(handler, view, viewPoints, axes.ToView(direction), distance);
+        }
+
+        private static bool CreateDimChain(
+            StraightDimensionSetHandler handler,
+            TSD.View view,
+            Point[] points,
+            Vector direction,
+            double distance
+        )
         {
             if (handler == null || view == null || points == null || points.Length < 2)
                 return false;
@@ -2378,8 +3324,7 @@ namespace Tekla.Technology.Akit.UserScript
             if (list.Count < 2)
                 return false;
 
-            StraightDimensionSet dim =
-                handler.CreateDimensionSet(view, list, direction, distance);
+            StraightDimensionSet dim = handler.CreateDimensionSet(view, list, direction, distance);
 
             return dim != null;
         }
@@ -2397,8 +3342,7 @@ namespace Tekla.Technology.Akit.UserScript
 
             try
             {
-                TSD.DrawingObjectEnumerator e =
-                    dh.GetDrawingObjectSelector().GetSelected();
+                TSD.DrawingObjectEnumerator e = dh.GetDrawingObjectSelector().GetSelected();
 
                 while (e != null && e.MoveNext())
                 {
@@ -2407,9 +3351,7 @@ namespace Tekla.Technology.Akit.UserScript
                         result.Add(dp);
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return result;
         }
@@ -2429,7 +3371,10 @@ namespace Tekla.Technology.Akit.UserScript
             }
         }
 
-        private static TSD.View TryGetSelectedPartsView(DrawingPart plateDrawingPart, DrawingPart beamDrawingPart)
+        private static TSD.View TryGetSelectedPartsView(
+            DrawingPart plateDrawingPart,
+            DrawingPart beamDrawingPart
+        )
         {
             TSD.View v1 = TryGetDrawingObjectView(plateDrawingPart);
             TSD.View v2 = TryGetDrawingObjectView(beamDrawingPart);
@@ -2451,23 +3396,21 @@ namespace Tekla.Technology.Akit.UserScript
             if (drawingObject == null)
                 return null;
 
-            string[] methodNames = new string[]
-            {
-                "GetView",
-                "GetFatherView",
-                "GetParentView"
-            };
+            string[] methodNames = new string[] { "GetView", "GetFatherView", "GetParentView" };
 
             for (int i = 0; i < methodNames.Length; i++)
             {
                 try
                 {
-                    MethodInfo m = drawingObject.GetType().GetMethod(
-                        methodNames[i],
-                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
-                        null,
-                        Type.EmptyTypes,
-                        null);
+                    MethodInfo m = drawingObject
+                        .GetType()
+                        .GetMethod(
+                            methodNames[i],
+                            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
+                            null,
+                            Type.EmptyTypes,
+                            null
+                        );
 
                     if (m == null)
                         continue;
@@ -2477,17 +3420,10 @@ namespace Tekla.Technology.Akit.UserScript
                     if (view != null)
                         return view;
                 }
-                catch
-                {
-                }
+                catch { }
             }
 
-            string[] propertyNames = new string[]
-            {
-                "View",
-                "FatherView",
-                "ParentView"
-            };
+            string[] propertyNames = new string[] { "View", "FatherView", "ParentView" };
 
             for (int i = 0; i < propertyNames.Length; i++)
             {
@@ -2498,9 +3434,7 @@ namespace Tekla.Technology.Akit.UserScript
                     if (view != null)
                         return view;
                 }
-                catch
-                {
-                }
+                catch { }
             }
 
             return null;
@@ -2509,7 +3443,8 @@ namespace Tekla.Technology.Akit.UserScript
         private static TSD.View FindViewContainingBothParts(
             TSD.Drawing drawing,
             Identifier id1,
-            Identifier id2)
+            Identifier id2
+        )
         {
             try
             {
@@ -2548,11 +3483,32 @@ namespace Tekla.Technology.Akit.UserScript
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return null;
+        }
+
+        private static bool ViewContainsPart(TSD.View view, Identifier identifier)
+        {
+            try
+            {
+                if (view == null || identifier == null)
+                    return false;
+
+                TSD.DrawingObjectEnumerator parts = view.GetAllObjects(typeof(DrawingPart));
+                while (parts != null && parts.MoveNext())
+                {
+                    DrawingPart drawingPart = parts.Current as DrawingPart;
+                    if (
+                        drawingPart != null
+                        && SameIdentifier(drawingPart.ModelIdentifier, identifier)
+                    )
+                        return true;
+                }
+            }
+            catch { }
+
+            return false;
         }
 
         private static bool IsPlatePart(ModelPart part)
@@ -2561,22 +3517,26 @@ namespace Tekla.Technology.Akit.UserScript
             if (string.IsNullOrEmpty(profile))
                 return false;
 
-            if (profile.StartsWith("PL") ||
-                profile.StartsWith("PLT") ||
-                profile.StartsWith("FB") ||
-                profile.StartsWith("FL") ||
-                profile.IndexOf("PLATE") >= 0)
+            if (
+                profile.StartsWith("PL")
+                || profile.StartsWith("PLT")
+                || profile.StartsWith("FB")
+                || profile.StartsWith("FL")
+                || profile.IndexOf("PLATE") >= 0
+            )
                 return true;
 
             // Một số môi trường trả dạng WIDTH*THICKNESS không có chữ PL.
             // Chỉ dùng fallback này khi profile không giống thép hình phổ biến.
-            if (profile.IndexOf("H") == 0 ||
-                profile.IndexOf("I") == 0 ||
-                profile.IndexOf("C") == 0 ||
-                profile.IndexOf("L") == 0 ||
-                profile.IndexOf("RHS") >= 0 ||
-                profile.IndexOf("SHS") >= 0 ||
-                profile.IndexOf("PIPE") >= 0)
+            if (
+                profile.IndexOf("H") == 0
+                || profile.IndexOf("I") == 0
+                || profile.IndexOf("C") == 0
+                || profile.IndexOf("L") == 0
+                || profile.IndexOf("RHS") >= 0
+                || profile.IndexOf("SHS") >= 0
+                || profile.IndexOf("PIPE") >= 0
+            )
                 return false;
 
             return false;
@@ -2616,8 +3576,10 @@ namespace Tekla.Technology.Akit.UserScript
                 double dz = Math.Abs(max.Z - min.Z);
 
                 double v = dx;
-                if (dy < v) v = dy;
-                if (dz < v) v = dz;
+                if (dy < v)
+                    v = dy;
+                if (dz < v)
+                    v = dz;
                 return v;
             }
             catch
@@ -2638,9 +3600,7 @@ namespace Tekla.Technology.Akit.UserScript
                 if (profileString != null)
                     return profileString.ToString();
             }
-            catch
-            {
-            }
+            catch { }
 
             string value = "";
             try
@@ -2648,18 +3608,17 @@ namespace Tekla.Technology.Akit.UserScript
                 if (part.GetReportProperty("PROFILE", ref value) && !string.IsNullOrEmpty(value))
                     return value;
             }
-            catch
-            {
-            }
+            catch { }
 
             try
             {
-                if (part.GetReportProperty("PROFILE_NAME", ref value) && !string.IsNullOrEmpty(value))
+                if (
+                    part.GetReportProperty("PROFILE_NAME", ref value)
+                    && !string.IsNullOrEmpty(value)
+                )
                     return value;
             }
-            catch
-            {
-            }
+            catch { }
 
             return "";
         }
@@ -2679,9 +3638,7 @@ namespace Tekla.Technology.Akit.UserScript
                 if (p2 != null && SameIdentifier(p2.Identifier, part.Identifier))
                     return true;
             }
-            catch
-            {
-            }
+            catch { }
 
             // Fallback: thử report assembly/part id không đủ tin cậy thì bỏ qua.
             return false;
@@ -2694,9 +3651,12 @@ namespace Tekla.Technology.Akit.UserScript
                 if (drawingObject == null)
                     return null;
 
-                PropertyInfo prop = drawingObject.GetType().GetProperty(
-                    "ModelIdentifier",
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                PropertyInfo prop = drawingObject
+                    .GetType()
+                    .GetProperty(
+                        "ModelIdentifier",
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    );
 
                 if (prop == null || !prop.CanRead)
                     return null;
@@ -2716,9 +3676,11 @@ namespace Tekla.Technology.Akit.UserScript
                 if (obj == null || string.IsNullOrEmpty(name))
                     return null;
 
-                PropertyInfo p = obj.GetType().GetProperty(
-                    name,
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                PropertyInfo p = obj.GetType()
+                    .GetProperty(
+                        name,
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    );
 
                 if (p == null || !p.CanRead || p.GetIndexParameters().Length > 0)
                     return null;

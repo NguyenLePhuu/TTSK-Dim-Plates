@@ -38,9 +38,7 @@ namespace Tekla.Technology.Akit.UserScript
             public double X;
             public double Y;
 
-            public Vec2()
-            {
-            }
+            public Vec2() { }
 
             public Vec2(double x, double y)
             {
@@ -79,9 +77,12 @@ namespace Tekla.Technology.Akit.UserScript
             {
                 get
                 {
-                    return IsFinite(MinX) && IsFinite(MaxX) &&
-                           IsFinite(MinY) && IsFinite(MaxY) &&
-                           MaxX > MinX + 0.001 && MaxY > MinY + 0.001;
+                    return IsFinite(MinX)
+                        && IsFinite(MaxX)
+                        && IsFinite(MinY)
+                        && IsFinite(MaxY)
+                        && MaxX > MinX + 0.001
+                        && MaxY > MinY + 0.001;
                 }
             }
 
@@ -130,8 +131,9 @@ namespace Tekla.Technology.Akit.UserScript
                 if (!handler.GetConnectionStatus())
                 {
                     ShowLog(
-                        "DIM SPACING LIVE AUDIT - READ ONLY\r\n\r\n" +
-                        "Khong ket noi duoc Tekla DrawingHandler.");
+                        "DIM SPACING LIVE AUDIT - READ ONLY\r\n\r\n"
+                            + "Khong ket noi duoc Tekla DrawingHandler."
+                    );
                     return;
                 }
 
@@ -139,8 +141,9 @@ namespace Tekla.Technology.Akit.UserScript
                 if (drawing == null)
                 {
                     ShowLog(
-                        "DIM SPACING LIVE AUDIT - READ ONLY\r\n\r\n" +
-                        "Khong co ban ve Tekla active. Mo Drawing Editor roi chay lai Slot 06.");
+                        "DIM SPACING LIVE AUDIT - READ ONLY\r\n\r\n"
+                            + "Khong co ban ve Tekla active. Mo Drawing Editor roi chay lai Slot 06."
+                    );
                     return;
                 }
 
@@ -148,8 +151,9 @@ namespace Tekla.Technology.Akit.UserScript
                 if (sheet == null)
                 {
                     ShowLog(
-                        "DIM SPACING LIVE AUDIT - READ ONLY\r\n\r\n" +
-                        "Khong lay duoc Sheet cua ban ve active.");
+                        "DIM SPACING LIVE AUDIT - READ ONLY\r\n\r\n"
+                            + "Khong lay duoc Sheet cua ban ve active."
+                    );
                     return;
                 }
 
@@ -163,8 +167,12 @@ namespace Tekla.Technology.Akit.UserScript
             catch (Exception ex)
             {
                 ShowLog(
-                    "DIM SPACING LIVE AUDIT - READ ONLY\r\n\r\n" +
-                    "Audit failed:\r\n" + ex.GetType().Name + ": " + ex.Message);
+                    "DIM SPACING LIVE AUDIT - READ ONLY\r\n\r\n"
+                        + "Audit failed:\r\n"
+                        + ex.GetType().Name
+                        + ": "
+                        + ex.Message
+                );
             }
         }
 
@@ -194,7 +202,8 @@ namespace Tekla.Technology.Akit.UserScript
         {
             List<DimInfo> result = new List<DimInfo>();
             Type straightDimensionSetType = Type.GetType(
-                "Tekla.Structures.Drawing.StraightDimensionSet, Tekla.Structures.Drawing");
+                "Tekla.Structures.Drawing.StraightDimensionSet, Tekla.Structures.Drawing"
+            );
 
             if (straightDimensionSetType == null || views == null)
                 return result;
@@ -206,8 +215,9 @@ namespace Tekla.Technology.Akit.UserScript
 
                 try
                 {
-                    DrawingObjectEnumerator enumerator =
-                        viewInfo.View.GetAllObjects(straightDimensionSetType);
+                    DrawingObjectEnumerator enumerator = viewInfo.View.GetAllObjects(
+                        straightDimensionSetType
+                    );
                     int collectionIndex = 0;
 
                     while (enumerator.MoveNext())
@@ -231,10 +241,7 @@ namespace Tekla.Technology.Akit.UserScript
             return result;
         }
 
-        private static DimInfo CreateDimInfo(
-            object dimSet,
-            ViewInfo viewInfo,
-            int collectionIndex)
+        private static DimInfo CreateDimInfo(object dimSet, ViewInfo viewInfo, int collectionIndex)
         {
             if (dimSet == null || viewInfo == null)
                 return null;
@@ -309,32 +316,42 @@ namespace Tekla.Technology.Akit.UserScript
                 }
                 else if (item.Kind == "V")
                 {
-                    item.GroupKey = viewPrefix + "_VERT_OFF_" +
-                        item.RoundedAngle.ToString("0") + "_SIDE_" + item.Side;
+                    item.GroupKey =
+                        viewPrefix
+                        + "_VERT_OFF_"
+                        + item.RoundedAngle.ToString("0")
+                        + "_SIDE_"
+                        + item.Side;
                 }
                 else if (item.Kind == "H")
                 {
-                    item.GroupKey = viewPrefix + "_HORIZ_OFF_" +
-                        item.RoundedAngle.ToString("0") + "_SIDE_" + item.Side;
+                    item.GroupKey =
+                        viewPrefix
+                        + "_HORIZ_OFF_"
+                        + item.RoundedAngle.ToString("0")
+                        + "_SIDE_"
+                        + item.Side;
                 }
                 else
                 {
-                    item.GroupKey = viewPrefix + "_SLOPE_OFF_" +
-                        item.RoundedAngle.ToString("0") + "_SIDE_" + item.Side;
+                    item.GroupKey =
+                        viewPrefix
+                        + "_SLOPE_OFF_"
+                        + item.RoundedAngle.ToString("0")
+                        + "_SIDE_"
+                        + item.Side;
                 }
             }
         }
 
-        private static string BuildReport(
-            Drawing drawing,
-            List<ViewInfo> views,
-            List<DimInfo> dims)
+        private static string BuildReport(Drawing drawing, List<ViewInfo> views, List<DimInfo> dims)
         {
             StringBuilder text = new StringBuilder();
             text.AppendLine("DIM SPACING LIVE AUDIT - READ ONLY");
             text.AppendLine("No Modify / CommitChanges / Delete / Insert is called by Slot 06.");
-            text.AppendLine("Audit spacing for the internal-DIM check: " +
-                AuditSpacing.ToString("0.0") + " mm.");
+            text.AppendLine(
+                "Audit spacing for the internal-DIM check: " + AuditSpacing.ToString("0.0") + " mm."
+            );
             text.AppendLine("Tekla Distance reference inspected: DimensionPoints[0].");
             text.AppendLine();
             text.AppendLine("Drawing: " + drawing.GetType().FullName);
@@ -346,16 +363,23 @@ namespace Tekla.Technology.Akit.UserScript
             {
                 foreach (ViewInfo view in views)
                 {
-                    text.Append("VIEW V").Append(view.Index.ToString("00"))
-                        .Append(": ").Append(view.Description ?? "<unknown>")
+                    text.Append("VIEW V")
+                        .Append(view.Index.ToString("00"))
+                        .Append(": ")
+                        .Append(view.Description ?? "<unknown>")
                         .Append(" | point bounds: ");
 
                     if (view.HasBounds)
                     {
-                        text.Append("X[").Append(Format(view.MinX)).Append(", ")
-                            .Append(Format(view.MaxX)).Append("] Y[")
-                            .Append(Format(view.MinY)).Append(", ")
-                            .Append(Format(view.MaxY)).Append("]");
+                        text.Append("X[")
+                            .Append(Format(view.MinX))
+                            .Append(", ")
+                            .Append(Format(view.MaxX))
+                            .Append("] Y[")
+                            .Append(Format(view.MinY))
+                            .Append(", ")
+                            .Append(Format(view.MaxY))
+                            .Append("]");
                     }
                     else
                     {
@@ -377,19 +401,27 @@ namespace Tekla.Technology.Akit.UserScript
                 List<DimInfo> group = groups[key];
                 SortByCurrentVisualTier(group);
 
-                text.Append("- ").Append(key)
-                    .Append(" | count=").Append(group.Count)
-                    .Append(" | action=").Append(GetPredictedAction(group))
+                text.Append("- ")
+                    .Append(key)
+                    .Append(" | count=")
+                    .Append(group.Count)
+                    .Append(" | action=")
+                    .Append(GetPredictedAction(group))
                     .AppendLine();
 
                 for (int i = 0; i < group.Count; i++)
                 {
                     DimInfo item = group[i];
-                    text.Append("    tier ").Append(i + 1)
-                        .Append(" | set#").Append(item.RuntimeId)
-                        .Append(" | lineLevel=").Append(Format(item.VisualLineLevel))
-                        .Append(" | distance=").Append(Format(item.Distance))
-                        .Append(" | p0=").Append(FormatPoint(item.FirstPoint))
+                    text.Append("    tier ")
+                        .Append(i + 1)
+                        .Append(" | set#")
+                        .Append(item.RuntimeId)
+                        .Append(" | lineLevel=")
+                        .Append(Format(item.VisualLineLevel))
+                        .Append(" | distance=")
+                        .Append(Format(item.Distance))
+                        .Append(" | p0=")
+                        .Append(FormatPoint(item.FirstPoint))
                         .AppendLine();
                 }
             }
@@ -401,32 +433,48 @@ namespace Tekla.Technology.Akit.UserScript
             if (dims != null)
             {
                 List<DimInfo> ordered = new List<DimInfo>(dims);
-                ordered.Sort(delegate (DimInfo a, DimInfo b)
-                {
-                    int byView = a.ViewInfo.Index.CompareTo(b.ViewInfo.Index);
-                    if (byView != 0)
-                        return byView;
-                    return a.CollectionIndex.CompareTo(b.CollectionIndex);
-                });
+                ordered.Sort(
+                    delegate(DimInfo a, DimInfo b)
+                    {
+                        int byView = a.ViewInfo.Index.CompareTo(b.ViewInfo.Index);
+                        if (byView != 0)
+                            return byView;
+                        return a.CollectionIndex.CompareTo(b.CollectionIndex);
+                    }
+                );
 
                 foreach (DimInfo item in ordered)
                 {
-                    text.Append("V").Append(item.ViewInfo.Index.ToString("00"))
-                        .Append(" / collection#").Append(item.CollectionIndex)
-                        .Append(" / set#").Append(item.RuntimeId).AppendLine();
+                    text.Append("V")
+                        .Append(item.ViewInfo.Index.ToString("00"))
+                        .Append(" / collection#")
+                        .Append(item.CollectionIndex)
+                        .Append(" / set#")
+                        .Append(item.RuntimeId)
+                        .AppendLine();
                     text.Append("  group=").Append(item.GroupKey).AppendLine();
-                    text.Append("  kind=").Append(item.Kind)
-                        .Append(" side=").Append(item.Side)
-                        .Append(" internal@50=").Append(item.IsInternalAtAuditSpacing)
-                        .Append(" points=").Append(item.Points == null ? 0 : item.Points.Count)
+                    text.Append("  kind=")
+                        .Append(item.Kind)
+                        .Append(" side=")
+                        .Append(item.Side)
+                        .Append(" internal@50=")
+                        .Append(item.IsInternalAtAuditSpacing)
+                        .Append(" points=")
+                        .Append(item.Points == null ? 0 : item.Points.Count)
                         .AppendLine();
-                    text.Append("  Distance=").Append(Format(item.Distance))
-                        .Append(" raw UpDirection=").Append(FormatVector(item.RawOffset))
-                        .Append(" visual direction=").Append(FormatVector(item.VisualOffset))
-                        .Append(" visual angle=").Append(item.RoundedAngle.ToString("0"))
+                    text.Append("  Distance=")
+                        .Append(Format(item.Distance))
+                        .Append(" raw UpDirection=")
+                        .Append(FormatVector(item.RawOffset))
+                        .Append(" visual direction=")
+                        .Append(FormatVector(item.VisualOffset))
+                        .Append(" visual angle=")
+                        .Append(item.RoundedAngle.ToString("0"))
                         .AppendLine();
-                    text.Append("  DimensionPoints[0]=").Append(FormatPoint(item.FirstPoint))
-                        .Append(" visualLineLevel=").Append(Format(item.VisualLineLevel))
+                    text.Append("  DimensionPoints[0]=")
+                        .Append(FormatPoint(item.FirstPoint))
+                        .Append(" visualLineLevel=")
+                        .Append(Format(item.VisualLineLevel))
                         .AppendLine();
                 }
             }
@@ -441,8 +489,9 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static Dictionary<string, List<DimInfo>> MakeGroups(List<DimInfo> dims)
         {
-            Dictionary<string, List<DimInfo>> groups =
-                new Dictionary<string, List<DimInfo>>(StringComparer.Ordinal);
+            Dictionary<string, List<DimInfo>> groups = new Dictionary<string, List<DimInfo>>(
+                StringComparer.Ordinal
+            );
 
             if (dims == null)
                 return groups;
@@ -470,23 +519,25 @@ namespace Tekla.Technology.Akit.UserScript
             if (group == null)
                 return;
 
-            group.Sort(delegate (DimInfo a, DimInfo b)
-            {
-                bool aBad = !IsFinite(a.VisualLineLevel);
-                bool bBad = !IsFinite(b.VisualLineLevel);
-                if (aBad && bBad)
+            group.Sort(
+                delegate(DimInfo a, DimInfo b)
+                {
+                    bool aBad = !IsFinite(a.VisualLineLevel);
+                    bool bBad = !IsFinite(b.VisualLineLevel);
+                    if (aBad && bBad)
+                        return a.RuntimeId.CompareTo(b.RuntimeId);
+                    if (aBad)
+                        return 1;
+                    if (bBad)
+                        return -1;
+
+                    double delta = a.VisualLineLevel - b.VisualLineLevel;
+                    if (Math.Abs(delta) > 0.01)
+                        return delta < 0.0 ? -1 : 1;
+
                     return a.RuntimeId.CompareTo(b.RuntimeId);
-                if (aBad)
-                    return 1;
-                if (bBad)
-                    return -1;
-
-                double delta = a.VisualLineLevel - b.VisualLineLevel;
-                if (Math.Abs(delta) > 0.01)
-                    return delta < 0.0 ? -1 : 1;
-
-                return a.RuntimeId.CompareTo(b.RuntimeId);
-            });
+                }
+            );
         }
 
         private static string GetPredictedAction(List<DimInfo> group)
@@ -505,8 +556,9 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static void AppendSplitWarnings(StringBuilder text, List<DimInfo> dims)
         {
-            Dictionary<string, List<string>> candidateGroups =
-                new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            Dictionary<string, List<string>> candidateGroups = new Dictionary<string, List<string>>(
+                StringComparer.Ordinal
+            );
 
             if (dims != null)
             {
@@ -515,8 +567,13 @@ namespace Tekla.Technology.Akit.UserScript
                     if (item == null || item.IsInternalAtAuditSpacing)
                         continue;
 
-                    string candidateKey = "V" + item.ViewInfo.Index.ToString("00") +
-                        "_" + item.Kind + "_" + item.Side;
+                    string candidateKey =
+                        "V"
+                        + item.ViewInfo.Index.ToString("00")
+                        + "_"
+                        + item.Kind
+                        + "_"
+                        + item.Side;
                     List<string> keys;
                     if (!candidateGroups.TryGetValue(candidateKey, out keys))
                     {
@@ -538,9 +595,12 @@ namespace Tekla.Technology.Akit.UserScript
                     continue;
 
                 foundWarning = true;
-                text.Append("- ").Append(pair.Key)
-                    .Append(" is split into ").Append(pair.Value.Count)
-                    .Append(" group keys: ").Append(string.Join(" | ", pair.Value.ToArray()))
+                text.Append("- ")
+                    .Append(pair.Key)
+                    .Append(" is split into ")
+                    .Append(pair.Value.Count)
+                    .Append(" group keys: ")
+                    .Append(string.Join(" | ", pair.Value.ToArray()))
                     .AppendLine();
             }
 
@@ -550,8 +610,13 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static bool IsInternalAtAuditSpacing(DimInfo item)
         {
-            if (item == null || item.ViewInfo == null || !item.ViewInfo.HasBounds ||
-                item.Points == null || item.Points.Count < 2)
+            if (
+                item == null
+                || item.ViewInfo == null
+                || !item.ViewInfo.HasBounds
+                || item.Points == null
+                || item.Points.Count < 2
+            )
                 return false;
 
             ViewInfo box = item.ViewInfo;
@@ -561,12 +626,16 @@ namespace Tekla.Technology.Akit.UserScript
             double lineX = item.FirstPoint.X + item.Distance * item.RawOffset.X;
             double lineY = item.FirstPoint.Y + item.Distance * item.RawOffset.Y;
 
-            if (item.Kind == "H" &&
-                (lineY <= box.MinY + EdgeTolerance || lineY >= box.MaxY - EdgeTolerance))
+            if (
+                item.Kind == "H"
+                && (lineY <= box.MinY + EdgeTolerance || lineY >= box.MaxY - EdgeTolerance)
+            )
                 return false;
 
-            if (item.Kind == "V" &&
-                (lineX <= box.MinX + EdgeTolerance || lineX >= box.MaxX - EdgeTolerance))
+            if (
+                item.Kind == "V"
+                && (lineX <= box.MinX + EdgeTolerance || lineX >= box.MaxX - EdgeTolerance)
+            )
                 return false;
 
             foreach (Point point in item.Points)
@@ -576,16 +645,22 @@ namespace Tekla.Technology.Akit.UserScript
 
                 if (item.Kind == "H")
                 {
-                    if (point.Y <= box.MinY + EdgeTolerance || point.Y >= box.MaxY - EdgeTolerance ||
-                        point.Y <= box.MinY + InternalNearEdgeLimit ||
-                        point.Y >= box.MaxY - InternalNearEdgeLimit)
+                    if (
+                        point.Y <= box.MinY + EdgeTolerance
+                        || point.Y >= box.MaxY - EdgeTolerance
+                        || point.Y <= box.MinY + InternalNearEdgeLimit
+                        || point.Y >= box.MaxY - InternalNearEdgeLimit
+                    )
                         return false;
                 }
                 else if (item.Kind == "V")
                 {
-                    if (point.X <= box.MinX + EdgeTolerance || point.X >= box.MaxX - EdgeTolerance ||
-                        point.X <= box.MinX + InternalNearEdgeLimit ||
-                        point.X >= box.MaxX - InternalNearEdgeLimit)
+                    if (
+                        point.X <= box.MinX + EdgeTolerance
+                        || point.X >= box.MaxX - EdgeTolerance
+                        || point.X <= box.MinX + InternalNearEdgeLimit
+                        || point.X >= box.MaxX - InternalNearEdgeLimit
+                    )
                         return false;
                 }
                 else
@@ -599,14 +674,18 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static double GetVisualLineLevel(DimInfo item)
         {
-            if (item == null || item.FirstPoint == null || item.RawOffset == null ||
-                item.VisualOffset == null)
+            if (
+                item == null
+                || item.FirstPoint == null
+                || item.RawOffset == null
+                || item.VisualOffset == null
+            )
                 return Double.NaN;
 
-            double anchor = item.FirstPoint.X * item.VisualOffset.X +
-                            item.FirstPoint.Y * item.VisualOffset.Y;
-            double dot = item.RawOffset.X * item.VisualOffset.X +
-                         item.RawOffset.Y * item.VisualOffset.Y;
+            double anchor =
+                item.FirstPoint.X * item.VisualOffset.X + item.FirstPoint.Y * item.VisualOffset.Y;
+            double dot =
+                item.RawOffset.X * item.VisualOffset.X + item.RawOffset.Y * item.VisualOffset.Y;
             double level = anchor + item.Distance * dot;
             return IsFinite(level) ? level : Double.NaN;
         }
@@ -614,8 +693,9 @@ namespace Tekla.Technology.Akit.UserScript
         private static bool TryReadOffset(object dimSet, out Vec2 offset)
         {
             offset = null;
-            object value = GetPropertyOrField(dimSet, "UpDirection") ??
-                           GetPropertyOrField(dimSet, "OffsetDirection");
+            object value =
+                GetPropertyOrField(dimSet, "UpDirection")
+                ?? GetPropertyOrField(dimSet, "OffsetDirection");
             if (value == null)
                 return false;
 
@@ -694,13 +774,15 @@ namespace Tekla.Technology.Akit.UserScript
                 Type type = value.GetType();
                 PropertyInfo property = type.GetProperty(
                     memberName,
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                );
                 if (property != null)
                     return property.GetValue(value, null);
 
                 FieldInfo field = type.GetField(
                     memberName,
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                );
                 return field == null ? null : field.GetValue(value);
             }
             catch
@@ -727,7 +809,11 @@ namespace Tekla.Technology.Akit.UserScript
             }
         }
 
-        private static bool TryReadCoordinate(object value, string memberName, out double coordinate)
+        private static bool TryReadCoordinate(
+            object value,
+            string memberName,
+            out double coordinate
+        )
         {
             coordinate = Double.NaN;
             object raw = GetPropertyOrField(value, memberName);

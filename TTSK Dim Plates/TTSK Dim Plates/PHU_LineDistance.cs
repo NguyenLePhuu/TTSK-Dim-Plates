@@ -18,9 +18,7 @@ namespace TTSK_AutoDim_Plates
                 if (Success)
                     return "Đã tạo line: " + Distance.ToString("0.###") + " mm";
 
-                return string.IsNullOrWhiteSpace(Message)
-                    ? "Không tạo được line."
-                    : Message;
+                return string.IsNullOrWhiteSpace(Message) ? "Không tạo được line." : Message;
             }
         }
 
@@ -47,16 +45,12 @@ namespace TTSK_AutoDim_Plates
                 if (picker == null)
                     throw new Exception("Không lấy được Drawing Picker.");
 
-                PickedPoint startPick = PickPoint(
-                    picker,
-                    "Chọn điểm bắt đầu line");
+                PickedPoint startPick = PickPoint(picker, "Chọn điểm bắt đầu line");
 
                 if (startPick == null || startPick.View == null || startPick.Point == null)
                     throw new Exception("Không lấy được điểm bắt đầu line.");
 
-                PickedPoint directionPick = PickPoint(
-                    picker,
-                    "Chọn điểm định hướng line");
+                PickedPoint directionPick = PickPoint(picker, "Chọn điểm định hướng line");
 
                 if (directionPick == null || directionPick.Point == null)
                     throw new Exception("Không lấy được điểm định hướng line.");
@@ -71,25 +65,28 @@ namespace TTSK_AutoDim_Plates
                 double length = Math.Sqrt(dx * dx + dy * dy + dz * dz);
 
                 if (length < 0.0001)
-                    throw new Exception("Điểm định hướng trùng điểm bắt đầu. Hãy chọn 2 điểm khác nhau.");
+                    throw new Exception(
+                        "Điểm định hướng trùng điểm bắt đầu. Hãy chọn 2 điểm khác nhau."
+                    );
 
                 double factor = distance / length;
 
                 Point endPoint = new Point(
                     startPoint.X + dx * factor,
                     startPoint.Y + dy * factor,
-                    startPoint.Z + dz * factor);
+                    startPoint.Z + dz * factor
+                );
 
                 Tekla.Structures.Drawing.Line.LineAttributes attributes =
                     BuildLineDistanceAttributes();
 
-                Tekla.Structures.Drawing.Line line =
-                    new Tekla.Structures.Drawing.Line(
-                        startPick.View,
-                        startPoint,
-                        endPoint,
-                        0.0,
-                        attributes);
+                Tekla.Structures.Drawing.Line line = new Tekla.Structures.Drawing.Line(
+                    startPick.View,
+                    startPoint,
+                    endPoint,
+                    0.0,
+                    attributes
+                );
 
                 if (!line.Insert())
                     throw new Exception("Tekla không insert được line.");
@@ -102,9 +99,7 @@ namespace TTSK_AutoDim_Plates
                     ApplyLineDistanceAttributes(insertedAttributes);
                     line.Modify();
                 }
-                catch
-                {
-                }
+                catch { }
 
                 drawing.CommitChanges();
 
@@ -139,16 +134,12 @@ namespace TTSK_AutoDim_Plates
                 if (picker == null)
                     throw new Exception("Không lấy được Drawing Picker.");
 
-                PickedPoint startPick = PickPoint(
-                    picker,
-                    "Chọn điểm bắt đầu line");
+                PickedPoint startPick = PickPoint(picker, "Chọn điểm bắt đầu line");
 
                 if (startPick == null || startPick.View == null || startPick.Point == null)
                     throw new Exception("Không lấy được điểm bắt đầu line.");
 
-                PickedPoint endPick = PickPoint(
-                    picker,
-                    "Chọn điểm kết thúc line");
+                PickedPoint endPick = PickPoint(picker, "Chọn điểm kết thúc line");
 
                 if (endPick == null || endPick.Point == null)
                     throw new Exception("Không lấy được điểm kết thúc line.");
@@ -168,18 +159,20 @@ namespace TTSK_AutoDim_Plates
                 double length = Math.Sqrt(dx * dx + dy * dy + dz * dz);
 
                 if (length < 0.0001)
-                    throw new Exception("Điểm kết thúc trùng điểm bắt đầu. Hãy chọn 2 điểm khác nhau.");
+                    throw new Exception(
+                        "Điểm kết thúc trùng điểm bắt đầu. Hãy chọn 2 điểm khác nhau."
+                    );
 
                 Tekla.Structures.Drawing.Line.LineAttributes attributes =
                     BuildLineDistanceAttributes();
 
-                Tekla.Structures.Drawing.Line line =
-                    new Tekla.Structures.Drawing.Line(
-                        startPick.View,
-                        startPoint,
-                        endPoint,
-                        0.0,
-                        attributes);
+                Tekla.Structures.Drawing.Line line = new Tekla.Structures.Drawing.Line(
+                    startPick.View,
+                    startPoint,
+                    endPoint,
+                    0.0,
+                    attributes
+                );
 
                 if (!line.Insert())
                     throw new Exception("Tekla không insert được line.");
@@ -192,9 +185,7 @@ namespace TTSK_AutoDim_Plates
                     ApplyLineDistanceAttributes(insertedAttributes);
                     line.Modify();
                 }
-                catch
-                {
-                }
+                catch { }
 
                 drawing.CommitChanges();
 
@@ -214,8 +205,26 @@ namespace TTSK_AutoDim_Plates
         public static bool InsertLineWithLineDistanceAttributes(
             ViewBase view,
             Point startPoint,
-            Point endPoint)
+            Point endPoint
+        )
         {
+            Tekla.Structures.Drawing.Line insertedLine;
+            return InsertLineWithLineDistanceAttributes(
+                view,
+                startPoint,
+                endPoint,
+                out insertedLine
+            );
+        }
+
+        public static bool InsertLineWithLineDistanceAttributes(
+            ViewBase view,
+            Point startPoint,
+            Point endPoint,
+            out Tekla.Structures.Drawing.Line insertedLine
+        )
+        {
+            insertedLine = null;
             try
             {
                 if (view == null || startPoint == null || endPoint == null)
@@ -231,16 +240,18 @@ namespace TTSK_AutoDim_Plates
                 Tekla.Structures.Drawing.Line.LineAttributes attributes =
                     BuildLineDistanceAttributes();
 
-                Tekla.Structures.Drawing.Line line =
-                    new Tekla.Structures.Drawing.Line(
-                        view,
-                        startPoint,
-                        endPoint,
-                        0.0,
-                        attributes);
+                Tekla.Structures.Drawing.Line line = new Tekla.Structures.Drawing.Line(
+                    view,
+                    startPoint,
+                    endPoint,
+                    0.0,
+                    attributes
+                );
 
                 if (!line.Insert())
                     return false;
+
+                insertedLine = line;
 
                 try
                 {
@@ -248,9 +259,7 @@ namespace TTSK_AutoDim_Plates
                     ApplyLineDistanceAttributes(insertedAttributes);
                     line.Modify();
                 }
-                catch
-                {
-                }
+                catch { }
 
                 return true;
             }
@@ -305,21 +314,30 @@ namespace TTSK_AutoDim_Plates
             }
         }
 
-        private static void SetLineTypeProp(object target, string propName, string preferredName, int number)
+        private static void SetLineTypeProp(
+            object target,
+            string propName,
+            string preferredName,
+            int number
+        )
         {
             if (target == null)
                 return;
 
             try
             {
-                PropertyInfo property = target.GetType().GetProperty(
-                    propName,
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                PropertyInfo property = target
+                    .GetType()
+                    .GetProperty(
+                        propName,
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    );
 
                 if (property == null || !property.CanWrite)
                     return;
 
-                Type type = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
+                Type type =
+                    Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
 
                 if (type.IsEnum)
                 {
@@ -331,26 +349,36 @@ namespace TTSK_AutoDim_Plates
                 }
 
                 object current = null;
-                try { current = property.GetValue(target, null); } catch { }
+                try
+                {
+                    current = property.GetValue(target, null);
+                }
+                catch { }
 
                 if (current != null)
                     SetLineTypeField(current, "_LineType", preferredName, number);
             }
-            catch
-            {
-            }
+            catch { }
         }
 
-        private static void SetLineTypeField(object target, string fieldName, string preferredName, int number)
+        private static void SetLineTypeField(
+            object target,
+            string fieldName,
+            string preferredName,
+            int number
+        )
         {
             if (target == null)
                 return;
 
             try
             {
-                FieldInfo field = target.GetType().GetField(
-                    fieldName,
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                FieldInfo field = target
+                    .GetType()
+                    .GetField(
+                        fieldName,
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    );
 
                 if (field == null)
                     return;
@@ -367,17 +395,23 @@ namespace TTSK_AutoDim_Plates
                 }
 
                 object current = null;
-                try { current = field.GetValue(target); } catch { }
+                try
+                {
+                    current = field.GetValue(target);
+                }
+                catch { }
 
                 if (current != null && !object.ReferenceEquals(current, target))
                     SetLineTypeField(current, "_LineType", preferredName, number);
             }
-            catch
-            {
-            }
+            catch { }
         }
 
-        private static object GetEnumValueByNameOrNumber(Type enumType, string preferredName, int number)
+        private static object GetEnumValueByNameOrNumber(
+            Type enumType,
+            string preferredName,
+            int number
+        )
         {
             if (enumType == null || !enumType.IsEnum)
                 return null;
@@ -390,25 +424,23 @@ namespace TTSK_AutoDim_Plates
                         return Enum.Parse(enumType, name);
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             try
             {
                 foreach (string name in Enum.GetNames(enumType))
                 {
-                    if (name.IndexOf("XKITLINE04", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                        name.IndexOf("LINE03", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                        name.IndexOf("XT03", StringComparison.OrdinalIgnoreCase) >= 0)
+                    if (
+                        name.IndexOf("XKITLINE04", StringComparison.OrdinalIgnoreCase) >= 0
+                        || name.IndexOf("LINE03", StringComparison.OrdinalIgnoreCase) >= 0
+                        || name.IndexOf("XT03", StringComparison.OrdinalIgnoreCase) >= 0
+                    )
                     {
                         return Enum.Parse(enumType, name);
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             try
             {
@@ -427,12 +459,15 @@ namespace TTSK_AutoDim_Plates
 
             try
             {
-                MethodInfo method = target.GetType().GetMethod(
-                    "LoadAttributes",
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
-                    null,
-                    new Type[] { typeof(string) },
-                    null);
+                MethodInfo method = target
+                    .GetType()
+                    .GetMethod(
+                        "LoadAttributes",
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
+                        null,
+                        new Type[] { typeof(string) },
+                        null
+                    );
 
                 if (method != null)
                 {
@@ -440,25 +475,24 @@ namespace TTSK_AutoDim_Plates
                     return;
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             try
             {
-                MethodInfo method = target.GetType().GetMethod(
-                    "Load",
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
-                    null,
-                    new Type[] { typeof(string) },
-                    null);
+                MethodInfo method = target
+                    .GetType()
+                    .GetMethod(
+                        "Load",
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
+                        null,
+                        new Type[] { typeof(string) },
+                        null
+                    );
 
                 if (method != null)
                     method.Invoke(target, new object[] { attributeName });
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static object GetProp(object target, string name)
@@ -468,9 +502,12 @@ namespace TTSK_AutoDim_Plates
 
             try
             {
-                PropertyInfo property = target.GetType().GetProperty(
-                    name,
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                PropertyInfo property = target
+                    .GetType()
+                    .GetProperty(
+                        name,
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    );
 
                 if (property == null || !property.CanRead)
                     return null;
@@ -490,16 +527,17 @@ namespace TTSK_AutoDim_Plates
 
             try
             {
-                FieldInfo field = target.GetType().GetField(
-                    fieldName,
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                FieldInfo field = target
+                    .GetType()
+                    .GetField(
+                        fieldName,
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    );
 
                 if (field != null && field.FieldType == typeof(string))
                     field.SetValue(target, value);
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static void SetEnumField(object target, string fieldName, string enumName)
@@ -509,9 +547,12 @@ namespace TTSK_AutoDim_Plates
 
             try
             {
-                FieldInfo field = target.GetType().GetField(
-                    fieldName,
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                FieldInfo field = target
+                    .GetType()
+                    .GetField(
+                        fieldName,
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    );
 
                 if (field == null)
                     return;
@@ -522,17 +563,17 @@ namespace TTSK_AutoDim_Plates
 
                 foreach (string name in Enum.GetNames(type))
                 {
-                    if (string.Equals(name, enumName, StringComparison.OrdinalIgnoreCase) ||
-                        name.IndexOf(enumName, StringComparison.OrdinalIgnoreCase) >= 0)
+                    if (
+                        string.Equals(name, enumName, StringComparison.OrdinalIgnoreCase)
+                        || name.IndexOf(enumName, StringComparison.OrdinalIgnoreCase) >= 0
+                    )
                     {
                         field.SetValue(target, Enum.Parse(type, name));
                         return;
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static void SetEnumProp(object target, string name, string enumName)
@@ -542,30 +583,34 @@ namespace TTSK_AutoDim_Plates
 
             try
             {
-                PropertyInfo property = target.GetType().GetProperty(
-                    name,
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                PropertyInfo property = target
+                    .GetType()
+                    .GetProperty(
+                        name,
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    );
 
                 if (property == null || !property.CanWrite)
                     return;
 
-                Type type = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
+                Type type =
+                    Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
                 if (!type.IsEnum)
                     return;
 
                 foreach (string enumValue in Enum.GetNames(type))
                 {
-                    if (string.Equals(enumValue, enumName, StringComparison.OrdinalIgnoreCase) ||
-                        enumValue.IndexOf(enumName, StringComparison.OrdinalIgnoreCase) >= 0)
+                    if (
+                        string.Equals(enumValue, enumName, StringComparison.OrdinalIgnoreCase)
+                        || enumValue.IndexOf(enumName, StringComparison.OrdinalIgnoreCase) >= 0
+                    )
                     {
                         property.SetValue(target, Enum.Parse(type, enumValue), null);
                         return;
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static void SetDoubleProp(object target, string name, double value)
@@ -575,20 +620,22 @@ namespace TTSK_AutoDim_Plates
 
             try
             {
-                PropertyInfo property = target.GetType().GetProperty(
-                    name,
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                PropertyInfo property = target
+                    .GetType()
+                    .GetProperty(
+                        name,
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    );
 
                 if (property == null || !property.CanWrite)
                     return;
 
-                Type type = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
+                Type type =
+                    Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
                 object converted = Convert.ChangeType(value, type);
                 property.SetValue(target, converted, null);
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private class PickedPoint
@@ -675,9 +722,7 @@ namespace TTSK_AutoDim_Plates
 
                     throw;
                 }
-                catch
-                {
-                }
+                catch { }
             }
 
             throw new Exception("Không tìm được hàm PickPoint phù hợp trong Tekla Drawing Picker.");

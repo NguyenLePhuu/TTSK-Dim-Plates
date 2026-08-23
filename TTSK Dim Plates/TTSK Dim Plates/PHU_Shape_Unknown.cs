@@ -84,14 +84,10 @@ namespace Tekla.Technology.Akit.UserScript
             public double CenterY;
         }
 
-        public static ShapeUnknownRunResult RunSafe(
-            Drawing drawing,
-            Model model,
-            ModelPart part)
+        public static ShapeUnknownRunResult RunSafe(Drawing drawing, Model model, ModelPart part)
         {
             ShapeUnknownRunResult result = new ShapeUnknownRunResult();
-            List<StraightDimensionSet> createdDimensions =
-                new List<StraightDimensionSet>();
+            List<StraightDimensionSet> createdDimensions = new List<StraightDimensionSet>();
             LastAppliedAutoScale = 0.0;
             CurrentDimTierBase = DIM_TIER_SCALE_15_BASE;
             CurrentDimTierStep = DIM_TIER_SCALE_15_STEP;
@@ -110,14 +106,14 @@ namespace Tekla.Technology.Akit.UserScript
                 if (part == null || part.Identifier == null)
                     return Fail(result, "Khong xac dinh duoc ModelPart can dim.");
 
-                List<View> partViews = GetViewsContainingPart(
-                    drawing,
-                    part.Identifier);
+                List<View> partViews = GetViewsContainingPart(drawing, part.Identifier);
 
-                partViews.Sort(delegate (View a, View b)
-                {
-                    return b.Origin.Y.CompareTo(a.Origin.Y);
-                });
+                partViews.Sort(
+                    delegate(View a, View b)
+                    {
+                        return b.Origin.Y.CompareTo(a.Origin.Y);
+                    }
+                );
 
                 View topView = FindViewByViewTypeForUnknown(partViews, "TopView", "Top");
                 View frontView = FindViewByViewTypeForUnknown(partViews, "FrontView", "Front");
@@ -134,29 +130,34 @@ namespace Tekla.Technology.Akit.UserScript
                     bottomView,
                     specialTopSections,
                     specialBottomSections,
-                    exactSectionViews);
+                    exactSectionViews
+                );
 
                 if (topView == null && specialTopSections.Count > 0)
                     topView = specialTopSections[0];
 
                 List<string> missingViews = new List<string>();
-                if (frontView == null) missingViews.Add("Front");
-                if (topView == null) missingViews.Add("Top");
+                if (frontView == null)
+                    missingViews.Add("Front");
+                if (topView == null)
+                    missingViews.Add("Top");
 
                 if (missingViews.Count > 0)
                 {
                     return Fail(
                         result,
-                        "Shape Unknown thieu view chinh: " +
-                        string.Join(", ", missingViews.ToArray()) +
-                        ". Khong xoa dim cu.");
+                        "Shape Unknown thieu view chinh: "
+                            + string.Join(", ", missingViews.ToArray())
+                            + ". Khong xoa dim cu."
+                    );
                 }
 
                 List<View> dimViews = BuildDimViewsByViewTypeForUnknown(
                     topView,
                     frontView,
                     bottomView,
-                    specialBottomSections);
+                    specialBottomSections
+                );
 
                 View exactSectionView = null;
                 bool isSinglePartDrawing = drawing is SinglePartDrawing;
@@ -171,7 +172,8 @@ namespace Tekla.Technology.Akit.UserScript
                     part,
                     topView,
                     "Top",
-                    out planError);
+                    out planError
+                );
                 if (topPlan == null)
                     return Fail(result, planError + " Khong xoa dim cu.");
                 plans.Add(topPlan);
@@ -181,7 +183,8 @@ namespace Tekla.Technology.Akit.UserScript
                     part,
                     frontView,
                     "Front",
-                    out planError);
+                    out planError
+                );
                 if (frontPlan == null)
                     return Fail(result, planError + " Khong xoa dim cu.");
                 plans.Add(frontPlan);
@@ -193,7 +196,8 @@ namespace Tekla.Technology.Akit.UserScript
                         part,
                         dimViews[i],
                         "Bottom",
-                        out planError);
+                        out planError
+                    );
                     if (bottomPlan == null)
                         return Fail(result, planError + " Khong xoa dim cu.");
                     plans.Add(bottomPlan);
@@ -214,8 +218,10 @@ namespace Tekla.Technology.Akit.UserScript
                     {
                         return Fail(
                             result,
-                            "Khong dat duoc Exact cho part trong view " +
-                            plan.Name + ". Khong xoa dim cu.");
+                            "Khong dat duoc Exact cho part trong view "
+                                + plan.Name
+                                + ". Khong xoa dim cu."
+                        );
                     }
                 }
 
@@ -225,47 +231,38 @@ namespace Tekla.Technology.Akit.UserScript
                     if (!DeleteDimensionsInView(plan.View, out deleteError))
                     {
                         throw new InvalidOperationException(
-                            "Khong xoa duoc dim cu trong view " +
-                            plan.Name + ": " + deleteError);
+                            "Khong xoa duoc dim cu trong view " + plan.Name + ": " + deleteError
+                        );
                     }
                 }
 
                 CommitAndWait(drawing, 250);
 
-                if (TTSK_AutoDim_Plates.ManualDrawingScaleOverride.HasOverride ||
-                    isSinglePartDrawing)
+                if (
+                    TTSK_AutoDim_Plates.ManualDrawingScaleOverride.HasOverride
+                    || isSinglePartDrawing
+                )
                 {
-                    ApplyAutoScaleByPartLength(
-                        drawing,
-                        model,
-                        part,
-                        topView,
-                        partViews);
+                    ApplyAutoScaleByPartLength(drawing, model, part, topView, partViews);
                     CommitAndWait(drawing, 500);
                 }
 
                 VerifyManualScaleAppliedUnknown(partViews);
                 InitializeCurrentDimTierSpacing(topView);
 
-                PHU_BeamGridDimensionEngine.Prepare(
-                    model,
-                    drawing,
-                    part,
-                    topView,
-                    frontView);
+                PHU_BeamGridDimensionEngine.Prepare(model, drawing, part, topView, frontView);
 
-                StraightDimensionSetHandler handler =
-                    new StraightDimensionSetHandler();
+                StraightDimensionSetHandler handler = new StraightDimensionSetHandler();
 
                 foreach (ViewDimensionPlan plan in plans)
                 {
                     double horizontalOffset = GetSteelDimOffsetByTier(0);
                     double verticalOffset = GetSteelDimOffsetByTier(0);
-                    bool createHorizontalTotal = true;
-
-                    if (PHU_BeamGridDimensionEngine.ShouldTakeOverHorizontalTotal(plan.View))
+                    // Report geometry thật trước khi quyết định takeover Vertical.
+                    bool reported = false;
+                    if (PHU_BeamGridDimensionEngine.IsViewPrepared(plan.View))
                     {
-                        createHorizontalTotal = !PHU_BeamGridDimensionEngine.ReportShapeHorizontalTotal(
+                        reported = PHU_BeamGridDimensionEngine.ReportShapeHorizontalTotal(
                             plan.View,
                             plan.LeftPoint,
                             plan.RightPoint,
@@ -275,11 +272,19 @@ namespace Tekla.Technology.Akit.UserScript
                             GetSteelDimOffsetByTier(1),
                             GetSteelDimOffsetByTier(2),
                             plan.TopPoint,
+                            plan.BottomPoint,
                             verticalOffset,
                             0,
                             GetSteelDimOffsetByTier(0),
-                            GetSteelDimOffsetByTier(1));
+                            GetSteelDimOffsetByTier(1)
+                        );
                     }
+
+                    bool shouldTakeoverHorizontal =
+                        PHU_BeamGridDimensionEngine.ShouldTakeOverHorizontalTotal(plan.View);
+                    bool shouldTakeoverVertical =
+                        PHU_BeamGridDimensionEngine.ShouldTakeOverVerticalTotal(plan.View);
+                    bool createHorizontalTotal = !(shouldTakeoverHorizontal && reported);
 
                     if (createHorizontalTotal)
                     {
@@ -289,36 +294,45 @@ namespace Tekla.Technology.Akit.UserScript
                             plan.LeftPoint,
                             plan.RightPoint,
                             new Vector(0, 1, 0),
-                            horizontalOffset);
+                            horizontalOffset
+                        );
 
                         if (horizontal == null)
                         {
                             throw new InvalidOperationException(
-                                "Khong tao duoc dim ngang trong view " + plan.Name + ".");
+                                "Khong tao duoc dim ngang trong view " + plan.Name + "."
+                            );
                         }
 
                         createdDimensions.Add(horizontal);
                     }
 
-                    StraightDimensionSet vertical = CreateDimension(
-                        handler,
-                        plan.View,
-                        plan.TopPoint,
-                        plan.BottomPoint,
-                        new Vector(-1, 0, 0),
-                        verticalOffset);
+                    // Fail-safe: chỉ bỏ DIM tổng dọc khi handoff đã thành công.
+                    bool createVerticalTotal = !(shouldTakeoverVertical && reported);
 
-                    if (vertical == null)
+                    if (createVerticalTotal)
                     {
-                        throw new InvalidOperationException(
-                            "Khong tao duoc dim doc trong view " + plan.Name + ".");
-                    }
+                        StraightDimensionSet vertical = CreateDimension(
+                            handler,
+                            plan.View,
+                            plan.TopPoint,
+                            plan.BottomPoint,
+                            new Vector(-1, 0, 0),
+                            verticalOffset
+                        );
 
-                    createdDimensions.Add(vertical);
+                        if (vertical == null)
+                        {
+                            throw new InvalidOperationException(
+                                "Khong tao duoc dim doc trong view " + plan.Name + "."
+                            );
+                        }
+
+                        createdDimensions.Add(vertical);
+                    }
                 }
 
-                bool gridDimensionsCreated =
-                    PHU_BeamGridDimensionEngine.CreatePreparedDimensions();
+                bool gridDimensionsCreated = PHU_BeamGridDimensionEngine.CreatePreparedDimensions();
 
                 CommitAndWait(drawing, 250);
 
@@ -331,7 +345,8 @@ namespace Tekla.Technology.Akit.UserScript
                             plan.MinX,
                             plan.MaxX,
                             plan.MinY,
-                            plan.MaxY);
+                            plan.MaxY
+                        );
                     }
 
                     CommitAndWait(drawing, 250);
@@ -341,25 +356,26 @@ namespace Tekla.Technology.Akit.UserScript
                 ViewDimensionPlan frontLayoutPlan = plans[1];
                 List<View> bottomViews = new List<View>();
 
-                AlignMainViewsByGeometryUnknown(
-                    topLayoutPlan,
-                    frontLayoutPlan);
+                AlignMainViewsByGeometryUnknown(topLayoutPlan, frontLayoutPlan);
 
                 ViewDimensionPlan previousLayoutPlan = frontLayoutPlan;
                 for (int i = 2; i < plans.Count; i++)
                 {
                     bottomViews.Add(plans[i].View);
-                    AlignMainViewsByGeometryUnknown(
-                        previousLayoutPlan,
-                        plans[i]);
+                    AlignMainViewsByGeometryUnknown(previousLayoutPlan, plans[i]);
                     previousLayoutPlan = plans[i];
                 }
 
                 const double finalGreenBoxGap = 15.0;
+                double finalTopFrontGreenBoxGap = PHU_Slot09_DataCenterContext.ResolveTopFrontGap(
+                    frontView,
+                    finalGreenBoxGap
+                );
                 ArrangeSectionViewRightOfFrontUnknown(
                     exactSectionView,
                     frontView,
-                    finalGreenBoxGap);
+                    finalGreenBoxGap
+                );
                 CommitAndWait(drawing, 100);
 
                 CenterShapeViewsByPurpleBoxOnSheetUnknown(
@@ -367,20 +383,24 @@ namespace Tekla.Technology.Akit.UserScript
                     topView,
                     frontView,
                     exactSectionView,
-                    bottomViews);
+                    bottomViews
+                );
                 CommitAndWait(drawing, 250);
 
                 ForceFinalEqualArrangeShapeTopFrontBottomGap15Unknown(
                     topView,
                     frontView,
                     bottomViews,
-                    finalGreenBoxGap);
+                    finalTopFrontGreenBoxGap,
+                    finalGreenBoxGap
+                );
                 CommitAndWait(drawing, 250);
 
                 ArrangeSectionViewRightOfFrontUnknown(
                     exactSectionView,
                     frontView,
-                    finalGreenBoxGap);
+                    finalGreenBoxGap
+                );
                 CommitAndWait(drawing, 250);
 
                 UpdateDrawingTitle3ScaleUnknown(drawing, topView);
@@ -389,15 +409,23 @@ namespace Tekla.Technology.Akit.UserScript
                 if (gridDimensionsCreated)
                     PHU_BeamGridDimensionEngine.AlignPreparedTopFrontByGrid();
 
+                PHU_Slot09_DataCenterContext.RegisterFinalTopFrontArrangement(
+                    topView,
+                    frontView,
+                    finalTopFrontGreenBoxGap
+                );
+
                 SelectViewsUnknown(partViews);
 
                 result.Success = true;
                 result.ProcessedViewCount = plans.Count;
                 result.CreatedDimensionCount = createdDimensions.Count;
-                result.Message = plans.Count > 2
-                    ? "Shape Unknown: dim ngang/doc Front-Top-Bottom thanh cong (" +
-                      createdDimensions.Count.ToString() + " dim)."
-                    : "Shape Unknown: dim ngang/doc Front-Top thanh cong (4 dim).";
+                result.Message =
+                    plans.Count > 2
+                        ? "Shape Unknown: dim ngang/doc Front-Top-Bottom thanh cong ("
+                            + createdDimensions.Count.ToString()
+                            + " dim)."
+                        : "Shape Unknown: dim ngang/doc Front-Top thanh cong (4 dim).";
                 return result;
             }
             catch (Exception ex)
@@ -407,9 +435,7 @@ namespace Tekla.Technology.Akit.UserScript
             }
         }
 
-        private static ShapeUnknownRunResult Fail(
-            ShapeUnknownRunResult result,
-            string message)
+        private static ShapeUnknownRunResult Fail(ShapeUnknownRunResult result, string message)
         {
             if (result == null)
                 result = new ShapeUnknownRunResult();
@@ -424,7 +450,8 @@ namespace Tekla.Technology.Akit.UserScript
             ModelPart part,
             View view,
             string name,
-            out string error)
+            out string error
+        )
         {
             error = "";
             TransformationPlane oldPlane = null;
@@ -438,8 +465,11 @@ namespace Tekla.Technology.Akit.UserScript
                 }
 
                 oldPlane = model.GetWorkPlaneHandler().GetCurrentTransformationPlane();
-                model.GetWorkPlaneHandler().SetCurrentTransformationPlane(
-                    new TransformationPlane(view.DisplayCoordinateSystem));
+                model
+                    .GetWorkPlaneHandler()
+                    .SetCurrentTransformationPlane(
+                        new TransformationPlane(view.DisplayCoordinateSystem)
+                    );
 
                 Solid solid = part.GetSolid();
                 if (solid == null || solid.MinimumPoint == null || solid.MaximumPoint == null)
@@ -453,18 +483,18 @@ namespace Tekla.Technology.Akit.UserScript
                 double minY = solid.MinimumPoint.Y;
                 double maxY = solid.MaximumPoint.Y;
 
-                if (!IsFinite(minX) || !IsFinite(maxX) ||
-                    !IsFinite(minY) || !IsFinite(maxY))
+                if (!IsFinite(minX) || !IsFinite(maxX) || !IsFinite(minY) || !IsFinite(maxY))
                 {
                     error = "Gioi han Solid trong view " + name + " khong hop le.";
                     return null;
                 }
 
-                if (Math.Abs(maxX - minX) < MIN_DIMENSION_LENGTH ||
-                    Math.Abs(maxY - minY) < MIN_DIMENSION_LENGTH)
+                if (
+                    Math.Abs(maxX - minX) < MIN_DIMENSION_LENGTH
+                    || Math.Abs(maxY - minY) < MIN_DIMENSION_LENGTH
+                )
                 {
-                    error = "Kich thuoc chieu ngang/doc trong view " +
-                            name + " nho hon 1 mm.";
+                    error = "Kich thuoc chieu ngang/doc trong view " + name + " nho hon 1 mm.";
                     return null;
                 }
 
@@ -472,28 +502,19 @@ namespace Tekla.Technology.Akit.UserScript
                 double centerX = (minX + maxX) / 2.0;
                 double centerY = (minY + maxY) / 2.0;
 
-                Point leftCandidate = FindNearestPointForX(
-                    projectedPoints,
-                    minX,
-                    centerY);
-                Point rightCandidate = FindNearestPointForX(
-                    projectedPoints,
-                    maxX,
-                    centerY);
-                Point bottomCandidate = FindNearestPointForY(
-                    projectedPoints,
-                    minY,
-                    centerX);
-                Point topCandidate = FindNearestPointForY(
-                    projectedPoints,
-                    maxY,
-                    centerX);
+                Point leftCandidate = FindNearestPointForX(projectedPoints, minX, centerY);
+                Point rightCandidate = FindNearestPointForX(projectedPoints, maxX, centerY);
+                Point bottomCandidate = FindNearestPointForY(projectedPoints, minY, centerX);
+                Point topCandidate = FindNearestPointForY(projectedPoints, maxY, centerX);
 
                 bool useTopEdgeForHorizontal =
-                    string.Equals(name, "Top", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(name, "Front", StringComparison.OrdinalIgnoreCase);
-                bool useLeftEdgeForVertical =
-                    string.Equals(name, "Top", StringComparison.OrdinalIgnoreCase);
+                    string.Equals(name, "Top", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(name, "Front", StringComparison.OrdinalIgnoreCase);
+                bool useLeftEdgeForVertical = string.Equals(
+                    name,
+                    "Top",
+                    StringComparison.OrdinalIgnoreCase
+                );
 
                 ViewDimensionPlan plan = new ViewDimensionPlan();
                 plan.Name = name;
@@ -503,25 +524,29 @@ namespace Tekla.Technology.Akit.UserScript
                     useTopEdgeForHorizontal
                         ? maxY
                         : (leftCandidate != null ? leftCandidate.Y : centerY),
-                    0);
+                    0
+                );
                 plan.RightPoint = new Point(
                     maxX,
                     useTopEdgeForHorizontal
                         ? maxY
                         : (rightCandidate != null ? rightCandidate.Y : centerY),
-                    0);
+                    0
+                );
                 plan.BottomPoint = new Point(
                     useLeftEdgeForVertical
                         ? minX
                         : (bottomCandidate != null ? bottomCandidate.X : centerX),
                     minY,
-                    0);
+                    0
+                );
                 plan.TopPoint = new Point(
                     useLeftEdgeForVertical
                         ? minX
                         : (topCandidate != null ? topCandidate.X : centerX),
                     maxY,
-                    0);
+                    0
+                );
                 plan.MinX = minX;
                 plan.MaxX = maxX;
                 plan.MinY = minY;
@@ -542,9 +567,7 @@ namespace Tekla.Technology.Akit.UserScript
                     {
                         model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane);
                     }
-                    catch
-                    {
-                    }
+                    catch { }
                 }
             }
         }
@@ -552,8 +575,7 @@ namespace Tekla.Technology.Akit.UserScript
         private static void VerifyManualScaleAppliedUnknown(List<View> views)
         {
             double manualScale;
-            if (!TTSK_AutoDim_Plates.ManualDrawingScaleOverride.TryGet(
-                    out manualScale))
+            if (!TTSK_AutoDim_Plates.ManualDrawingScaleOverride.TryGet(out manualScale))
                 return;
 
             bool viewFound = false;
@@ -566,17 +588,19 @@ namespace Tekla.Technology.Akit.UserScript
 
                     viewFound = true;
                     double actualScale = TryGetViewScaleUnknown(view);
-                    if (actualScale <= 0.0 ||
-                        Math.Abs(actualScale - manualScale) > 0.001)
+                    if (actualScale <= 0.0 || Math.Abs(actualScale - manualScale) > 0.001)
                     {
                         throw new InvalidOperationException(
-                            "Không áp dụng được manual scale cho toàn bộ target view.");
+                            "Không áp dụng được manual scale cho toàn bộ target view."
+                        );
                     }
                 }
             }
 
             if (!viewFound)
-                throw new InvalidOperationException("Không tìm thấy target view để áp dụng manual scale.");
+                throw new InvalidOperationException(
+                    "Không tìm thấy target view để áp dụng manual scale."
+                );
         }
 
         private static void InitializeCurrentDimTierSpacing(View referenceView)
@@ -588,9 +612,7 @@ namespace Tekla.Technology.Akit.UserScript
             {
                 double rawScale = TryGetViewScaleUnknown(referenceView);
 
-                if (double.IsNaN(rawScale) ||
-                    double.IsInfinity(rawScale) ||
-                    rawScale <= 0.0)
+                if (double.IsNaN(rawScale) || double.IsInfinity(rawScale) || rawScale <= 0.0)
                     return;
 
                 int scale = Convert.ToInt32(Math.Round(rawScale));
@@ -623,24 +645,17 @@ namespace Tekla.Technology.Akit.UserScript
                         break;
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static double GetSteelDimOffsetByTier(int tier)
         {
             int safeTier = Math.Max(0, tier);
-            double offset =
-                CurrentDimTierBase +
-                safeTier * CurrentDimTierStep;
+            double offset = CurrentDimTierBase + safeTier * CurrentDimTierStep;
 
-            if (double.IsNaN(offset) ||
-                double.IsInfinity(offset) ||
-                offset <= 0.0)
+            if (double.IsNaN(offset) || double.IsInfinity(offset) || offset <= 0.0)
             {
-                return DIM_TIER_SCALE_15_BASE +
-                       safeTier * DIM_TIER_SCALE_15_STEP;
+                return DIM_TIER_SCALE_15_BASE + safeTier * DIM_TIER_SCALE_15_STEP;
             }
 
             return offset;
@@ -652,26 +667,26 @@ namespace Tekla.Technology.Akit.UserScript
             Point first,
             Point second,
             Vector direction,
-            double offset)
+            double offset
+        )
         {
-            if (handler == null || view == null ||
-                first == null || second == null || direction == null)
+            if (
+                handler == null
+                || view == null
+                || first == null
+                || second == null
+                || direction == null
+            )
                 return null;
 
             PointList points = new PointList();
             points.Add(new Point(first.X, first.Y, 0));
             points.Add(new Point(second.X, second.Y, 0));
 
-            return handler.CreateDimensionSet(
-                view,
-                points,
-                direction,
-                offset);
+            return handler.CreateDimensionSet(view, points, direction, offset);
         }
 
-        private static List<View> GetViewsContainingPart(
-            Drawing drawing,
-            Identifier partIdentifier)
+        private static List<View> GetViewsContainingPart(Drawing drawing, Identifier partIdentifier)
         {
             List<View> result = new List<View>();
 
@@ -693,9 +708,7 @@ namespace Tekla.Technology.Akit.UserScript
             return result;
         }
 
-        private static bool ViewContainsPart(
-            View view,
-            Identifier partIdentifier)
+        private static bool ViewContainsPart(View view, Identifier partIdentifier)
         {
             if (view == null || partIdentifier == null)
                 return false;
@@ -717,7 +730,8 @@ namespace Tekla.Technology.Akit.UserScript
         private static View FindStandardView(
             List<View> views,
             string exactViewTypeName,
-            string fallbackText)
+            string fallbackText
+        )
         {
             if (views == null)
                 return null;
@@ -737,15 +751,16 @@ namespace Tekla.Technology.Akit.UserScript
                     viewTypeText = "";
                 }
 
-                if (viewTypeText.IndexOf(
-                    "Section",
-                    StringComparison.OrdinalIgnoreCase) >= 0)
+                if (viewTypeText.IndexOf("Section", StringComparison.OrdinalIgnoreCase) >= 0)
                     continue;
 
-                if (string.Equals(
-                    viewTypeText,
-                    exactViewTypeName,
-                    StringComparison.OrdinalIgnoreCase))
+                if (
+                    string.Equals(
+                        viewTypeText,
+                        exactViewTypeName,
+                        StringComparison.OrdinalIgnoreCase
+                    )
+                )
                     return view;
             }
 
@@ -764,24 +779,20 @@ namespace Tekla.Technology.Akit.UserScript
                     viewTypeText = "";
                 }
 
-                if (viewTypeText.IndexOf(
-                    "Section",
-                    StringComparison.OrdinalIgnoreCase) >= 0)
+                if (viewTypeText.IndexOf("Section", StringComparison.OrdinalIgnoreCase) >= 0)
                     continue;
 
-                if (!string.IsNullOrEmpty(fallbackText) &&
-                    viewTypeText.IndexOf(
-                        fallbackText,
-                        StringComparison.OrdinalIgnoreCase) >= 0)
+                if (
+                    !string.IsNullOrEmpty(fallbackText)
+                    && viewTypeText.IndexOf(fallbackText, StringComparison.OrdinalIgnoreCase) >= 0
+                )
                     return view;
             }
 
             return null;
         }
 
-        private static bool ApplyExactToTargetPart(
-            View view,
-            Identifier partIdentifier)
+        private static bool ApplyExactToTargetPart(View view, Identifier partIdentifier)
         {
             if (view == null || partIdentifier == null)
                 return false;
@@ -815,8 +826,7 @@ namespace Tekla.Technology.Akit.UserScript
                 if (view == null)
                     return;
 
-                DrawingObjectEnumerator parts =
-                    view.GetAllObjects(typeof(DrawingPart));
+                DrawingObjectEnumerator parts = view.GetAllObjects(typeof(DrawingPart));
                 while (parts != null && parts.MoveNext())
                 {
                     DrawingPart drawingPart = parts.Current as DrawingPart;
@@ -832,14 +842,10 @@ namespace Tekla.Technology.Akit.UserScript
                     drawingPart.Modify();
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
-        private static bool DeleteDimensionsInView(
-            View view,
-            out string error)
+        private static bool DeleteDimensionsInView(View view, out string error)
         {
             error = "";
 
@@ -862,13 +868,11 @@ namespace Tekla.Technology.Akit.UserScript
 
                 foreach (Type dimensionType in dimensionTypes)
                 {
-                    DrawingObjectEnumerator objects =
-                        view.GetAllObjects(dimensionType);
+                    DrawingObjectEnumerator objects = view.GetAllObjects(dimensionType);
 
                     while (objects != null && objects.MoveNext())
                     {
-                        DrawingObject drawingObject =
-                            objects.Current as DrawingObject;
+                        DrawingObject drawingObject = objects.Current as DrawingObject;
 
                         if (drawingObject != null && !drawingObject.Delete())
                         {
@@ -889,7 +893,8 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static void RollBackCreatedDimensions(
             List<StraightDimensionSet> createdDimensions,
-            Drawing drawing)
+            Drawing drawing
+        )
         {
             if (createdDimensions == null || createdDimensions.Count == 0)
                 return;
@@ -903,9 +908,7 @@ namespace Tekla.Technology.Akit.UserScript
                 {
                     dimension.Delete();
                 }
-                catch
-                {
-                }
+                catch { }
             }
 
             try
@@ -913,9 +916,7 @@ namespace Tekla.Technology.Akit.UserScript
                 if (drawing != null)
                     drawing.CommitChanges();
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static List<Point> GetProjectedSolidPoints(Solid solid)
@@ -928,10 +929,7 @@ namespace Tekla.Technology.Akit.UserScript
             return result;
         }
 
-        private static void CollectSolidPoints(
-            object source,
-            List<Point> result,
-            int depth)
+        private static void CollectSolidPoints(object source, List<Point> result, int depth)
         {
             if (source == null || result == null || depth > 8)
                 return;
@@ -939,9 +937,7 @@ namespace Tekla.Technology.Akit.UserScript
             Point directPoint = source as Point;
             if (directPoint != null)
             {
-                AddUniquePoint(
-                    result,
-                    new Point(directPoint.X, directPoint.Y, 0));
+                AddUniquePoint(result, new Point(directPoint.X, directPoint.Y, 0));
                 return;
             }
 
@@ -970,13 +966,14 @@ namespace Tekla.Technology.Akit.UserScript
             object source,
             List<Point> result,
             int depth,
-            string methodName)
+            string methodName
+        )
         {
             try
             {
-                MethodInfo method = source.GetType().GetMethod(
-                    methodName,
-                    BindingFlags.Public | BindingFlags.Instance);
+                MethodInfo method = source
+                    .GetType()
+                    .GetMethod(methodName, BindingFlags.Public | BindingFlags.Instance);
 
                 if (method == null || method.GetParameters().Length != 0)
                     return;
@@ -985,12 +982,12 @@ namespace Tekla.Technology.Akit.UserScript
                 if (enumerator == null)
                     return;
 
-                MethodInfo moveNext = enumerator.GetType().GetMethod(
-                    "MoveNext",
-                    BindingFlags.Public | BindingFlags.Instance);
-                PropertyInfo current = enumerator.GetType().GetProperty(
-                    "Current",
-                    BindingFlags.Public | BindingFlags.Instance);
+                MethodInfo moveNext = enumerator
+                    .GetType()
+                    .GetMethod("MoveNext", BindingFlags.Public | BindingFlags.Instance);
+                PropertyInfo current = enumerator
+                    .GetType()
+                    .GetProperty("Current", BindingFlags.Public | BindingFlags.Instance);
 
                 if (moveNext == null || current == null)
                     return;
@@ -1003,54 +1000,42 @@ namespace Tekla.Technology.Akit.UserScript
                     if (!(moved is bool) || !(bool)moved)
                         break;
 
-                    CollectSolidPoints(
-                        current.GetValue(enumerator, null),
-                        result,
-                        depth + 1);
+                    CollectSolidPoints(current.GetValue(enumerator, null), result, depth + 1);
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static void TryCollectPointProperty(
             object source,
             List<Point> result,
-            string propertyName)
+            string propertyName
+        )
         {
             try
             {
-                PropertyInfo property = source.GetType().GetProperty(
-                    propertyName,
-                    BindingFlags.Public | BindingFlags.Instance);
+                PropertyInfo property = source
+                    .GetType()
+                    .GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
 
-                if (property == null || !property.CanRead ||
-                    property.PropertyType != typeof(Point))
+                if (property == null || !property.CanRead || property.PropertyType != typeof(Point))
                     return;
 
                 Point point = property.GetValue(source, null) as Point;
                 if (point != null)
                 {
-                    AddUniquePoint(
-                        result,
-                        new Point(point.X, point.Y, 0));
+                    AddUniquePoint(result, new Point(point.X, point.Y, 0));
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
-        private static void AddUniquePoint(
-            List<Point> points,
-            Point point)
+        private static void AddUniquePoint(List<Point> points, Point point)
         {
             if (points == null || point == null)
                 return;
 
-            double toleranceSquared =
-                POINT_UNIQUE_TOLERANCE * POINT_UNIQUE_TOLERANCE;
+            double toleranceSquared = POINT_UNIQUE_TOLERANCE * POINT_UNIQUE_TOLERANCE;
 
             foreach (Point existing in points)
             {
@@ -1066,7 +1051,8 @@ namespace Tekla.Technology.Akit.UserScript
         private static Point FindNearestPointForX(
             List<Point> points,
             double targetX,
-            double preferredY)
+            double preferredY
+        )
         {
             Point best = null;
             double bestPrimary = double.MaxValue;
@@ -1083,9 +1069,13 @@ namespace Tekla.Technology.Akit.UserScript
                 double primary = Math.Abs(point.X - targetX);
                 double secondary = Math.Abs(point.Y - preferredY);
 
-                if (primary < bestPrimary - POINT_UNIQUE_TOLERANCE ||
-                    (Math.Abs(primary - bestPrimary) <= POINT_UNIQUE_TOLERANCE &&
-                     secondary < bestSecondary))
+                if (
+                    primary < bestPrimary - POINT_UNIQUE_TOLERANCE
+                    || (
+                        Math.Abs(primary - bestPrimary) <= POINT_UNIQUE_TOLERANCE
+                        && secondary < bestSecondary
+                    )
+                )
                 {
                     best = point;
                     bestPrimary = primary;
@@ -1099,7 +1089,8 @@ namespace Tekla.Technology.Akit.UserScript
         private static Point FindNearestPointForY(
             List<Point> points,
             double targetY,
-            double preferredX)
+            double preferredX
+        )
         {
             Point best = null;
             double bestPrimary = double.MaxValue;
@@ -1116,9 +1107,13 @@ namespace Tekla.Technology.Akit.UserScript
                 double primary = Math.Abs(point.Y - targetY);
                 double secondary = Math.Abs(point.X - preferredX);
 
-                if (primary < bestPrimary - POINT_UNIQUE_TOLERANCE ||
-                    (Math.Abs(primary - bestPrimary) <= POINT_UNIQUE_TOLERANCE &&
-                     secondary < bestSecondary))
+                if (
+                    primary < bestPrimary - POINT_UNIQUE_TOLERANCE
+                    || (
+                        Math.Abs(primary - bestPrimary) <= POINT_UNIQUE_TOLERANCE
+                        && secondary < bestSecondary
+                    )
+                )
                 {
                     best = point;
                     bestPrimary = primary;
@@ -1132,7 +1127,8 @@ namespace Tekla.Technology.Akit.UserScript
         private static View FindViewByViewTypeForUnknown(
             List<View> views,
             string exactViewTypeName,
-            string fallbackText)
+            string fallbackText
+        )
         {
             try
             {
@@ -1141,16 +1137,11 @@ namespace Tekla.Technology.Akit.UserScript
 
                 foreach (View view in views)
                 {
-                    if (ViewTypeMatchesForUnknown(
-                        view,
-                        exactViewTypeName,
-                        fallbackText))
+                    if (ViewTypeMatchesForUnknown(view, exactViewTypeName, fallbackText))
                         return view;
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return null;
         }
@@ -1158,7 +1149,8 @@ namespace Tekla.Technology.Akit.UserScript
         private static bool ViewTypeMatchesForUnknown(
             View view,
             string exactViewTypeName,
-            string fallbackText)
+            string fallbackText
+        )
         {
             try
             {
@@ -1166,12 +1158,14 @@ namespace Tekla.Technology.Akit.UserScript
                     return false;
 
                 string text = view.ViewType.ToString();
-                if (!string.IsNullOrEmpty(exactViewTypeName) &&
-                    string.Equals(text, exactViewTypeName, StringComparison.OrdinalIgnoreCase))
+                if (
+                    !string.IsNullOrEmpty(exactViewTypeName)
+                    && string.Equals(text, exactViewTypeName, StringComparison.OrdinalIgnoreCase)
+                )
                     return true;
 
-                return !string.IsNullOrEmpty(fallbackText) &&
-                       text.IndexOf(fallbackText, StringComparison.OrdinalIgnoreCase) >= 0;
+                return !string.IsNullOrEmpty(fallbackText)
+                    && text.IndexOf(fallbackText, StringComparison.OrdinalIgnoreCase) >= 0;
             }
             catch
             {
@@ -1186,7 +1180,8 @@ namespace Tekla.Technology.Akit.UserScript
             View bottomViewByType,
             List<View> specialTopSections,
             List<View> specialBottomSections,
-            List<View> exactSectionViews)
+            List<View> exactSectionViews
+        )
         {
             try
             {
@@ -1198,13 +1193,14 @@ namespace Tekla.Technology.Akit.UserScript
                     if (!ViewTypeMatchesForUnknown(view, "SectionView", "Section"))
                         continue;
 
-                    if (object.ReferenceEquals(view, topViewByType) ||
-                        object.ReferenceEquals(view, bottomViewByType))
+                    if (
+                        object.ReferenceEquals(view, topViewByType)
+                        || object.ReferenceEquals(view, bottomViewByType)
+                    )
                         continue;
 
                     bool isSpecial = false;
-                    if (frontView != null &&
-                        IsSectionWidthCloseToFrontForUnknown(view, frontView))
+                    if (frontView != null && IsSectionWidthCloseToFrontForUnknown(view, frontView))
                     {
                         if (view.Origin.Y > frontView.Origin.Y)
                         {
@@ -1222,14 +1218,10 @@ namespace Tekla.Technology.Akit.UserScript
                         AddUniqueViewForUnknown(exactSectionViews, view);
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
-        private static bool IsSectionWidthCloseToFrontForUnknown(
-            View sectionView,
-            View frontView)
+        private static bool IsSectionWidthCloseToFrontForUnknown(View sectionView, View frontView)
         {
             try
             {
@@ -1267,7 +1259,8 @@ namespace Tekla.Technology.Akit.UserScript
             View topView,
             View frontView,
             View bottomViewByType,
-            List<View> specialBottomSections)
+            List<View> specialBottomSections
+        )
         {
             List<View> result = new List<View>();
             AddUniqueViewForUnknown(result, topView);
@@ -1305,17 +1298,22 @@ namespace Tekla.Technology.Akit.UserScript
             Model model,
             ModelPart part,
             View referenceView,
-            List<View> views)
+            List<View> views
+        )
         {
             try
             {
-                if (drawing == null || model == null || part == null ||
-                    referenceView == null || views == null)
+                if (
+                    drawing == null
+                    || model == null
+                    || part == null
+                    || referenceView == null
+                    || views == null
+                )
                     return;
 
                 double scale;
-                if (TTSK_AutoDim_Plates.ManualDrawingScaleOverride.TryGet(
-                        out scale))
+                if (TTSK_AutoDim_Plates.ManualDrawingScaleOverride.TryGet(out scale))
                 {
                     LastAppliedAutoScale = scale;
 
@@ -1334,31 +1332,26 @@ namespace Tekla.Technology.Akit.UserScript
                 if (beamLength <= 1.0)
                     return;
 
-                scale = GetAutoViewScaleByPartLengthUnknown(
-                    beamLength,
-                    sheetWidth,
-                    sheetHeight);
+                scale = GetAutoViewScaleByPartLengthUnknown(beamLength, sheetWidth, sheetHeight);
                 LastAppliedAutoScale = scale;
 
                 foreach (View view in views)
                     SetViewScaleUnknown(view, scale);
             }
-            catch
-            {
-            }
+            catch { }
         }
 
-        private static double GetBeamLengthInViewUnknown(
-            Model model,
-            ModelPart part,
-            View view)
+        private static double GetBeamLengthInViewUnknown(Model model, ModelPart part, View view)
         {
             TransformationPlane oldPlane = null;
             try
             {
                 oldPlane = model.GetWorkPlaneHandler().GetCurrentTransformationPlane();
-                model.GetWorkPlaneHandler().SetCurrentTransformationPlane(
-                    new TransformationPlane(view.DisplayCoordinateSystem));
+                model
+                    .GetWorkPlaneHandler()
+                    .SetCurrentTransformationPlane(
+                        new TransformationPlane(view.DisplayCoordinateSystem)
+                    );
 
                 Solid solid = part.GetSolid();
                 if (solid == null || solid.MinimumPoint == null || solid.MaximumPoint == null)
@@ -1378,9 +1371,7 @@ namespace Tekla.Technology.Akit.UserScript
                     {
                         model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane);
                     }
-                    catch
-                    {
-                    }
+                    catch { }
                 }
             }
         }
@@ -1388,11 +1379,12 @@ namespace Tekla.Technology.Akit.UserScript
         private static double GetAutoViewScaleByPartLengthUnknown(
             double beamLength,
             double sheetWidth,
-            double sheetHeight)
+            double sheetHeight
+        )
         {
             double paperLength = Math.Max(sheetWidth, sheetHeight);
-            double usablePaperLength = paperLength -
-                GetScaleMarginBySheetSizeUnknown(sheetWidth, sheetHeight);
+            double usablePaperLength =
+                paperLength - GetScaleMarginBySheetSizeUnknown(sheetWidth, sheetHeight);
             if (usablePaperLength <= 1.0)
                 return 30.0;
 
@@ -1418,19 +1410,24 @@ namespace Tekla.Technology.Akit.UserScript
             double width,
             double height,
             double targetWidth,
-            double targetHeight)
+            double targetHeight
+        )
         {
-            return
-                (Math.Abs(width - targetWidth) <= SHEET_SIZE_TOLERANCE &&
-                 Math.Abs(height - targetHeight) <= SHEET_SIZE_TOLERANCE) ||
-                (Math.Abs(width - targetHeight) <= SHEET_SIZE_TOLERANCE &&
-                 Math.Abs(height - targetWidth) <= SHEET_SIZE_TOLERANCE);
+            return (
+                    Math.Abs(width - targetWidth) <= SHEET_SIZE_TOLERANCE
+                    && Math.Abs(height - targetHeight) <= SHEET_SIZE_TOLERANCE
+                )
+                || (
+                    Math.Abs(width - targetHeight) <= SHEET_SIZE_TOLERANCE
+                    && Math.Abs(height - targetWidth) <= SHEET_SIZE_TOLERANCE
+                );
         }
 
         private static bool TryGetDrawingSheetSizeUnknown(
             Drawing drawing,
             out double width,
-            out double height)
+            out double height
+        )
         {
             width = 0.0;
             height = 0.0;
@@ -1461,32 +1458,36 @@ namespace Tekla.Technology.Akit.UserScript
             try
             {
                 object attributes = null;
-                try { attributes = view.Attributes; }
-                catch { attributes = null; }
+                try
+                {
+                    attributes = view.Attributes;
+                }
+                catch
+                {
+                    attributes = null;
+                }
 
                 if (attributes != null)
                 {
                     SetScalePropertiesUnknown(attributes, scale);
                     try
                     {
-                        PropertyInfo attributeProperty = view.GetType().GetProperty(
-                            "Attributes",
-                            BindingFlags.Public | BindingFlags.Instance);
+                        PropertyInfo attributeProperty = view.GetType()
+                            .GetProperty("Attributes", BindingFlags.Public | BindingFlags.Instance);
                         if (attributeProperty != null && attributeProperty.CanWrite)
                             attributeProperty.SetValue(view, attributes, null);
                     }
-                    catch
-                    {
-                    }
+                    catch { }
                 }
 
                 SetScalePropertiesUnknown(view, scale);
-                try { view.Modify(); }
+                try
+                {
+                    view.Modify();
+                }
                 catch { }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static void SetScalePropertiesUnknown(object obj, double scale)
@@ -1496,8 +1497,8 @@ namespace Tekla.Technology.Akit.UserScript
 
             try
             {
-                PropertyInfo[] properties = obj.GetType().GetProperties(
-                    BindingFlags.Public | BindingFlags.Instance);
+                PropertyInfo[] properties = obj.GetType()
+                    .GetProperties(BindingFlags.Public | BindingFlags.Instance);
                 foreach (PropertyInfo property in properties)
                 {
                     if (property == null)
@@ -1524,20 +1525,20 @@ namespace Tekla.Technology.Akit.UserScript
                         else if (property.CanRead)
                         {
                             object value = property.GetValue(obj, null);
-                            TrySetObjectPropertyUnknown(value, "Denominator", Convert.ToInt32(scale));
+                            TrySetObjectPropertyUnknown(
+                                value,
+                                "Denominator",
+                                Convert.ToInt32(scale)
+                            );
                             TrySetObjectPropertyUnknown(value, "Numerator", 1);
                             TrySetObjectPropertyUnknown(value, "X", 1.0);
                             TrySetObjectPropertyUnknown(value, "Y", scale);
                         }
                     }
-                    catch
-                    {
-                    }
+                    catch { }
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static object TryGetObjectPropertyUnknown(object obj, string propertyName)
@@ -1547,12 +1548,12 @@ namespace Tekla.Technology.Akit.UserScript
                 if (obj == null)
                     return null;
 
-                PropertyInfo property = obj.GetType().GetProperty(
-                    propertyName,
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                return property != null && property.CanRead
-                    ? property.GetValue(obj, null)
-                    : null;
+                PropertyInfo property = obj.GetType()
+                    .GetProperty(
+                        propertyName,
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    );
+                return property != null && property.CanRead ? property.GetValue(obj, null) : null;
             }
             catch
             {
@@ -1563,16 +1564,16 @@ namespace Tekla.Technology.Akit.UserScript
         private static bool TrySetObjectPropertyUnknown(
             object obj,
             string propertyName,
-            object value)
+            object value
+        )
         {
             try
             {
                 if (obj == null || value == null)
                     return false;
 
-                PropertyInfo property = obj.GetType().GetProperty(
-                    propertyName,
-                    BindingFlags.Public | BindingFlags.Instance);
+                PropertyInfo property = obj.GetType()
+                    .GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
                 if (property == null || !property.CanWrite)
                     return false;
 
@@ -1626,12 +1627,17 @@ namespace Tekla.Technology.Akit.UserScript
                 if (obj == null)
                     return 0.0;
 
-                PropertyInfo[] properties = obj.GetType().GetProperties(
-                    BindingFlags.Public | BindingFlags.Instance);
+                PropertyInfo[] properties = obj.GetType()
+                    .GetProperties(BindingFlags.Public | BindingFlags.Instance);
                 foreach (PropertyInfo property in properties)
                 {
-                    if (property == null || !property.CanRead ||
-                        property.Name.ToUpperInvariant().IndexOf("SCALE", StringComparison.Ordinal) < 0)
+                    if (
+                        property == null
+                        || !property.CanRead
+                        || property
+                            .Name.ToUpperInvariant()
+                            .IndexOf("SCALE", StringComparison.Ordinal) < 0
+                    )
                         continue;
 
                     object value = property.GetValue(obj, null);
@@ -1648,9 +1654,7 @@ namespace Tekla.Technology.Akit.UserScript
                         return direct;
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return 0.0;
         }
@@ -1664,8 +1668,13 @@ namespace Tekla.Technology.Akit.UserScript
                     return false;
 
                 Type type = value.GetType();
-                if (type != typeof(double) && type != typeof(float) &&
-                    type != typeof(int) && type != typeof(short) && type != typeof(long))
+                if (
+                    type != typeof(double)
+                    && type != typeof(float)
+                    && type != typeof(int)
+                    && type != typeof(short)
+                    && type != typeof(long)
+                )
                     return false;
 
                 result = Convert.ToDouble(value);
@@ -1682,7 +1691,8 @@ namespace Tekla.Technology.Akit.UserScript
             double minX,
             double maxX,
             double minY,
-            double maxY)
+            double maxY
+        )
         {
             try
             {
@@ -1692,22 +1702,26 @@ namespace Tekla.Technology.Akit.UserScript
 
                 view.RestrictionBox = new AABB(
                     new Point(minX - VIEW_PADDING, minY - VIEW_PADDING, oldBox.MinPoint.Z),
-                    new Point(maxX + VIEW_PADDING, maxY + VIEW_PADDING, oldBox.MaxPoint.Z));
+                    new Point(maxX + VIEW_PADDING, maxY + VIEW_PADDING, oldBox.MaxPoint.Z)
+                );
                 view.Modify();
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static void AlignMainViewsByGeometryUnknown(
             ViewDimensionPlan basePlan,
-            ViewDimensionPlan targetPlan)
+            ViewDimensionPlan targetPlan
+        )
         {
             try
             {
-                if (basePlan == null || targetPlan == null ||
-                    basePlan.View == null || targetPlan.View == null)
+                if (
+                    basePlan == null
+                    || targetPlan == null
+                    || basePlan.View == null
+                    || targetPlan.View == null
+                )
                     return;
 
                 double scale = GetCurrentDrawingScaleUnknown(basePlan.View);
@@ -1721,24 +1735,26 @@ namespace Tekla.Technology.Akit.UserScript
 
                 double targetSheetLeft = baseOrigin.X + basePlan.MinX / scale;
                 double currentSheetLeft = targetOrigin.X + targetPlan.MinX / scale;
-                double targetSheetTop = baseOrigin.Y + basePlan.MinY / scale -
-                                        (GetSteelDimOffsetByTier(0) * 2.0) / scale;
+                double targetSheetTop =
+                    baseOrigin.Y
+                    + basePlan.MinY / scale
+                    - (GetSteelDimOffsetByTier(0) * 2.0) / scale;
                 double currentSheetTop = targetOrigin.Y + targetPlan.MaxY / scale;
 
                 TryMoveViewUnknown(
                     targetPlan.View,
                     targetSheetLeft - currentSheetLeft,
-                    targetSheetTop - currentSheetTop);
+                    targetSheetTop - currentSheetTop
+                );
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static void ArrangeSectionViewRightOfFrontUnknown(
             View sectionView,
             View frontView,
-            double greenBoxGap)
+            double greenBoxGap
+        )
         {
             try
             {
@@ -1747,41 +1763,39 @@ namespace Tekla.Technology.Akit.UserScript
 
                 ViewPaperBox frontBox;
                 ViewPaperBox sectionBox;
-                if (!TryGetViewGreenPaperBoxForUnknown(frontView, out frontBox) ||
-                    !TryGetViewGreenPaperBoxForUnknown(sectionView, out sectionBox))
+                if (
+                    !TryGetViewGreenPaperBoxForUnknown(frontView, out frontBox)
+                    || !TryGetViewGreenPaperBoxForUnknown(sectionView, out sectionBox)
+                )
                     return;
 
                 if (greenBoxGap < 0.0)
                     greenBoxGap = 0.0;
 
-                double deltaX =
-                    frontBox.MaxX + greenBoxGap - sectionBox.MinX;
+                double deltaX = frontBox.MaxX + greenBoxGap - sectionBox.MinX;
                 Point frontOrigin = frontView.Origin;
                 Point sectionOrigin = sectionView.Origin;
                 if (frontOrigin == null || sectionOrigin == null)
                     return;
 
-                TryMoveViewUnknown(
-                    sectionView,
-                    deltaX,
-                    frontOrigin.Y - sectionOrigin.Y);
+                TryMoveViewUnknown(sectionView, deltaX, frontOrigin.Y - sectionOrigin.Y);
             }
-            catch
-            {
-            }
+            catch { }
         }
 
-        private static bool TryGetViewPurplePaperBoxForUnknown(
-            View view,
-            out ViewPaperBox box)
+        private static bool TryGetViewPurplePaperBoxForUnknown(View view, out ViewPaperBox box)
         {
             box = null;
             try
             {
                 AABB restrictionBox = view != null ? view.RestrictionBox : null;
                 Point origin = view != null ? view.Origin : null;
-                if (restrictionBox == null || restrictionBox.MinPoint == null ||
-                    restrictionBox.MaxPoint == null || origin == null)
+                if (
+                    restrictionBox == null
+                    || restrictionBox.MinPoint == null
+                    || restrictionBox.MaxPoint == null
+                    || origin == null
+                )
                     return false;
 
                 double scale = GetCurrentDrawingScaleUnknown(view);
@@ -1798,10 +1812,13 @@ namespace Tekla.Technology.Akit.UserScript
                     Math.Min(x1, x2),
                     Math.Max(x1, x2),
                     Math.Min(y1, y2),
-                    Math.Max(y1, y2));
+                    Math.Max(y1, y2)
+                );
 
-                return box.Width > 0.5 && box.Height > 0.5 &&
-                       box.Width <= 1000.0 && box.Height <= 1000.0;
+                return box.Width > 0.5
+                    && box.Height > 0.5
+                    && box.Width <= 1000.0
+                    && box.Height <= 1000.0;
             }
             catch
             {
@@ -1810,16 +1827,17 @@ namespace Tekla.Technology.Akit.UserScript
             }
         }
 
-        private static bool TryGetViewGreenPaperBoxForUnknown(
-            View view,
-            out ViewPaperBox box)
+        private static bool TryGetViewGreenPaperBoxForUnknown(View view, out ViewPaperBox box)
         {
             box = null;
             try
             {
                 AABB boundingBox = view != null ? view.GetAxisAlignedBoundingBox() : null;
-                if (boundingBox == null || boundingBox.MinPoint == null ||
-                    boundingBox.MaxPoint == null)
+                if (
+                    boundingBox == null
+                    || boundingBox.MinPoint == null
+                    || boundingBox.MaxPoint == null
+                )
                     return false;
 
                 box = CreateViewPaperBoxUnknown(
@@ -1827,7 +1845,8 @@ namespace Tekla.Technology.Akit.UserScript
                     Math.Min(boundingBox.MinPoint.X, boundingBox.MaxPoint.X),
                     Math.Max(boundingBox.MinPoint.X, boundingBox.MaxPoint.X),
                     Math.Min(boundingBox.MinPoint.Y, boundingBox.MaxPoint.Y),
-                    Math.Max(boundingBox.MinPoint.Y, boundingBox.MaxPoint.Y));
+                    Math.Max(boundingBox.MinPoint.Y, boundingBox.MaxPoint.Y)
+                );
 
                 return box.Width > 0.5 && box.Height > 0.5;
             }
@@ -1843,7 +1862,8 @@ namespace Tekla.Technology.Akit.UserScript
             double minX,
             double maxX,
             double minY,
-            double maxY)
+            double maxY
+        )
         {
             ViewPaperBox box = new ViewPaperBox();
             box.View = view;
@@ -1861,29 +1881,26 @@ namespace Tekla.Technology.Akit.UserScript
         {
             try
             {
-                if (view == null ||
-                    (Math.Abs(deltaX) <= 0.01 && Math.Abs(deltaY) <= 0.01))
+                if (view == null || (Math.Abs(deltaX) <= 0.01 && Math.Abs(deltaY) <= 0.01))
                     return;
 
                 Point origin = view.Origin;
                 if (origin == null)
                     return;
 
-                PropertyInfo property = view.GetType().GetProperty(
-                    "Origin",
-                    BindingFlags.Public | BindingFlags.Instance);
+                PropertyInfo property = view.GetType()
+                    .GetProperty("Origin", BindingFlags.Public | BindingFlags.Instance);
                 if (property == null || !property.CanWrite)
                     return;
 
                 property.SetValue(
                     view,
                     new Point(origin.X + deltaX, origin.Y + deltaY, origin.Z),
-                    null);
+                    null
+                );
                 view.Modify();
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static void CenterShapeViewsByPurpleBoxOnSheetUnknown(
@@ -1891,7 +1908,8 @@ namespace Tekla.Technology.Akit.UserScript
             View topView,
             View frontView,
             View sectionView,
-            List<View> bottomViews)
+            List<View> bottomViews
+        )
         {
             try
             {
@@ -1915,15 +1933,16 @@ namespace Tekla.Technology.Akit.UserScript
                     sheetHeight,
                     margin,
                     ref usableMinY,
-                    ref usableMaxY);
+                    ref usableMaxY
+                );
                 ApplyForcedTopBottomBlockLimitForCenterUnknown(
                     sheetWidth,
                     sheetHeight,
                     ref usableMinY,
-                    ref usableMaxY);
+                    ref usableMaxY
+                );
 
-                if (usableMaxX <= usableMinX + 1.0 ||
-                    usableMaxY <= usableMinY + 1.0)
+                if (usableMaxX <= usableMinX + 1.0 || usableMaxY <= usableMinY + 1.0)
                     return;
 
                 List<View> views = new List<View>();
@@ -1947,10 +1966,14 @@ namespace Tekla.Technology.Akit.UserScript
                     if (!TryGetViewPurplePaperBoxForUnknown(view, out box))
                         continue;
 
-                    if (box.MinX < minX) minX = box.MinX;
-                    if (box.MaxX > maxX) maxX = box.MaxX;
-                    if (box.MinY < minY) minY = box.MinY;
-                    if (box.MaxY > maxY) maxY = box.MaxY;
+                    if (box.MinX < minX)
+                        minX = box.MinX;
+                    if (box.MaxX > maxX)
+                        maxX = box.MaxX;
+                    if (box.MinY < minY)
+                        minY = box.MinY;
+                    if (box.MaxY > maxY)
+                        maxY = box.MaxY;
                     count++;
                 }
 
@@ -1959,38 +1982,39 @@ namespace Tekla.Technology.Akit.UserScript
 
                 double deltaX = (usableMinX + usableMaxX) * 0.5 - (minX + maxX) * 0.5;
                 double deltaY = (usableMinY + usableMaxY) * 0.5 - (minY + maxY) * 0.5;
-                if (Math.Abs(deltaX) > sheetWidth * 2.0 ||
-                    Math.Abs(deltaY) > sheetHeight * 2.0)
+                if (Math.Abs(deltaX) > sheetWidth * 2.0 || Math.Abs(deltaY) > sheetHeight * 2.0)
                     return;
 
                 foreach (View view in views)
                     TryMoveViewUnknown(view, deltaX, deltaY);
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static void ApplyForcedTopBottomBlockLimitForCenterUnknown(
             double sheetWidth,
             double sheetHeight,
             ref double usableMinY,
-            ref double usableMaxY)
+            ref double usableMaxY
+        )
         {
             try
             {
-                if (!FORCE_CENTER_BY_TOP_BOTTOM_BLOCKS ||
-                    sheetWidth <= 1.0 || sheetHeight <= 1.0)
+                if (!FORCE_CENTER_BY_TOP_BOTTOM_BLOCKS || sheetWidth <= 1.0 || sheetHeight <= 1.0)
                     return;
 
-                double bottomReserved = sheetHeight * CENTER_BOTTOM_BLOCK_HEIGHT_RATIO +
-                                        CENTER_BLOCK_EXTRA_GAP;
-                double topReserved = sheetHeight * CENTER_TOP_BLOCK_HEIGHT_RATIO +
-                                     CENTER_BLOCK_EXTRA_GAP;
-                if (bottomReserved < 0.0) bottomReserved = 0.0;
-                if (topReserved < 0.0) topReserved = 0.0;
-                if (bottomReserved > sheetHeight * 0.40) bottomReserved = sheetHeight * 0.40;
-                if (topReserved > sheetHeight * 0.25) topReserved = sheetHeight * 0.25;
+                double bottomReserved =
+                    sheetHeight * CENTER_BOTTOM_BLOCK_HEIGHT_RATIO + CENTER_BLOCK_EXTRA_GAP;
+                double topReserved =
+                    sheetHeight * CENTER_TOP_BLOCK_HEIGHT_RATIO + CENTER_BLOCK_EXTRA_GAP;
+                if (bottomReserved < 0.0)
+                    bottomReserved = 0.0;
+                if (topReserved < 0.0)
+                    topReserved = 0.0;
+                if (bottomReserved > sheetHeight * 0.40)
+                    bottomReserved = sheetHeight * 0.40;
+                if (topReserved > sheetHeight * 0.25)
+                    topReserved = sheetHeight * 0.25;
 
                 double forcedMinY = bottomReserved;
                 double forcedMaxY = sheetHeight - topReserved;
@@ -2000,9 +2024,7 @@ namespace Tekla.Technology.Akit.UserScript
                     usableMaxY = Math.Min(usableMaxY, forcedMaxY);
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static void ApplyTopBottomSheetBlockLimitForCenterUnknown(
@@ -2011,7 +2033,8 @@ namespace Tekla.Technology.Akit.UserScript
             double sheetHeight,
             double margin,
             ref double usableMinY,
-            ref double usableMaxY)
+            ref double usableMaxY
+        )
         {
             try
             {
@@ -2041,21 +2064,35 @@ namespace Tekla.Technology.Akit.UserScript
                     double maxY = Math.Max(box.MinPoint.Y, box.MaxPoint.Y);
                     double width = Math.Abs(maxX - minX);
                     double height = Math.Abs(maxY - minY);
-                    if ((width < 2.0 && height < 2.0) ||
-                        (width > sheetWidth * 0.95 && height > sheetHeight * 0.90))
+                    if (
+                        (width < 2.0 && height < 2.0)
+                        || (width > sheetWidth * 0.95 && height > sheetHeight * 0.90)
+                    )
                         continue;
 
-                    if (minX < -sheetWidth || maxX > sheetWidth * 2.0 ||
-                        minY < -sheetHeight || maxY > sheetHeight * 2.0)
+                    if (
+                        minX < -sheetWidth
+                        || maxX > sheetWidth * 2.0
+                        || minY < -sheetHeight
+                        || maxY > sheetHeight * 2.0
+                    )
                         continue;
 
                     double centerY = (minY + maxY) * 0.5;
-                    if (centerY <= bottomBandMaxY && minY <= bottomBandMaxY &&
-                        maxY > bottomLimit && maxY < sheetHeight * 0.55)
+                    if (
+                        centerY <= bottomBandMaxY
+                        && minY <= bottomBandMaxY
+                        && maxY > bottomLimit
+                        && maxY < sheetHeight * 0.55
+                    )
                         bottomLimit = maxY;
 
-                    if (centerY >= topBandMinY && maxY >= topBandMinY &&
-                        minY < topLimit && minY > sheetHeight * 0.45)
+                    if (
+                        centerY >= topBandMinY
+                        && maxY >= topBandMinY
+                        && minY < topLimit
+                        && minY > sheetHeight * 0.45
+                    )
                         topLimit = minY;
                 }
 
@@ -2065,14 +2102,13 @@ namespace Tekla.Technology.Akit.UserScript
                     usableMaxY = Math.Min(usableMaxY, topLimit - margin);
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static bool TryGetDrawingObjectPaperBoxForCenterUnknown(
             DrawingObject drawingObject,
-            out AABB box)
+            out AABB box
+        )
         {
             box = null;
             try
@@ -2080,9 +2116,12 @@ namespace Tekla.Technology.Akit.UserScript
                 if (drawingObject == null)
                     return false;
 
-                MethodInfo method = drawingObject.GetType().GetMethod(
-                    "GetAxisAlignedBoundingBox",
-                    BindingFlags.Public | BindingFlags.Instance);
+                MethodInfo method = drawingObject
+                    .GetType()
+                    .GetMethod(
+                        "GetAxisAlignedBoundingBox",
+                        BindingFlags.Public | BindingFlags.Instance
+                    );
                 if (method == null)
                     return false;
 
@@ -2100,7 +2139,9 @@ namespace Tekla.Technology.Akit.UserScript
             View topView,
             View frontView,
             List<View> bottomViews,
-            double gap)
+            double topFrontGap,
+            double remainingGap
+        )
         {
             try
             {
@@ -2120,18 +2161,36 @@ namespace Tekla.Technology.Akit.UserScript
                 foreach (View view in stackViews)
                 {
                     ViewPaperBox box;
-                    if (TryGetViewGreenPaperBoxForUnknown(view, out box) &&
-                        box.Width > 1.0 && box.Height > 1.0)
+                    if (
+                        TryGetViewGreenPaperBoxForUnknown(view, out box)
+                        && box.Width > 1.0
+                        && box.Height > 1.0
+                    )
                         boxes.Add(box);
                 }
 
                 if (boxes.Count < 2)
                     return;
 
-                boxes.Sort(delegate (ViewPaperBox a, ViewPaperBox b)
-                {
-                    return b.CenterY.CompareTo(a.CenterY);
-                });
+                boxes.Sort(
+                    delegate(ViewPaperBox a, ViewPaperBox b)
+                    {
+                        int aRole =
+                            object.ReferenceEquals(a.View, topView) ? 0
+                            : object.ReferenceEquals(a.View, frontView) ? 1
+                            : 2;
+                        int bRole =
+                            object.ReferenceEquals(b.View, topView) ? 0
+                            : object.ReferenceEquals(b.View, frontView) ? 1
+                            : 2;
+                        if (aRole != bRole)
+                            return aRole.CompareTo(bRole);
+
+                        // Chỉ các BOTTOM cùng vai trò mới giữ thứ tự hình học cũ.
+                        // TOP/FRONT luôn theo semantic TOP -> FRONT, không theo Y hiện tại.
+                        return b.CenterY.CompareTo(a.CenterY);
+                    }
+                );
 
                 double totalHeight = 0.0;
                 double currentMinY = double.MaxValue;
@@ -2139,35 +2198,34 @@ namespace Tekla.Technology.Akit.UserScript
                 foreach (ViewPaperBox box in boxes)
                 {
                     totalHeight += box.Height;
-                    if (box.MinY < currentMinY) currentMinY = box.MinY;
-                    if (box.MaxY > currentMaxY) currentMaxY = box.MaxY;
+                    if (box.MinY < currentMinY)
+                        currentMinY = box.MinY;
+                    if (box.MaxY > currentMaxY)
+                        currentMaxY = box.MaxY;
                 }
 
                 double currentCenter = (currentMinY + currentMaxY) * 0.5;
-                double totalStackHeight = totalHeight + gap * (boxes.Count - 1);
+                double totalStackHeight =
+                    totalHeight + topFrontGap + remainingGap * Math.Max(0, boxes.Count - 2);
                 double cursorMaxY = currentCenter + totalStackHeight * 0.5;
 
-                foreach (ViewPaperBox box in boxes)
+                for (int i = 0; i < boxes.Count; i++)
                 {
-                    double desiredCenterY =
-                        (cursorMaxY + cursorMaxY - box.Height) * 0.5;
-                    double deltaY = desiredCenterY -
-                                    (box.MinY + box.MaxY) * 0.5;
+                    ViewPaperBox box = boxes[i];
+                    double desiredCenterY = (cursorMaxY + cursorMaxY - box.Height) * 0.5;
+                    double deltaY = desiredCenterY - (box.MinY + box.MaxY) * 0.5;
                     if (Math.Abs(deltaY) > 300.0)
                         return;
 
                     TryMoveViewUnknown(box.View, 0.0, deltaY);
-                    cursorMaxY -= box.Height + gap;
+                    double nextGap = i == 0 ? topFrontGap : remainingGap;
+                    cursorMaxY -= box.Height + nextGap;
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
-        private static void UpdateDrawingTitle3ScaleUnknown(
-            Drawing drawing,
-            View referenceView)
+        private static void UpdateDrawingTitle3ScaleUnknown(Drawing drawing, View referenceView)
         {
             try
             {
@@ -2178,8 +2236,7 @@ namespace Tekla.Technology.Akit.UserScript
                 if (scale <= 0.0)
                     return;
 
-                string scaleText = "1:" +
-                    Convert.ToInt32(Math.Round(scale)).ToString();
+                string scaleText = "1:" + Convert.ToInt32(Math.Round(scale)).ToString();
                 bool changed = false;
                 object attributes = TryGetObjectPropertyUnknown(drawing, "Attributes");
                 changed = SetTitle3TextUnknown(attributes, scaleText) || changed;
@@ -2187,13 +2244,14 @@ namespace Tekla.Technology.Akit.UserScript
 
                 if (changed)
                 {
-                    try { drawing.Modify(); }
+                    try
+                    {
+                        drawing.Modify();
+                    }
                     catch { }
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static bool SetTitle3TextUnknown(object obj, string scaleText)
@@ -2204,26 +2262,29 @@ namespace Tekla.Technology.Akit.UserScript
                 if (obj == null || string.IsNullOrEmpty(scaleText))
                     return false;
 
-                PropertyInfo[] properties = obj.GetType().GetProperties(
-                    BindingFlags.Public | BindingFlags.Instance);
+                PropertyInfo[] properties = obj.GetType()
+                    .GetProperties(BindingFlags.Public | BindingFlags.Instance);
                 foreach (PropertyInfo property in properties)
                 {
-                    if (property == null || !property.CanWrite ||
-                        property.PropertyType != typeof(string))
+                    if (
+                        property == null
+                        || !property.CanWrite
+                        || property.PropertyType != typeof(string)
+                    )
                         continue;
 
                     string name = property.Name.ToUpperInvariant();
-                    if (name.IndexOf("TITLE", StringComparison.Ordinal) < 0 ||
-                        name.IndexOf("3", StringComparison.Ordinal) < 0)
+                    if (
+                        name.IndexOf("TITLE", StringComparison.Ordinal) < 0
+                        || name.IndexOf("3", StringComparison.Ordinal) < 0
+                    )
                         continue;
 
                     property.SetValue(obj, scaleText, null);
                     changed = true;
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return changed;
         }
@@ -2233,8 +2294,7 @@ namespace Tekla.Technology.Akit.UserScript
             try
             {
                 DrawingHandler drawingHandler = new DrawingHandler();
-                DrawingObjectSelector selector =
-                    drawingHandler.GetDrawingObjectSelector();
+                DrawingObjectSelector selector = drawingHandler.GetDrawingObjectSelector();
                 DrawingObjectEnumerator.AutoFetch = true;
                 ArrayList selected = new ArrayList();
 
@@ -2249,9 +2309,7 @@ namespace Tekla.Technology.Akit.UserScript
 
                 selector.SelectObjects(selected, false);
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static void CommitAndWait(Drawing drawing, int milliseconds)
@@ -2260,17 +2318,13 @@ namespace Tekla.Technology.Akit.UserScript
             {
                 drawing.CommitChanges();
             }
-            catch
-            {
-            }
+            catch { }
 
             try
             {
                 System.Threading.Thread.Sleep(milliseconds);
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static bool IsFinite(double value)

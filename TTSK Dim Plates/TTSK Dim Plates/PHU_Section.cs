@@ -105,8 +105,7 @@ namespace Tekla.Technology.Akit.UserScript
 
         private sealed class FrontNotchGeometry
         {
-            public FrontNotchDetectionStatus Status =
-                FrontNotchDetectionStatus.NotChecked;
+            public FrontNotchDetectionStatus Status = FrontNotchDetectionStatus.NotChecked;
 
             public bool HasTopLeft;
             public bool HasTopRight;
@@ -146,7 +145,8 @@ namespace Tekla.Technology.Akit.UserScript
             ModelPart part,
             DrawingView topView,
             DrawingView frontView,
-            string sectionViewAttributeName)
+            string sectionViewAttributeName
+        )
         {
             AutoSectionWorkerResult result = new AutoSectionWorkerResult();
             SectionGeometry geometry;
@@ -157,20 +157,23 @@ namespace Tekla.Technology.Akit.UserScript
             double savedTopScale;
             string preflightMessage;
 
-            if (!TryPreflightSingle(
-                drawing,
-                model,
-                part,
-                topView,
-                frontView,
-                sectionViewAttributeName,
-                out geometry,
-                out attributesB,
-                out attributesC,
-                out topOrigin,
-                out frontOrigin,
-                out savedTopScale,
-                out preflightMessage))
+            if (
+                !TryPreflightSingle(
+                    drawing,
+                    model,
+                    part,
+                    topView,
+                    frontView,
+                    sectionViewAttributeName,
+                    out geometry,
+                    out attributesB,
+                    out attributesC,
+                    out topOrigin,
+                    out frontOrigin,
+                    out savedTopScale,
+                    out preflightMessage
+                )
+            )
             {
                 result.Status = AutoSectionWorkerStatus.PreflightFailed;
                 result.Message = preflightMessage;
@@ -183,9 +186,8 @@ namespace Tekla.Technology.Akit.UserScript
             SectionMark markC = null;
 
             double sectionGap = GetSectionGap(frontView);
-            double insertBY = topOrigin.Y > frontOrigin.Y
-                ? topOrigin.Y
-                : frontOrigin.Y + sectionGap;
+            double insertBY =
+                topOrigin.Y > frontOrigin.Y ? topOrigin.Y : frontOrigin.Y + sectionGap;
             Point insertB = new Point(frontOrigin.X, insertBY, 0.0);
             Point insertC = new Point(frontOrigin.X, frontOrigin.Y - sectionGap, 0.0);
 
@@ -199,7 +201,8 @@ namespace Tekla.Technology.Akit.UserScript
                 geometry.BDepthDown,
                 attributesB,
                 out sectionB,
-                out markB);
+                out markB
+            );
 
             if (!createB)
                 return FinishCreateFailure(
@@ -208,7 +211,8 @@ namespace Tekla.Technology.Akit.UserScript
                     sectionB,
                     markB,
                     sectionC,
-                    markC);
+                    markC
+                );
 
             if (!CommitAndValidateCreatedSection(drawing, part, sectionB))
                 return FinishCreateFailure(
@@ -217,7 +221,8 @@ namespace Tekla.Technology.Akit.UserScript
                     sectionB,
                     markB,
                     sectionC,
-                    markC);
+                    markC
+                );
 
             bool createC = CreateOneSectionView(
                 frontView,
@@ -229,7 +234,8 @@ namespace Tekla.Technology.Akit.UserScript
                 geometry.CDepthDown,
                 attributesC,
                 out sectionC,
-                out markC);
+                out markC
+            );
 
             if (!createC)
                 return FinishCreateFailure(
@@ -238,7 +244,8 @@ namespace Tekla.Technology.Akit.UserScript
                     sectionB,
                     markB,
                     sectionC,
-                    markC);
+                    markC
+                );
 
             if (!CommitAndValidateCreatedSection(drawing, part, sectionC))
                 return FinishCreateFailure(
@@ -247,7 +254,8 @@ namespace Tekla.Technology.Akit.UserScript
                     sectionB,
                     markB,
                     sectionC,
-                    markC);
+                    markC
+                );
 
             bool topDeleteReturned = SafeDelete(topView);
             bool deleteCommitReturned = SafeCommit(drawing);
@@ -260,7 +268,8 @@ namespace Tekla.Technology.Akit.UserScript
                     sectionB,
                     markB,
                     sectionC,
-                    markC);
+                    markC
+                );
 
                 bool topIsSafe = IsViewPresent(drawing, topView);
                 result.SectionB = sectionB;
@@ -269,13 +278,15 @@ namespace Tekla.Technology.Akit.UserScript
                 if (rollbackSucceeded && topIsSafe)
                 {
                     result.Status = AutoSectionWorkerStatus.RolledBack;
-                    result.Message = "Khong xoa duoc TopView; Section B/C da rollback, TopView van duoc giu.";
+                    result.Message =
+                        "Khong xoa duoc TopView; Section B/C da rollback, TopView van duoc giu.";
                     return result;
                 }
 
                 result.Status = AutoSectionWorkerStatus.UnsafeRollbackFailed;
                 result.IsSafeToContinue = false;
-                result.Message = "Xoa TopView hoac rollback B/C that bai; drawing khong an toan de save.";
+                result.Message =
+                    "Xoa TopView hoac rollback B/C that bai; drawing khong an toan de save.";
                 return result;
             }
 
@@ -292,7 +303,8 @@ namespace Tekla.Technology.Akit.UserScript
             ModelPart part,
             DrawingView topView,
             DrawingView frontView,
-            string sectionViewAttributeName)
+            string sectionViewAttributeName
+        )
         {
             AutoSectionWorkerResult result = new AutoSectionWorkerResult();
             SectionGeometry geometry;
@@ -300,17 +312,20 @@ namespace Tekla.Technology.Akit.UserScript
             Point frontOrigin;
             string preflightMessage;
 
-            if (!TryPreflightAssembly(
-                drawing,
-                model,
-                part,
-                topView,
-                frontView,
-                sectionViewAttributeName,
-                out geometry,
-                out attributesB,
-                out frontOrigin,
-                out preflightMessage))
+            if (
+                !TryPreflightAssembly(
+                    drawing,
+                    model,
+                    part,
+                    topView,
+                    frontView,
+                    sectionViewAttributeName,
+                    out geometry,
+                    out attributesB,
+                    out frontOrigin,
+                    out preflightMessage
+                )
+            )
             {
                 result.Status = AutoSectionWorkerStatus.PreflightFailed;
                 result.Message = preflightMessage;
@@ -319,10 +334,7 @@ namespace Tekla.Technology.Akit.UserScript
 
             DrawingView sectionB = null;
             SectionMark markB = null;
-            Point insertB = new Point(
-                frontOrigin.X,
-                frontOrigin.Y - GetSectionGap(frontView),
-                0.0);
+            Point insertB = new Point(frontOrigin.X, frontOrigin.Y - GetSectionGap(frontView), 0.0);
 
             bool created = CreateOneSectionView(
                 frontView,
@@ -334,7 +346,8 @@ namespace Tekla.Technology.Akit.UserScript
                 geometry.CDepthDown,
                 attributesB,
                 out sectionB,
-                out markB);
+                out markB
+            );
 
             if (!created)
                 return FinishCreateFailure(
@@ -343,7 +356,8 @@ namespace Tekla.Technology.Akit.UserScript
                     sectionB,
                     markB,
                     null,
-                    null);
+                    null
+                );
 
             if (!CommitAndValidateCreatedSection(drawing, part, sectionB))
                 return FinishCreateFailure(
@@ -352,7 +366,8 @@ namespace Tekla.Technology.Akit.UserScript
                     sectionB,
                     markB,
                     null,
-                    null);
+                    null
+                );
 
             result.Status = AutoSectionWorkerStatus.CreatedAssemblyBottom;
             result.Message = "Assembly: da giu Top/Front va tao Bottom Section ten B.";
@@ -373,7 +388,8 @@ namespace Tekla.Technology.Akit.UserScript
             out Point topOrigin,
             out Point frontOrigin,
             out double savedTopScale,
-            out string message)
+            out string message
+        )
         {
             geometry = new SectionGeometry();
             attributesB = null;
@@ -415,27 +431,28 @@ namespace Tekla.Technology.Akit.UserScript
                 return false;
             }
 
-            if (!TryGetSectionGeometry(
-                model,
-                part,
-                frontView,
-                out geometry,
-                out message))
+            if (!TryGetSectionGeometry(model, part, frontView, out geometry, out message))
                 return false;
 
-            if (!TryLoadSectionAttributes(
-                "B",
-                frontScale,
-                sectionViewAttributeName,
-                out attributesB,
-                out message))
+            if (
+                !TryLoadSectionAttributes(
+                    "B",
+                    frontScale,
+                    sectionViewAttributeName,
+                    out attributesB,
+                    out message
+                )
+            )
                 return false;
-            if (!TryLoadSectionAttributes(
-                "C",
-                frontScale,
-                sectionViewAttributeName,
-                out attributesC,
-                out message))
+            if (
+                !TryLoadSectionAttributes(
+                    "C",
+                    frontScale,
+                    sectionViewAttributeName,
+                    out attributesC,
+                    out message
+                )
+            )
                 return false;
 
             return true;
@@ -451,7 +468,8 @@ namespace Tekla.Technology.Akit.UserScript
             out SectionGeometry geometry,
             out SectionAttributeSet attributesB,
             out Point frontOrigin,
-            out string message)
+            out string message
+        )
         {
             geometry = new SectionGeometry();
             attributesB = null;
@@ -481,20 +499,18 @@ namespace Tekla.Technology.Akit.UserScript
                 return false;
             }
 
-            if (!TryGetSectionGeometry(
-                model,
-                part,
-                frontView,
-                out geometry,
-                out message))
+            if (!TryGetSectionGeometry(model, part, frontView, out geometry, out message))
                 return false;
 
-            if (!TryLoadSectionAttributes(
-                "B",
-                frontScale,
-                sectionViewAttributeName,
-                out attributesB,
-                out message))
+            if (
+                !TryLoadSectionAttributes(
+                    "B",
+                    frontScale,
+                    sectionViewAttributeName,
+                    out attributesB,
+                    out message
+                )
+            )
                 return false;
 
             return true;
@@ -506,7 +522,8 @@ namespace Tekla.Technology.Akit.UserScript
             ModelPart part,
             DrawingView topView,
             DrawingView frontView,
-            out string message)
+            out string message
+        )
         {
             message = "";
 
@@ -528,7 +545,11 @@ namespace Tekla.Technology.Akit.UserScript
                 return false;
             }
 
-            if (topView == null || frontView == null || System.Object.ReferenceEquals(topView, frontView))
+            if (
+                topView == null
+                || frontView == null
+                || System.Object.ReferenceEquals(topView, frontView)
+            )
             {
                 message = "TopView/FrontView khong hop le.";
                 return false;
@@ -540,8 +561,10 @@ namespace Tekla.Technology.Akit.UserScript
                 return false;
             }
 
-            if (!ViewContainsPart(topView, part.Identifier) ||
-                !ViewContainsPart(frontView, part.Identifier))
+            if (
+                !ViewContainsPart(topView, part.Identifier)
+                || !ViewContainsPart(frontView, part.Identifier)
+            )
             {
                 message = "TopView/FrontView khong chua dung ModelPart duoc truyen vao.";
                 return false;
@@ -555,7 +578,8 @@ namespace Tekla.Technology.Akit.UserScript
             ModelPart part,
             DrawingView frontView,
             out SectionGeometry geometry,
-            out string message)
+            out string message
+        )
         {
             geometry = new SectionGeometry();
             message = "";
@@ -566,12 +590,15 @@ namespace Tekla.Technology.Akit.UserScript
             string normalizedProfile;
             AutoSectionProfileKind profileKind;
 
-            if (!TryClassifyAutoSectionProfile(
-                part,
-                out profileText,
-                out normalizedProfile,
-                out profileKind,
-                out message))
+            if (
+                !TryClassifyAutoSectionProfile(
+                    part,
+                    out profileText,
+                    out normalizedProfile,
+                    out profileKind,
+                    out message
+                )
+            )
             {
                 AddGeometryDiagnostic("Profile classification failed: " + message);
                 return false;
@@ -584,8 +611,11 @@ namespace Tekla.Technology.Akit.UserScript
             try
             {
                 oldPlane = model.GetWorkPlaneHandler().GetCurrentTransformationPlane();
-                model.GetWorkPlaneHandler().SetCurrentTransformationPlane(
-                    new TransformationPlane(frontView.DisplayCoordinateSystem));
+                model
+                    .GetWorkPlaneHandler()
+                    .SetCurrentTransformationPlane(
+                        new TransformationPlane(frontView.DisplayCoordinateSystem)
+                    );
 
                 Solid solid = part.GetSolid();
                 if (solid == null || solid.MinimumPoint == null || solid.MaximumPoint == null)
@@ -601,20 +631,29 @@ namespace Tekla.Technology.Akit.UserScript
                 double minY = min.Y;
                 double maxY = max.Y;
 
-                if (!IsFinite(minX) || !IsFinite(maxX) ||
-                    !IsFinite(minY) || !IsFinite(maxY) ||
-                    maxX - minX <= TOL || maxY - minY <= TOL)
+                if (
+                    !IsFinite(minX)
+                    || !IsFinite(maxX)
+                    || !IsFinite(minY)
+                    || !IsFinite(maxY)
+                    || maxX - minX <= TOL
+                    || maxY - minY <= TOL
+                )
                 {
                     message = "Solid cua ModelPart khong co extents hop le trong FrontView.";
                     return false;
                 }
 
                 AddGeometryDiagnostic(
-                    "FrontExtents=" +
-                    FormatDiagnosticNumber(minX) + "," +
-                    FormatDiagnosticNumber(minY) + " -> " +
-                    FormatDiagnosticNumber(maxX) + "," +
-                    FormatDiagnosticNumber(maxY));
+                    "FrontExtents="
+                        + FormatDiagnosticNumber(minX)
+                        + ","
+                        + FormatDiagnosticNumber(minY)
+                        + " -> "
+                        + FormatDiagnosticNumber(maxX)
+                        + ","
+                        + FormatDiagnosticNumber(maxY)
+                );
 
                 double legacyFlangeThickness = 0.0;
                 if (profileKind != AutoSectionProfileKind.ShapeCOrdinary)
@@ -632,19 +671,19 @@ namespace Tekla.Technology.Akit.UserScript
                     }
 
                     AddGeometryDiagnostic(
-                        "LegacyFlangeThickness=" +
-                        FormatDiagnosticNumber(legacyFlangeThickness));
+                        "LegacyFlangeThickness=" + FormatDiagnosticNumber(legacyFlangeThickness)
+                    );
                 }
 
                 FrontNotchGeometry notchGeometry;
-                FrontNotchDetectionStatus notchStatus =
-                    TryGetFrontNotchGeometry(
-                        solid,
-                        minX,
-                        maxX,
-                        minY,
-                        maxY,
-                        out notchGeometry);
+                FrontNotchDetectionStatus notchStatus = TryGetFrontNotchGeometry(
+                    solid,
+                    minX,
+                    maxX,
+                    minY,
+                    maxY,
+                    out notchGeometry
+                );
 
                 AddGeometryDiagnostic("NotchStatus=" + notchStatus);
 
@@ -655,72 +694,83 @@ namespace Tekla.Technology.Akit.UserScript
 
                 if (profileKind == AutoSectionProfileKind.ShapeCOrdinary)
                 {
-                    if (notchStatus == FrontNotchDetectionStatus.Failed ||
-                        notchStatus == FrontNotchDetectionStatus.NotChecked)
+                    if (
+                        notchStatus == FrontNotchDetectionStatus.Failed
+                        || notchStatus == FrontNotchDetectionStatus.NotChecked
+                    )
                     {
                         message =
-                            "Khong validate duoc notch cua Shape C thong thuong; " +
-                            "dung o Preflight.";
+                            "Khong validate duoc notch cua Shape C thong thuong; "
+                            + "dung o Preflight.";
                         AddGeometryDiagnostic(message);
                         return false;
                     }
 
                     List<Point> projectedPoints;
                     List<ProjectedFrontSegment> projectedSegments;
-                    if (!TryCollectProjectedFrontSolidGeometry(
-                        solid,
-                        out projectedPoints,
-                        out projectedSegments))
+                    if (
+                        !TryCollectProjectedFrontSolidGeometry(
+                            solid,
+                            out projectedPoints,
+                            out projectedSegments
+                        )
+                    )
                     {
-                        message =
-                            "Khong doc duoc canh Solid that cua Shape C trong FrontView.";
+                        message = "Khong doc duoc canh Solid that cua Shape C trong FrontView.";
                         AddGeometryDiagnostic(message);
                         return false;
                     }
 
                     AddGeometryDiagnostic(
-                        "ProjectedGeometry points=" +
-                        projectedPoints.Count +
-                        " segments=" +
-                        projectedSegments.Count);
+                        "ProjectedGeometry points="
+                            + projectedPoints.Count
+                            + " segments="
+                            + projectedSegments.Count
+                    );
 
                     CFlangeGeometry flangeGeometry;
-                    if (!TryResolveOrdinaryCFlangeGeometry(
-                        projectedSegments,
-                        minX,
-                        maxX,
-                        minY,
-                        maxY,
-                        out flangeGeometry,
-                        out message))
+                    if (
+                        !TryResolveOrdinaryCFlangeGeometry(
+                            projectedSegments,
+                            minX,
+                            maxX,
+                            minY,
+                            maxY,
+                            out flangeGeometry,
+                            out message
+                        )
+                    )
                     {
                         AddGeometryDiagnostic(message);
                         return false;
                     }
 
+                    AddGeometryDiagnostic("COpeningSide=" + flangeGeometry.OpeningSide);
                     AddGeometryDiagnostic(
-                        "COpeningSide=" + flangeGeometry.OpeningSide);
-                    AddGeometryDiagnostic(
-                        "CFlangeEdges outerTop=" +
-                        FormatDiagnosticNumber(flangeGeometry.OuterTopY) +
-                        " innerTop=" +
-                        FormatDiagnosticNumber(flangeGeometry.InnerTopY) +
-                        " innerBottom=" +
-                        FormatDiagnosticNumber(flangeGeometry.InnerBottomY) +
-                        " outerBottom=" +
-                        FormatDiagnosticNumber(flangeGeometry.OuterBottomY));
+                        "CFlangeEdges outerTop="
+                            + FormatDiagnosticNumber(flangeGeometry.OuterTopY)
+                            + " innerTop="
+                            + FormatDiagnosticNumber(flangeGeometry.InnerTopY)
+                            + " innerBottom="
+                            + FormatDiagnosticNumber(flangeGeometry.InnerBottomY)
+                            + " outerBottom="
+                            + FormatDiagnosticNumber(flangeGeometry.OuterBottomY)
+                    );
 
-                    if (!TryResolveOrdinaryCSectionDepthFromNotches(
-                        minY,
-                        maxY,
-                        flangeGeometry,
-                        notchStatus,
-                        notchGeometry,
-                        out bCutY,
-                        out bDepth,
-                        out cCutY,
-                        out cDepth,
-                        out message))
+                    if (
+                        !TryResolveOrdinaryCSectionDepthFromNotches(
+                            minY,
+                            maxY,
+                            flangeGeometry,
+                            notchStatus,
+                            notchGeometry,
+                            out bCutY,
+                            out bDepth,
+                            out cCutY,
+                            out cDepth,
+                            out message
+                        )
+                    )
                     {
                         AddGeometryDiagnostic(message);
                         return false;
@@ -728,17 +778,20 @@ namespace Tekla.Technology.Akit.UserScript
                 }
                 else
                 {
-                    if (!TryResolveSectionDepthFromNotches(
-                        minY,
-                        maxY,
-                        legacyFlangeThickness,
-                        notchStatus,
-                        notchGeometry,
-                        out bCutY,
-                        out bDepth,
-                        out cCutY,
-                        out cDepth,
-                        out message))
+                    if (
+                        !TryResolveSectionDepthFromNotches(
+                            minY,
+                            maxY,
+                            legacyFlangeThickness,
+                            notchStatus,
+                            notchGeometry,
+                            out bCutY,
+                            out bDepth,
+                            out cCutY,
+                            out cDepth,
+                            out message
+                        )
+                    )
                     {
                         AddGeometryDiagnostic(message);
                         return false;
@@ -746,15 +799,16 @@ namespace Tekla.Technology.Akit.UserScript
                 }
 
                 AddGeometryDiagnostic(
-                    "FinalSection B(cutY=" +
-                    FormatDiagnosticNumber(bCutY) +
-                    ",depth=" +
-                    FormatDiagnosticNumber(bDepth) +
-                    ") C(cutY=" +
-                    FormatDiagnosticNumber(cCutY) +
-                    ",depth=" +
-                    FormatDiagnosticNumber(cDepth) +
-                    ")");
+                    "FinalSection B(cutY="
+                        + FormatDiagnosticNumber(bCutY)
+                        + ",depth="
+                        + FormatDiagnosticNumber(bDepth)
+                        + ") C(cutY="
+                        + FormatDiagnosticNumber(cCutY)
+                        + ",depth="
+                        + FormatDiagnosticNumber(cDepth)
+                        + ")"
+                );
 
                 Point bLeft = new Point(minX, bCutY, 0.0);
                 Point bRight = new Point(maxX, bCutY, 0.0);
@@ -796,9 +850,7 @@ namespace Tekla.Technology.Akit.UserScript
                     if (oldPlane != null)
                         model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane);
                 }
-                catch
-                {
-                }
+                catch { }
             }
         }
 
@@ -831,7 +883,8 @@ namespace Tekla.Technology.Akit.UserScript
             out string profileText,
             out string normalizedProfile,
             out AutoSectionProfileKind kind,
-            out string message)
+            out string message
+        )
         {
             profileText = "";
             normalizedProfile = "";
@@ -849,18 +902,19 @@ namespace Tekla.Technology.Akit.UserScript
 
             if (String.IsNullOrEmpty(normalizedProfile))
             {
-                message =
-                    "Khong doc duoc PROFILE hoac Profile.ProfileString de Auto Section.";
+                message = "Khong doc duoc PROFILE hoac Profile.ProfileString de Auto Section.";
                 return false;
             }
 
-            if (normalizedProfile.StartsWith("BH") ||
-                normalizedProfile.StartsWith("RH") ||
-                normalizedProfile.StartsWith("HM") ||
-                normalizedProfile.StartsWith("HN") ||
-                normalizedProfile.StartsWith("HW") ||
-                normalizedProfile.StartsWith("H") ||
-                normalizedProfile.StartsWith("I"))
+            if (
+                normalizedProfile.StartsWith("BH")
+                || normalizedProfile.StartsWith("RH")
+                || normalizedProfile.StartsWith("HM")
+                || normalizedProfile.StartsWith("HN")
+                || normalizedProfile.StartsWith("HW")
+                || normalizedProfile.StartsWith("H")
+                || normalizedProfile.StartsWith("I")
+            )
             {
                 kind = AutoSectionProfileKind.ShapeIH;
                 return true;
@@ -872,17 +926,19 @@ namespace Tekla.Technology.Akit.UserScript
                 return true;
             }
 
-            if (normalizedProfile.StartsWith("CH") ||
-                normalizedProfile.StartsWith("CHANNEL") ||
-                normalizedProfile.StartsWith("C"))
+            if (
+                normalizedProfile.StartsWith("CH")
+                || normalizedProfile.StartsWith("CHANNEL")
+                || normalizedProfile.StartsWith("C")
+            )
             {
                 kind = AutoSectionProfileKind.ShapeCOrdinary;
                 return true;
             }
 
             message =
-                "Profile khong thuoc I/H, Shape [ hoac Shape C duoc Auto Section ho tro: " +
-                profileText;
+                "Profile khong thuoc I/H, Shape [ hoac Shape C duoc Auto Section ho tro: "
+                + profileText;
             return false;
         }
 
@@ -891,43 +947,43 @@ namespace Tekla.Technology.Akit.UserScript
             try
             {
                 string profile = "";
-                if (part != null &&
-                    part.GetReportProperty("PROFILE", ref profile) &&
-                    !String.IsNullOrWhiteSpace(profile))
+                if (
+                    part != null
+                    && part.GetReportProperty("PROFILE", ref profile)
+                    && !String.IsNullOrWhiteSpace(profile)
+                )
                     return profile.Trim();
             }
-            catch
-            {
-            }
+            catch { }
 
             try
             {
                 if (part == null)
                     return "";
 
-                PropertyInfo profileProperty = part.GetType().GetProperty(
-                    "Profile",
-                    BindingFlags.Public |
-                    BindingFlags.NonPublic |
-                    BindingFlags.Instance);
+                PropertyInfo profileProperty = part.GetType()
+                    .GetProperty(
+                        "Profile",
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    );
 
-                object profileObject = profileProperty != null &&
-                    profileProperty.CanRead
+                object profileObject =
+                    profileProperty != null && profileProperty.CanRead
                         ? profileProperty.GetValue(part, null)
                         : null;
 
                 if (profileObject == null)
                     return "";
 
-                PropertyInfo profileStringProperty =
-                    profileObject.GetType().GetProperty(
+                PropertyInfo profileStringProperty = profileObject
+                    .GetType()
+                    .GetProperty(
                         "ProfileString",
-                        BindingFlags.Public |
-                        BindingFlags.NonPublic |
-                        BindingFlags.Instance);
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    );
 
-                object value = profileStringProperty != null &&
-                    profileStringProperty.CanRead
+                object value =
+                    profileStringProperty != null && profileStringProperty.CanRead
                         ? profileStringProperty.GetValue(profileObject, null)
                         : null;
 
@@ -959,7 +1015,8 @@ namespace Tekla.Technology.Akit.UserScript
             double minY,
             double maxY,
             out CFlangeGeometry geometry,
-            out string message)
+            out string message
+        )
         {
             geometry = null;
             message = "";
@@ -968,8 +1025,7 @@ namespace Tekla.Technology.Akit.UserScript
             {
                 if (segments == null || segments.Count < 4)
                 {
-                    message =
-                        "Shape C khong co du canh Solid that de tim hai mep trong.";
+                    message = "Shape C khong co du canh Solid that de tim hai mep trong.";
                     return false;
                 }
 
@@ -977,11 +1033,9 @@ namespace Tekla.Technology.Akit.UserScript
                 double height = maxY - minY;
                 double edgeTol = Math.Max(2.0, TOL + 1.0);
 
-                if (!IsFinite(width) || !IsFinite(height) ||
-                    width <= edgeTol || height <= edgeTol)
+                if (!IsFinite(width) || !IsFinite(height) || width <= edgeTol || height <= edgeTol)
                 {
-                    message =
-                        "Extents Shape C khong hop le de phan tich mep canh.";
+                    message = "Extents Shape C khong hop le de phan tich mep canh.";
                     return false;
                 }
 
@@ -1010,62 +1064,65 @@ namespace Tekla.Technology.Akit.UserScript
                 double topCoverage;
                 double bottomCoverage;
 
-                if (!TrySelectCFlangeInnerLevel(
-                    horizontalLevels,
-                    segments,
-                    minX,
-                    maxX,
-                    minY,
-                    maxY,
-                    true,
-                    edgeTol,
-                    out innerTopY,
-                    out topCoverage))
+                if (
+                    !TrySelectCFlangeInnerLevel(
+                        horizontalLevels,
+                        segments,
+                        minX,
+                        maxX,
+                        minY,
+                        maxY,
+                        true,
+                        edgeTol,
+                        out innerTopY,
+                        out topCoverage
+                    )
+                )
                 {
-                    message =
-                        "Khong tim duoc mep trong phia duoi cua canh tren Shape C.";
+                    message = "Khong tim duoc mep trong phia duoi cua canh tren Shape C.";
                     return false;
                 }
 
-                if (!TrySelectCFlangeInnerLevel(
-                    horizontalLevels,
-                    segments,
-                    minX,
-                    maxX,
-                    minY,
-                    maxY,
-                    false,
-                    edgeTol,
-                    out innerBottomY,
-                    out bottomCoverage))
+                if (
+                    !TrySelectCFlangeInnerLevel(
+                        horizontalLevels,
+                        segments,
+                        minX,
+                        maxX,
+                        minY,
+                        maxY,
+                        false,
+                        edgeTol,
+                        out innerBottomY,
+                        out bottomCoverage
+                    )
+                )
                 {
-                    message =
-                        "Khong tim duoc mep trong phia tren cua canh duoi Shape C.";
+                    message = "Khong tim duoc mep trong phia tren cua canh duoi Shape C.";
                     return false;
                 }
 
                 double topFlangeDepth = maxY - innerTopY;
                 double bottomFlangeDepth = innerBottomY - minY;
 
-                if (!IsFinite(topFlangeDepth) ||
-                    !IsFinite(bottomFlangeDepth) ||
-                    topFlangeDepth <= TOL ||
-                    bottomFlangeDepth <= TOL ||
-                    topFlangeDepth >= height * 0.45 ||
-                    bottomFlangeDepth >= height * 0.45 ||
-                    innerTopY <= innerBottomY + edgeTol)
+                if (
+                    !IsFinite(topFlangeDepth)
+                    || !IsFinite(bottomFlangeDepth)
+                    || topFlangeDepth <= TOL
+                    || bottomFlangeDepth <= TOL
+                    || topFlangeDepth >= height * 0.45
+                    || bottomFlangeDepth >= height * 0.45
+                    || innerTopY <= innerBottomY + edgeTol
+                )
                 {
-                    message =
-                        "Hai mep trong Shape C khong tao thanh hai canh tren/duoi hop le.";
+                    message = "Hai mep trong Shape C khong tao thanh hai canh tren/duoi hop le.";
                     return false;
                 }
 
                 double minimumCoverage = Math.Max(5.0, width * 0.15);
-                if (topCoverage < minimumCoverage ||
-                    bottomCoverage < minimumCoverage)
+                if (topCoverage < minimumCoverage || bottomCoverage < minimumCoverage)
                 {
-                    message =
-                        "Do dai canh that tai hai mep trong Shape C khong du de validate.";
+                    message = "Do dai canh that tai hai mep trong Shape C khong du de validate.";
                     return false;
                 }
 
@@ -1076,15 +1133,18 @@ namespace Tekla.Technology.Akit.UserScript
                 geometry.InnerBottomY = innerBottomY;
 
                 COpeningSide openingSide;
-                if (!TryResolveOrdinaryCOpeningTopology(
-                    segments,
-                    minX,
-                    maxX,
-                    minY,
-                    maxY,
-                    edgeTol,
-                    out openingSide,
-                    out message))
+                if (
+                    !TryResolveOrdinaryCOpeningTopology(
+                        segments,
+                        minX,
+                        maxX,
+                        minY,
+                        maxY,
+                        edgeTol,
+                        out openingSide,
+                        out message
+                    )
+                )
                 {
                     geometry = null;
                     return false;
@@ -1093,10 +1153,11 @@ namespace Tekla.Technology.Akit.UserScript
                 geometry.OpeningSide = openingSide;
 
                 AddGeometryDiagnostic(
-                    "CFlangeCoverage top=" +
-                    FormatDiagnosticNumber(topCoverage) +
-                    " bottom=" +
-                    FormatDiagnosticNumber(bottomCoverage));
+                    "CFlangeCoverage top="
+                        + FormatDiagnosticNumber(topCoverage)
+                        + " bottom="
+                        + FormatDiagnosticNumber(bottomCoverage)
+                );
 
                 return true;
             }
@@ -1107,10 +1168,7 @@ namespace Tekla.Technology.Akit.UserScript
             }
         }
 
-        private static void AddUniqueCoordinate(
-            List<double> values,
-            double value,
-            double tolerance)
+        private static void AddUniqueCoordinate(List<double> values, double value, double tolerance)
         {
             if (values == null || !IsFinite(value))
                 return;
@@ -1137,7 +1195,8 @@ namespace Tekla.Technology.Akit.UserScript
             bool topSide,
             double tolerance,
             out double selectedY,
-            out double selectedCoverage)
+            out double selectedCoverage
+        )
         {
             selectedY = 0.0;
             selectedCoverage = 0.0;
@@ -1150,16 +1209,10 @@ namespace Tekla.Technology.Akit.UserScript
 
             foreach (double y in levels)
             {
-                if ((topSide && y <= middleY + tolerance) ||
-                    (!topSide && y >= middleY - tolerance))
+                if ((topSide && y <= middleY + tolerance) || (!topSide && y >= middleY - tolerance))
                     continue;
 
-                double coverage = GetHorizontalCoverageAtY(
-                    segments,
-                    y,
-                    minX,
-                    maxX,
-                    tolerance);
+                double coverage = GetHorizontalCoverageAtY(segments, y, minX, maxX, tolerance);
 
                 if (coverage > bestCoverage)
                     bestCoverage = coverage;
@@ -1170,28 +1223,21 @@ namespace Tekla.Technology.Akit.UserScript
 
             double minimumCoverage = Math.Max(
                 Math.Max(5.0, (maxX - minX) * 0.15),
-                bestCoverage * 0.70);
+                bestCoverage * 0.70
+            );
             bool found = false;
 
             foreach (double y in levels)
             {
-                if ((topSide && y <= middleY + tolerance) ||
-                    (!topSide && y >= middleY - tolerance))
+                if ((topSide && y <= middleY + tolerance) || (!topSide && y >= middleY - tolerance))
                     continue;
 
-                double coverage = GetHorizontalCoverageAtY(
-                    segments,
-                    y,
-                    minX,
-                    maxX,
-                    tolerance);
+                double coverage = GetHorizontalCoverageAtY(segments, y, minX, maxX, tolerance);
 
                 if (coverage < minimumCoverage)
                     continue;
 
-                if (!found ||
-                    (topSide && y > selectedY) ||
-                    (!topSide && y < selectedY))
+                if (!found || (topSide && y > selectedY) || (!topSide && y < selectedY))
                 {
                     selectedY = y;
                     selectedCoverage = coverage;
@@ -1207,7 +1253,8 @@ namespace Tekla.Technology.Akit.UserScript
             double targetY,
             double minX,
             double maxX,
-            double tolerance)
+            double tolerance
+        )
         {
             List<ProjectedInterval> intervals = new List<ProjectedInterval>();
 
@@ -1223,18 +1270,12 @@ namespace Tekla.Technology.Akit.UserScript
                 double dy = Math.Abs(segment.End.Y - segment.Start.Y);
                 double y = (segment.Start.Y + segment.End.Y) * 0.5;
 
-                if (dx <= tolerance ||
-                    dy > tolerance ||
-                    Math.Abs(y - targetY) > tolerance)
+                if (dx <= tolerance || dy > tolerance || Math.Abs(y - targetY) > tolerance)
                     continue;
 
                 ProjectedInterval interval = new ProjectedInterval();
-                interval.Min = Math.Max(
-                    minX,
-                    Math.Min(segment.Start.X, segment.End.X));
-                interval.Max = Math.Min(
-                    maxX,
-                    Math.Max(segment.Start.X, segment.End.X));
+                interval.Min = Math.Max(minX, Math.Min(segment.Start.X, segment.End.X));
+                interval.Max = Math.Min(maxX, Math.Max(segment.Start.X, segment.End.X));
 
                 if (interval.Max - interval.Min > TOL)
                     intervals.Add(interval);
@@ -1248,7 +1289,8 @@ namespace Tekla.Technology.Akit.UserScript
             double targetX,
             double minY,
             double maxY,
-            double tolerance)
+            double tolerance
+        )
         {
             List<ProjectedInterval> intervals = new List<ProjectedInterval>();
 
@@ -1264,18 +1306,12 @@ namespace Tekla.Technology.Akit.UserScript
                 double dy = Math.Abs(segment.End.Y - segment.Start.Y);
                 double x = (segment.Start.X + segment.End.X) * 0.5;
 
-                if (dy <= tolerance ||
-                    dx > tolerance ||
-                    Math.Abs(x - targetX) > tolerance)
+                if (dy <= tolerance || dx > tolerance || Math.Abs(x - targetX) > tolerance)
                     continue;
 
                 ProjectedInterval interval = new ProjectedInterval();
-                interval.Min = Math.Max(
-                    minY,
-                    Math.Min(segment.Start.Y, segment.End.Y));
-                interval.Max = Math.Min(
-                    maxY,
-                    Math.Max(segment.Start.Y, segment.End.Y));
+                interval.Min = Math.Max(minY, Math.Min(segment.Start.Y, segment.End.Y));
+                interval.Max = Math.Min(maxY, Math.Max(segment.Start.Y, segment.End.Y));
 
                 if (interval.Max - interval.Min > TOL)
                     intervals.Add(interval);
@@ -1286,17 +1322,18 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static double GetMergedIntervalCoverage(
             List<ProjectedInterval> intervals,
-            double tolerance)
+            double tolerance
+        )
         {
             if (intervals == null || intervals.Count == 0)
                 return 0.0;
 
-            intervals.Sort(delegate (
-                ProjectedInterval first,
-                ProjectedInterval second)
-            {
-                return first.Min.CompareTo(second.Min);
-            });
+            intervals.Sort(
+                delegate(ProjectedInterval first, ProjectedInterval second)
+                {
+                    return first.Min.CompareTo(second.Min);
+                }
+            );
 
             double coverage = 0.0;
             double currentMin = intervals[0].Min;
@@ -1329,35 +1366,29 @@ namespace Tekla.Technology.Akit.UserScript
             double maxY,
             double edgeTolerance,
             out COpeningSide openingSide,
-            out string message)
+            out string message
+        )
         {
             openingSide = COpeningSide.Unknown;
             message = "";
 
-            double sideTolerance = Math.Max(
-                edgeTolerance,
-                (maxX - minX) * 0.03);
-            double leftCoverage = GetVerticalCoverageAtX(
-                segments,
-                minX,
-                minY,
-                maxY,
-                sideTolerance);
+            double sideTolerance = Math.Max(edgeTolerance, (maxX - minX) * 0.03);
+            double leftCoverage = GetVerticalCoverageAtX(segments, minX, minY, maxY, sideTolerance);
             double rightCoverage = GetVerticalCoverageAtX(
                 segments,
                 maxX,
                 minY,
                 maxY,
-                sideTolerance);
-            double minimumDifference = Math.Max(
-                2.0,
-                (maxY - minY) * 0.05);
+                sideTolerance
+            );
+            double minimumDifference = Math.Max(2.0, (maxY - minY) * 0.05);
 
             AddGeometryDiagnostic(
-                "CVerticalCoverage left=" +
-                FormatDiagnosticNumber(leftCoverage) +
-                " right=" +
-                FormatDiagnosticNumber(rightCoverage));
+                "CVerticalCoverage left="
+                    + FormatDiagnosticNumber(leftCoverage)
+                    + " right="
+                    + FormatDiagnosticNumber(rightCoverage)
+            );
 
             if (leftCoverage + minimumDifference < rightCoverage)
                 openingSide = COpeningSide.Left;
@@ -1373,58 +1404,63 @@ namespace Tekla.Technology.Akit.UserScript
                 minX,
                 minY,
                 middleY,
-                sideTolerance);
+                sideTolerance
+            );
             double leftUpperCoverage = GetVerticalCoverageAtX(
                 segments,
                 minX,
                 middleY,
                 maxY,
-                sideTolerance);
+                sideTolerance
+            );
             double rightLowerCoverage = GetVerticalCoverageAtX(
                 segments,
                 maxX,
                 minY,
                 middleY,
-                sideTolerance);
+                sideTolerance
+            );
             double rightUpperCoverage = GetVerticalCoverageAtX(
                 segments,
                 maxX,
                 middleY,
                 maxY,
-                sideTolerance);
+                sideTolerance
+            );
 
             AddGeometryDiagnostic(
-                "CSplitCoverage left(lower=" +
-                FormatDiagnosticNumber(leftLowerCoverage) +
-                ",upper=" +
-                FormatDiagnosticNumber(leftUpperCoverage) +
-                ") right(lower=" +
-                FormatDiagnosticNumber(rightLowerCoverage) +
-                ",upper=" +
-                FormatDiagnosticNumber(rightUpperCoverage) +
-                ")");
+                "CSplitCoverage left(lower="
+                    + FormatDiagnosticNumber(leftLowerCoverage)
+                    + ",upper="
+                    + FormatDiagnosticNumber(leftUpperCoverage)
+                    + ") right(lower="
+                    + FormatDiagnosticNumber(rightLowerCoverage)
+                    + ",upper="
+                    + FormatDiagnosticNumber(rightUpperCoverage)
+                    + ")"
+            );
 
             if (Math.Max(leftCoverage, rightCoverage) >= partHeight * 0.75)
             {
                 message =
-                    "Hinh hoc C co canh dung lien tuc gan het chieu cao; " +
-                    "khong du chac chan de xu ly nhu C thong thuong thay vi Shape [.";
+                    "Hinh hoc C co canh dung lien tuc gan het chieu cao; "
+                    + "khong du chac chan de xu ly nhu C thong thuong thay vi Shape [.";
                 return false;
             }
 
             double minimumHalfCoverage = Math.Max(2.0, partHeight * 0.01);
             bool hasLeftSplit =
-                leftLowerCoverage >= minimumHalfCoverage &&
-                leftUpperCoverage >= minimumHalfCoverage;
+                leftLowerCoverage >= minimumHalfCoverage
+                && leftUpperCoverage >= minimumHalfCoverage;
             bool hasRightSplit =
-                rightLowerCoverage >= minimumHalfCoverage &&
-                rightUpperCoverage >= minimumHalfCoverage;
+                rightLowerCoverage >= minimumHalfCoverage
+                && rightUpperCoverage >= minimumHalfCoverage;
 
             if (!hasLeftSplit && !hasRightSplit)
             {
                 message =
-                    "Hinh hoc C khong co du hai doan canh dung tren/duoi " +
-                    "de xac nhan C thong thuong.";
+                    "Hinh hoc C khong co du hai doan canh dung tren/duoi "
+                    + "de xac nhan C thong thuong.";
                 return false;
             }
 
@@ -1437,7 +1473,8 @@ namespace Tekla.Technology.Akit.UserScript
             double maxX,
             double minY,
             double maxY,
-            out FrontNotchGeometry geometry)
+            out FrontNotchGeometry geometry
+        )
         {
             geometry = new FrontNotchGeometry();
 
@@ -1446,10 +1483,7 @@ namespace Tekla.Technology.Akit.UserScript
                 List<Point> points;
                 List<ProjectedFrontSegment> segments;
 
-                if (!TryCollectProjectedFrontSolidGeometry(
-                    solid,
-                    out points,
-                    out segments))
+                if (!TryCollectProjectedFrontSolidGeometry(solid, out points, out segments))
                 {
                     geometry.Status = FrontNotchDetectionStatus.Failed;
                     return geometry.Status;
@@ -1462,7 +1496,8 @@ namespace Tekla.Technology.Akit.UserScript
                     maxX,
                     minY,
                     maxY,
-                    geometry);
+                    geometry
+                );
 
                 return geometry.Status;
             }
@@ -1476,7 +1511,8 @@ namespace Tekla.Technology.Akit.UserScript
         private static bool TryCollectProjectedFrontSolidGeometry(
             Solid solid,
             out List<Point> points,
-            out List<ProjectedFrontSegment> segments)
+            out List<ProjectedFrontSegment> segments
+        )
         {
             points = new List<Point>();
             segments = new List<ProjectedFrontSegment>();
@@ -1488,8 +1524,7 @@ namespace Tekla.Technology.Akit.UserScript
 
             try
             {
-                Tekla.Structures.Solid.FaceEnumerator faces =
-                    solid.GetFaceEnumerator();
+                Tekla.Structures.Solid.FaceEnumerator faces = solid.GetFaceEnumerator();
 
                 while (faces != null && faces.MoveNext())
                 {
@@ -1501,8 +1536,7 @@ namespace Tekla.Technology.Akit.UserScript
                     if (face == null)
                         continue;
 
-                    Tekla.Structures.Solid.LoopEnumerator loops =
-                        face.GetLoopEnumerator();
+                    Tekla.Structures.Solid.LoopEnumerator loops = face.GetLoopEnumerator();
 
                     while (loops != null && loops.MoveNext())
                     {
@@ -1523,9 +1557,7 @@ namespace Tekla.Technology.Akit.UserScript
                             if (geometryItemCount > SECTION_NOTCH_MAX_GEOMETRY_ITEMS)
                                 return false;
 
-                            if (!TryAddUniqueProjectedPoint(
-                                points,
-                                vertices.Current))
+                            if (!TryAddUniqueProjectedPoint(points, vertices.Current))
                                 return false;
                         }
                     }
@@ -1538,8 +1570,7 @@ namespace Tekla.Technology.Akit.UserScript
 
             try
             {
-                Tekla.Structures.Solid.EdgeEnumerator edges =
-                    solid.GetEdgeEnumerator();
+                Tekla.Structures.Solid.EdgeEnumerator edges = solid.GetEdgeEnumerator();
 
                 while (edges != null && edges.MoveNext())
                 {
@@ -1547,26 +1578,19 @@ namespace Tekla.Technology.Akit.UserScript
                     if (geometryItemCount > SECTION_NOTCH_MAX_GEOMETRY_ITEMS)
                         return false;
 
-                    Tekla.Structures.Solid.Edge edge =
-                        edges.Current as Tekla.Structures.Solid.Edge;
+                    Tekla.Structures.Solid.Edge edge = edges.Current as Tekla.Structures.Solid.Edge;
 
-                    if (edge == null ||
-                        edge.StartPoint == null ||
-                        edge.EndPoint == null)
+                    if (edge == null || edge.StartPoint == null || edge.EndPoint == null)
                         continue;
 
-                    Point start = new Point(
-                        edge.StartPoint.X,
-                        edge.StartPoint.Y,
-                        0.0);
-                    Point end = new Point(
-                        edge.EndPoint.X,
-                        edge.EndPoint.Y,
-                        0.0);
+                    Point start = new Point(edge.StartPoint.X, edge.StartPoint.Y, 0.0);
+                    Point end = new Point(edge.EndPoint.X, edge.EndPoint.Y, 0.0);
 
-                    if (!TryAddUniqueProjectedPoint(points, start) ||
-                        !TryAddUniqueProjectedPoint(points, end) ||
-                        !TryAddUniqueProjectedSegment(segments, start, end))
+                    if (
+                        !TryAddUniqueProjectedPoint(points, start)
+                        || !TryAddUniqueProjectedPoint(points, end)
+                        || !TryAddUniqueProjectedSegment(segments, start, end)
+                    )
                         return false;
                 }
             }
@@ -1578,24 +1602,17 @@ namespace Tekla.Technology.Akit.UserScript
             return points.Count >= 4 && segments.Count >= 4;
         }
 
-        private static bool TryAddUniqueProjectedPoint(
-            List<Point> points,
-            Point point)
+        private static bool TryAddUniqueProjectedPoint(List<Point> points, Point point)
         {
             if (points == null)
                 return false;
 
-            if (point == null ||
-                !IsFinite(point.X) ||
-                !IsFinite(point.Y))
+            if (point == null || !IsFinite(point.X) || !IsFinite(point.Y))
                 return true;
 
             foreach (Point current in points)
             {
-                if (AreProjectedPointsNear(
-                    current,
-                    point,
-                    SECTION_NOTCH_POINT_MERGE_TOL))
+                if (AreProjectedPointsNear(current, point, SECTION_NOTCH_POINT_MERGE_TOL))
                     return true;
             }
 
@@ -1609,42 +1626,27 @@ namespace Tekla.Technology.Akit.UserScript
         private static bool TryAddUniqueProjectedSegment(
             List<ProjectedFrontSegment> segments,
             Point start,
-            Point end)
+            Point end
+        )
         {
             if (segments == null || start == null || end == null)
                 return false;
 
-            if (!IsFinite(start.X) || !IsFinite(start.Y) ||
-                !IsFinite(end.X) || !IsFinite(end.Y))
+            if (!IsFinite(start.X) || !IsFinite(start.Y) || !IsFinite(end.X) || !IsFinite(end.Y))
                 return true;
 
-            if (AreProjectedPointsNear(
-                start,
-                end,
-                SECTION_NOTCH_POINT_MERGE_TOL))
+            if (AreProjectedPointsNear(start, end, SECTION_NOTCH_POINT_MERGE_TOL))
                 return true;
 
             foreach (ProjectedFrontSegment current in segments)
             {
                 bool sameDirection =
-                    AreProjectedPointsNear(
-                        current.Start,
-                        start,
-                        SECTION_NOTCH_POINT_MERGE_TOL) &&
-                    AreProjectedPointsNear(
-                        current.End,
-                        end,
-                        SECTION_NOTCH_POINT_MERGE_TOL);
+                    AreProjectedPointsNear(current.Start, start, SECTION_NOTCH_POINT_MERGE_TOL)
+                    && AreProjectedPointsNear(current.End, end, SECTION_NOTCH_POINT_MERGE_TOL);
 
                 bool oppositeDirection =
-                    AreProjectedPointsNear(
-                        current.Start,
-                        end,
-                        SECTION_NOTCH_POINT_MERGE_TOL) &&
-                    AreProjectedPointsNear(
-                        current.End,
-                        start,
-                        SECTION_NOTCH_POINT_MERGE_TOL);
+                    AreProjectedPointsNear(current.Start, end, SECTION_NOTCH_POINT_MERGE_TOL)
+                    && AreProjectedPointsNear(current.End, start, SECTION_NOTCH_POINT_MERGE_TOL);
 
                 if (sameDirection || oppositeDirection)
                     return true;
@@ -1660,15 +1662,12 @@ namespace Tekla.Technology.Akit.UserScript
             return true;
         }
 
-        private static bool AreProjectedPointsNear(
-            Point first,
-            Point second,
-            double tolerance)
+        private static bool AreProjectedPointsNear(Point first, Point second, double tolerance)
         {
-            return first != null &&
-                   second != null &&
-                   Math.Abs(first.X - second.X) <= tolerance &&
-                   Math.Abs(first.Y - second.Y) <= tolerance;
+            return first != null
+                && second != null
+                && Math.Abs(first.X - second.X) <= tolerance
+                && Math.Abs(first.Y - second.Y) <= tolerance;
         }
 
         private static FrontNotchDetectionStatus TryDetectFrontCornerNotches(
@@ -1678,15 +1677,18 @@ namespace Tekla.Technology.Akit.UserScript
             double maxX,
             double minY,
             double maxY,
-            FrontNotchGeometry geometry)
+            FrontNotchGeometry geometry
+        )
         {
             try
             {
-                if (geometry == null ||
-                    points == null ||
-                    segments == null ||
-                    points.Count < 4 ||
-                    segments.Count < 4)
+                if (
+                    geometry == null
+                    || points == null
+                    || segments == null
+                    || points.Count < 4
+                    || segments.Count < 4
+                )
                     return FrontNotchDetectionStatus.Failed;
 
                 geometry.HasTopLeft = TryDetectOneFrontCornerNotch(
@@ -1699,7 +1701,8 @@ namespace Tekla.Technology.Akit.UserScript
                     true,
                     true,
                     out geometry.TopLeftOuter,
-                    out geometry.TopLeftInner);
+                    out geometry.TopLeftInner
+                );
 
                 geometry.HasTopRight = TryDetectOneFrontCornerNotch(
                     points,
@@ -1711,7 +1714,8 @@ namespace Tekla.Technology.Akit.UserScript
                     false,
                     true,
                     out geometry.TopRightOuter,
-                    out geometry.TopRightInner);
+                    out geometry.TopRightInner
+                );
 
                 geometry.HasBottomLeft = TryDetectOneFrontCornerNotch(
                     points,
@@ -1723,7 +1727,8 @@ namespace Tekla.Technology.Akit.UserScript
                     true,
                     false,
                     out geometry.BottomLeftOuter,
-                    out geometry.BottomLeftInner);
+                    out geometry.BottomLeftInner
+                );
 
                 geometry.HasBottomRight = TryDetectOneFrontCornerNotch(
                     points,
@@ -1735,25 +1740,26 @@ namespace Tekla.Technology.Akit.UserScript
                     false,
                     false,
                     out geometry.BottomRightOuter,
-                    out geometry.BottomRightInner);
+                    out geometry.BottomRightInner
+                );
 
-                geometry.HasAnyTopNotch =
-                    geometry.HasTopLeft || geometry.HasTopRight;
-                geometry.HasAnyBottomNotch =
-                    geometry.HasBottomLeft || geometry.HasBottomRight;
+                geometry.HasAnyTopNotch = geometry.HasTopLeft || geometry.HasTopRight;
+                geometry.HasAnyBottomNotch = geometry.HasBottomLeft || geometry.HasBottomRight;
 
                 geometry.LowestTopNotchY = double.MaxValue;
                 if (geometry.HasTopLeft)
                 {
                     geometry.LowestTopNotchY = Math.Min(
                         geometry.LowestTopNotchY,
-                        geometry.TopLeftOuter.Y);
+                        geometry.TopLeftOuter.Y
+                    );
                 }
                 if (geometry.HasTopRight)
                 {
                     geometry.LowestTopNotchY = Math.Min(
                         geometry.LowestTopNotchY,
-                        geometry.TopRightOuter.Y);
+                        geometry.TopRightOuter.Y
+                    );
                 }
 
                 geometry.HighestBottomNotchY = double.MinValue;
@@ -1761,17 +1767,18 @@ namespace Tekla.Technology.Akit.UserScript
                 {
                     geometry.HighestBottomNotchY = Math.Max(
                         geometry.HighestBottomNotchY,
-                        geometry.BottomLeftOuter.Y);
+                        geometry.BottomLeftOuter.Y
+                    );
                 }
                 if (geometry.HasBottomRight)
                 {
                     geometry.HighestBottomNotchY = Math.Max(
                         geometry.HighestBottomNotchY,
-                        geometry.BottomRightOuter.Y);
+                        geometry.BottomRightOuter.Y
+                    );
                 }
 
-                return geometry.HasAnyTopNotch ||
-                       geometry.HasAnyBottomNotch
+                return geometry.HasAnyTopNotch || geometry.HasAnyBottomNotch
                     ? FrontNotchDetectionStatus.Found
                     : FrontNotchDetectionStatus.NoNotch;
             }
@@ -1791,7 +1798,8 @@ namespace Tekla.Technology.Akit.UserScript
             bool leftSide,
             bool topSide,
             out Point outer,
-            out Point inner)
+            out Point inner
+        )
         {
             outer = null;
             inner = null;
@@ -1808,16 +1816,16 @@ namespace Tekla.Technology.Akit.UserScript
                     : Math.Abs(point.X - maxX) <= edgeTol;
 
                 bool inVerticalCornerBand = topSide
-                    ? point.Y < maxY - edgeTol &&
-                      point.Y >= maxY - SECTION_NOTCH_MAX_SIZE
-                    : point.Y > minY + edgeTol &&
-                      point.Y <= minY + SECTION_NOTCH_MAX_SIZE;
+                    ? point.Y < maxY - edgeTol && point.Y >= maxY - SECTION_NOTCH_MAX_SIZE
+                    : point.Y > minY + edgeTol && point.Y <= minY + SECTION_NOTCH_MAX_SIZE;
 
                 if (onSideEdge && inVerticalCornerBand)
                 {
-                    if (outer == null ||
-                        (topSide && point.Y > outer.Y) ||
-                        (!topSide && point.Y < outer.Y))
+                    if (
+                        outer == null
+                        || (topSide && point.Y > outer.Y)
+                        || (!topSide && point.Y < outer.Y)
+                    )
                     {
                         outer = new Point(point.X, point.Y, 0.0);
                     }
@@ -1828,16 +1836,16 @@ namespace Tekla.Technology.Akit.UserScript
                     : Math.Abs(point.Y - minY) <= edgeTol;
 
                 bool inHorizontalCornerBand = leftSide
-                    ? point.X > minX + edgeTol &&
-                      point.X <= minX + SECTION_NOTCH_MAX_SIZE
-                    : point.X < maxX - edgeTol &&
-                      point.X >= maxX - SECTION_NOTCH_MAX_SIZE;
+                    ? point.X > minX + edgeTol && point.X <= minX + SECTION_NOTCH_MAX_SIZE
+                    : point.X < maxX - edgeTol && point.X >= maxX - SECTION_NOTCH_MAX_SIZE;
 
                 if (onHorizontalEdge && inHorizontalCornerBand)
                 {
-                    if (inner == null ||
-                        (leftSide && point.X > inner.X) ||
-                        (!leftSide && point.X < inner.X))
+                    if (
+                        inner == null
+                        || (leftSide && point.X > inner.X)
+                        || (!leftSide && point.X < inner.X)
+                    )
                     {
                         inner = new Point(point.X, point.Y, 0.0);
                     }
@@ -1847,28 +1855,21 @@ namespace Tekla.Technology.Akit.UserScript
             if (outer == null || inner == null)
                 return false;
 
-            if ((leftSide && inner.X >= maxX - edgeTol) ||
-                (!leftSide && inner.X <= minX + edgeTol))
+            if ((leftSide && inner.X >= maxX - edgeTol) || (!leftSide && inner.X <= minX + edgeTol))
                 return false;
 
-            double width = leftSide
-                ? Math.Abs(inner.X - minX)
-                : Math.Abs(maxX - inner.X);
-            double depth = topSide
-                ? Math.Abs(maxY - outer.Y)
-                : Math.Abs(outer.Y - minY);
+            double width = leftSide ? Math.Abs(inner.X - minX) : Math.Abs(maxX - inner.X);
+            double depth = topSide ? Math.Abs(maxY - outer.Y) : Math.Abs(outer.Y - minY);
 
-            if (width < SECTION_NOTCH_MIN_SIZE ||
-                depth < SECTION_NOTCH_MIN_SIZE ||
-                width > SECTION_NOTCH_MAX_SIZE ||
-                depth > SECTION_NOTCH_MAX_SIZE)
+            if (
+                width < SECTION_NOTCH_MIN_SIZE
+                || depth < SECTION_NOTCH_MIN_SIZE
+                || width > SECTION_NOTCH_MAX_SIZE
+                || depth > SECTION_NOTCH_MAX_SIZE
+            )
                 return false;
 
-            if (!HasAxisAlignedNotchEvidence(
-                segments,
-                outer,
-                inner,
-                edgeTol))
+            if (!HasAxisAlignedNotchEvidence(segments, outer, inner, edgeTol))
                 return false;
 
             return true;
@@ -1878,7 +1879,8 @@ namespace Tekla.Technology.Akit.UserScript
             List<ProjectedFrontSegment> segments,
             Point outer,
             Point inner,
-            double edgeTol)
+            double edgeTol
+        )
         {
             bool hasHorizontalLeg = false;
             bool hasVerticalLeg = false;
@@ -1900,10 +1902,14 @@ namespace Tekla.Technology.Akit.UserScript
                 double dy = Math.Abs(end.Y - start.Y);
 
                 bool joinsOuterAndInner =
-                    (AreProjectedPointsNear(start, outer, edgeTol) &&
-                     AreProjectedPointsNear(end, inner, edgeTol)) ||
-                    (AreProjectedPointsNear(start, inner, edgeTol) &&
-                     AreProjectedPointsNear(end, outer, edgeTol));
+                    (
+                        AreProjectedPointsNear(start, outer, edgeTol)
+                        && AreProjectedPointsNear(end, inner, edgeTol)
+                    )
+                    || (
+                        AreProjectedPointsNear(start, inner, edgeTol)
+                        && AreProjectedPointsNear(end, outer, edgeTol)
+                    );
 
                 if (joinsOuterAndInner && dx > edgeTol && dy > edgeTol)
                     hasDirectDiagonal = true;
@@ -1913,28 +1919,30 @@ namespace Tekla.Technology.Akit.UserScript
                 double segmentMinY = Math.Min(start.Y, end.Y);
                 double segmentMaxY = Math.Max(start.Y, end.Y);
 
-                if (dx > SECTION_NOTCH_POINT_MERGE_TOL &&
-                    dy <= edgeTol &&
-                    Math.Abs((start.Y + end.Y) * 0.5 - outer.Y) <= edgeTol &&
-                    segmentMaxX >= minCornerX &&
-                    segmentMinX <= maxCornerX)
+                if (
+                    dx > SECTION_NOTCH_POINT_MERGE_TOL
+                    && dy <= edgeTol
+                    && Math.Abs((start.Y + end.Y) * 0.5 - outer.Y) <= edgeTol
+                    && segmentMaxX >= minCornerX
+                    && segmentMinX <= maxCornerX
+                )
                 {
                     hasHorizontalLeg = true;
                 }
 
-                if (dy > SECTION_NOTCH_POINT_MERGE_TOL &&
-                    dx <= edgeTol &&
-                    Math.Abs((start.X + end.X) * 0.5 - inner.X) <= edgeTol &&
-                    segmentMaxY >= minCornerY &&
-                    segmentMinY <= maxCornerY)
+                if (
+                    dy > SECTION_NOTCH_POINT_MERGE_TOL
+                    && dx <= edgeTol
+                    && Math.Abs((start.X + end.X) * 0.5 - inner.X) <= edgeTol
+                    && segmentMaxY >= minCornerY
+                    && segmentMinY <= maxCornerY
+                )
                 {
                     hasVerticalLeg = true;
                 }
             }
 
-            return hasHorizontalLeg &&
-                   hasVerticalLeg &&
-                   !hasDirectDiagonal;
+            return hasHorizontalLeg && hasVerticalLeg && !hasDirectDiagonal;
         }
 
         private static bool TryResolveSectionDepthFromNotches(
@@ -1947,7 +1955,8 @@ namespace Tekla.Technology.Akit.UserScript
             out double bDepth,
             out double cCutY,
             out double cDepth,
-            out string message)
+            out string message
+        )
         {
             message = "";
             bCutY = maxY;
@@ -1956,27 +1965,22 @@ namespace Tekla.Technology.Akit.UserScript
             cDepth = cCutY - minY;
 
             bool hasTopNotch =
-                notchStatus == FrontNotchDetectionStatus.Found &&
-                notchGeometry != null &&
-                notchGeometry.HasAnyTopNotch;
+                notchStatus == FrontNotchDetectionStatus.Found
+                && notchGeometry != null
+                && notchGeometry.HasAnyTopNotch;
             bool hasBottomNotch =
-                notchStatus == FrontNotchDetectionStatus.Found &&
-                notchGeometry != null &&
-                notchGeometry.HasAnyBottomNotch;
+                notchStatus == FrontNotchDetectionStatus.Found
+                && notchGeometry != null
+                && notchGeometry.HasAnyBottomNotch;
 
             if (hasTopNotch)
             {
-                bDepth =
-                    maxY -
-                    notchGeometry.LowestTopNotchY +
-                    SECTION_B_EXTRA_DEPTH;
+                bDepth = maxY - notchGeometry.LowestTopNotchY + SECTION_B_EXTRA_DEPTH;
             }
 
             if (hasBottomNotch)
             {
-                cCutY =
-                    notchGeometry.HighestBottomNotchY +
-                    SECTION_C_EXTRA_START;
+                cCutY = notchGeometry.HighestBottomNotchY + SECTION_C_EXTRA_START;
                 cDepth = cCutY - minY;
             }
 
@@ -1990,7 +1994,8 @@ namespace Tekla.Technology.Akit.UserScript
                 hasTopNotch,
                 hasBottomNotch,
                 notchGeometry,
-                out message);
+                out message
+            );
         }
 
         private static bool TryResolveOrdinaryCSectionDepthFromNotches(
@@ -2003,7 +2008,8 @@ namespace Tekla.Technology.Akit.UserScript
             out double bDepth,
             out double cCutY,
             out double cDepth,
-            out string message)
+            out string message
+        )
         {
             message = "";
             bCutY = 0.0;
@@ -2018,66 +2024,56 @@ namespace Tekla.Technology.Akit.UserScript
             }
 
             bCutY = flangeGeometry.OuterTopY;
-            bDepth =
-                flangeGeometry.OuterTopY -
-                flangeGeometry.InnerTopY +
-                SECTION_B_EXTRA_DEPTH;
-            cCutY =
-                flangeGeometry.InnerBottomY +
-                SECTION_C_EXTRA_START;
+            bDepth = flangeGeometry.OuterTopY - flangeGeometry.InnerTopY + SECTION_B_EXTRA_DEPTH;
+            cCutY = flangeGeometry.InnerBottomY + SECTION_C_EXTRA_START;
             cDepth = cCutY - flangeGeometry.OuterBottomY;
 
             double baseBDepth = bDepth;
             double baseCCutY = cCutY;
             bool hasTopNotch =
-                notchStatus == FrontNotchDetectionStatus.Found &&
-                notchGeometry != null &&
-                notchGeometry.HasAnyTopNotch;
+                notchStatus == FrontNotchDetectionStatus.Found
+                && notchGeometry != null
+                && notchGeometry.HasAnyTopNotch;
             bool hasBottomNotch =
-                notchStatus == FrontNotchDetectionStatus.Found &&
-                notchGeometry != null &&
-                notchGeometry.HasAnyBottomNotch;
+                notchStatus == FrontNotchDetectionStatus.Found
+                && notchGeometry != null
+                && notchGeometry.HasAnyBottomNotch;
 
             if (hasTopNotch)
             {
-                double notchBDepth =
-                    maxY -
-                    notchGeometry.LowestTopNotchY +
-                    SECTION_B_EXTRA_DEPTH;
+                double notchBDepth = maxY - notchGeometry.LowestTopNotchY + SECTION_B_EXTRA_DEPTH;
                 bDepth = Math.Max(baseBDepth, notchBDepth);
                 AddGeometryDiagnostic(
-                    "TopLimit flange=" +
-                    FormatDiagnosticNumber(baseBDepth) +
-                    " notch=" +
-                    FormatDiagnosticNumber(notchBDepth));
+                    "TopLimit flange="
+                        + FormatDiagnosticNumber(baseBDepth)
+                        + " notch="
+                        + FormatDiagnosticNumber(notchBDepth)
+                );
             }
             else
             {
                 AddGeometryDiagnostic(
-                    "TopLimit flange=" +
-                    FormatDiagnosticNumber(baseBDepth) +
-                    " notch=none");
+                    "TopLimit flange=" + FormatDiagnosticNumber(baseBDepth) + " notch=none"
+                );
             }
 
             if (hasBottomNotch)
             {
-                double notchCCutY =
-                    notchGeometry.HighestBottomNotchY +
-                    SECTION_C_EXTRA_START;
+                double notchCCutY = notchGeometry.HighestBottomNotchY + SECTION_C_EXTRA_START;
                 cCutY = Math.Max(baseCCutY, notchCCutY);
                 cDepth = cCutY - minY;
                 AddGeometryDiagnostic(
-                    "BottomLimit flangeCutY=" +
-                    FormatDiagnosticNumber(baseCCutY) +
-                    " notchCutY=" +
-                    FormatDiagnosticNumber(notchCCutY));
+                    "BottomLimit flangeCutY="
+                        + FormatDiagnosticNumber(baseCCutY)
+                        + " notchCutY="
+                        + FormatDiagnosticNumber(notchCCutY)
+                );
             }
             else
             {
                 AddGeometryDiagnostic(
-                    "BottomLimit flangeCutY=" +
-                    FormatDiagnosticNumber(baseCCutY) +
-                    " notch=none");
+                    "BottomLimit flangeCutY=" + FormatDiagnosticNumber(baseCCutY) + " notch=none"
+                );
             }
 
             return ValidateResolvedOrdinaryCSectionGeometry(
@@ -2090,7 +2086,8 @@ namespace Tekla.Technology.Akit.UserScript
                 hasTopNotch,
                 hasBottomNotch,
                 notchGeometry,
-                out message);
+                out message
+            );
         }
 
         private static bool ValidateResolvedOrdinaryCSectionGeometry(
@@ -2103,29 +2100,27 @@ namespace Tekla.Technology.Akit.UserScript
             bool hasTopNotch,
             bool hasBottomNotch,
             FrontNotchGeometry notchGeometry,
-            out string message)
+            out string message
+        )
         {
             message = "";
             double partHeight = maxY - minY;
 
             if (!IsFinite(partHeight) || partHeight <= TOL)
             {
-                message =
-                    "Chieu cao Shape C khong hop le de tinh Section B/C.";
+                message = "Chieu cao Shape C khong hop le de tinh Section B/C.";
                 return false;
             }
 
             if (!IsFinite(bCutY) || !IsFinite(bDepth) || bDepth <= TOL)
             {
-                message =
-                    "Section B tinh theo mep canh Shape C khong hop le.";
+                message = "Section B tinh theo mep canh Shape C khong hop le.";
                 return false;
             }
 
             if (bDepth >= partHeight)
             {
-                message =
-                    "Section B theo mep canh/notch Shape C vuot chieu cao part.";
+                message = "Section B theo mep canh/notch Shape C vuot chieu cao part.";
                 return false;
             }
 
@@ -2137,15 +2132,13 @@ namespace Tekla.Technology.Akit.UserScript
 
             if (!IsFinite(cCutY) || !IsFinite(cDepth) || cDepth <= TOL)
             {
-                message =
-                    "Section C tinh theo mep canh Shape C khong hop le.";
+                message = "Section C tinh theo mep canh Shape C khong hop le.";
                 return false;
             }
 
             if (cDepth >= partHeight)
             {
-                message =
-                    "Section C theo mep canh/notch Shape C vuot chieu cao part.";
+                message = "Section C theo mep canh/notch Shape C vuot chieu cao part.";
                 return false;
             }
 
@@ -2158,30 +2151,22 @@ namespace Tekla.Technology.Akit.UserScript
             if (hasTopNotch)
             {
                 double requiredBDepth =
-                    maxY -
-                    notchGeometry.LowestTopNotchY +
-                    SECTION_B_EXTRA_DEPTH;
+                    maxY - notchGeometry.LowestTopNotchY + SECTION_B_EXTRA_DEPTH;
 
-                if (!IsFinite(requiredBDepth) ||
-                    bDepth < requiredBDepth - TOL)
+                if (!IsFinite(requiredBDepth) || bDepth < requiredBDepth - TOL)
                 {
-                    message =
-                        "Section B Shape C khong bao phu day notch tren.";
+                    message = "Section B Shape C khong bao phu day notch tren.";
                     return false;
                 }
             }
 
             if (hasBottomNotch)
             {
-                double requiredCCutY =
-                    notchGeometry.HighestBottomNotchY +
-                    SECTION_C_EXTRA_START;
+                double requiredCCutY = notchGeometry.HighestBottomNotchY + SECTION_C_EXTRA_START;
 
-                if (!IsFinite(requiredCCutY) ||
-                    cCutY < requiredCCutY - TOL)
+                if (!IsFinite(requiredCCutY) || cCutY < requiredCCutY - TOL)
                 {
-                    message =
-                        "Section C Shape C khong bao phu dinh notch duoi.";
+                    message = "Section C Shape C khong bao phu dinh notch duoi.";
                     return false;
                 }
             }
@@ -2199,7 +2184,8 @@ namespace Tekla.Technology.Akit.UserScript
             bool hasTopNotch,
             bool hasBottomNotch,
             FrontNotchGeometry notchGeometry,
-            out string message)
+            out string message
+        )
         {
             message = "";
             double partHeight = maxY - minY;
@@ -2265,12 +2251,9 @@ namespace Tekla.Technology.Akit.UserScript
             if (hasTopNotch)
             {
                 double requiredBDepth =
-                    maxY -
-                    notchGeometry.LowestTopNotchY +
-                    SECTION_B_EXTRA_DEPTH;
+                    maxY - notchGeometry.LowestTopNotchY + SECTION_B_EXTRA_DEPTH;
 
-                if (!IsFinite(requiredBDepth) ||
-                    bDepth < requiredBDepth - TOL)
+                if (!IsFinite(requiredBDepth) || bDepth < requiredBDepth - TOL)
                 {
                     message = "Section B depth khong bao phu day notch tren.";
                     return false;
@@ -2279,12 +2262,9 @@ namespace Tekla.Technology.Akit.UserScript
 
             if (hasBottomNotch)
             {
-                double requiredCCutY =
-                    notchGeometry.HighestBottomNotchY +
-                    SECTION_C_EXTRA_START;
+                double requiredCCutY = notchGeometry.HighestBottomNotchY + SECTION_C_EXTRA_START;
 
-                if (!IsFinite(requiredCCutY) ||
-                    cCutY < requiredCCutY - TOL)
+                if (!IsFinite(requiredCCutY) || cCutY < requiredCCutY - TOL)
                 {
                     message = "Section C cut line khong bao phu dinh notch duoi.";
                     return false;
@@ -2299,7 +2279,8 @@ namespace Tekla.Technology.Akit.UserScript
             double frontScale,
             string sectionViewAttributeName,
             out SectionAttributeSet attributeSet,
-            out string message)
+            out string message
+        )
         {
             attributeSet = null;
             message = "";
@@ -2309,18 +2290,17 @@ namespace Tekla.Technology.Akit.UserScript
                 if (string.IsNullOrWhiteSpace(sectionViewAttributeName))
                 {
                     message =
-                        "Khong doc duoc View properties cua hang Section views " +
-                        "truoc khi Load Standard.";
+                        "Khong doc duoc View properties cua hang Section views "
+                        + "truoc khi Load Standard.";
                     return false;
                 }
 
-                DrawingView.ViewAttributes viewAttributes =
-                    new DrawingView.ViewAttributes();
+                DrawingView.ViewAttributes viewAttributes = new DrawingView.ViewAttributes();
 
                 if (!viewAttributes.LoadAttributes(sectionViewAttributeName))
                 {
-                    message = "Thieu hoac khong load duoc view attribute: " +
-                        sectionViewAttributeName;
+                    message =
+                        "Thieu hoac khong load duoc view attribute: " + sectionViewAttributeName;
                     return false;
                 }
 
@@ -2329,8 +2309,9 @@ namespace Tekla.Technology.Akit.UserScript
 
                 if (!markAttributes.LoadAttributes(SECTION_MARK_ATTRIBUTE_NAME))
                 {
-                    message = "Thieu hoac khong load duoc section mark attribute: " +
-                        SECTION_MARK_ATTRIBUTE_NAME;
+                    message =
+                        "Thieu hoac khong load duoc section mark attribute: "
+                        + SECTION_MARK_ATTRIBUTE_NAME;
                     return false;
                 }
 
@@ -2360,17 +2341,23 @@ namespace Tekla.Technology.Akit.UserScript
             double depthDown,
             SectionAttributeSet attributeSet,
             out DrawingView sectionView,
-            out SectionMark sectionMark)
+            out SectionMark sectionMark
+        )
         {
             sectionView = null;
             sectionMark = null;
 
             try
             {
-                if (frontView == null || attributeSet == null ||
-                    !IsFinitePoint(startPoint) || !IsFinitePoint(endPoint) ||
-                    !IsFinitePoint(insertionPoint) ||
-                    !IsFinite(depthUp) || !IsFinite(depthDown))
+                if (
+                    frontView == null
+                    || attributeSet == null
+                    || !IsFinitePoint(startPoint)
+                    || !IsFinitePoint(endPoint)
+                    || !IsFinitePoint(insertionPoint)
+                    || !IsFinite(depthUp)
+                    || !IsFinite(depthDown)
+                )
                     return false;
 
                 bool created = DrawingView.CreateSectionView(
@@ -2383,7 +2370,8 @@ namespace Tekla.Technology.Akit.UserScript
                     attributeSet.ViewAttributes,
                     attributeSet.MarkAttributes,
                     out sectionView,
-                    out sectionMark);
+                    out sectionMark
+                );
 
                 if (sectionView != null)
                 {
@@ -2406,16 +2394,17 @@ namespace Tekla.Technology.Akit.UserScript
         private static bool CommitAndValidateCreatedSection(
             Drawing drawing,
             ModelPart part,
-            DrawingView sectionView)
+            DrawingView sectionView
+        )
         {
             if (!SafeCommit(drawing))
                 return false;
 
             Thread.Sleep(150);
 
-            return sectionView != null &&
-                   IsViewPresent(drawing, sectionView) &&
-                   ViewContainsPart(sectionView, part.Identifier);
+            return sectionView != null
+                && IsViewPresent(drawing, sectionView)
+                && ViewContainsPart(sectionView, part.Identifier);
         }
 
         private static AutoSectionWorkerResult FinishCreateFailure(
@@ -2424,15 +2413,16 @@ namespace Tekla.Technology.Akit.UserScript
             DrawingView sectionB,
             SectionMark markB,
             DrawingView sectionC,
-            SectionMark markC)
+            SectionMark markC
+        )
         {
             AutoSectionWorkerResult result = new AutoSectionWorkerResult();
             result.Message = message;
             result.SectionB = sectionB;
             result.SectionC = sectionC;
 
-            bool hasCreatedReference = sectionB != null || markB != null ||
-                sectionC != null || markC != null;
+            bool hasCreatedReference =
+                sectionB != null || markB != null || sectionC != null || markC != null;
 
             if (!hasCreatedReference)
             {
@@ -2440,12 +2430,7 @@ namespace Tekla.Technology.Akit.UserScript
                 return result;
             }
 
-            if (RollbackCreatedSections(
-                drawing,
-                sectionB,
-                markB,
-                sectionC,
-                markC))
+            if (RollbackCreatedSections(drawing, sectionB, markB, sectionC, markC))
             {
                 result.Status = AutoSectionWorkerStatus.RolledBack;
                 result.Message += " Cac object vua tao da rollback.";
@@ -2463,7 +2448,8 @@ namespace Tekla.Technology.Akit.UserScript
             DrawingView sectionB,
             SectionMark markB,
             DrawingView sectionC,
-            SectionMark markC)
+            SectionMark markC
+        )
         {
             bool deleteReturned = true;
 
@@ -2480,8 +2466,8 @@ namespace Tekla.Technology.Akit.UserScript
             Thread.Sleep(100);
 
             bool viewsRemoved =
-                (sectionB == null || !IsViewPresent(drawing, sectionB)) &&
-                (sectionC == null || !IsViewPresent(drawing, sectionC));
+                (sectionB == null || !IsViewPresent(drawing, sectionB))
+                && (sectionC == null || !IsViewPresent(drawing, sectionC));
 
             return deleteReturned && commitReturned && viewsRemoved;
         }
@@ -2502,15 +2488,14 @@ namespace Tekla.Technology.Akit.UserScript
                     if (current == null)
                         continue;
 
-                    if (System.Object.ReferenceEquals(current, target) ||
-                        (targetIdentifier > 0 &&
-                         GetViewIdentifier(current) == targetIdentifier))
+                    if (
+                        System.Object.ReferenceEquals(current, target)
+                        || (targetIdentifier > 0 && GetViewIdentifier(current) == targetIdentifier)
+                    )
                         return true;
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return false;
         }
@@ -2531,10 +2516,11 @@ namespace Tekla.Technology.Akit.UserScript
             {
                 try
                 {
-                    PropertyInfo property = view.GetType().GetProperty(
-                        propertyName,
-                        BindingFlags.Public | BindingFlags.NonPublic |
-                        BindingFlags.Instance);
+                    PropertyInfo property = view.GetType()
+                        .GetProperty(
+                            propertyName,
+                            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                        );
 
                     if (property == null || !property.CanRead)
                         continue;
@@ -2543,9 +2529,7 @@ namespace Tekla.Technology.Akit.UserScript
                     if (identifier != null && identifier.ID > 0)
                         return identifier.ID;
                 }
-                catch
-                {
-                }
+                catch { }
             }
 
             return 0;
@@ -2558,8 +2542,7 @@ namespace Tekla.Technology.Akit.UserScript
                 if (view == null || partIdentifier == null)
                     return false;
 
-                DrawingObjectEnumerator parts =
-                    view.GetAllObjects(typeof(DrawingPart));
+                DrawingObjectEnumerator parts = view.GetAllObjects(typeof(DrawingPart));
 
                 while (parts != null && parts.MoveNext())
                 {
@@ -2571,9 +2554,7 @@ namespace Tekla.Technology.Akit.UserScript
                         return true;
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return false;
         }
@@ -2617,9 +2598,7 @@ namespace Tekla.Technology.Akit.UserScript
                 if (view != null && IsFinite(view.Height) && view.Height > TOL)
                     return view.Height;
             }
-            catch
-            {
-            }
+            catch { }
 
             return 0.0;
         }
@@ -2631,9 +2610,7 @@ namespace Tekla.Technology.Akit.UserScript
                 if (view != null && view.Attributes != null)
                     return view.Attributes.Scale;
             }
-            catch
-            {
-            }
+            catch { }
 
             return 0.0;
         }
@@ -2647,7 +2624,8 @@ namespace Tekla.Technology.Akit.UserScript
                 if (String.IsNullOrEmpty(profile))
                     return 0.0;
 
-                string normalized = profile.ToUpperInvariant()
+                string normalized = profile
+                    .ToUpperInvariant()
                     .Replace("BH", "")
                     .Replace("H", "")
                     .Replace("I", "")
@@ -2657,17 +2635,22 @@ namespace Tekla.Technology.Akit.UserScript
 
                 string[] tokens = normalized.Split(
                     new char[] { '*', 'X', 'x', '-' },
-                    StringSplitOptions.RemoveEmptyEntries);
+                    StringSplitOptions.RemoveEmptyEntries
+                );
 
                 List<double> values = new List<double>();
                 foreach (string token in tokens)
                 {
                     double value;
-                    if (Double.TryParse(
-                        token,
-                        NumberStyles.Any,
-                        CultureInfo.InvariantCulture,
-                        out value) && value > 0.0)
+                    if (
+                        Double.TryParse(
+                            token,
+                            NumberStyles.Any,
+                            CultureInfo.InvariantCulture,
+                            out value
+                        )
+                        && value > 0.0
+                    )
                         values.Add(value);
                 }
 
@@ -2701,14 +2684,14 @@ namespace Tekla.Technology.Akit.UserScript
                     double value = 0.0;
                     try
                     {
-                        if (part.GetReportProperty(propertyName, ref value) &&
-                            IsFinite(value) &&
-                            value > 0.0)
+                        if (
+                            part.GetReportProperty(propertyName, ref value)
+                            && IsFinite(value)
+                            && value > 0.0
+                        )
                             return value;
                     }
-                    catch
-                    {
-                    }
+                    catch { }
                 }
 
                 return GetFlangeThicknessFromProfile(part);
@@ -2721,17 +2704,12 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static Point ClonePoint(Point point)
         {
-            return point == null
-                ? null
-                : new Point(point.X, point.Y, point.Z);
+            return point == null ? null : new Point(point.X, point.Y, point.Z);
         }
 
         private static bool IsFinitePoint(Point point)
         {
-            return point != null &&
-                   IsFinite(point.X) &&
-                   IsFinite(point.Y) &&
-                   IsFinite(point.Z);
+            return point != null && IsFinite(point.X) && IsFinite(point.Y) && IsFinite(point.Z);
         }
 
         private static bool IsFinite(double value)

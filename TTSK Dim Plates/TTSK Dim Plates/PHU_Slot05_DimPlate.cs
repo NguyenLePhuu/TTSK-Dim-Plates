@@ -114,21 +114,34 @@ namespace Tekla.Technology.Akit.UserScript
                 model,
                 drawing,
                 mainPart,
-                out diagnostic);
+                out diagnostic
+            );
 
             if (target != null && target.Plates.Count > 0)
             {
-                TSM.TransformationPlane oldPlaneAudit = model.GetWorkPlaneHandler().GetCurrentTransformationPlane();
+                TSM.TransformationPlane oldPlaneAudit = model
+                    .GetWorkPlaneHandler()
+                    .GetCurrentTransformationPlane();
                 try
                 {
-                    model.GetWorkPlaneHandler().SetCurrentTransformationPlane(new TSM.TransformationPlane(target.View.DisplayCoordinateSystem));
-                    Bounds2D mBox = GetPartBounds2D(model.SelectModelObject(mainPart.Identifier) as ModelPart);
+                    model
+                        .GetWorkPlaneHandler()
+                        .SetCurrentTransformationPlane(
+                            new TSM.TransformationPlane(target.View.DisplayCoordinateSystem)
+                        );
+                    Bounds2D mBox = GetPartBounds2D(
+                        model.SelectModelObject(mainPart.Identifier) as ModelPart
+                    );
                     Slot05MainOrientation ori = DetectOrientation(mBox);
                     text.Append("Orientation=").Append(ori.ToString()).AppendLine();
                 }
                 finally
                 {
-                    try { model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlaneAudit); } catch { }
+                    try
+                    {
+                        model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlaneAudit);
+                    }
+                    catch { }
                 }
             }
             text.Append("Decision=").Append(target == null ? "REJECT" : "ACCEPT").AppendLine();
@@ -141,21 +154,22 @@ namespace Tekla.Technology.Akit.UserScript
             }
 
             text.Append("ClassificationView=")
-                .Append(DescribeViewForAudit(target.ClassificationView)).AppendLine();
-            text.Append("TargetFrontView=")
-                .Append(DescribeViewForAudit(target.View)).AppendLine();
-            text.Append("AcceptedModelPlateCount=")
-                .Append(target.MatchedPlateCount).AppendLine();
-            text.Append("DimensionGeometryGroupCount=")
-                .Append(target.Plates.Count).AppendLine();
+                .Append(DescribeViewForAudit(target.ClassificationView))
+                .AppendLine();
+            text.Append("TargetFrontView=").Append(DescribeViewForAudit(target.View)).AppendLine();
+            text.Append("AcceptedModelPlateCount=").Append(target.MatchedPlateCount).AppendLine();
+            text.Append("DimensionGeometryGroupCount=").Append(target.Plates.Count).AppendLine();
             text.Append("DirectBoltConnectionCount=")
-                .Append(target.DirectConnectionCount).AppendLine();
+                .Append(target.DirectConnectionCount)
+                .AppendLine();
             text.Append("GeometryScore=")
                 .Append(target.GeometryScore.ToString("0.###", CultureInfo.InvariantCulture))
                 .AppendLine();
             for (int selectedIndex = 0; selectedIndex < target.Plates.Count; selectedIndex++)
             {
-                text.Append("TargetPlate[").Append(selectedIndex).Append("]=")
+                text.Append("TargetPlate[")
+                    .Append(selectedIndex)
+                    .Append("]=")
                     .Append(DescribePartForAudit(target.Plates[selectedIndex]))
                     .AppendLine();
             }
@@ -165,55 +179,66 @@ namespace Tekla.Technology.Akit.UserScript
                 model,
                 drawing,
                 mainPart,
-                out frontFallbackDiagnostic);
+                out frontFallbackDiagnostic
+            );
             text.Append("FrontOnlyFallbackDecision=")
                 .Append(frontFallback == null ? "REJECT" : "ACCEPT")
                 .Append(" count=")
                 .Append(frontFallback == null ? 0 : frontFallback.Plates.Count)
                 .Append(" matchesPrimary=")
-                .Append(frontFallback != null && PartIdentifierSetsMatch(
-                    frontFallback.Plates,
-                    target.Plates))
+                .Append(
+                    frontFallback != null
+                        && PartIdentifierSetsMatch(frontFallback.Plates, target.Plates)
+                )
                 .AppendLine();
-            text.Append("FrontOnlyFallbackReason=")
-                .Append(frontFallbackDiagnostic).AppendLine();
+            text.Append("FrontOnlyFallbackReason=").Append(frontFallbackDiagnostic).AppendLine();
 
             string sectionDiagnostic;
             List<Slot05SectionDimPlan> sectionPlans = BuildSlot05SectionDimPlans(
                 model,
                 mainPart,
                 target,
-                out sectionDiagnostic);
+                out sectionDiagnostic
+            );
             bool sectionReady = sectionPlans.Count > 0;
-            text.Append("SectionDecision=")
-                .Append(sectionReady ? "ACCEPT" : "SKIP").AppendLine();
+            text.Append("SectionDecision=").Append(sectionReady ? "ACCEPT" : "SKIP").AppendLine();
             text.Append("SectionReason=").Append(sectionDiagnostic).AppendLine();
-            text.Append("MatchingSectionViewCount=")
-                .Append(target.SectionViews.Count).AppendLine();
-            for (int sectionIndex = 0;
-                sectionIndex < sectionPlans.Count;
-                sectionIndex++)
+            text.Append("MatchingSectionViewCount=").Append(target.SectionViews.Count).AppendLine();
+            for (int sectionIndex = 0; sectionIndex < sectionPlans.Count; sectionIndex++)
             {
                 Slot05SectionDimPlan sectionPlan = sectionPlans[sectionIndex];
-                text.Append("SectionPlan[").Append(sectionIndex).Append("]View=")
-                    .Append(DescribeViewForAudit(sectionPlan.View)).AppendLine();
-                text.Append("SectionPlan[").Append(sectionIndex)
+                text.Append("SectionPlan[")
+                    .Append(sectionIndex)
+                    .Append("]View=")
+                    .Append(DescribeViewForAudit(sectionPlan.View))
+                    .AppendLine();
+                text.Append("SectionPlan[")
+                    .Append(sectionIndex)
                     .Append("]PlateChain=")
                     .Append(FormatPointsForAudit(new List<Point>(sectionPlan.PlateChain)))
                     .Append(" direction=")
                     .Append(FormatVectorForAudit(sectionPlan.Direction))
                     .Append(" distance=")
-                    .Append(sectionPlan.PlateChainDistance.ToString(
-                        "0.###", CultureInfo.InvariantCulture))
+                    .Append(
+                        sectionPlan.PlateChainDistance.ToString(
+                            "0.###",
+                            CultureInfo.InvariantCulture
+                        )
+                    )
                     .AppendLine();
-                text.Append("SectionPlan[").Append(sectionIndex)
+                text.Append("SectionPlan[")
+                    .Append(sectionIndex)
                     .Append("]BoltChain=")
                     .Append(FormatPointsForAudit(new List<Point>(sectionPlan.BoltChain)))
                     .Append(" direction=")
                     .Append(FormatVectorForAudit(sectionPlan.Direction))
                     .Append(" distance=")
-                    .Append(sectionPlan.BoltChainDistance.ToString(
-                        "0.###", CultureInfo.InvariantCulture))
+                    .Append(
+                        sectionPlan.BoltChainDistance.ToString(
+                            "0.###",
+                            CultureInfo.InvariantCulture
+                        )
+                    )
                     .AppendLine();
             }
 
@@ -222,29 +247,31 @@ namespace Tekla.Technology.Akit.UserScript
                 model,
                 mainPart,
                 target.ClassificationView,
-                target.AllMatchedPlates);
+                target.AllMatchedPlates
+            );
 
-            AppendSlot05CrossViewAudit(
-                text,
-                model,
-                drawing,
-                mainPart,
-                target.AllMatchedPlates);
+            AppendSlot05CrossViewAudit(text, model, drawing, mainPart, target.AllMatchedPlates);
 
-            TSM.TransformationPlane oldPlane =
-                model.GetWorkPlaneHandler().GetCurrentTransformationPlane();
+            TSM.TransformationPlane oldPlane = model
+                .GetWorkPlaneHandler()
+                .GetCurrentTransformationPlane();
             try
             {
-                model.GetWorkPlaneHandler().SetCurrentTransformationPlane(
-                    new TSM.TransformationPlane(target.View.DisplayCoordinateSystem));
+                model
+                    .GetWorkPlaneHandler()
+                    .SetCurrentTransformationPlane(
+                        new TSM.TransformationPlane(target.View.DisplayCoordinateSystem)
+                    );
 
                 Bounds2D mainBox = GetPartBounds2D(mainPart);
                 text.Append("MainBounds=").Append(FormatBoundsForAudit(mainBox)).AppendLine();
 
                 int representativePlatesWithHoles = 0;
-                for (int representativeIndex = 0;
+                for (
+                    int representativeIndex = 0;
                     representativeIndex < target.Plates.Count;
-                    representativeIndex++)
+                    representativeIndex++
+                )
                 {
                     ModelPart representative = target.Plates[representativeIndex];
                     Bounds2D representativeBounds = GetPartBounds2D(representative);
@@ -252,15 +279,18 @@ namespace Tekla.Technology.Akit.UserScript
                         model,
                         target.View,
                         representative,
-                        representativeBounds);
+                        representativeBounds
+                    );
                     if (representativeHoles.Count > 0)
                         representativePlatesWithHoles++;
                     text.Append("DIM_TARGET_PLATE ")
                         .Append(DescribePartForAudit(representative))
                         .Append(" bounds=")
                         .Append(FormatBoundsForAudit(representativeBounds))
-                        .Append(" holeCount=").Append(representativeHoles.Count)
-                        .Append(" holeXY=").Append(FormatPointsForAudit(representativeHoles))
+                        .Append(" holeCount=")
+                        .Append(representativeHoles.Count)
+                        .Append(" holeXY=")
+                        .Append(FormatPointsForAudit(representativeHoles))
                         .Append(" holeGaps=")
                         .Append(FormatHoleGapsForAudit(representative, representativeHoles))
                         .AppendLine();
@@ -289,9 +319,7 @@ namespace Tekla.Technology.Akit.UserScript
                 {
                     model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane);
                 }
-                catch
-                {
-                }
+                catch { }
             }
 
             text.AppendLine("No dimension was created, deleted, modified or committed.");
@@ -303,30 +331,38 @@ namespace Tekla.Technology.Akit.UserScript
             TSM.Model model,
             ModelPart mainPart,
             TSD.View classificationView,
-            List<ModelPart> matchedPlates)
+            List<ModelPart> matchedPlates
+        )
         {
-            if (text == null || model == null || mainPart == null ||
-                classificationView == null || matchedPlates == null)
+            if (
+                text == null
+                || model == null
+                || mainPart == null
+                || classificationView == null
+                || matchedPlates == null
+            )
             {
                 return;
             }
 
-            TSM.TransformationPlane oldPlane =
-                model.GetWorkPlaneHandler().GetCurrentTransformationPlane();
+            TSM.TransformationPlane oldPlane = model
+                .GetWorkPlaneHandler()
+                .GetCurrentTransformationPlane();
             try
             {
-                model.GetWorkPlaneHandler().SetCurrentTransformationPlane(
-                    new TSM.TransformationPlane(classificationView.DisplayCoordinateSystem));
+                model
+                    .GetWorkPlaneHandler()
+                    .SetCurrentTransformationPlane(
+                        new TSM.TransformationPlane(classificationView.DisplayCoordinateSystem)
+                    );
                 List<ModelPart> viewParts = GetAllModelPartsInView(model, classificationView);
-                ModelPart mainInViewPlane = model.SelectModelObject(
-                    mainPart.Identifier) as ModelPart;
+                ModelPart mainInViewPlane =
+                    model.SelectModelObject(mainPart.Identifier) as ModelPart;
                 Bounds2D mainBox = GetPartBounds2D(mainInViewPlane);
 
                 for (int i = 0; i < matchedPlates.Count; i++)
                 {
-                    Identifier id = matchedPlates[i] == null
-                        ? null
-                        : matchedPlates[i].Identifier;
+                    Identifier id = matchedPlates[i] == null ? null : matchedPlates[i].Identifier;
                     ModelPart candidate = FindPartByIdentifier(viewParts, id);
                     if (candidate == null)
                         continue;
@@ -340,16 +376,22 @@ namespace Tekla.Technology.Akit.UserScript
                         mainBox,
                         candidate,
                         out finalScore,
-                        out directConnection);
+                        out directConnection
+                    );
                     text.Append(accepted ? "LINK_ACCEPTED " : "LINK_REJECTED ")
                         .Append(DescribePartForAudit(candidate))
-                        .Append(" bounds=").Append(FormatBoundsForAudit(plateBox))
-                        .Append(" profilePoints=").Append(profilePoints.Count)
-                        .Append(" profileXY=").Append(FormatPointsForAudit(profilePoints))
+                        .Append(" bounds=")
+                        .Append(FormatBoundsForAudit(plateBox))
+                        .Append(" profilePoints=")
+                        .Append(profilePoints.Count)
+                        .Append(" profileXY=")
+                        .Append(FormatPointsForAudit(profilePoints))
                         .Append(" score=")
-                        .Append(accepted
-                            ? finalScore.ToString("0.###", CultureInfo.InvariantCulture)
-                            : "NA")
+                        .Append(
+                            accepted
+                                ? finalScore.ToString("0.###", CultureInfo.InvariantCulture)
+                                : "NA"
+                        )
                         .AppendLine();
                 }
             }
@@ -359,9 +401,7 @@ namespace Tekla.Technology.Akit.UserScript
                 {
                     model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane);
                 }
-                catch
-                {
-                }
+                catch { }
             }
         }
 
@@ -370,16 +410,24 @@ namespace Tekla.Technology.Akit.UserScript
             TSM.Model model,
             TSD.Drawing drawing,
             ModelPart mainPart,
-            List<ModelPart> matchedPlates)
+            List<ModelPart> matchedPlates
+        )
         {
-            if (text == null || model == null || drawing == null || mainPart == null ||
-                matchedPlates == null || matchedPlates.Count == 0)
+            if (
+                text == null
+                || model == null
+                || drawing == null
+                || mainPart == null
+                || matchedPlates == null
+                || matchedPlates.Count == 0
+            )
             {
                 return;
             }
 
-            TSM.TransformationPlane oldPlane =
-                model.GetWorkPlaneHandler().GetCurrentTransformationPlane();
+            TSM.TransformationPlane oldPlane = model
+                .GetWorkPlaneHandler()
+                .GetCurrentTransformationPlane();
             try
             {
                 TSD.ContainerView sheet = drawing.GetSheet();
@@ -390,13 +438,18 @@ namespace Tekla.Technology.Akit.UserScript
                     if (view == null)
                         continue;
 
-                    model.GetWorkPlaneHandler().SetCurrentTransformationPlane(
-                        new TSM.TransformationPlane(view.DisplayCoordinateSystem));
+                    model
+                        .GetWorkPlaneHandler()
+                        .SetCurrentTransformationPlane(
+                            new TSM.TransformationPlane(view.DisplayCoordinateSystem)
+                        );
                     List<ModelPart> viewParts = GetAllModelPartsInView(model, view);
-                    ModelPart mainInViewPlane = model.SelectModelObject(
-                        mainPart.Identifier) as ModelPart;
-                    if (!ContainsPartIdentifier(viewParts, mainPart.Identifier) ||
-                        mainInViewPlane == null)
+                    ModelPart mainInViewPlane =
+                        model.SelectModelObject(mainPart.Identifier) as ModelPart;
+                    if (
+                        !ContainsPartIdentifier(viewParts, mainPart.Identifier)
+                        || mainInViewPlane == null
+                    )
                     {
                         continue;
                     }
@@ -414,7 +467,8 @@ namespace Tekla.Technology.Akit.UserScript
                     {
                         ModelPart visible = FindPartByIdentifier(
                             viewParts,
-                            matchedPlates[i] == null ? null : matchedPlates[i].Identifier);
+                            matchedPlates[i] == null ? null : matchedPlates[i].Identifier
+                        );
                         if (visible == null)
                             continue;
 
@@ -430,7 +484,8 @@ namespace Tekla.Technology.Akit.UserScript
                         maxCenter = Math.Max(maxCenter, center);
                         if (platesText.Length > 0)
                             platesText.Append(" | ");
-                        platesText.Append(visible.Identifier.ID)
+                        platesText
+                            .Append(visible.Identifier.ID)
                             .Append(":")
                             .Append(FormatBoundsForAudit(plateBox));
                     }
@@ -441,16 +496,20 @@ namespace Tekla.Technology.Akit.UserScript
                     double centerSpread = visibleCount > 1 ? maxCenter - minCenter : 0.0;
                     text.Append("ViewCandidate=")
                         .Append(DescribeViewForAudit(view))
-                        .Append(" mainBounds=").Append(FormatBoundsForAudit(mainBox))
+                        .Append(" mainBounds=")
+                        .Append(FormatBoundsForAudit(mainBox))
                         .Append(" longitudinalAspect=")
                         .Append(longitudinalAspect.ToString("0.###", CultureInfo.InvariantCulture))
-                        .Append(" matchedVisible=").Append(visibleCount)
-                        .Append("/").Append(matchedPlates.Count)
+                        .Append(" matchedVisible=")
+                        .Append(visibleCount)
+                        .Append("/")
+                        .Append(matchedPlates.Count)
                         .Append(" plateCenterSpread=")
                         .Append(centerSpread.ToString("0.###", CultureInfo.InvariantCulture))
                         .Append(" existingDimensionObjects=")
                         .Append(CountDimensionObjectsInView(view))
-                        .Append(" plates=").Append(platesText)
+                        .Append(" plates=")
+                        .Append(platesText)
                         .AppendLine();
                 }
             }
@@ -464,9 +523,7 @@ namespace Tekla.Technology.Akit.UserScript
                 {
                     model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane);
                 }
-                catch
-                {
-                }
+                catch { }
             }
         }
 
@@ -482,17 +539,18 @@ namespace Tekla.Technology.Akit.UserScript
                 while (objects != null && objects.MoveNext())
                 {
                     object value = objects.Current;
-                    if (value != null && value.GetType().Name.IndexOf(
-                        "Dimension",
-                        StringComparison.OrdinalIgnoreCase) >= 0)
+                    if (
+                        value != null
+                        && value
+                            .GetType()
+                            .Name.IndexOf("Dimension", StringComparison.OrdinalIgnoreCase) >= 0
+                    )
                     {
                         count++;
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return count;
         }
@@ -534,7 +592,8 @@ namespace Tekla.Technology.Akit.UserScript
                 model,
                 drawing,
                 mainPart,
-                out autoDiagnostic);
+                out autoDiagnostic
+            );
             if (autoTarget == null || autoTarget.View == null || autoTarget.Plates.Count == 0)
             {
                 Msg("Slot05 5-1: " + autoDiagnostic);
@@ -546,40 +605,49 @@ namespace Tekla.Technology.Akit.UserScript
                 model,
                 mainPart,
                 autoTarget,
-                out sectionDiagnostic);
+                out sectionDiagnostic
+            );
 
             int created = CreateSelectedPlateDims(
                 model,
                 drawing,
                 autoTarget.View,
                 autoTarget.Plates,
-                mainPart);
+                mainPart
+            );
 
             if (created <= 0)
             {
-                Msg("Slot05 5-1: Đã nhận diện " + autoTarget.MatchedPlateCount.ToString() +
-                    " plate liên kết nhưng không tạo được dimension hợp lệ.");
+                Msg(
+                    "Slot05 5-1: Đã nhận diện "
+                        + autoTarget.MatchedPlateCount.ToString()
+                        + " plate liên kết nhưng không tạo được dimension hợp lệ."
+                );
                 return;
             }
 
             int sectionCreated = 0;
-            for (int sectionIndex = 0;
-                sectionIndex < sectionPlans.Count;
-                sectionIndex++)
+            for (int sectionIndex = 0; sectionIndex < sectionPlans.Count; sectionIndex++)
             {
                 sectionCreated += CreateSlot05SectionDims(sectionPlans[sectionIndex]);
             }
             int expectedSectionCreated = sectionPlans.Count * 2;
             if (sectionCreated != expectedSectionCreated)
             {
-                Msg("Slot05 5-1: Không tạo đủ " +
-                    expectedSectionCreated.ToString() +
-                    " dimension cho các section hợp lệ; bản vẽ chưa được commit " +
-                    "để tránh lưu kết quả thiếu.");
+                Msg(
+                    "Slot05 5-1: Không tạo đủ "
+                        + expectedSectionCreated.ToString()
+                        + " dimension cho các section hợp lệ; bản vẽ chưa được commit "
+                        + "để tránh lưu kết quả thiếu."
+                );
                 return;
             }
 
-            try { drawing.CommitChanges(); } catch { }
+            try
+            {
+                drawing.CommitChanges();
+            }
+            catch { }
 
             // Không popup hoàn thành để chạy gọn.
         }
@@ -604,6 +672,13 @@ namespace Tekla.Technology.Akit.UserScript
             if (!model.GetConnectionStatus())
             {
                 Msg("Model chưa kết nối.");
+                return;
+            }
+
+            ModelPart mainPart = PHU_MainPartResolver.Resolve(model, drawing);
+            if (mainPart == null || mainPart.Identifier == null)
+            {
+                Msg("Slot05 5-2: Không xác định được Main Part từ bản vẽ đang mở.");
                 return;
             }
 
@@ -641,18 +716,35 @@ namespace Tekla.Technology.Akit.UserScript
             }
 
             TSD.View view = TryGetSelectedPartsView(selectedPlateDrawingParts.ToArray());
+            if (view != null && !ViewContainsPart(view, mainPart.Identifier))
+                view = null;
+
             if (view == null)
-                view = FindViewContainingPart(drawing, selectedPlates[0].Identifier);
+                view = FindViewContainingBothParts(
+                    drawing,
+                    selectedPlates[0].Identifier,
+                    mainPart.Identifier
+                );
 
             if (view == null)
             {
-                Msg("Slot05: Không tìm thấy view chứa tấm đã chọn.");
+                Msg("Slot05: Không tìm thấy view chứa đồng thời tấm đã chọn và Main Part.");
                 return;
             }
 
-            int created = CreateSelectedPlateDims_TopBottomMode(model, drawing, view, selectedPlates);
+            int created = CreateSelectedPlateDims_TopBottomMode(
+                model,
+                drawing,
+                view,
+                selectedPlates,
+                mainPart
+            );
 
-            try { drawing.CommitChanges(); } catch { }
+            try
+            {
+                drawing.CommitChanges();
+            }
+            catch { }
 
             // Không popup hoàn thành để chạy gọn.
         }
@@ -666,13 +758,17 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static Slot05MainOrientation DetectOrientation(Bounds2D mainBox)
         {
-            if (!mainBox.Valid) return Slot05MainOrientation.Unknown;
+            if (!mainBox.Valid)
+                return Slot05MainOrientation.Unknown;
             double w = mainBox.MaxX - mainBox.MinX;
             double h = mainBox.MaxY - mainBox.MinY;
-            if (w <= 0 || h <= 0) return Slot05MainOrientation.Unknown;
+            if (w <= 0 || h <= 0)
+                return Slot05MainOrientation.Unknown;
 
-            if (w > h * 1.5) return Slot05MainOrientation.Horizontal;
-            if (h > w * 1.5) return Slot05MainOrientation.Vertical;
+            if (w > h * 1.5)
+                return Slot05MainOrientation.Horizontal;
+            if (h > w * 1.5)
+                return Slot05MainOrientation.Vertical;
 
             return Slot05MainOrientation.Unknown;
         }
@@ -682,17 +778,30 @@ namespace Tekla.Technology.Akit.UserScript
             TSD.Drawing drawing,
             TSD.View view,
             List<ModelPart> plates,
-            ModelPart authoritativeMainPart)
+            ModelPart authoritativeMainPart
+        )
         {
             Slot05MainOrientation orientation = Slot05MainOrientation.Unknown;
 
-            if (model != null && view != null && authoritativeMainPart != null && authoritativeMainPart.Identifier != null)
+            if (
+                model != null
+                && view != null
+                && authoritativeMainPart != null
+                && authoritativeMainPart.Identifier != null
+            )
             {
-                TSM.TransformationPlane oldPlane = model.GetWorkPlaneHandler().GetCurrentTransformationPlane();
+                TSM.TransformationPlane oldPlane = model
+                    .GetWorkPlaneHandler()
+                    .GetCurrentTransformationPlane();
                 try
                 {
-                    model.GetWorkPlaneHandler().SetCurrentTransformationPlane(new TSM.TransformationPlane(view.DisplayCoordinateSystem));
-                    ModelPart mainInViewPlane = model.SelectModelObject(authoritativeMainPart.Identifier) as ModelPart;
+                    model
+                        .GetWorkPlaneHandler()
+                        .SetCurrentTransformationPlane(
+                            new TSM.TransformationPlane(view.DisplayCoordinateSystem)
+                        );
+                    ModelPart mainInViewPlane =
+                        model.SelectModelObject(authoritativeMainPart.Identifier) as ModelPart;
                     if (mainInViewPlane != null)
                     {
                         Bounds2D mainBox = GetPartBounds2D(mainInViewPlane);
@@ -701,17 +810,33 @@ namespace Tekla.Technology.Akit.UserScript
                 }
                 finally
                 {
-                    try { model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane); } catch { }
+                    try
+                    {
+                        model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane);
+                    }
+                    catch { }
                 }
             }
 
             if (orientation == Slot05MainOrientation.Vertical)
             {
-                return CreateSelectedPlateDimsVertical(model, drawing, view, plates, authoritativeMainPart);
+                return CreateSelectedPlateDimsVertical(
+                    model,
+                    drawing,
+                    view,
+                    plates,
+                    authoritativeMainPart
+                );
             }
             else
             {
-                return CreateSelectedPlateDimsHorizontal(model, drawing, view, plates, authoritativeMainPart);
+                return CreateSelectedPlateDimsHorizontal(
+                    model,
+                    drawing,
+                    view,
+                    plates,
+                    authoritativeMainPart
+                );
             }
         }
 
@@ -720,45 +845,73 @@ namespace Tekla.Technology.Akit.UserScript
             TSD.Drawing drawing,
             TSD.View view,
             List<ModelPart> plates,
-            ModelPart authoritativeMainPart)
+            ModelPart authoritativeMainPart
+        )
         {
             int count = 0;
-            if (model == null || drawing == null || view == null || plates == null || plates.Count == 0)
+            if (
+                model == null
+                || drawing == null
+                || view == null
+                || plates == null
+                || plates.Count == 0
+            )
                 return count;
 
-            TSM.TransformationPlane oldPlane = model.GetWorkPlaneHandler().GetCurrentTransformationPlane();
+            TSM.TransformationPlane oldPlane = model
+                .GetWorkPlaneHandler()
+                .GetCurrentTransformationPlane();
 
             try
             {
-                model.GetWorkPlaneHandler().SetCurrentTransformationPlane(new TSM.TransformationPlane(view.DisplayCoordinateSystem));
+                model
+                    .GetWorkPlaneHandler()
+                    .SetCurrentTransformationPlane(
+                        new TSM.TransformationPlane(view.DisplayCoordinateSystem)
+                    );
 
                 List<ModelPart> allViewParts = GetAllModelPartsInView(model, view);
-                if (allViewParts.Count == 0) return count;
+                if (allViewParts.Count == 0)
+                    return count;
 
-                ModelPart mainInViewPlane = authoritativeMainPart == null || authoritativeMainPart.Identifier == null
-                    ? null
-                    : model.SelectModelObject(authoritativeMainPart.Identifier) as ModelPart;
+                ModelPart mainInViewPlane =
+                    authoritativeMainPart == null || authoritativeMainPart.Identifier == null
+                        ? null
+                        : model.SelectModelObject(authoritativeMainPart.Identifier) as ModelPart;
 
                 List<Slot05PlateGroup> groups = new List<Slot05PlateGroup>();
 
                 for (int i = 0; i < plates.Count; i++)
                 {
                     ModelPart sourcePlate = plates[i];
-                    if (sourcePlate == null || sourcePlate.Identifier == null) continue;
+                    if (sourcePlate == null || sourcePlate.Identifier == null)
+                        continue;
 
                     ModelPart plate = model.SelectModelObject(sourcePlate.Identifier) as ModelPart;
-                    if (plate == null) continue;
+                    if (plate == null)
+                        continue;
 
                     Bounds2D plateBox = GetPartBounds2D(plate);
-                    if (!plateBox.Valid) continue;
+                    if (!plateBox.Valid)
+                        continue;
 
                     ModelPart mainBeam = mainInViewPlane;
-                    if (mainBeam == null || !ContainsPartIdentifier(allViewParts, mainBeam.Identifier)) continue;
+                    if (
+                        mainBeam == null
+                        || !ContainsPartIdentifier(allViewParts, mainBeam.Identifier)
+                    )
+                        continue;
 
                     Bounds2D mainBox = GetPartBounds2D(mainBeam);
-                    if (!mainBox.Valid) continue;
+                    if (!mainBox.Valid)
+                        continue;
 
-                    List<Point> holeCenters = GetBoltCentersInsidePlate(model, view, plate, plateBox);
+                    List<Point> holeCenters = GetBoltCentersInsidePlate(
+                        model,
+                        view,
+                        plate,
+                        plateBox
+                    );
                     holeCenters.Sort(ComparePointByXThenY);
 
                     Slot05PlateGroup g = new Slot05PlateGroup();
@@ -770,7 +923,8 @@ namespace Tekla.Technology.Akit.UserScript
                     groups.Add(g);
                 }
 
-                if (groups.Count == 0) return count;
+                if (groups.Count == 0)
+                    return count;
 
                 TSD.StraightDimensionSetHandler handler = new TSD.StraightDimensionSetHandler();
                 Vector verticalDirection = new Vector(-1, 0, 0); // Left
@@ -780,7 +934,13 @@ namespace Tekla.Technology.Akit.UserScript
                 for (int i = 0; i < groups.Count; i++)
                 {
                     Slot05PlateGroup g = groups[i];
-                    if (g == null || !g.PlateBox.Valid || g.HoleCenters == null || g.HoleCenters.Count == 0) continue;
+                    if (
+                        g == null
+                        || !g.PlateBox.Valid
+                        || g.HoleCenters == null
+                        || g.HoleCenters.Count == 0
+                    )
+                        continue;
 
                     List<Point> v1 = new List<Point>();
                     double plateLeftX = g.PlateBox.MinX;
@@ -800,7 +960,16 @@ namespace Tekla.Technology.Akit.UserScript
 
                     if (v1.Count >= 2)
                     {
-                        if (CreateDimChain(handler, view, v1.ToArray(), verticalDirection, SLOT05_INTERNAL_PLATE_HOLE_TIER, "GEO_DIMENSION"))
+                        if (
+                            CreateDimChain(
+                                handler,
+                                view,
+                                v1.ToArray(),
+                                verticalDirection,
+                                SLOT05_INTERNAL_PLATE_HOLE_TIER,
+                                "GEO_DIMENSION"
+                            )
+                        )
                             count++;
                     }
                 }
@@ -815,17 +984,35 @@ namespace Tekla.Technology.Akit.UserScript
                     for (int i = 0; i < groups.Count; i++)
                     {
                         Slot05PlateGroup g = groups[i];
-                        if (g == null || !g.PlateBox.Valid) continue;
+                        if (g == null || !g.PlateBox.Valid)
+                            continue;
                         double plateLeftX = g.PlateBox.MinX;
-                        AddUniquePoint2D(v2, new Point(plateLeftX, g.PlateBox.MinY, 0), POINT_DUP_TOL);
-                        AddUniquePoint2D(v2, new Point(plateLeftX, g.PlateBox.MaxY, 0), POINT_DUP_TOL);
+                        AddUniquePoint2D(
+                            v2,
+                            new Point(plateLeftX, g.PlateBox.MinY, 0),
+                            POINT_DUP_TOL
+                        );
+                        AddUniquePoint2D(
+                            v2,
+                            new Point(plateLeftX, g.PlateBox.MaxY, 0),
+                            POINT_DUP_TOL
+                        );
                     }
                     AddUniquePoint2D(v2, new Point(mainLeftX, mainUnion.MaxY, 0), POINT_DUP_TOL);
                     v2.Sort(ComparePointByYThenX);
 
                     if (v2.Count >= 2)
                     {
-                        if (CreateDimChain(handler, view, v2.ToArray(), verticalDirection, SLOT05_MAIN_PLATE_CHAIN_TIER, "GEO_DIMENSION"))
+                        if (
+                            CreateDimChain(
+                                handler,
+                                view,
+                                v2.ToArray(),
+                                verticalDirection,
+                                SLOT05_MAIN_PLATE_CHAIN_TIER,
+                                "GEO_DIMENSION"
+                            )
+                        )
                             count++;
                     }
                 }
@@ -839,7 +1026,13 @@ namespace Tekla.Technology.Akit.UserScript
                 for (int i = 0; i < groups.Count; i++)
                 {
                     Slot05PlateGroup g = groups[i];
-                    if (g == null || g.HoleCenters == null || g.HoleCenters.Count == 0 || !g.MainBox.Valid) continue;
+                    if (
+                        g == null
+                        || g.HoleCenters == null
+                        || g.HoleCenters.Count == 0
+                        || !g.MainBox.Valid
+                    )
+                        continue;
 
                     double bottomEdgeGap = Math.Abs(g.PlateBox.MinY - g.MainBox.MinY);
                     double topEdgeGap = Math.Abs(g.PlateBox.MaxY - g.MainBox.MaxY);
@@ -848,15 +1041,22 @@ namespace Tekla.Technology.Akit.UserScript
 
                     if (nearBottomMainEdge && nearTopMainEdge)
                     {
-                        if (bottomEdgeGap <= topEdgeGap) nearTopMainEdge = false;
-                        else nearBottomMainEdge = false;
+                        if (bottomEdgeGap <= topEdgeGap)
+                            nearTopMainEdge = false;
+                        else
+                            nearBottomMainEdge = false;
                     }
 
                     // Đường dóng dùng lỗ xa phía đặt DIM để đi xuyên qua cụm.
                     // DIM phía trên lấy lỗ dưới. DIM phía dưới lấy lỗ trên.
                     bool pickTopHole = nearBottomMainEdge && !nearTopMainEdge;
-                    Point primaryHole = PickPrimaryHorizontalHole(g.PlateBox, g.HoleCenters, pickTopHole);
-                    if (primaryHole == null) continue;
+                    Point primaryHole = PickPrimaryHorizontalHole(
+                        g.PlateBox,
+                        g.HoleCenters,
+                        pickTopHole
+                    );
+                    if (primaryHole == null)
+                        continue;
 
                     Vector horizontalDir;
                     double distance;
@@ -895,7 +1095,16 @@ namespace Tekla.Technology.Akit.UserScript
                     h.Add(mainRight);
                     h.Sort(ComparePointByXThenY);
 
-                    if (CreateDimChain(handler, view, h.ToArray(), horizontalDir, distance, "GEO_DIMENSION"))
+                    if (
+                        CreateDimChain(
+                            handler,
+                            view,
+                            h.ToArray(),
+                            horizontalDir,
+                            distance,
+                            "GEO_DIMENSION"
+                        )
+                    )
                         count++;
                 }
             }
@@ -905,29 +1114,43 @@ namespace Tekla.Technology.Akit.UserScript
             }
             finally
             {
-                try { model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane); } catch { }
+                try
+                {
+                    model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane);
+                }
+                catch { }
             }
 
             return count;
         }
 
-        private static Point PickPrimaryHorizontalHole(Bounds2D plateBox, List<Point> holes, bool pickTopHole)
+        private static Point PickPrimaryHorizontalHole(
+            Bounds2D plateBox,
+            List<Point> holes,
+            bool pickTopHole
+        )
         {
-            if (holes == null || holes.Count == 0) return null;
-            if (holes.Count == 1) return holes[0];
+            if (holes == null || holes.Count == 0)
+                return null;
+            if (holes.Count == 1)
+                return holes[0];
 
             Point best = holes[0];
             for (int i = 1; i < holes.Count; i++)
             {
                 if (pickTopHole)
                 {
-                    if (holes[i].Y > best.Y) best = holes[i];
-                    else if (Math.Abs(holes[i].Y - best.Y) <= TOL && holes[i].X < best.X) best = holes[i];
+                    if (holes[i].Y > best.Y)
+                        best = holes[i];
+                    else if (Math.Abs(holes[i].Y - best.Y) <= TOL && holes[i].X < best.X)
+                        best = holes[i];
                 }
                 else
                 {
-                    if (holes[i].Y < best.Y) best = holes[i];
-                    else if (Math.Abs(holes[i].Y - best.Y) <= TOL && holes[i].X < best.X) best = holes[i];
+                    if (holes[i].Y < best.Y)
+                        best = holes[i];
+                    else if (Math.Abs(holes[i].Y - best.Y) <= TOL && holes[i].X < best.X)
+                        best = holes[i];
                 }
             }
             return best;
@@ -938,29 +1161,40 @@ namespace Tekla.Technology.Akit.UserScript
             TSD.Drawing drawing,
             TSD.View view,
             List<ModelPart> plates,
-            ModelPart authoritativeMainPart)
+            ModelPart authoritativeMainPart
+        )
         {
             int count = 0;
 
-            if (model == null || drawing == null || view == null || plates == null || plates.Count == 0)
+            if (
+                model == null
+                || drawing == null
+                || view == null
+                || plates == null
+                || plates.Count == 0
+            )
                 return count;
 
-            TSM.TransformationPlane oldPlane =
-                model.GetWorkPlaneHandler().GetCurrentTransformationPlane();
+            TSM.TransformationPlane oldPlane = model
+                .GetWorkPlaneHandler()
+                .GetCurrentTransformationPlane();
 
             try
             {
-                model.GetWorkPlaneHandler().SetCurrentTransformationPlane(
-                    new TSM.TransformationPlane(view.DisplayCoordinateSystem));
+                model
+                    .GetWorkPlaneHandler()
+                    .SetCurrentTransformationPlane(
+                        new TSM.TransformationPlane(view.DisplayCoordinateSystem)
+                    );
 
                 List<ModelPart> allViewParts = GetAllModelPartsInView(model, view);
                 if (allViewParts.Count == 0)
                     return count;
 
-                ModelPart mainInViewPlane = authoritativeMainPart == null ||
-                    authoritativeMainPart.Identifier == null
-                    ? null
-                    : model.SelectModelObject(authoritativeMainPart.Identifier) as ModelPart;
+                ModelPart mainInViewPlane =
+                    authoritativeMainPart == null || authoritativeMainPart.Identifier == null
+                        ? null
+                        : model.SelectModelObject(authoritativeMainPart.Identifier) as ModelPart;
 
                 List<Slot05PlateGroup> groups = new List<Slot05PlateGroup>();
 
@@ -970,8 +1204,7 @@ namespace Tekla.Technology.Akit.UserScript
                     if (sourcePlate == null || sourcePlate.Identifier == null)
                         continue;
 
-                    ModelPart plate = model.SelectModelObject(
-                        sourcePlate.Identifier) as ModelPart;
+                    ModelPart plate = model.SelectModelObject(sourcePlate.Identifier) as ModelPart;
                     if (plate == null)
                         continue;
 
@@ -980,8 +1213,10 @@ namespace Tekla.Technology.Akit.UserScript
                         continue;
 
                     ModelPart mainBeam = mainInViewPlane;
-                    if (mainBeam == null ||
-                        !ContainsPartIdentifier(allViewParts, mainBeam.Identifier))
+                    if (
+                        mainBeam == null
+                        || !ContainsPartIdentifier(allViewParts, mainBeam.Identifier)
+                    )
                     {
                         continue;
                     }
@@ -990,7 +1225,12 @@ namespace Tekla.Technology.Akit.UserScript
                     if (!mainBox.Valid)
                         continue;
 
-                    List<Point> holeCenters = GetBoltCentersInsidePlate(model, view, plate, plateBox);
+                    List<Point> holeCenters = GetBoltCentersInsidePlate(
+                        model,
+                        view,
+                        plate,
+                        plateBox
+                    );
                     holeCenters.Sort(ComparePointByXThenY);
 
                     Slot05PlateGroup g = new Slot05PlateGroup();
@@ -1005,8 +1245,7 @@ namespace Tekla.Technology.Akit.UserScript
                 if (groups.Count == 0)
                     return count;
 
-                TSD.StraightDimensionSetHandler handler =
-                    new TSD.StraightDimensionSetHandler();
+                TSD.StraightDimensionSetHandler handler = new TSD.StraightDimensionSetHandler();
 
                 // Slot05 theo dump: DIM ngang đặt phía trên.
                 Vector horizontalDirection = new Vector(0, 1, 0);
@@ -1035,7 +1274,11 @@ namespace Tekla.Technology.Akit.UserScript
                             Point hp = g.HoleCenters[h];
                             if (hp != null)
                             {
-                                Point hpGap = GetHolePointWithMBoltGap(g.Plate, hp, horizontalDirection);
+                                Point hpGap = GetHolePointWithMBoltGap(
+                                    g.Plate,
+                                    hp,
+                                    horizontalDirection
+                                );
                                 AddUniquePoint2D(h1, hpGap, POINT_DUP_TOL);
                             }
                         }
@@ -1046,13 +1289,16 @@ namespace Tekla.Technology.Akit.UserScript
 
                     if (h1.Count >= 2)
                     {
-                        if (CreateDimChain(
-                            handler,
-                            view,
-                            h1.ToArray(),
-                            horizontalDirection,
-                            SLOT05_INTERNAL_PLATE_HOLE_TIER,
-                            "GEO_DIMENSION"))
+                        if (
+                            CreateDimChain(
+                                handler,
+                                view,
+                                h1.ToArray(),
+                                horizontalDirection,
+                                SLOT05_INTERNAL_PLATE_HOLE_TIER,
+                                "GEO_DIMENSION"
+                            )
+                        )
                         {
                             count++;
                         }
@@ -1075,8 +1321,16 @@ namespace Tekla.Technology.Akit.UserScript
                             continue;
 
                         double plateTopY = g.PlateBox.MaxY;
-                        AddUniquePoint2D(h2, new Point(g.PlateBox.MinX, plateTopY, 0), POINT_DUP_TOL);
-                        AddUniquePoint2D(h2, new Point(g.PlateBox.MaxX, plateTopY, 0), POINT_DUP_TOL);
+                        AddUniquePoint2D(
+                            h2,
+                            new Point(g.PlateBox.MinX, plateTopY, 0),
+                            POINT_DUP_TOL
+                        );
+                        AddUniquePoint2D(
+                            h2,
+                            new Point(g.PlateBox.MaxX, plateTopY, 0),
+                            POINT_DUP_TOL
+                        );
                     }
 
                     AddUniquePoint2D(h2, new Point(mainUnion.MaxX, mainTopY, 0), POINT_DUP_TOL);
@@ -1084,13 +1338,16 @@ namespace Tekla.Technology.Akit.UserScript
 
                     if (h2.Count >= 2)
                     {
-                        if (CreateDimChain(
-                            handler,
-                            view,
-                            h2.ToArray(),
-                            horizontalDirection,
-                            SLOT05_MAIN_PLATE_CHAIN_TIER,
-                            "GEO_DIMENSION"))
+                        if (
+                            CreateDimChain(
+                                handler,
+                                view,
+                                h2.ToArray(),
+                                horizontalDirection,
+                                SLOT05_MAIN_PLATE_CHAIN_TIER,
+                                "GEO_DIMENSION"
+                            )
+                        )
                         {
                             count++;
                         }
@@ -1111,7 +1368,12 @@ namespace Tekla.Technology.Akit.UserScript
                 for (int i = 0; i < groups.Count; i++)
                 {
                     Slot05PlateGroup g = groups[i];
-                    if (g == null || g.HoleCenters == null || g.HoleCenters.Count == 0 || !g.MainBox.Valid)
+                    if (
+                        g == null
+                        || g.HoleCenters == null
+                        || g.HoleCenters.Count == 0
+                        || !g.MainBox.Valid
+                    )
                         continue;
 
                     double leftEdgeGap = Math.Abs(g.PlateBox.MinX - g.MainBox.MinX);
@@ -1130,7 +1392,11 @@ namespace Tekla.Technology.Akit.UserScript
                     // Đường dóng dùng lỗ xa phía đặt DIM để đi xuyên qua cụm.
                     // DIM đặt bên phải lấy lỗ bên trái. DIM đặt bên trái (hoặc giữa) lấy lỗ bên phải.
                     bool pickRightHole = !(nearRightMainEdge && !nearLeftMainEdge);
-                    Point primaryHole = PickPrimaryVerticalHole(g.PlateBox, g.HoleCenters, pickRightHole);
+                    Point primaryHole = PickPrimaryVerticalHole(
+                        g.PlateBox,
+                        g.HoleCenters,
+                        pickRightHole
+                    );
                     if (primaryHole == null)
                         continue;
 
@@ -1166,7 +1432,11 @@ namespace Tekla.Technology.Akit.UserScript
                         distance = Slot05TierOffset(0);
                     }
 
-                    Point holePoint = GetHolePointWithMBoltGap(g.Plate, primaryHole, verticalDirection);
+                    Point holePoint = GetHolePointWithMBoltGap(
+                        g.Plate,
+                        primaryHole,
+                        verticalDirection
+                    );
 
                     List<Point> v = new List<Point>();
                     v.Add(mainBottom);
@@ -1174,13 +1444,16 @@ namespace Tekla.Technology.Akit.UserScript
                     v.Add(mainTop);
                     v.Sort(ComparePointByYThenX);
 
-                    if (CreateDimChain(
-                        handler,
-                        view,
-                        v.ToArray(),
-                        verticalDirection,
-                        distance,
-                        "GEO_DIMENSION"))
+                    if (
+                        CreateDimChain(
+                            handler,
+                            view,
+                            v.ToArray(),
+                            verticalDirection,
+                            distance,
+                            "GEO_DIMENSION"
+                        )
+                    )
                     {
                         count++;
                     }
@@ -1192,7 +1465,11 @@ namespace Tekla.Technology.Akit.UserScript
             }
             finally
             {
-                try { model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane); } catch { }
+                try
+                {
+                    model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane);
+                }
+                catch { }
             }
 
             return count;
@@ -1202,23 +1479,42 @@ namespace Tekla.Technology.Akit.UserScript
             TSM.Model model,
             TSD.Drawing drawing,
             TSD.View view,
-            List<ModelPart> plates)
+            List<ModelPart> plates,
+            ModelPart authoritativeMainPart
+        )
         {
             int count = 0;
 
-            if (model == null || drawing == null || view == null || plates == null || plates.Count == 0)
+            if (
+                model == null
+                || drawing == null
+                || view == null
+                || plates == null
+                || plates.Count == 0
+                || authoritativeMainPart == null
+                || authoritativeMainPart.Identifier == null
+            )
                 return count;
 
-            TSM.TransformationPlane oldPlane =
-                model.GetWorkPlaneHandler().GetCurrentTransformationPlane();
+            TSM.TransformationPlane oldPlane = model
+                .GetWorkPlaneHandler()
+                .GetCurrentTransformationPlane();
 
             try
             {
-                model.GetWorkPlaneHandler().SetCurrentTransformationPlane(
-                    new TSM.TransformationPlane(view.DisplayCoordinateSystem));
+                model
+                    .GetWorkPlaneHandler()
+                    .SetCurrentTransformationPlane(
+                        new TSM.TransformationPlane(view.DisplayCoordinateSystem)
+                    );
 
                 List<ModelPart> allViewParts = GetAllModelPartsInView(model, view);
                 if (allViewParts.Count == 0)
+                    return count;
+
+                ModelPart mainBeam =
+                    model.SelectModelObject(authoritativeMainPart.Identifier) as ModelPart;
+                if (mainBeam == null || !ContainsPartIdentifier(allViewParts, mainBeam.Identifier))
                     return count;
 
                 List<Slot05PlateGroup> groups = new List<Slot05PlateGroup>();
@@ -1233,15 +1529,16 @@ namespace Tekla.Technology.Akit.UserScript
                     if (!plateBox.Valid)
                         continue;
 
-                    ModelPart mainBeam = FindMainBeamForPlate(plate, plateBox, allViewParts);
-                    if (mainBeam == null)
-                        continue;
-
                     Bounds2D mainBox = GetPartBounds2D(mainBeam);
                     if (!mainBox.Valid)
                         continue;
 
-                    List<Point> holeCenters = GetBoltCentersInsidePlate(model, view, plate, plateBox);
+                    List<Point> holeCenters = GetBoltCentersInsidePlate(
+                        model,
+                        view,
+                        plate,
+                        plateBox
+                    );
                     holeCenters.Sort(ComparePointByXThenY);
 
                     Slot05PlateGroup g = new Slot05PlateGroup();
@@ -1256,8 +1553,7 @@ namespace Tekla.Technology.Akit.UserScript
                 if (groups.Count == 0)
                     return count;
 
-                TSD.StraightDimensionSetHandler handler =
-                    new TSD.StraightDimensionSetHandler();
+                TSD.StraightDimensionSetHandler handler = new TSD.StraightDimensionSetHandler();
 
                 Bounds2D mainUnion = GetMainUnionBox(groups);
 
@@ -1274,7 +1570,9 @@ namespace Tekla.Technology.Akit.UserScript
                         continue;
 
                     bool plateBelowMain = IsPlateBelowMain(g.PlateBox, g.MainBox);
-                    Vector horizontalDirection = plateBelowMain ? new Vector(0, -1, 0) : new Vector(0, 1, 0);
+                    Vector horizontalDirection = plateBelowMain
+                        ? new Vector(0, -1, 0)
+                        : new Vector(0, 1, 0);
                     double plateEdgeY = plateBelowMain ? g.PlateBox.MinY : g.PlateBox.MaxY;
 
                     List<Point> h1 = new List<Point>();
@@ -1288,7 +1586,11 @@ namespace Tekla.Technology.Akit.UserScript
                             Point hp = g.HoleCenters[h];
                             if (hp != null)
                             {
-                                Point hpGap = GetHolePointWithMBoltGap(g.Plate, hp, horizontalDirection);
+                                Point hpGap = GetHolePointWithMBoltGap(
+                                    g.Plate,
+                                    hp,
+                                    horizontalDirection
+                                );
                                 AddUniquePoint2D(h1, hpGap, POINT_DUP_TOL);
                             }
                         }
@@ -1299,13 +1601,16 @@ namespace Tekla.Technology.Akit.UserScript
 
                     if (h1.Count >= 2)
                     {
-                        if (CreateDimChain(
-                            handler,
-                            view,
-                            h1.ToArray(),
-                            horizontalDirection,
-                            SLOT05_INTERNAL_PLATE_HOLE_TIER,
-                            "GEO_DIMENSION"))
+                        if (
+                            CreateDimChain(
+                                handler,
+                                view,
+                                h1.ToArray(),
+                                horizontalDirection,
+                                SLOT05_INTERNAL_PLATE_HOLE_TIER,
+                                "GEO_DIMENSION"
+                            )
+                        )
                         {
                             count++;
                         }
@@ -1317,8 +1622,16 @@ namespace Tekla.Technology.Akit.UserScript
                 List<Point> h2Bottom = new List<Point>();
                 if (mainUnion.Valid)
                 {
-                    AddUniquePoint2D(h2Top, new Point(mainUnion.MinX, mainUnion.MaxY, 0), POINT_DUP_TOL);
-                    AddUniquePoint2D(h2Bottom, new Point(mainUnion.MinX, mainUnion.MinY, 0), POINT_DUP_TOL);
+                    AddUniquePoint2D(
+                        h2Top,
+                        new Point(mainUnion.MinX, mainUnion.MaxY, 0),
+                        POINT_DUP_TOL
+                    );
+                    AddUniquePoint2D(
+                        h2Bottom,
+                        new Point(mainUnion.MinX, mainUnion.MinY, 0),
+                        POINT_DUP_TOL
+                    );
 
                     bool hasTopPlate = false;
                     bool hasBottomPlate = false;
@@ -1338,8 +1651,16 @@ namespace Tekla.Technology.Akit.UserScript
                             double plateBottomY = g.PlateBox.MinY;
                             if (plateBottomY < bottomPlateOuterY)
                                 bottomPlateOuterY = plateBottomY;
-                            AddUniquePoint2D(h2Bottom, new Point(g.PlateBox.MinX, plateBottomY, 0), POINT_DUP_TOL);
-                            AddUniquePoint2D(h2Bottom, new Point(g.PlateBox.MaxX, plateBottomY, 0), POINT_DUP_TOL);
+                            AddUniquePoint2D(
+                                h2Bottom,
+                                new Point(g.PlateBox.MinX, plateBottomY, 0),
+                                POINT_DUP_TOL
+                            );
+                            AddUniquePoint2D(
+                                h2Bottom,
+                                new Point(g.PlateBox.MaxX, plateBottomY, 0),
+                                POINT_DUP_TOL
+                            );
                         }
                         else
                         {
@@ -1347,13 +1668,29 @@ namespace Tekla.Technology.Akit.UserScript
                             double plateTopY = g.PlateBox.MaxY;
                             if (plateTopY > topPlateOuterY)
                                 topPlateOuterY = plateTopY;
-                            AddUniquePoint2D(h2Top, new Point(g.PlateBox.MinX, plateTopY, 0), POINT_DUP_TOL);
-                            AddUniquePoint2D(h2Top, new Point(g.PlateBox.MaxX, plateTopY, 0), POINT_DUP_TOL);
+                            AddUniquePoint2D(
+                                h2Top,
+                                new Point(g.PlateBox.MinX, plateTopY, 0),
+                                POINT_DUP_TOL
+                            );
+                            AddUniquePoint2D(
+                                h2Top,
+                                new Point(g.PlateBox.MaxX, plateTopY, 0),
+                                POINT_DUP_TOL
+                            );
                         }
                     }
 
-                    AddUniquePoint2D(h2Top, new Point(mainUnion.MaxX, mainUnion.MaxY, 0), POINT_DUP_TOL);
-                    AddUniquePoint2D(h2Bottom, new Point(mainUnion.MaxX, mainUnion.MinY, 0), POINT_DUP_TOL);
+                    AddUniquePoint2D(
+                        h2Top,
+                        new Point(mainUnion.MaxX, mainUnion.MaxY, 0),
+                        POINT_DUP_TOL
+                    );
+                    AddUniquePoint2D(
+                        h2Bottom,
+                        new Point(mainUnion.MaxX, mainUnion.MinY, 0),
+                        POINT_DUP_TOL
+                    );
 
                     h2Top.Sort(ComparePointByXThenY);
                     h2Bottom.Sort(ComparePointByXThenY);
@@ -1363,13 +1700,16 @@ namespace Tekla.Technology.Akit.UserScript
                         double topChainTargetY = topPlateOuterY + SLOT05_MAIN_PLATE_CHAIN_TIER;
                         double topChainDistance = Math.Abs(topChainTargetY - h2Top[0].Y);
 
-                        if (CreateDimChain(
-                            handler,
-                            view,
-                            h2Top.ToArray(),
-                            new Vector(0, 1, 0),
-                            topChainDistance,
-                            "GEO_DIMENSION"))
+                        if (
+                            CreateDimChain(
+                                handler,
+                                view,
+                                h2Top.ToArray(),
+                                new Vector(0, 1, 0),
+                                topChainDistance,
+                                "GEO_DIMENSION"
+                            )
+                        )
                         {
                             count++;
                         }
@@ -1377,16 +1717,20 @@ namespace Tekla.Technology.Akit.UserScript
 
                     if (hasBottomPlate && h2Bottom.Count >= 2)
                     {
-                        double bottomChainTargetY = bottomPlateOuterY - SLOT05_MAIN_PLATE_CHAIN_TIER;
+                        double bottomChainTargetY =
+                            bottomPlateOuterY - SLOT05_MAIN_PLATE_CHAIN_TIER;
                         double bottomChainDistance = Math.Abs(h2Bottom[0].Y - bottomChainTargetY);
 
-                        if (CreateDimChain(
-                            handler,
-                            view,
-                            h2Bottom.ToArray(),
-                            new Vector(0, -1, 0),
-                            bottomChainDistance,
-                            "GEO_DIMENSION"))
+                        if (
+                            CreateDimChain(
+                                handler,
+                                view,
+                                h2Bottom.ToArray(),
+                                new Vector(0, -1, 0),
+                                bottomChainDistance,
+                                "GEO_DIMENSION"
+                            )
+                        )
                         {
                             count++;
                         }
@@ -1404,7 +1748,12 @@ namespace Tekla.Technology.Akit.UserScript
                 for (int i = 0; i < groups.Count; i++)
                 {
                     Slot05PlateGroup g = groups[i];
-                    if (g == null || g.HoleCenters == null || g.HoleCenters.Count == 0 || !g.MainBox.Valid)
+                    if (
+                        g == null
+                        || g.HoleCenters == null
+                        || g.HoleCenters.Count == 0
+                        || !g.MainBox.Valid
+                    )
                         continue;
 
                     double leftEdgeGap = Math.Abs(g.PlateBox.MinX - g.MainBox.MinX);
@@ -1421,7 +1770,11 @@ namespace Tekla.Technology.Akit.UserScript
                     }
 
                     bool pickRightHole = nearRightMainEdge && !nearLeftMainEdge;
-                    Point primaryHole = PickPrimaryVerticalHole(g.PlateBox, g.HoleCenters, pickRightHole);
+                    Point primaryHole = PickPrimaryVerticalHole(
+                        g.PlateBox,
+                        g.HoleCenters,
+                        pickRightHole
+                    );
                     if (primaryHole == null)
                         continue;
 
@@ -1433,14 +1786,22 @@ namespace Tekla.Technology.Akit.UserScript
                     {
                         verticalDirection = new Vector(-1, 0, 0);
                         mainEdgeX = g.MainBox.MinX;
-                        distance = GetLeftTierDistance(new Point(mainEdgeX, primaryHole.Y, 0), g.MainBox, edgeLeftTier);
+                        distance = GetLeftTierDistance(
+                            new Point(mainEdgeX, primaryHole.Y, 0),
+                            g.MainBox,
+                            edgeLeftTier
+                        );
                         edgeLeftTier++;
                     }
                     else if (nearRightMainEdge && !nearLeftMainEdge)
                     {
                         verticalDirection = new Vector(1, 0, 0);
                         mainEdgeX = g.MainBox.MaxX;
-                        distance = GetRightTierDistance(new Point(mainEdgeX, primaryHole.Y, 0), g.MainBox, edgeRightTier);
+                        distance = GetRightTierDistance(
+                            new Point(mainEdgeX, primaryHole.Y, 0),
+                            g.MainBox,
+                            edgeRightTier
+                        );
                         edgeRightTier++;
                     }
                     else
@@ -1455,7 +1816,8 @@ namespace Tekla.Technology.Akit.UserScript
                     double mainEdgeY = plateBelowMain ? g.MainBox.MinY : g.MainBox.MaxY;
 
                     List<Point> v = new List<Point>();
-                    double plateOuterEdgeX = verticalDirection.X < 0.0 ? g.PlateBox.MinX : g.PlateBox.MaxX;
+                    double plateOuterEdgeX =
+                        verticalDirection.X < 0.0 ? g.PlateBox.MinX : g.PlateBox.MaxX;
                     AddUniquePoint2D(v, new Point(plateOuterEdgeX, plateEdgeY, 0), POINT_DUP_TOL);
 
                     List<Point> holesForVerticalDim = new List<Point>();
@@ -1465,8 +1827,12 @@ namespace Tekla.Technology.Akit.UserScript
                         if (hp == null)
                             continue;
 
-                        if (hp.X < g.PlateBox.MinX - PLATE_BOUND_TOL || hp.X > g.PlateBox.MaxX + PLATE_BOUND_TOL ||
-                            hp.Y < g.PlateBox.MinY - PLATE_BOUND_TOL || hp.Y > g.PlateBox.MaxY + PLATE_BOUND_TOL)
+                        if (
+                            hp.X < g.PlateBox.MinX - PLATE_BOUND_TOL
+                            || hp.X > g.PlateBox.MaxX + PLATE_BOUND_TOL
+                            || hp.Y < g.PlateBox.MinY - PLATE_BOUND_TOL
+                            || hp.Y > g.PlateBox.MaxY + PLATE_BOUND_TOL
+                        )
                             continue;
 
                         holesForVerticalDim.Add(new Point(hp.X, hp.Y, 0));
@@ -1484,13 +1850,16 @@ namespace Tekla.Technology.Akit.UserScript
                     AddUniquePoint2D(v, new Point(mainEdgeX, mainEdgeY, 0), POINT_DUP_TOL);
                     v.Sort(ComparePointByYThenX);
 
-                    if (CreateDimChain(
-                        handler,
-                        view,
-                        v.ToArray(),
-                        verticalDirection,
-                        distance,
-                        "GEO_DIMENSION"))
+                    if (
+                        CreateDimChain(
+                            handler,
+                            view,
+                            v.ToArray(),
+                            verticalDirection,
+                            distance,
+                            "GEO_DIMENSION"
+                        )
+                    )
                     {
                         count++;
                     }
@@ -1502,7 +1871,11 @@ namespace Tekla.Technology.Akit.UserScript
             }
             finally
             {
-                try { model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane); } catch { }
+                try
+                {
+                    model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane);
+                }
+                catch { }
             }
 
             return count;
@@ -1522,13 +1895,13 @@ namespace Tekla.Technology.Akit.UserScript
             TSM.Model model,
             ModelPart mainPart,
             Slot05AutoTarget target,
-            out string diagnostic)
+            out string diagnostic
+        )
         {
             List<Slot05SectionDimPlan> result = new List<Slot05SectionDimPlan>();
             List<string> rejected = new List<string>();
 
-            if (target == null || target.SectionViews == null ||
-                target.SectionViews.Count == 0)
+            if (target == null || target.SectionViews == null || target.SectionViews.Count == 0)
             {
                 diagnostic = "Không có section cùng tập ModelIdentifier với các plate mặt front.";
                 return result;
@@ -1538,27 +1911,33 @@ namespace Tekla.Technology.Akit.UserScript
             {
                 Slot05SectionDimPlan plan;
                 string viewDiagnostic;
-                if (TryBuildSlot05SectionDimPlanForView(
-                    model,
-                    mainPart,
-                    target,
-                    target.SectionViews[i],
-                    out plan,
-                    out viewDiagnostic))
+                if (
+                    TryBuildSlot05SectionDimPlanForView(
+                        model,
+                        mainPart,
+                        target,
+                        target.SectionViews[i],
+                        out plan,
+                        out viewDiagnostic
+                    )
+                )
                 {
                     result.Add(plan);
                 }
                 else
                 {
                     rejected.Add(
-                        DescribeViewForAudit(target.SectionViews[i]) + ": " +
-                        viewDiagnostic);
+                        DescribeViewForAudit(target.SectionViews[i]) + ": " + viewDiagnostic
+                    );
                 }
             }
 
-            diagnostic = "Đã preflight " + result.Count.ToString() + "/" +
-                target.SectionViews.Count.ToString() +
-                " section cùng liên kết bằng hình học.";
+            diagnostic =
+                "Đã preflight "
+                + result.Count.ToString()
+                + "/"
+                + target.SectionViews.Count.ToString()
+                + " section cùng liên kết bằng hình học.";
             if (rejected.Count > 0)
                 diagnostic += " Bỏ qua an toàn: " + string.Join(" | ", rejected.ToArray());
             return result;
@@ -1570,14 +1949,21 @@ namespace Tekla.Technology.Akit.UserScript
             Slot05AutoTarget target,
             TSD.View view,
             out Slot05SectionDimPlan plan,
-            out string diagnostic)
+            out string diagnostic
+        )
         {
             plan = null;
             diagnostic = "Không tìm thấy section đúng loại liên kết plate/main được hỗ trợ.";
 
-            if (model == null || mainPart == null || mainPart.Identifier == null ||
-                target == null || view == null ||
-                target.AllMatchedPlates == null || target.AllMatchedPlates.Count == 0)
+            if (
+                model == null
+                || mainPart == null
+                || mainPart.Identifier == null
+                || target == null
+                || view == null
+                || target.AllMatchedPlates == null
+                || target.AllMatchedPlates.Count == 0
+            )
             {
                 return false;
             }
@@ -1588,17 +1974,23 @@ namespace Tekla.Technology.Akit.UserScript
                 return false;
             }
 
-            TSM.TransformationPlane oldPlane =
-                model.GetWorkPlaneHandler().GetCurrentTransformationPlane();
+            TSM.TransformationPlane oldPlane = model
+                .GetWorkPlaneHandler()
+                .GetCurrentTransformationPlane();
             try
             {
-                model.GetWorkPlaneHandler().SetCurrentTransformationPlane(
-                    new TSM.TransformationPlane(view.DisplayCoordinateSystem));
+                model
+                    .GetWorkPlaneHandler()
+                    .SetCurrentTransformationPlane(
+                        new TSM.TransformationPlane(view.DisplayCoordinateSystem)
+                    );
                 List<ModelPart> viewParts = GetAllModelPartsInView(model, view);
-                ModelPart mainInViewPlane = model.SelectModelObject(
-                    mainPart.Identifier) as ModelPart;
-                if (mainInViewPlane == null ||
-                    !ContainsPartIdentifier(viewParts, mainPart.Identifier))
+                ModelPart mainInViewPlane =
+                    model.SelectModelObject(mainPart.Identifier) as ModelPart;
+                if (
+                    mainInViewPlane == null
+                    || !ContainsPartIdentifier(viewParts, mainPart.Identifier)
+                )
                 {
                     diagnostic = "Section không chứa Main Part chính xác của drawing.";
                     return false;
@@ -1611,8 +2003,7 @@ namespace Tekla.Technology.Akit.UserScript
                     return false;
                 }
 
-                List<ModelPart> orderedPlates =
-                    new List<ModelPart>(target.AllMatchedPlates);
+                List<ModelPart> orderedPlates = new List<ModelPart>(target.AllMatchedPlates);
                 orderedPlates.Sort(CompareModelPartByIdentifier);
 
                 Point referenceLower = null;
@@ -1623,26 +2014,29 @@ namespace Tekla.Technology.Akit.UserScript
 
                 for (int i = 0; i < orderedPlates.Count; i++)
                 {
-                    Identifier id = orderedPlates[i] == null
-                        ? null
-                        : orderedPlates[i].Identifier;
+                    Identifier id = orderedPlates[i] == null ? null : orderedPlates[i].Identifier;
                     ModelPart plate = FindPartByIdentifier(viewParts, id);
                     if (plate == null)
                     {
-                        diagnostic = "Section không chứa đủ mọi plate đã nhận diện theo ModelIdentifier.";
+                        diagnostic =
+                            "Section không chứa đủ mọi plate đã nhận diện theo ModelIdentifier.";
                         return false;
                     }
 
                     double score;
                     bool directConnection;
-                    if (!TryAnalyzeAutomaticWrapPlate(
-                        mainInViewPlane,
-                        mainBox,
-                        plate,
-                        out score,
-                        out directConnection))
+                    if (
+                        !TryAnalyzeAutomaticWrapPlate(
+                            mainInViewPlane,
+                            mainBox,
+                            plate,
+                            out score,
+                            out directConnection
+                        )
+                    )
                     {
-                        diagnostic = "Có plate không còn thỏa quan hệ liên kết được hỗ trợ với Main Part trong section.";
+                        diagnostic =
+                            "Có plate không còn thỏa quan hệ liên kết được hỗ trợ với Main Part trong section.";
                         return false;
                     }
 
@@ -1651,18 +2045,22 @@ namespace Tekla.Technology.Akit.UserScript
                     Point bolt;
                     int side;
                     bool isStraightSidePlate;
-                    if (!TryResolveSlot05SectionFeatures(
-                        model,
-                        view,
-                        mainBox,
-                        plate,
-                        out lower,
-                        out upper,
-                        out bolt,
-                        out side,
-                        out isStraightSidePlate))
+                    if (
+                        !TryResolveSlot05SectionFeatures(
+                            model,
+                            view,
+                            mainBox,
+                            plate,
+                            out lower,
+                            out upper,
+                            out bolt,
+                            out side,
+                            out isStraightSidePlate
+                        )
+                    )
                     {
-                        diagnostic = "Section có topology lỗ/đỉnh plate khác liên kết mẫu; từ chối dim để tránh nhầm.";
+                        diagnostic =
+                            "Section có topology lỗ/đỉnh plate khác liên kết mẫu; từ chối dim để tránh nhầm.";
                         return false;
                     }
 
@@ -1674,22 +2072,29 @@ namespace Tekla.Technology.Akit.UserScript
                         referenceSide = side;
                         referenceIsStraightSidePlate = isStraightSidePlate;
                     }
-                    else if (side != referenceSide ||
-                        isStraightSidePlate != referenceIsStraightSidePlate ||
-                        Distance2D(referenceLower, lower) > SLOT05_SECTION_SIGNATURE_TOL ||
-                        Distance2D(referenceUpper, upper) > SLOT05_SECTION_SIGNATURE_TOL ||
-                        (referenceIsStraightSidePlate
-                            ? Math.Abs(referenceBolt.Y - bolt.Y) >
-                                SLOT05_SECTION_SIGNATURE_TOL
-                            : Distance2D(referenceBolt, bolt) >
-                                SLOT05_SECTION_SIGNATURE_TOL))
+                    else if (
+                        side != referenceSide
+                        || isStraightSidePlate != referenceIsStraightSidePlate
+                        || Distance2D(referenceLower, lower) > SLOT05_SECTION_SIGNATURE_TOL
+                        || Distance2D(referenceUpper, upper) > SLOT05_SECTION_SIGNATURE_TOL
+                        || (
+                            referenceIsStraightSidePlate
+                                ? Math.Abs(referenceBolt.Y - bolt.Y) > SLOT05_SECTION_SIGNATURE_TOL
+                                : Distance2D(referenceBolt, bolt) > SLOT05_SECTION_SIGNATURE_TOL
+                        )
+                    )
                     {
-                        diagnostic = "Các plate không chiếu về cùng một chữ ký section liên kết; từ chối dim.";
+                        diagnostic =
+                            "Các plate không chiếu về cùng một chữ ký section liên kết; từ chối dim.";
                         return false;
                     }
-                    else if (referenceIsStraightSidePlate &&
-                        ((referenceSide < 0 && bolt.X < referenceBolt.X) ||
-                         (referenceSide > 0 && bolt.X > referenceBolt.X)))
+                    else if (
+                        referenceIsStraightSidePlate
+                        && (
+                            (referenceSide < 0 && bolt.X < referenceBolt.X)
+                            || (referenceSide > 0 && bolt.X > referenceBolt.X)
+                        )
+                    )
                     {
                         // Hai plate ở hai đầu main có thể chiếu tâm bolt về hai
                         // mặt khác nhau. Dim mẫu lấy tâm ngoài cùng phía plate.
@@ -1697,8 +2102,12 @@ namespace Tekla.Technology.Akit.UserScript
                     }
                 }
 
-                if (referenceLower == null || referenceUpper == null ||
-                    referenceBolt == null || referenceSide == 0)
+                if (
+                    referenceLower == null
+                    || referenceUpper == null
+                    || referenceBolt == null
+                    || referenceSide == 0
+                )
                 {
                     return false;
                 }
@@ -1725,17 +2134,14 @@ namespace Tekla.Technology.Akit.UserScript
                     referenceUpper,
                     mainUpper
                 };
-                plan.BoltChain = new Point[]
-                {
-                    mainLower,
-                    referenceBolt,
-                    mainUpper
-                };
+                plan.BoltChain = new Point[] { mainLower, referenceBolt, mainUpper };
                 plan.PlateChainDistance = SLOT05_SECTION_NEAR_TIER_PAPER * scale;
                 plan.BoltChainDistance = SLOT05_SECTION_FAR_TIER_PAPER * scale;
 
-                diagnostic = "Section chứa đủ " + orderedPlates.Count.ToString() +
-                    " plate cùng chữ ký liên kết, cùng đỉnh solid và cùng tâm lỗ chiếu.";
+                diagnostic =
+                    "Section chứa đủ "
+                    + orderedPlates.Count.ToString()
+                    + " plate cùng chữ ký liên kết, cùng đỉnh solid và cùng tâm lỗ chiếu.";
                 return true;
             }
             catch (Exception ex)
@@ -1749,9 +2155,7 @@ namespace Tekla.Technology.Akit.UserScript
                 {
                     model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane);
                 }
-                catch
-                {
-                }
+                catch { }
             }
         }
 
@@ -1764,7 +2168,8 @@ namespace Tekla.Technology.Akit.UserScript
             out Point upper,
             out Point bolt,
             out int side,
-            out bool isStraightSidePlate)
+            out bool isStraightSidePlate
+        )
         {
             lower = null;
             upper = null;
@@ -1784,7 +2189,8 @@ namespace Tekla.Technology.Akit.UserScript
                 plate,
                 mainBox,
                 plateBox,
-                out straightScore);
+                out straightScore
+            );
 
             double plateCenterX = (plateBox.MinX + plateBox.MaxX) / 2.0;
             double leftGap = Math.Abs(plateCenterX - mainBox.MinX);
@@ -1797,16 +2203,21 @@ namespace Tekla.Technology.Akit.UserScript
                 vertices,
                 plateBox.MinY,
                 mainEdgeX,
-                isStraightSidePlate);
+                isStraightSidePlate
+            );
             upper = FindSectionExtremeVertex(
                 vertices,
                 plateBox.MaxY,
                 mainEdgeX,
-                isStraightSidePlate);
-            if (lower == null || upper == null ||
-                upper.Y - lower.Y <= TOL ||
-                lower.Y <= mainBox.MinY + TOL ||
-                upper.Y >= mainBox.MaxY - TOL)
+                isStraightSidePlate
+            );
+            if (
+                lower == null
+                || upper == null
+                || upper.Y - lower.Y <= TOL
+                || lower.Y <= mainBox.MinY + TOL
+                || upper.Y >= mainBox.MaxY - TOL
+            )
             {
                 return false;
             }
@@ -1816,10 +2227,15 @@ namespace Tekla.Technology.Akit.UserScript
                 return false;
 
             bolt = holes[0];
-            if (bolt == null || bolt.Y <= mainBox.MinY + TOL ||
-                bolt.Y >= mainBox.MaxY - TOL ||
-                (!isStraightSidePlate &&
-                 Math.Abs(bolt.X - mainEdgeX) > SLOT05_AUTO_EDGE_CONTACT_TOL))
+            if (
+                bolt == null
+                || bolt.Y <= mainBox.MinY + TOL
+                || bolt.Y >= mainBox.MaxY - TOL
+                || (
+                    !isStraightSidePlate
+                    && Math.Abs(bolt.X - mainEdgeX) > SLOT05_AUTO_EDGE_CONTACT_TOL
+                )
+            )
             {
                 return false;
             }
@@ -1839,8 +2255,7 @@ namespace Tekla.Technology.Akit.UserScript
                 Tekla.Structures.Solid.EdgeEnumerator edges = solid.GetEdgeEnumerator();
                 while (edges != null && edges.MoveNext())
                 {
-                    Tekla.Structures.Solid.Edge edge =
-                        edges.Current as Tekla.Structures.Solid.Edge;
+                    Tekla.Structures.Solid.Edge edge = edges.Current as Tekla.Structures.Solid.Edge;
                     if (edge == null)
                         continue;
 
@@ -1850,9 +2265,7 @@ namespace Tekla.Technology.Akit.UserScript
                         AddUniquePoint2D(result, edge.EndPoint, 0.1);
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return result;
         }
@@ -1861,7 +2274,8 @@ namespace Tekla.Technology.Akit.UserScript
             List<Point> vertices,
             double targetY,
             double mainEdgeX,
-            bool preferOutside)
+            bool preferOutside
+        )
         {
             Point best = null;
             double bestGap = double.PositiveInfinity;
@@ -1871,18 +2285,18 @@ namespace Tekla.Technology.Akit.UserScript
             for (int i = 0; i < vertices.Count; i++)
             {
                 Point point = vertices[i];
-                if (point == null ||
-                    Math.Abs(point.Y - targetY) > SLOT05_AUTO_PROFILE_POINT_TOL)
+                if (point == null || Math.Abs(point.Y - targetY) > SLOT05_AUTO_PROFILE_POINT_TOL)
                 {
                     continue;
                 }
 
                 double gap = Math.Abs(point.X - mainEdgeX);
-                bool betterGap = preferOutside
-                    ? gap > bestGap + 0.01
-                    : gap < bestGap - 0.01;
-                if (best == null || betterGap ||
-                    (Math.Abs(gap - bestGap) <= 0.01 && point.X < best.X))
+                bool betterGap = preferOutside ? gap > bestGap + 0.01 : gap < bestGap - 0.01;
+                if (
+                    best == null
+                    || betterGap
+                    || (Math.Abs(gap - bestGap) <= 0.01 && point.X < best.X)
+                )
                 {
                     best = point;
                     bestGap = gap;
@@ -1894,12 +2308,10 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static int CompareModelPartByIdentifier(ModelPart first, ModelPart second)
         {
-            int firstId = first == null || first.Identifier == null
-                ? int.MinValue
-                : first.Identifier.ID;
-            int secondId = second == null || second.Identifier == null
-                ? int.MinValue
-                : second.Identifier.ID;
+            int firstId =
+                first == null || first.Identifier == null ? int.MinValue : first.Identifier.ID;
+            int secondId =
+                second == null || second.Identifier == null ? int.MinValue : second.Identifier.ID;
             return firstId.CompareTo(secondId);
         }
 
@@ -1907,9 +2319,7 @@ namespace Tekla.Technology.Akit.UserScript
         {
             try
             {
-                return view == null || view.Attributes == null
-                    ? double.NaN
-                    : view.Attributes.Scale;
+                return view == null || view.Attributes == null ? double.NaN : view.Attributes.Scale;
             }
             catch
             {
@@ -1919,32 +2329,42 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static int CreateSlot05SectionDims(Slot05SectionDimPlan plan)
         {
-            if (plan == null || plan.View == null || plan.Direction == null ||
-                plan.PlateChain == null || plan.BoltChain == null)
+            if (
+                plan == null
+                || plan.View == null
+                || plan.Direction == null
+                || plan.PlateChain == null
+                || plan.BoltChain == null
+            )
             {
                 return 0;
             }
 
             int created = 0;
-            TSD.StraightDimensionSetHandler handler =
-                new TSD.StraightDimensionSetHandler();
-            if (CreateDimChain(
-                handler,
-                plan.View,
-                plan.PlateChain,
-                plan.Direction,
-                plan.PlateChainDistance,
-                "GEO_DIMENSION"))
+            TSD.StraightDimensionSetHandler handler = new TSD.StraightDimensionSetHandler();
+            if (
+                CreateDimChain(
+                    handler,
+                    plan.View,
+                    plan.PlateChain,
+                    plan.Direction,
+                    plan.PlateChainDistance,
+                    "GEO_DIMENSION"
+                )
+            )
             {
                 created++;
             }
-            if (CreateDimChain(
-                handler,
-                plan.View,
-                plan.BoltChain,
-                plan.Direction,
-                plan.BoltChainDistance,
-                "GEO_DIMENSION"))
+            if (
+                CreateDimChain(
+                    handler,
+                    plan.View,
+                    plan.BoltChain,
+                    plan.Direction,
+                    plan.BoltChainDistance,
+                    "GEO_DIMENSION"
+                )
+            )
             {
                 created++;
             }
@@ -1977,16 +2397,19 @@ namespace Tekla.Technology.Akit.UserScript
             TSM.Model model,
             TSD.Drawing drawing,
             ModelPart mainPart,
-            out string diagnostic)
+            out string diagnostic
+        )
         {
-            diagnostic = "Không tìm thấy plate thuộc loại liên kết 5-1 với Main Part trong các view.";
+            diagnostic =
+                "Không tìm thấy plate thuộc loại liên kết 5-1 với Main Part trong các view.";
 
             if (model == null || drawing == null || mainPart == null || mainPart.Identifier == null)
                 return null;
 
             List<Slot05AutoTarget> targets = new List<Slot05AutoTarget>();
-            TSM.TransformationPlane oldPlane =
-                model.GetWorkPlaneHandler().GetCurrentTransformationPlane();
+            TSM.TransformationPlane oldPlane = model
+                .GetWorkPlaneHandler()
+                .GetCurrentTransformationPlane();
 
             try
             {
@@ -2004,13 +2427,18 @@ namespace Tekla.Technology.Akit.UserScript
                     if (view == null)
                         continue;
 
-                    model.GetWorkPlaneHandler().SetCurrentTransformationPlane(
-                        new TSM.TransformationPlane(view.DisplayCoordinateSystem));
+                    model
+                        .GetWorkPlaneHandler()
+                        .SetCurrentTransformationPlane(
+                            new TSM.TransformationPlane(view.DisplayCoordinateSystem)
+                        );
                     List<ModelPart> allViewParts = GetAllModelPartsInView(model, view);
-                    ModelPart mainInViewPlane = model.SelectModelObject(
-                        mainPart.Identifier) as ModelPart;
-                    if (!ContainsPartIdentifier(allViewParts, mainPart.Identifier) ||
-                        mainInViewPlane == null)
+                    ModelPart mainInViewPlane =
+                        model.SelectModelObject(mainPart.Identifier) as ModelPart;
+                    if (
+                        !ContainsPartIdentifier(allViewParts, mainPart.Identifier)
+                        || mainInViewPlane == null
+                    )
                     {
                         continue;
                     }
@@ -2025,31 +2453,40 @@ namespace Tekla.Technology.Akit.UserScript
                     for (int i = 0; i < allViewParts.Count; i++)
                     {
                         ModelPart candidate = allViewParts[i];
-                        if (candidate == null || candidate.Identifier == null ||
-                            SameIdentifier(candidate.Identifier, mainPart.Identifier))
+                        if (
+                            candidate == null
+                            || candidate.Identifier == null
+                            || SameIdentifier(candidate.Identifier, mainPart.Identifier)
+                        )
                         {
                             continue;
                         }
 
                         double relationScore;
                         bool directConnection;
-                        if (!TryAnalyzeAutomaticWrapPlate(
-                            mainInViewPlane,
-                            mainBox,
-                            candidate,
-                            out relationScore,
-                            out directConnection))
+                        if (
+                            !TryAnalyzeAutomaticWrapPlate(
+                                mainInViewPlane,
+                                mainBox,
+                                candidate,
+                                out relationScore,
+                                out directConnection
+                            )
+                        )
                         {
                             continue;
                         }
 
                         target.MatchedPlateCount++;
                         AddUniqueModelPart(target.AllMatchedPlates, candidate);
-                        if (!ContainsEquivalentProjectedDimensionGeometry(
-                            model,
-                            view,
-                            target.Plates,
-                            candidate))
+                        if (
+                            !ContainsEquivalentProjectedDimensionGeometry(
+                                model,
+                                view,
+                                target.Plates,
+                                candidate
+                            )
+                        )
                         {
                             AddUniqueModelPart(target.Plates, candidate);
                         }
@@ -2073,9 +2510,7 @@ namespace Tekla.Technology.Akit.UserScript
                 {
                     model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane);
                 }
-                catch
-                {
-                }
+                catch { }
             }
 
             Slot05AutoTarget classification = null;
@@ -2083,8 +2518,8 @@ namespace Tekla.Technology.Akit.UserScript
             if (targets.Count > 0)
             {
                 targets.Sort(CompareAutomaticTargets);
-                sectionClassificationAmbiguous = targets.Count > 1 &&
-                    AutomaticTargetsAreAmbiguous(targets[0], targets[1]);
+                sectionClassificationAmbiguous =
+                    targets.Count > 1 && AutomaticTargetsAreAmbiguous(targets[0], targets[1]);
                 if (!sectionClassificationAmbiguous)
                     classification = targets[0];
             }
@@ -2095,7 +2530,8 @@ namespace Tekla.Technology.Akit.UserScript
                     model,
                     drawing,
                     mainPart,
-                    classification.AllMatchedPlates);
+                    classification.AllMatchedPlates
+                );
                 if (dimensionView != null)
                 {
                     Slot05AutoTarget result = new Slot05AutoTarget();
@@ -2108,10 +2544,13 @@ namespace Tekla.Technology.Akit.UserScript
                     result.GeometryScore = classification.GeometryScore;
                     AttachMatchingSectionViews(result, targets);
 
-                    diagnostic = "Đã nhận diện " + result.MatchedPlateCount.ToString() +
-                        " plate qua hình học liên kết, ánh xạ đúng ModelIdentifier sang mặt front" +
-                        " và ghép " + result.SectionViews.Count.ToString() +
-                        " section cùng liên kết.";
+                    diagnostic =
+                        "Đã nhận diện "
+                        + result.MatchedPlateCount.ToString()
+                        + " plate qua hình học liên kết, ánh xạ đúng ModelIdentifier sang mặt front"
+                        + " và ghép "
+                        + result.SectionViews.Count.ToString()
+                        + " section cùng liên kết.";
                     return result;
                 }
             }
@@ -2121,14 +2560,18 @@ namespace Tekla.Technology.Akit.UserScript
                 model,
                 drawing,
                 mainPart,
-                out fallbackDiagnostic);
+                out fallbackDiagnostic
+            );
             if (fallback != null)
             {
                 AttachMatchingSectionViews(fallback, targets);
-                diagnostic = (sectionClassificationAmbiguous
-                    ? "Có nhiều section đối xứng cùng liên kết; dùng tập plate mặt front " +
-                        "làm chuẩn để giữ đúng mọi section khớp ModelIdentifier. "
-                    : "Không có section liên kết hợp lệ. ") + fallbackDiagnostic;
+                diagnostic =
+                    (
+                        sectionClassificationAmbiguous
+                            ? "Có nhiều section đối xứng cùng liên kết; dùng tập plate mặt front "
+                                + "làm chuẩn để giữ đúng mọi section khớp ModelIdentifier. "
+                            : "Không có section liên kết hợp lệ. "
+                    ) + fallbackDiagnostic;
                 return fallback;
             }
 
@@ -2138,10 +2581,10 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static void AttachMatchingSectionViews(
             Slot05AutoTarget result,
-            List<Slot05AutoTarget> sectionCandidates)
+            List<Slot05AutoTarget> sectionCandidates
+        )
         {
-            if (result == null || result.AllMatchedPlates == null ||
-                sectionCandidates == null)
+            if (result == null || result.AllMatchedPlates == null || sectionCandidates == null)
             {
                 return;
             }
@@ -2150,10 +2593,11 @@ namespace Tekla.Technology.Akit.UserScript
             for (int i = 0; i < sectionCandidates.Count; i++)
             {
                 Slot05AutoTarget candidate = sectionCandidates[i];
-                if (candidate == null || !IsSlot05SectionView(candidate.View) ||
-                    !PartIdentifierSetsMatch(
-                        candidate.AllMatchedPlates,
-                        result.AllMatchedPlates))
+                if (
+                    candidate == null
+                    || !IsSlot05SectionView(candidate.View)
+                    || !PartIdentifierSetsMatch(candidate.AllMatchedPlates, result.AllMatchedPlates)
+                )
                 {
                     continue;
                 }
@@ -2163,27 +2607,27 @@ namespace Tekla.Technology.Akit.UserScript
                 result.SectionViews.Add(candidate.View);
             }
 
-            result.ClassificationView = result.SectionViews.Count > 0
-                ? result.SectionViews[0]
-                : null;
+            result.ClassificationView =
+                result.SectionViews.Count > 0 ? result.SectionViews[0] : null;
         }
 
         private static Slot05AutoTarget FindFrontFaceFallbackTarget(
             TSM.Model model,
             TSD.Drawing drawing,
             ModelPart mainPart,
-            out string diagnostic)
+            out string diagnostic
+        )
         {
             diagnostic = "Không nhận diện được plate liên kết trên mặt front bằng hình học.";
-            if (model == null || drawing == null || mainPart == null ||
-                mainPart.Identifier == null)
+            if (model == null || drawing == null || mainPart == null || mainPart.Identifier == null)
             {
                 return null;
             }
 
             List<Slot05AutoTarget> candidates = new List<Slot05AutoTarget>();
-            TSM.TransformationPlane oldPlane =
-                model.GetWorkPlaneHandler().GetCurrentTransformationPlane();
+            TSM.TransformationPlane oldPlane = model
+                .GetWorkPlaneHandler()
+                .GetCurrentTransformationPlane();
             try
             {
                 TSD.ContainerView sheet = drawing.GetSheet();
@@ -2194,13 +2638,18 @@ namespace Tekla.Technology.Akit.UserScript
                     if (!IsSlot05FrontFaceView(view))
                         continue;
 
-                    model.GetWorkPlaneHandler().SetCurrentTransformationPlane(
-                        new TSM.TransformationPlane(view.DisplayCoordinateSystem));
+                    model
+                        .GetWorkPlaneHandler()
+                        .SetCurrentTransformationPlane(
+                            new TSM.TransformationPlane(view.DisplayCoordinateSystem)
+                        );
                     List<ModelPart> viewParts = GetAllModelPartsInView(model, view);
-                    ModelPart mainInViewPlane = model.SelectModelObject(
-                        mainPart.Identifier) as ModelPart;
-                    if (mainInViewPlane == null ||
-                        !ContainsPartIdentifier(viewParts, mainPart.Identifier))
+                    ModelPart mainInViewPlane =
+                        model.SelectModelObject(mainPart.Identifier) as ModelPart;
+                    if (
+                        mainInViewPlane == null
+                        || !ContainsPartIdentifier(viewParts, mainPart.Identifier)
+                    )
                     {
                         continue;
                     }
@@ -2214,22 +2663,28 @@ namespace Tekla.Technology.Akit.UserScript
                     for (int i = 0; i < viewParts.Count; i++)
                     {
                         ModelPart part = viewParts[i];
-                        if (part == null || part.Identifier == null ||
-                            SameIdentifier(part.Identifier, mainPart.Identifier))
+                        if (
+                            part == null
+                            || part.Identifier == null
+                            || SameIdentifier(part.Identifier, mainPart.Identifier)
+                        )
                         {
                             continue;
                         }
 
                         double score;
                         bool directConnection;
-                        if (!TryAnalyzeFrontFallbackPlate(
-                            model,
-                            view,
-                            mainInViewPlane,
-                            mainBox,
-                            part,
-                            out score,
-                            out directConnection))
+                        if (
+                            !TryAnalyzeFrontFallbackPlate(
+                                model,
+                                view,
+                                mainInViewPlane,
+                                mainBox,
+                                part,
+                                out score,
+                                out directConnection
+                            )
+                        )
                         {
                             continue;
                         }
@@ -2257,25 +2712,25 @@ namespace Tekla.Technology.Akit.UserScript
                 {
                     model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane);
                 }
-                catch
-                {
-                }
+                catch { }
             }
 
             if (candidates.Count == 0)
                 return null;
 
             candidates.Sort(CompareAutomaticTargets);
-            if (candidates.Count > 1 &&
-                AutomaticTargetsAreAmbiguous(candidates[0], candidates[1]))
+            if (candidates.Count > 1 && AutomaticTargetsAreAmbiguous(candidates[0], candidates[1]))
             {
-                diagnostic = "Có nhiều mặt front có chữ ký plate liên kết ngang nhau; " +
-                    "không tự dim để tránh chọn nhầm view.";
+                diagnostic =
+                    "Có nhiều mặt front có chữ ký plate liên kết ngang nhau; "
+                    + "không tự dim để tránh chọn nhầm view.";
                 return null;
             }
 
-            diagnostic = "Đã nhận diện " + candidates[0].Plates.Count.ToString() +
-                " plate trực tiếp trên mặt front; section là tùy chọn và được bỏ qua.";
+            diagnostic =
+                "Đã nhận diện "
+                + candidates[0].Plates.Count.ToString()
+                + " plate trực tiếp trên mặt front; section là tùy chọn và được bỏ qua.";
             return candidates[0];
         }
 
@@ -2286,12 +2741,18 @@ namespace Tekla.Technology.Akit.UserScript
             Bounds2D mainBox,
             ModelPart candidate,
             out double score,
-            out bool directConnection)
+            out bool directConnection
+        )
         {
             score = 0.0;
             directConnection = false;
-            if (model == null || view == null || mainPart == null ||
-                candidate == null || !mainBox.Valid)
+            if (
+                model == null
+                || view == null
+                || mainPart == null
+                || candidate == null
+                || !mainBox.Valid
+            )
             {
                 return false;
             }
@@ -2302,8 +2763,7 @@ namespace Tekla.Technology.Akit.UserScript
                 return false;
 
             Bounds2D plateBox = GetPartBounds2D(candidate);
-            if (!plateBox.Valid ||
-                !HasSteppedOrCurvedProjectedProfile(candidate, plateBox))
+            if (!plateBox.Valid || !HasSteppedOrCurvedProjectedProfile(candidate, plateBox))
             {
                 return false;
             }
@@ -2312,8 +2772,11 @@ namespace Tekla.Technology.Akit.UserScript
             double mainHeight = mainBox.MaxY - mainBox.MinY;
             double mainLong = Math.Max(mainWidth, mainHeight);
             double mainShort = Math.Min(mainWidth, mainHeight);
-            if (mainLong <= TOL || mainShort <= TOL ||
-                mainLong / mainShort < SLOT05_AUTO_MIN_LONGITUDINAL_ASPECT)
+            if (
+                mainLong <= TOL
+                || mainShort <= TOL
+                || mainLong / mainShort < SLOT05_AUTO_MIN_LONGITUDINAL_ASPECT
+            )
             {
                 return false;
             }
@@ -2325,8 +2788,11 @@ namespace Tekla.Technology.Akit.UserScript
             double plateTransverse = mainAxisIsX
                 ? plateBox.MaxY - plateBox.MinY
                 : plateBox.MaxX - plateBox.MinX;
-            if (plateLong <= TOL || plateTransverse <= TOL ||
-                plateLong > mainLong * 0.10 + SLOT05_AUTO_EDGE_CONTACT_TOL)
+            if (
+                plateLong <= TOL
+                || plateTransverse <= TOL
+                || plateLong > mainLong * 0.10 + SLOT05_AUTO_EDGE_CONTACT_TOL
+            )
             {
                 return false;
             }
@@ -2336,8 +2802,10 @@ namespace Tekla.Technology.Akit.UserScript
             double plateAxisCenter = mainAxisIsX
                 ? (plateBox.MinX + plateBox.MaxX) / 2.0
                 : (plateBox.MinY + plateBox.MaxY) / 2.0;
-            if (plateAxisCenter < mainAxisMin - SLOT05_AUTO_EDGE_CONTACT_TOL ||
-                plateAxisCenter > mainAxisMax + SLOT05_AUTO_EDGE_CONTACT_TOL)
+            if (
+                plateAxisCenter < mainAxisMin - SLOT05_AUTO_EDGE_CONTACT_TOL
+                || plateAxisCenter > mainAxisMax + SLOT05_AUTO_EDGE_CONTACT_TOL
+            )
             {
                 return false;
             }
@@ -2345,11 +2813,14 @@ namespace Tekla.Technology.Akit.UserScript
             double transverseOverlap = mainAxisIsX
                 ? IntervalOverlap(mainBox.MinY, mainBox.MaxY, plateBox.MinY, plateBox.MaxY)
                 : IntervalOverlap(mainBox.MinX, mainBox.MaxX, plateBox.MinX, plateBox.MaxX);
-            double overlapRatio = transverseOverlap /
-                Math.Max(TOL, Math.Min(mainShort, plateTransverse));
+            double overlapRatio =
+                transverseOverlap / Math.Max(TOL, Math.Min(mainShort, plateTransverse));
             double faceRatio = plateTransverse / mainShort;
-            if (overlapRatio < 0.90 ||
-                faceRatio < SLOT05_AUTO_MIN_PLATE_FACE_RATIO || faceRatio > 1.20)
+            if (
+                overlapRatio < 0.90
+                || faceRatio < SLOT05_AUTO_MIN_PLATE_FACE_RATIO
+                || faceRatio > 1.20
+            )
             {
                 return false;
             }
@@ -2358,9 +2829,10 @@ namespace Tekla.Technology.Akit.UserScript
             if (holes.Count == 0)
                 return false;
 
-            score = overlapRatio * 100.0 +
-                Math.Max(0.0, 1.0 - plateLong / mainLong) * 20.0 +
-                Math.Min(holes.Count, 10);
+            score =
+                overlapRatio * 100.0
+                + Math.Max(0.0, 1.0 - plateLong / mainLong) * 20.0
+                + Math.Min(holes.Count, 10);
             if (directConnection)
                 score += 100.0;
             if (sameAssembly)
@@ -2372,19 +2844,26 @@ namespace Tekla.Technology.Akit.UserScript
             TSM.Model model,
             TSD.Drawing drawing,
             ModelPart mainPart,
-            List<ModelPart> matchedPlates)
+            List<ModelPart> matchedPlates
+        )
         {
-            if (model == null || drawing == null || mainPart == null ||
-                mainPart.Identifier == null || matchedPlates == null ||
-                matchedPlates.Count == 0)
+            if (
+                model == null
+                || drawing == null
+                || mainPart == null
+                || mainPart.Identifier == null
+                || matchedPlates == null
+                || matchedPlates.Count == 0
+            )
             {
                 return null;
             }
 
             List<Slot05DimensionViewCandidate> candidates =
                 new List<Slot05DimensionViewCandidate>();
-            TSM.TransformationPlane oldPlane =
-                model.GetWorkPlaneHandler().GetCurrentTransformationPlane();
+            TSM.TransformationPlane oldPlane = model
+                .GetWorkPlaneHandler()
+                .GetCurrentTransformationPlane();
 
             try
             {
@@ -2402,13 +2881,18 @@ namespace Tekla.Technology.Akit.UserScript
                     if (!IsSlot05FrontFaceView(view))
                         continue;
 
-                    model.GetWorkPlaneHandler().SetCurrentTransformationPlane(
-                        new TSM.TransformationPlane(view.DisplayCoordinateSystem));
+                    model
+                        .GetWorkPlaneHandler()
+                        .SetCurrentTransformationPlane(
+                            new TSM.TransformationPlane(view.DisplayCoordinateSystem)
+                        );
                     List<ModelPart> viewParts = GetAllModelPartsInView(model, view);
-                    ModelPart mainInViewPlane = model.SelectModelObject(
-                        mainPart.Identifier) as ModelPart;
-                    if (!ContainsPartIdentifier(viewParts, mainPart.Identifier) ||
-                        mainInViewPlane == null)
+                    ModelPart mainInViewPlane =
+                        model.SelectModelObject(mainPart.Identifier) as ModelPart;
+                    if (
+                        !ContainsPartIdentifier(viewParts, mainPart.Identifier)
+                        || mainInViewPlane == null
+                    )
                     {
                         continue;
                     }
@@ -2430,8 +2914,7 @@ namespace Tekla.Technology.Akit.UserScript
 
                     bool mainAxisIsX = mainWidth >= mainHeight;
 
-                    Slot05DimensionViewCandidate candidate =
-                        new Slot05DimensionViewCandidate();
+                    Slot05DimensionViewCandidate candidate = new Slot05DimensionViewCandidate();
                     candidate.View = view;
                     candidate.MainLongitudinalAspect = longitudinalAspect;
 
@@ -2441,9 +2924,8 @@ namespace Tekla.Technology.Akit.UserScript
                     bool complete = true;
                     for (int i = 0; i < matchedPlates.Count; i++)
                     {
-                        Identifier plateId = matchedPlates[i] == null
-                            ? null
-                            : matchedPlates[i].Identifier;
+                        Identifier plateId =
+                            matchedPlates[i] == null ? null : matchedPlates[i].Identifier;
                         ModelPart visiblePlate = FindPartByIdentifier(viewParts, plateId);
                         if (visiblePlate == null)
                         {
@@ -2472,19 +2954,17 @@ namespace Tekla.Technology.Akit.UserScript
                             : (plateBox.MinY + plateBox.MaxY) / 2.0;
                         minCenter = Math.Min(minCenter, center);
                         maxCenter = Math.Max(maxCenter, center);
-                        plateFaceScore += (plateWidth * plateHeight) /
-                            Math.Max(TOL, mainShort * mainShort);
+                        plateFaceScore +=
+                            (plateWidth * plateHeight) / Math.Max(TOL, mainShort * mainShort);
                         candidate.Plates.Add(visiblePlate);
                     }
 
                     if (!complete || candidate.Plates.Count != matchedPlates.Count)
                         continue;
 
-                    candidate.PlateCenterSpread = candidate.Plates.Count > 1
-                        ? maxCenter - minCenter
-                        : 0.0;
-                    candidate.PlateFaceScore = plateFaceScore /
-                        Math.Max(1, candidate.Plates.Count);
+                    candidate.PlateCenterSpread =
+                        candidate.Plates.Count > 1 ? maxCenter - minCenter : 0.0;
+                    candidate.PlateFaceScore = plateFaceScore / Math.Max(1, candidate.Plates.Count);
                     candidates.Add(candidate);
                 }
             }
@@ -2498,17 +2978,17 @@ namespace Tekla.Technology.Akit.UserScript
                 {
                     model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane);
                 }
-                catch
-                {
-                }
+                catch { }
             }
 
             if (candidates.Count == 0)
                 return null;
 
             candidates.Sort(CompareDimensionViewCandidates);
-            if (candidates.Count > 1 &&
-                DimensionViewCandidatesAreAmbiguous(candidates[0], candidates[1]))
+            if (
+                candidates.Count > 1
+                && DimensionViewCandidatesAreAmbiguous(candidates[0], candidates[1])
+            )
             {
                 return null;
             }
@@ -2518,35 +2998,43 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static int CompareDimensionViewCandidates(
             Slot05DimensionViewCandidate first,
-            Slot05DimensionViewCandidate second)
+            Slot05DimensionViewCandidate second
+        )
         {
-            if (first == null && second == null) return 0;
-            if (first == null) return 1;
-            if (second == null) return -1;
+            if (first == null && second == null)
+                return 0;
+            if (first == null)
+                return 1;
+            if (second == null)
+                return -1;
 
             int c = second.Plates.Count.CompareTo(first.Plates.Count);
-            if (c != 0) return c;
+            if (c != 0)
+                return c;
 
             c = second.PlateFaceScore.CompareTo(first.PlateFaceScore);
-            if (c != 0) return c;
+            if (c != 0)
+                return c;
 
             c = second.PlateCenterSpread.CompareTo(first.PlateCenterSpread);
-            if (c != 0) return c;
+            if (c != 0)
+                return c;
 
             return second.MainLongitudinalAspect.CompareTo(first.MainLongitudinalAspect);
         }
 
         private static bool DimensionViewCandidatesAreAmbiguous(
             Slot05DimensionViewCandidate first,
-            Slot05DimensionViewCandidate second)
+            Slot05DimensionViewCandidate second
+        )
         {
             if (first == null || second == null)
                 return false;
 
-            return first.Plates.Count == second.Plates.Count &&
-                Math.Abs(first.PlateFaceScore - second.PlateFaceScore) <= 0.01 &&
-                Math.Abs(first.PlateCenterSpread - second.PlateCenterSpread) <= TOL &&
-                Math.Abs(first.MainLongitudinalAspect - second.MainLongitudinalAspect) <= 0.05;
+            return first.Plates.Count == second.Plates.Count
+                && Math.Abs(first.PlateFaceScore - second.PlateFaceScore) <= 0.01
+                && Math.Abs(first.PlateCenterSpread - second.PlateCenterSpread) <= TOL
+                && Math.Abs(first.MainLongitudinalAspect - second.MainLongitudinalAspect) <= 0.05;
         }
 
         private static bool IsSlot05FrontFaceView(TSD.View view)
@@ -2555,10 +3043,12 @@ namespace Tekla.Technology.Akit.UserScript
                 return false;
 
             object viewType = GetPropertyValue(view, "ViewType");
-            return viewType != null && string.Equals(
-                viewType.ToString(),
-                "FrontView",
-                StringComparison.OrdinalIgnoreCase);
+            return viewType != null
+                && string.Equals(
+                    viewType.ToString(),
+                    "FrontView",
+                    StringComparison.OrdinalIgnoreCase
+                );
         }
 
         private static bool IsSlot05SectionView(TSD.View view)
@@ -2567,28 +3057,34 @@ namespace Tekla.Technology.Akit.UserScript
                 return false;
 
             object viewType = GetPropertyValue(view, "ViewType");
-            return viewType != null && string.Equals(
-                viewType.ToString(),
-                "SectionView",
-                StringComparison.OrdinalIgnoreCase);
+            return viewType != null
+                && string.Equals(
+                    viewType.ToString(),
+                    "SectionView",
+                    StringComparison.OrdinalIgnoreCase
+                );
         }
 
         private static bool ContainsEquivalentProjectedDimensionGeometry(
             TSM.Model model,
             TSD.View view,
             List<ModelPart> representatives,
-            ModelPart candidate)
+            ModelPart candidate
+        )
         {
             if (model == null || view == null || representatives == null || candidate == null)
                 return false;
 
             for (int i = 0; i < representatives.Count; i++)
             {
-                if (HaveEquivalentProjectedDimensionGeometry(
-                    model,
-                    view,
-                    representatives[i],
-                    candidate))
+                if (
+                    HaveEquivalentProjectedDimensionGeometry(
+                        model,
+                        view,
+                        representatives[i],
+                        candidate
+                    )
+                )
                 {
                     return true;
                 }
@@ -2601,18 +3097,22 @@ namespace Tekla.Technology.Akit.UserScript
             TSM.Model model,
             TSD.View view,
             ModelPart first,
-            ModelPart second)
+            ModelPart second
+        )
         {
             if (first == null || second == null)
                 return false;
 
             Bounds2D firstBounds = GetPartBounds2D(first);
             Bounds2D secondBounds = GetPartBounds2D(second);
-            if (!firstBounds.Valid || !secondBounds.Valid ||
-                Math.Abs(firstBounds.MinX - secondBounds.MinX) > POINT_DUP_TOL ||
-                Math.Abs(firstBounds.MaxX - secondBounds.MaxX) > POINT_DUP_TOL ||
-                Math.Abs(firstBounds.MinY - secondBounds.MinY) > POINT_DUP_TOL ||
-                Math.Abs(firstBounds.MaxY - secondBounds.MaxY) > POINT_DUP_TOL)
+            if (
+                !firstBounds.Valid
+                || !secondBounds.Valid
+                || Math.Abs(firstBounds.MinX - secondBounds.MinX) > POINT_DUP_TOL
+                || Math.Abs(firstBounds.MaxX - secondBounds.MaxX) > POINT_DUP_TOL
+                || Math.Abs(firstBounds.MinY - secondBounds.MinY) > POINT_DUP_TOL
+                || Math.Abs(firstBounds.MaxY - secondBounds.MaxY) > POINT_DUP_TOL
+            )
             {
                 return false;
             }
@@ -2620,16 +3120,8 @@ namespace Tekla.Technology.Akit.UserScript
             // Chữ ký dimension chỉ chứa dữ liệu writer thật sự tiêu thụ:
             // projected bounds, tâm lỗ và gap M/phi. Contour đã được dùng ở
             // bước nhận diện plate; không đọc lại Solid.EdgeEnumerator tại đây.
-            List<Point> firstHoles = GetBoltCentersInsidePlate(
-                model,
-                view,
-                first,
-                firstBounds);
-            List<Point> secondHoles = GetBoltCentersInsidePlate(
-                model,
-                view,
-                second,
-                secondBounds);
+            List<Point> firstHoles = GetBoltCentersInsidePlate(model, view, first, firstBounds);
+            List<Point> secondHoles = GetBoltCentersInsidePlate(model, view, second, secondBounds);
             if (!PointSetsMatch2D(firstHoles, secondHoles, POINT_DUP_TOL))
                 return false;
 
@@ -2649,7 +3141,8 @@ namespace Tekla.Technology.Akit.UserScript
         private static bool PointSetsMatch2D(
             List<Point> first,
             List<Point> second,
-            double tolerance)
+            double tolerance
+        )
         {
             if (first == null || second == null || first.Count != second.Count)
                 return false;
@@ -2680,7 +3173,8 @@ namespace Tekla.Technology.Akit.UserScript
             Bounds2D mainBox,
             ModelPart candidate,
             out double score,
-            out bool directConnection)
+            out bool directConnection
+        )
         {
             score = 0.0;
             directConnection = false;
@@ -2698,25 +3192,18 @@ namespace Tekla.Technology.Akit.UserScript
                 return false;
 
             double edgeScore;
-            bool isBentProfile = HasSteppedOrCurvedProjectedProfile(
-                candidate,
-                plateBox);
+            bool isBentProfile = HasSteppedOrCurvedProjectedProfile(candidate, plateBox);
             if (isBentProfile)
             {
                 if (!TryGetBestMainEdgeWrapScore(mainBox, plateBox, out edgeScore))
                     return false;
             }
-            else if (!TryGetStraightSidePlateScore(
-                candidate,
-                mainBox,
-                plateBox,
-                out edgeScore))
+            else if (!TryGetStraightSidePlateScore(candidate, mainBox, plateBox, out edgeScore))
             {
                 return false;
             }
 
-            score = edgeScore + (directConnection ? 100.0 : 0.0) +
-                (sameAssembly ? 25.0 : 0.0);
+            score = edgeScore + (directConnection ? 100.0 : 0.0) + (sameAssembly ? 25.0 : 0.0);
             return true;
         }
 
@@ -2724,11 +3211,16 @@ namespace Tekla.Technology.Akit.UserScript
             ModelPart candidate,
             Bounds2D mainBox,
             Bounds2D plateBox,
-            out double score)
+            out double score
+        )
         {
             score = 0.0;
-            if (candidate == null || !mainBox.Valid || !plateBox.Valid ||
-                !IsProjectedRectangle(candidate))
+            if (
+                candidate == null
+                || !mainBox.Valid
+                || !plateBox.Valid
+                || !IsProjectedRectangle(candidate)
+            )
             {
                 return false;
             }
@@ -2737,8 +3229,7 @@ namespace Tekla.Technology.Akit.UserScript
             double mainHeight = mainBox.MaxY - mainBox.MinY;
             double plateWidth = plateBox.MaxX - plateBox.MinX;
             double plateHeight = plateBox.MaxY - plateBox.MinY;
-            if (mainWidth <= TOL || mainHeight <= TOL ||
-                plateWidth <= TOL || plateHeight <= TOL)
+            if (mainWidth <= TOL || mainHeight <= TOL || plateWidth <= TOL || plateHeight <= TOL)
             {
                 return false;
             }
@@ -2747,19 +3238,21 @@ namespace Tekla.Technology.Akit.UserScript
             double spanRatio = 0.0;
             double normalRatio = 0.0;
 
-            bool insideMainY = plateBox.MinY > mainBox.MinY + TOL &&
-                plateBox.MaxY < mainBox.MaxY - TOL;
-            if (insideMainY &&
-                Math.Abs(plateBox.MaxX - mainBox.MinX) <=
-                    SLOT05_AUTO_EDGE_CONTACT_TOL &&
-                plateBox.MinX < mainBox.MinX - TOL)
+            bool insideMainY =
+                plateBox.MinY > mainBox.MinY + TOL && plateBox.MaxY < mainBox.MaxY - TOL;
+            if (
+                insideMainY
+                && Math.Abs(plateBox.MaxX - mainBox.MinX) <= SLOT05_AUTO_EDGE_CONTACT_TOL
+                && plateBox.MinX < mainBox.MinX - TOL
+            )
             {
                 touchesSingleOuterEdge = true;
             }
-            else if (insideMainY &&
-                Math.Abs(plateBox.MinX - mainBox.MaxX) <=
-                    SLOT05_AUTO_EDGE_CONTACT_TOL &&
-                plateBox.MaxX > mainBox.MaxX + TOL)
+            else if (
+                insideMainY
+                && Math.Abs(plateBox.MinX - mainBox.MaxX) <= SLOT05_AUTO_EDGE_CONTACT_TOL
+                && plateBox.MaxX > mainBox.MaxX + TOL
+            )
             {
                 touchesSingleOuterEdge = true;
             }
@@ -2772,15 +3265,16 @@ namespace Tekla.Technology.Akit.UserScript
             spanRatio = plateHeight / mainHeight;
             normalRatio = plateWidth / mainWidth;
 
-            if (spanRatio < SLOT05_AUTO_STRAIGHT_MIN_SPAN_RATIO ||
-                spanRatio >= 1.0 - 0.001 ||
-                normalRatio > SLOT05_AUTO_STRAIGHT_MAX_NORMAL_RATIO)
+            if (
+                spanRatio < SLOT05_AUTO_STRAIGHT_MIN_SPAN_RATIO
+                || spanRatio >= 1.0 - 0.001
+                || normalRatio > SLOT05_AUTO_STRAIGHT_MAX_NORMAL_RATIO
+            )
             {
                 return false;
             }
 
-            score = spanRatio * 100.0 +
-                Math.Max(0.0, 1.0 - normalRatio) * 20.0;
+            score = spanRatio * 100.0 + Math.Max(0.0, 1.0 - normalRatio) * 20.0;
             return true;
         }
 
@@ -2804,16 +3298,14 @@ namespace Tekla.Technology.Akit.UserScript
             centerX /= points.Count;
             centerY /= points.Count;
 
-            points.Sort(delegate (Point first, Point second)
-            {
-                double firstAngle = Math.Atan2(
-                    first.Y - centerY,
-                    first.X - centerX);
-                double secondAngle = Math.Atan2(
-                    second.Y - centerY,
-                    second.X - centerX);
-                return firstAngle.CompareTo(secondAngle);
-            });
+            points.Sort(
+                delegate(Point first, Point second)
+                {
+                    double firstAngle = Math.Atan2(first.Y - centerY, first.X - centerX);
+                    double secondAngle = Math.Atan2(second.Y - centerY, second.X - centerX);
+                    return firstAngle.CompareTo(secondAngle);
+                }
+            );
 
             double[] edgeX = new double[4];
             double[] edgeY = new double[4];
@@ -2824,8 +3316,7 @@ namespace Tekla.Technology.Akit.UserScript
                 Point end = points[(i + 1) % 4];
                 edgeX[i] = end.X - start.X;
                 edgeY[i] = end.Y - start.Y;
-                edgeLength[i] = Math.Sqrt(
-                    edgeX[i] * edgeX[i] + edgeY[i] * edgeY[i]);
+                edgeLength[i] = Math.Sqrt(edgeX[i] * edgeX[i] + edgeY[i] * edgeY[i]);
                 if (edgeLength[i] <= TOL)
                     return false;
             }
@@ -2833,18 +3324,21 @@ namespace Tekla.Technology.Akit.UserScript
             for (int i = 0; i < 4; i++)
             {
                 int next = (i + 1) % 4;
-                double normalizedDot = Math.Abs(
-                    edgeX[i] * edgeX[next] + edgeY[i] * edgeY[next]) /
-                    (edgeLength[i] * edgeLength[next]);
+                double normalizedDot =
+                    Math.Abs(edgeX[i] * edgeX[next] + edgeY[i] * edgeY[next])
+                    / (edgeLength[i] * edgeLength[next]);
                 if (normalizedDot > 0.05)
                     return false;
             }
 
             double oppositeTolerance = Math.Max(
                 SLOT05_AUTO_PROFILE_POINT_TOL,
-                Math.Max(edgeLength[0], edgeLength[1]) * 0.02);
-            if (Math.Abs(edgeLength[0] - edgeLength[2]) > oppositeTolerance ||
-                Math.Abs(edgeLength[1] - edgeLength[3]) > oppositeTolerance)
+                Math.Max(edgeLength[0], edgeLength[1]) * 0.02
+            );
+            if (
+                Math.Abs(edgeLength[0] - edgeLength[2]) > oppositeTolerance
+                || Math.Abs(edgeLength[1] - edgeLength[3]) > oppositeTolerance
+            )
             {
                 return false;
             }
@@ -2853,14 +3347,13 @@ namespace Tekla.Technology.Akit.UserScript
             double diagonalSecond = Distance2D(points[1], points[3]);
             double diagonalTolerance = Math.Max(
                 SLOT05_AUTO_PROFILE_POINT_TOL,
-                Math.Max(diagonalFirst, diagonalSecond) * 0.02);
+                Math.Max(diagonalFirst, diagonalSecond) * 0.02
+            );
 
             return Math.Abs(diagonalFirst - diagonalSecond) <= diagonalTolerance;
         }
 
-        private static bool HasSteppedOrCurvedProjectedProfile(
-            ModelPart part,
-            Bounds2D bounds)
+        private static bool HasSteppedOrCurvedProjectedProfile(ModelPart part, Bounds2D bounds)
         {
             if (part == null || !bounds.Valid)
                 return false;
@@ -2898,14 +3391,13 @@ namespace Tekla.Technology.Akit.UserScript
                             AddUniquePoint2D(
                                 result,
                                 new Point(point.X, point.Y, 0),
-                                SLOT05_AUTO_PROFILE_POINT_TOL);
+                                SLOT05_AUTO_PROFILE_POINT_TOL
+                            );
                         }
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             if (result.Count >= 3)
                 return result;
@@ -2916,8 +3408,7 @@ namespace Tekla.Technology.Akit.UserScript
                 Tekla.Structures.Solid.EdgeEnumerator edges = solid.GetEdgeEnumerator();
                 while (edges != null && edges.MoveNext())
                 {
-                    Tekla.Structures.Solid.Edge edge =
-                        edges.Current as Tekla.Structures.Solid.Edge;
+                    Tekla.Structures.Solid.Edge edge = edges.Current as Tekla.Structures.Solid.Edge;
                     if (edge == null)
                         continue;
 
@@ -2925,17 +3416,17 @@ namespace Tekla.Technology.Akit.UserScript
                         AddUniquePoint2D(
                             result,
                             new Point(edge.StartPoint.X, edge.StartPoint.Y, 0),
-                            SLOT05_AUTO_PROFILE_POINT_TOL);
+                            SLOT05_AUTO_PROFILE_POINT_TOL
+                        );
                     if (edge.EndPoint != null)
                         AddUniquePoint2D(
                             result,
                             new Point(edge.EndPoint.X, edge.EndPoint.Y, 0),
-                            SLOT05_AUTO_PROFILE_POINT_TOL);
+                            SLOT05_AUTO_PROFILE_POINT_TOL
+                        );
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return result;
         }
@@ -2951,32 +3442,31 @@ namespace Tekla.Technology.Akit.UserScript
                 Tekla.Structures.Solid.EdgeEnumerator edges = solid.GetEdgeEnumerator();
                 while (edges != null && edges.MoveNext())
                 {
-                    Tekla.Structures.Solid.Edge edge =
-                        edges.Current as Tekla.Structures.Solid.Edge;
+                    Tekla.Structures.Solid.Edge edge = edges.Current as Tekla.Structures.Solid.Edge;
                     if (edge == null || edge.StartPoint == null || edge.EndPoint == null)
                         continue;
 
                     string edgeType = edge.Type.ToString();
-                    if (edgeType.IndexOf(
-                        "CURVED_SURFACE",
-                        StringComparison.OrdinalIgnoreCase) < 0)
+                    if (edgeType.IndexOf("CURVED_SURFACE", StringComparison.OrdinalIgnoreCase) < 0)
                     {
                         continue;
                     }
 
                     Point start = new Point(edge.StartPoint.X, edge.StartPoint.Y, 0);
                     Point end = new Point(edge.EndPoint.X, edge.EndPoint.Y, 0);
-                    if (Distance2D(start, end) > SLOT05_AUTO_EDGE_CONTACT_TOL &&
-                        (PointTouchesProjectedBounds(start, bounds) ||
-                         PointTouchesProjectedBounds(end, bounds)))
+                    if (
+                        Distance2D(start, end) > SLOT05_AUTO_EDGE_CONTACT_TOL
+                        && (
+                            PointTouchesProjectedBounds(start, bounds)
+                            || PointTouchesProjectedBounds(end, bounds)
+                        )
+                    )
                     {
                         return true;
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return false;
         }
@@ -2986,16 +3476,17 @@ namespace Tekla.Technology.Akit.UserScript
             if (point == null || !bounds.Valid)
                 return false;
 
-            return Math.Abs(point.X - bounds.MinX) <= SLOT05_AUTO_PROFILE_POINT_TOL ||
-                Math.Abs(point.X - bounds.MaxX) <= SLOT05_AUTO_PROFILE_POINT_TOL ||
-                Math.Abs(point.Y - bounds.MinY) <= SLOT05_AUTO_PROFILE_POINT_TOL ||
-                Math.Abs(point.Y - bounds.MaxY) <= SLOT05_AUTO_PROFILE_POINT_TOL;
+            return Math.Abs(point.X - bounds.MinX) <= SLOT05_AUTO_PROFILE_POINT_TOL
+                || Math.Abs(point.X - bounds.MaxX) <= SLOT05_AUTO_PROFILE_POINT_TOL
+                || Math.Abs(point.Y - bounds.MinY) <= SLOT05_AUTO_PROFILE_POINT_TOL
+                || Math.Abs(point.Y - bounds.MaxY) <= SLOT05_AUTO_PROFILE_POINT_TOL;
         }
 
         private static bool TryGetBestMainEdgeWrapScore(
             Bounds2D mainBox,
             Bounds2D plateBox,
-            out double bestScore)
+            out double bestScore
+        )
         {
             bestScore = -999999999.0;
             double score;
@@ -3004,7 +3495,10 @@ namespace Tekla.Technology.Akit.UserScript
                 bestScore = score;
             if (TryScoreVerticalMainEdge(mainBox, plateBox, true, out score) && score > bestScore)
                 bestScore = score;
-            if (TryScoreHorizontalMainEdge(mainBox, plateBox, false, out score) && score > bestScore)
+            if (
+                TryScoreHorizontalMainEdge(mainBox, plateBox, false, out score)
+                && score > bestScore
+            )
                 bestScore = score;
             if (TryScoreHorizontalMainEdge(mainBox, plateBox, true, out score) && score > bestScore)
                 bestScore = score;
@@ -3016,7 +3510,8 @@ namespace Tekla.Technology.Akit.UserScript
             Bounds2D mainBox,
             Bounds2D plateBox,
             bool rightSide,
-            out double score)
+            out double score
+        )
         {
             score = 0.0;
             double mainWidth = mainBox.MaxX - mainBox.MinX;
@@ -3025,7 +3520,10 @@ namespace Tekla.Technology.Akit.UserScript
             double plateHeight = plateBox.MaxY - plateBox.MinY;
             if (mainWidth <= TOL || mainHeight <= TOL || plateWidth <= TOL || plateHeight <= TOL)
                 return false;
-            if (plateWidth > mainWidth * SLOT05_AUTO_MAX_NORMAL_SIZE_RATIO + SLOT05_AUTO_EDGE_CONTACT_TOL)
+            if (
+                plateWidth
+                > mainWidth * SLOT05_AUTO_MAX_NORMAL_SIZE_RATIO + SLOT05_AUTO_EDGE_CONTACT_TOL
+            )
                 return false;
 
             double edgeX = rightSide ? mainBox.MaxX : mainBox.MinX;
@@ -3035,14 +3533,12 @@ namespace Tekla.Technology.Akit.UserScript
             if (nearDistance >= farDistance)
                 return false;
 
-            double insideDepth = rightSide
-                ? edgeX - plateBox.MinX
-                : plateBox.MaxX - edgeX;
-            double outsideDepth = rightSide
-                ? plateBox.MaxX - edgeX
-                : edgeX - plateBox.MinX;
-            if (insideDepth < -SLOT05_AUTO_EDGE_CONTACT_TOL ||
-                outsideDepth < -SLOT05_AUTO_EDGE_CONTACT_TOL)
+            double insideDepth = rightSide ? edgeX - plateBox.MinX : plateBox.MaxX - edgeX;
+            double outsideDepth = rightSide ? plateBox.MaxX - edgeX : edgeX - plateBox.MinX;
+            if (
+                insideDepth < -SLOT05_AUTO_EDGE_CONTACT_TOL
+                || outsideDepth < -SLOT05_AUTO_EDGE_CONTACT_TOL
+            )
             {
                 return false;
             }
@@ -3051,15 +3547,17 @@ namespace Tekla.Technology.Akit.UserScript
                 mainBox.MinY,
                 mainBox.MaxY,
                 plateBox.MinY,
-                plateBox.MaxY);
+                plateBox.MaxY
+            );
             double overlapRatio = overlap / Math.Max(TOL, Math.Min(mainHeight, plateHeight));
             if (overlapRatio < SLOT05_AUTO_MIN_SIDE_OVERLAP_RATIO)
                 return false;
 
             double normalRatio = plateWidth / mainWidth;
-            score = overlapRatio * 100.0 +
-                Math.Max(0.0, 1.0 - normalRatio) * 20.0 +
-                (insideDepth > TOL && outsideDepth > TOL ? 30.0 : 15.0);
+            score =
+                overlapRatio * 100.0
+                + Math.Max(0.0, 1.0 - normalRatio) * 20.0
+                + (insideDepth > TOL && outsideDepth > TOL ? 30.0 : 15.0);
             return true;
         }
 
@@ -3067,7 +3565,8 @@ namespace Tekla.Technology.Akit.UserScript
             Bounds2D mainBox,
             Bounds2D plateBox,
             bool topSide,
-            out double score)
+            out double score
+        )
         {
             score = 0.0;
             double mainWidth = mainBox.MaxX - mainBox.MinX;
@@ -3076,7 +3575,10 @@ namespace Tekla.Technology.Akit.UserScript
             double plateHeight = plateBox.MaxY - plateBox.MinY;
             if (mainWidth <= TOL || mainHeight <= TOL || plateWidth <= TOL || plateHeight <= TOL)
                 return false;
-            if (plateHeight > mainHeight * SLOT05_AUTO_MAX_NORMAL_SIZE_RATIO + SLOT05_AUTO_EDGE_CONTACT_TOL)
+            if (
+                plateHeight
+                > mainHeight * SLOT05_AUTO_MAX_NORMAL_SIZE_RATIO + SLOT05_AUTO_EDGE_CONTACT_TOL
+            )
                 return false;
 
             double edgeY = topSide ? mainBox.MaxY : mainBox.MinY;
@@ -3086,14 +3588,12 @@ namespace Tekla.Technology.Akit.UserScript
             if (nearDistance >= farDistance)
                 return false;
 
-            double insideDepth = topSide
-                ? edgeY - plateBox.MinY
-                : plateBox.MaxY - edgeY;
-            double outsideDepth = topSide
-                ? plateBox.MaxY - edgeY
-                : edgeY - plateBox.MinY;
-            if (insideDepth < -SLOT05_AUTO_EDGE_CONTACT_TOL ||
-                outsideDepth < -SLOT05_AUTO_EDGE_CONTACT_TOL)
+            double insideDepth = topSide ? edgeY - plateBox.MinY : plateBox.MaxY - edgeY;
+            double outsideDepth = topSide ? plateBox.MaxY - edgeY : edgeY - plateBox.MinY;
+            if (
+                insideDepth < -SLOT05_AUTO_EDGE_CONTACT_TOL
+                || outsideDepth < -SLOT05_AUTO_EDGE_CONTACT_TOL
+            )
             {
                 return false;
             }
@@ -3102,15 +3602,17 @@ namespace Tekla.Technology.Akit.UserScript
                 mainBox.MinX,
                 mainBox.MaxX,
                 plateBox.MinX,
-                plateBox.MaxX);
+                plateBox.MaxX
+            );
             double overlapRatio = overlap / Math.Max(TOL, Math.Min(mainWidth, plateWidth));
             if (overlapRatio < SLOT05_AUTO_MIN_SIDE_OVERLAP_RATIO)
                 return false;
 
             double normalRatio = plateHeight / mainHeight;
-            score = overlapRatio * 100.0 +
-                Math.Max(0.0, 1.0 - normalRatio) * 20.0 +
-                (insideDepth > TOL && outsideDepth > TOL ? 30.0 : 15.0);
+            score =
+                overlapRatio * 100.0
+                + Math.Max(0.0, 1.0 - normalRatio) * 20.0
+                + (insideDepth > TOL && outsideDepth > TOL ? 30.0 : 15.0);
             return true;
         }
 
@@ -3118,7 +3620,8 @@ namespace Tekla.Technology.Akit.UserScript
             double firstMin,
             double firstMax,
             double secondMin,
-            double secondMax)
+            double secondMax
+        )
         {
             return Math.Max(0.0, Math.Min(firstMax, secondMax) - Math.Max(firstMin, secondMin));
         }
@@ -3132,8 +3635,9 @@ namespace Tekla.Technology.Akit.UserScript
 
                 TSM.Assembly partAssembly = part.GetAssembly();
                 TSM.Assembly mainAssembly = mainPart.GetAssembly();
-                return partAssembly != null && mainAssembly != null &&
-                    SameIdentifier(partAssembly.Identifier, mainAssembly.Identifier);
+                return partAssembly != null
+                    && mainAssembly != null
+                    && SameIdentifier(partAssembly.Identifier, mainAssembly.Identifier);
             }
             catch
             {
@@ -3146,8 +3650,8 @@ namespace Tekla.Technology.Akit.UserScript
             if (first == null || second == null)
                 return false;
 
-            return PartBoltCollectionReferencesPart(first, second) ||
-                PartBoltCollectionReferencesPart(second, first);
+            return PartBoltCollectionReferencesPart(first, second)
+                || PartBoltCollectionReferencesPart(second, first);
         }
 
         private static bool PartBoltCollectionReferencesPart(ModelPart owner, ModelPart other)
@@ -3178,9 +3682,7 @@ namespace Tekla.Technology.Akit.UserScript
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return false;
         }
@@ -3210,9 +3712,7 @@ namespace Tekla.Technology.Akit.UserScript
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return false;
         }
@@ -3241,9 +3741,7 @@ namespace Tekla.Technology.Akit.UserScript
             return false;
         }
 
-        private static ModelPart FindPartByIdentifier(
-            List<ModelPart> parts,
-            Identifier identifier)
+        private static ModelPart FindPartByIdentifier(List<ModelPart> parts, Identifier identifier)
         {
             if (parts == null || identifier == null)
                 return null;
@@ -3258,9 +3756,7 @@ namespace Tekla.Technology.Akit.UserScript
             return null;
         }
 
-        private static bool PartIdentifierSetsMatch(
-            List<ModelPart> first,
-            List<ModelPart> second)
+        private static bool PartIdentifierSetsMatch(List<ModelPart> first, List<ModelPart> second)
         {
             if (first == null || second == null || first.Count != second.Count)
                 return false;
@@ -3268,8 +3764,11 @@ namespace Tekla.Technology.Akit.UserScript
             for (int i = 0; i < first.Count; i++)
             {
                 ModelPart part = first[i];
-                if (part == null || part.Identifier == null ||
-                    !ContainsPartIdentifier(second, part.Identifier))
+                if (
+                    part == null
+                    || part.Identifier == null
+                    || !ContainsPartIdentifier(second, part.Identifier)
+                )
                 {
                     return false;
                 }
@@ -3280,33 +3779,40 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static int CompareAutomaticTargets(Slot05AutoTarget first, Slot05AutoTarget second)
         {
-            if (first == null && second == null) return 0;
-            if (first == null) return 1;
-            if (second == null) return -1;
+            if (first == null && second == null)
+                return 0;
+            if (first == null)
+                return 1;
+            if (second == null)
+                return -1;
 
             int c = second.MatchedPlateCount.CompareTo(first.MatchedPlateCount);
-            if (c != 0) return c;
+            if (c != 0)
+                return c;
 
             c = second.Plates.Count.CompareTo(first.Plates.Count);
-            if (c != 0) return c;
+            if (c != 0)
+                return c;
 
             c = second.DirectConnectionCount.CompareTo(first.DirectConnectionCount);
-            if (c != 0) return c;
+            if (c != 0)
+                return c;
 
             return second.GeometryScore.CompareTo(first.GeometryScore);
         }
 
         private static bool AutomaticTargetsAreAmbiguous(
             Slot05AutoTarget first,
-            Slot05AutoTarget second)
+            Slot05AutoTarget second
+        )
         {
             if (first == null || second == null)
                 return false;
 
-            return first.MatchedPlateCount == second.MatchedPlateCount &&
-                first.Plates.Count == second.Plates.Count &&
-                first.DirectConnectionCount == second.DirectConnectionCount &&
-                Math.Abs(first.GeometryScore - second.GeometryScore) <= 1.0;
+            return first.MatchedPlateCount == second.MatchedPlateCount
+                && first.Plates.Count == second.Plates.Count
+                && first.DirectConnectionCount == second.DirectConnectionCount
+                && Math.Abs(first.GeometryScore - second.GeometryScore) <= 1.0;
         }
 
         private static string DescribePartForAudit(ModelPart part)
@@ -3314,29 +3820,33 @@ namespace Tekla.Technology.Akit.UserScript
             if (part == null)
                 return "<null>";
 
-            string id = part.Identifier == null
-                ? "?"
-                : part.Identifier.ID.ToString(CultureInfo.InvariantCulture);
+            string id =
+                part.Identifier == null
+                    ? "?"
+                    : part.Identifier.ID.ToString(CultureInfo.InvariantCulture);
             string assemblyId = "?";
             try
             {
                 TSM.Assembly assembly = part.GetAssembly();
                 if (assembly != null && assembly.Identifier != null)
                 {
-                    assemblyId = assembly.Identifier.ID.ToString(
-                        CultureInfo.InvariantCulture);
+                    assemblyId = assembly.Identifier.ID.ToString(CultureInfo.InvariantCulture);
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
-            return "id=" + id +
-                " asm=" + assemblyId +
-                " type=" + part.GetType().Name +
-                " profile=" + GetProfileString(part) +
-                " name=" + GetReportString(part, "NAME") +
-                " partPos=" + GetReportString(part, "PART_POS");
+            return "id="
+                + id
+                + " asm="
+                + assemblyId
+                + " type="
+                + part.GetType().Name
+                + " profile="
+                + GetProfileString(part)
+                + " name="
+                + GetReportString(part, "NAME")
+                + " partPos="
+                + GetReportString(part, "PART_POS");
         }
 
         private static string DescribeViewForAudit(TSD.View view)
@@ -3347,9 +3857,12 @@ namespace Tekla.Technology.Akit.UserScript
             object identifier = GetPropertyValue(view, "Identifier");
             object viewType = GetPropertyValue(view, "ViewType");
             object name = GetPropertyValue(view, "Name");
-            return "id=" + (identifier == null ? "?" : identifier.ToString()) +
-                " type=" + (viewType == null ? view.GetType().Name : viewType.ToString()) +
-                " name=" + (name == null ? "" : name.ToString());
+            return "id="
+                + (identifier == null ? "?" : identifier.ToString())
+                + " type="
+                + (viewType == null ? view.GetType().Name : viewType.ToString())
+                + " name="
+                + (name == null ? "" : name.ToString());
         }
 
         private static string FormatBoundsForAudit(Bounds2D bounds)
@@ -3357,10 +3870,15 @@ namespace Tekla.Technology.Akit.UserScript
             if (!bounds.Valid)
                 return "NA";
 
-            return "X[" + bounds.MinX.ToString("0.###", CultureInfo.InvariantCulture) +
-                "," + bounds.MaxX.ToString("0.###", CultureInfo.InvariantCulture) +
-                "] Y[" + bounds.MinY.ToString("0.###", CultureInfo.InvariantCulture) +
-                "," + bounds.MaxY.ToString("0.###", CultureInfo.InvariantCulture) + "]";
+            return "X["
+                + bounds.MinX.ToString("0.###", CultureInfo.InvariantCulture)
+                + ","
+                + bounds.MaxX.ToString("0.###", CultureInfo.InvariantCulture)
+                + "] Y["
+                + bounds.MinY.ToString("0.###", CultureInfo.InvariantCulture)
+                + ","
+                + bounds.MaxY.ToString("0.###", CultureInfo.InvariantCulture)
+                + "]";
         }
 
         private static string FormatPointsForAudit(List<Point> points)
@@ -3395,9 +3913,13 @@ namespace Tekla.Technology.Akit.UserScript
             if (vector == null)
                 return "null";
 
-            return "[" + vector.X.ToString("0.###", CultureInfo.InvariantCulture) +
-                "," + vector.Y.ToString("0.###", CultureInfo.InvariantCulture) +
-                "," + vector.Z.ToString("0.###", CultureInfo.InvariantCulture) + "]";
+            return "["
+                + vector.X.ToString("0.###", CultureInfo.InvariantCulture)
+                + ","
+                + vector.Y.ToString("0.###", CultureInfo.InvariantCulture)
+                + ","
+                + vector.Z.ToString("0.###", CultureInfo.InvariantCulture)
+                + "]";
         }
 
         private static string FormatHoleGapsForAudit(ModelPart plate, List<Point> holes)
@@ -3411,9 +3933,10 @@ namespace Tekla.Technology.Akit.UserScript
             {
                 if (i > 0)
                     text.Append(";");
-                text.Append(GetHoleCenterDimGapByMThenPhi(plate, holes[i]).ToString(
-                    "0.###",
-                    CultureInfo.InvariantCulture));
+                text.Append(
+                    GetHoleCenterDimGapByMThenPhi(plate, holes[i])
+                        .ToString("0.###", CultureInfo.InvariantCulture)
+                );
             }
             text.Append("]");
             return text.ToString();
@@ -3465,7 +3988,11 @@ namespace Tekla.Technology.Akit.UserScript
             return Math.Abs(targetX - firstPoint.X);
         }
 
-        private static double GetMiddleLeftTierDistance(Point firstPoint, Bounds2D mainBox, int tier)
+        private static double GetMiddleLeftTierDistance(
+            Point firstPoint,
+            Bounds2D mainBox,
+            int tier
+        )
         {
             // Plate giữa: dim luôn đẩy về bên trái, offset tính từ mép trái ngoài cùng của main.
             return GetLeftTierDistance(firstPoint, mainBox, tier);
@@ -3473,14 +4000,18 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static int CompareGroupByPlateCenterXThenY(Slot05PlateGroup a, Slot05PlateGroup b)
         {
-            if (a == null && b == null) return 0;
-            if (a == null) return -1;
-            if (b == null) return 1;
+            if (a == null && b == null)
+                return 0;
+            if (a == null)
+                return -1;
+            if (b == null)
+                return 1;
 
             double ax = (a.PlateBox.MinX + a.PlateBox.MaxX) / 2.0;
             double bx = (b.PlateBox.MinX + b.PlateBox.MaxX) / 2.0;
             int c = ax.CompareTo(bx);
-            if (c != 0) return c;
+            if (c != 0)
+                return c;
 
             double ay = (a.PlateBox.MinY + a.PlateBox.MaxY) / 2.0;
             double by = (b.PlateBox.MinY + b.PlateBox.MaxY) / 2.0;
@@ -3489,14 +4020,18 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static int CompareGroupByPlateCenterYThenX(Slot05PlateGroup a, Slot05PlateGroup b)
         {
-            if (a == null && b == null) return 0;
-            if (a == null) return -1;
-            if (b == null) return 1;
+            if (a == null && b == null)
+                return 0;
+            if (a == null)
+                return -1;
+            if (b == null)
+                return 1;
 
             double ay = (a.PlateBox.MinY + a.PlateBox.MaxY) / 2.0;
             double by = (b.PlateBox.MinY + b.PlateBox.MaxY) / 2.0;
             int c = ay.CompareTo(by);
-            if (c != 0) return c;
+            if (c != 0)
+                return c;
 
             double ax = (a.PlateBox.MinX + a.PlateBox.MaxX) / 2.0;
             double bx = (b.PlateBox.MinX + b.PlateBox.MaxX) / 2.0;
@@ -3526,21 +4061,27 @@ namespace Tekla.Technology.Akit.UserScript
                     }
                     else
                     {
-                        if (g.MainBox.MinX < b.MinX) b.MinX = g.MainBox.MinX;
-                        if (g.MainBox.MaxX > b.MaxX) b.MaxX = g.MainBox.MaxX;
-                        if (g.MainBox.MinY < b.MinY) b.MinY = g.MainBox.MinY;
-                        if (g.MainBox.MaxY > b.MaxY) b.MaxY = g.MainBox.MaxY;
+                        if (g.MainBox.MinX < b.MinX)
+                            b.MinX = g.MainBox.MinX;
+                        if (g.MainBox.MaxX > b.MaxX)
+                            b.MaxX = g.MainBox.MaxX;
+                        if (g.MainBox.MinY < b.MinY)
+                            b.MinY = g.MainBox.MinY;
+                        if (g.MainBox.MaxY > b.MaxY)
+                            b.MaxY = g.MainBox.MaxY;
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return b;
         }
 
-        private static Point PickPrimaryVerticalHole(Bounds2D plateBox, List<Point> holes, bool pickRightHole)
+        private static Point PickPrimaryVerticalHole(
+            Bounds2D plateBox,
+            List<Point> holes,
+            bool pickRightHole
+        )
         {
             if (holes == null || holes.Count == 0)
                 return null;
@@ -3554,13 +4095,19 @@ namespace Tekla.Technology.Akit.UserScript
                 if (p == null)
                     continue;
 
-                if (p.X < plateBox.MinX - PLATE_BOUND_TOL || p.X > plateBox.MaxX + PLATE_BOUND_TOL ||
-                    p.Y < plateBox.MinY - PLATE_BOUND_TOL || p.Y > plateBox.MaxY + PLATE_BOUND_TOL)
+                if (
+                    p.X < plateBox.MinX - PLATE_BOUND_TOL
+                    || p.X > plateBox.MaxX + PLATE_BOUND_TOL
+                    || p.Y < plateBox.MinY - PLATE_BOUND_TOL
+                    || p.Y > plateBox.MaxY + PLATE_BOUND_TOL
+                )
                     continue;
 
-                if (best == null ||
-                    (pickRightHole && p.X > bestX) ||
-                    (!pickRightHole && p.X < bestX))
+                if (
+                    best == null
+                    || (pickRightHole && p.X > bestX)
+                    || (!pickRightHole && p.X < bestX)
+                )
                 {
                     best = p;
                     bestX = p.X;
@@ -3576,7 +4123,8 @@ namespace Tekla.Technology.Akit.UserScript
         private static double GetReferenceYForHorizontalPlateEdge(
             Bounds2D plateBox,
             List<Point> holeCenters,
-            bool dimToTop)
+            bool dimToTop
+        )
         {
             try
             {
@@ -3605,63 +4153,6 @@ namespace Tekla.Technology.Akit.UserScript
             {
                 return dimToTop ? plateBox.MaxY : plateBox.MinY;
             }
-        }
-
-        private static ModelPart FindMainBeamForPlate(
-            ModelPart plate,
-            Bounds2D plateBox,
-            List<ModelPart> allViewParts)
-        {
-            if (plate == null || !plateBox.Valid || allViewParts == null || allViewParts.Count == 0)
-                return null;
-
-            string plateAssembly = GetReportString(plate, "ASSEMBLY_POS");
-            Point plateCenter = CenterOf(plateBox);
-
-            ModelPart best = null;
-            double bestScore = -999999999.0;
-
-            for (int i = 0; i < allViewParts.Count; i++)
-            {
-                ModelPart p = allViewParts[i];
-                if (p == null || p.Identifier == null || plate.Identifier == null)
-                    continue;
-
-                if (SameIdentifier(p.Identifier, plate.Identifier))
-                    continue;
-
-                if (IsDummyReferencePart(p))
-                    continue;
-
-                if (IsPlateLikePart(p))
-                    continue;
-
-                Bounds2D b = GetPartBounds2D(p);
-                if (!b.Valid)
-                    continue;
-
-                Point c = CenterOf(b);
-                double area = Math.Abs(b.MaxX - b.MinX) * Math.Abs(b.MaxY - b.MinY);
-                double distance = Distance2D(plateCenter, c);
-
-                double score = area - distance * 0.25;
-
-                string asm = GetReportString(p, "ASSEMBLY_POS");
-                if (!string.IsNullOrEmpty(plateAssembly) &&
-                    !string.IsNullOrEmpty(asm) &&
-                    string.Equals(plateAssembly, asm, StringComparison.OrdinalIgnoreCase))
-                {
-                    score += 100000000.0;
-                }
-
-                if (score > bestScore)
-                {
-                    bestScore = score;
-                    best = p;
-                }
-            }
-
-            return best;
         }
 
         private static List<ModelPart> GetAllModelPartsInView(TSM.Model model, TSD.View view)
@@ -3698,14 +4189,16 @@ namespace Tekla.Technology.Akit.UserScript
                         result.Add(mp);
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return result;
         }
 
-        private static Point GetHolePointWithMBoltGap(ModelPart plate, Point holeCenter, Vector direction)
+        private static Point GetHolePointWithMBoltGap(
+            ModelPart plate,
+            Point holeCenter,
+            Vector direction
+        )
         {
             try
             {
@@ -3762,8 +4255,10 @@ namespace Tekla.Technology.Akit.UserScript
                         if (p == null)
                             continue;
 
-                        if (Math.Abs(p.X - holeCenter.X) <= 1.0 &&
-                            Math.Abs(p.Y - holeCenter.Y) <= 1.0)
+                        if (
+                            Math.Abs(p.X - holeCenter.X) <= 1.0
+                            && Math.Abs(p.Y - holeCenter.Y) <= 1.0
+                        )
                         {
                             double d = GetBoltGroupMThenPhiForDimGap(bg);
                             if (d > 0.0)
@@ -3772,9 +4267,7 @@ namespace Tekla.Technology.Akit.UserScript
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return 0.0;
         }
@@ -3786,47 +4279,61 @@ namespace Tekla.Technology.Akit.UserScript
 
             // Slot05 yêu cầu ưu tiên M/BoltSize trước, sau đó mới tới phi lỗ.
             double v = GetReportDouble(bg, "BOLT_DIAMETER");
-            if (v > 0.0 && v < 500.0) return v;
+            if (v > 0.0 && v < 500.0)
+                return v;
 
             v = GetDoublePropertyByReflection(bg, "BoltSize");
-            if (v > 0.0 && v < 500.0) return v;
+            if (v > 0.0 && v < 500.0)
+                return v;
 
             v = GetReportDouble(bg, "BOLT_SIZE");
-            if (v > 0.0 && v < 500.0) return v;
+            if (v > 0.0 && v < 500.0)
+                return v;
 
             v = GetReportDouble(bg, "DIAMETER");
-            if (v > 0.0 && v < 500.0) return v;
+            if (v > 0.0 && v < 500.0)
+                return v;
 
             v = GetDoublePropertyByReflection(bg, "Diameter");
-            if (v > 0.0 && v < 500.0) return v;
+            if (v > 0.0 && v < 500.0)
+                return v;
 
             // Sau M mới tới phi lỗ / hole size.
             v = GetReportDouble(bg, "HOLE_DIAMETER");
-            if (v > 0.0 && v < 500.0) return v;
+            if (v > 0.0 && v < 500.0)
+                return v;
 
             v = GetReportDouble(bg, "BOLT_HOLE_DIAMETER");
-            if (v > 0.0 && v < 500.0) return v;
+            if (v > 0.0 && v < 500.0)
+                return v;
 
             v = GetReportDouble(bg, "HOLE_SIZE");
-            if (v > 0.0 && v < 500.0) return v;
+            if (v > 0.0 && v < 500.0)
+                return v;
 
             v = GetReportDouble(bg, "HOLE_DIAM");
-            if (v > 0.0 && v < 500.0) return v;
+            if (v > 0.0 && v < 500.0)
+                return v;
 
             v = GetReportDouble(bg, "BOLT_HOLE_SIZE");
-            if (v > 0.0 && v < 500.0) return v;
+            if (v > 0.0 && v < 500.0)
+                return v;
 
             v = GetDoublePropertyByReflection(bg, "HoleDiameter");
-            if (v > 0.0 && v < 500.0) return v;
+            if (v > 0.0 && v < 500.0)
+                return v;
 
             v = GetDoublePropertyByReflection(bg, "HoleSize");
-            if (v > 0.0 && v < 500.0) return v;
+            if (v > 0.0 && v < 500.0)
+                return v;
 
             v = GetDoublePropertyByReflection(bg, "BoltHoleDiameter");
-            if (v > 0.0 && v < 500.0) return v;
+            if (v > 0.0 && v < 500.0)
+                return v;
 
             v = GetDoublePropertyByReflection(bg, "BoltHoleSize");
-            if (v > 0.0 && v < 500.0) return v;
+            if (v > 0.0 && v < 500.0)
+                return v;
 
             return 0.0;
         }
@@ -3855,10 +4362,8 @@ namespace Tekla.Technology.Akit.UserScript
                 if (obj == null || string.IsNullOrEmpty(propertyName))
                     return 0.0;
 
-                PropertyInfo prop = obj.GetType().GetProperty(
-                    propertyName,
-                    BindingFlags.Public | BindingFlags.Instance
-                );
+                PropertyInfo prop = obj.GetType()
+                    .GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
 
                 if (prop == null || !prop.CanRead)
                     return 0.0;
@@ -3877,16 +4382,17 @@ namespace Tekla.Technology.Akit.UserScript
                     return Convert.ToDouble((float)value);
 
                 double result;
-                if (double.TryParse(
-                    value.ToString().Replace(",", "."),
-                    System.Globalization.NumberStyles.Any,
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    out result))
+                if (
+                    double.TryParse(
+                        value.ToString().Replace(",", "."),
+                        System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out result
+                    )
+                )
                     return result;
             }
-            catch
-            {
-            }
+            catch { }
 
             return 0.0;
         }
@@ -3895,7 +4401,8 @@ namespace Tekla.Technology.Akit.UserScript
             TSM.Model model,
             TSD.View view,
             ModelPart plate,
-            Bounds2D plateBox)
+            Bounds2D plateBox
+        )
         {
             List<Point> result = new List<Point>();
 
@@ -3920,12 +4427,12 @@ namespace Tekla.Technology.Akit.UserScript
                         AddBoltGroupPositionsInsideBounds(bg, plateBox, result);
                     }
                 }
-                catch
-                {
-                }
+                catch { }
 
                 // Fallback/ bổ sung: quét Drawing Bolt trong view, nhưng chỉ nhận bolt thuộc chính plate đang xét.
-                TSD.DrawingObjectEnumerator e = view.GetAllObjects(typeof(Tekla.Structures.Drawing.Bolt));
+                TSD.DrawingObjectEnumerator e = view.GetAllObjects(
+                    typeof(Tekla.Structures.Drawing.Bolt)
+                );
                 while (e != null && e.MoveNext())
                 {
                     TSD.DrawingObject dobj = e.Current as TSD.DrawingObject;
@@ -3944,9 +4451,7 @@ namespace Tekla.Technology.Akit.UserScript
                     AddBoltGroupPositionsInsideBounds(bg, plateBox, result);
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             result.Sort(ComparePointByXThenY);
             return result;
@@ -3955,7 +4460,8 @@ namespace Tekla.Technology.Akit.UserScript
         private static void AddBoltGroupPositionsInsideBounds(
             ModelBoltGroup bg,
             Bounds2D plateBox,
-            List<Point> result)
+            List<Point> result
+        )
         {
             try
             {
@@ -3974,9 +4480,7 @@ namespace Tekla.Technology.Akit.UserScript
                     AddUniquePoint2D(result, new Point(p.X, p.Y, 0), POINT_DUP_TOL);
                 }
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static void AddUniqueIdentifier(List<Identifier> list, Identifier id)
@@ -3991,9 +4495,7 @@ namespace Tekla.Technology.Akit.UserScript
 
                 list.Add(id);
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static bool ContainsIdentifier(List<Identifier> list, Identifier id)
@@ -4009,9 +4511,7 @@ namespace Tekla.Technology.Akit.UserScript
                         return true;
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return false;
         }
@@ -4058,19 +4558,14 @@ namespace Tekla.Technology.Akit.UserScript
                 b.MaxY = Math.Max(min.Y, max.Y);
                 b.Valid = Math.Abs(b.MaxX - b.MinX) > TOL && Math.Abs(b.MaxY - b.MinY) > TOL;
             }
-            catch
-            {
-            }
+            catch { }
 
             return b;
         }
 
         private static Point CenterOf(Bounds2D b)
         {
-            return new Point(
-                (b.MinX + b.MaxX) / 2.0,
-                (b.MinY + b.MaxY) / 2.0,
-                0);
+            return new Point((b.MinX + b.MaxX) / 2.0, (b.MinY + b.MaxY) / 2.0, 0);
         }
 
         private static bool PointInsideBounds(Point p, Bounds2D b, double tol)
@@ -4078,31 +4573,39 @@ namespace Tekla.Technology.Akit.UserScript
             if (p == null || !b.Valid)
                 return false;
 
-            return p.X >= b.MinX - tol &&
-                   p.X <= b.MaxX + tol &&
-                   p.Y >= b.MinY - tol &&
-                   p.Y <= b.MaxY + tol;
+            return p.X >= b.MinX - tol
+                && p.X <= b.MaxX + tol
+                && p.Y >= b.MinY - tol
+                && p.Y <= b.MaxY + tol;
         }
 
         private static int ComparePointByXThenY(Point a, Point b)
         {
-            if (a == null && b == null) return 0;
-            if (a == null) return -1;
-            if (b == null) return 1;
+            if (a == null && b == null)
+                return 0;
+            if (a == null)
+                return -1;
+            if (b == null)
+                return 1;
 
             int c = a.X.CompareTo(b.X);
-            if (c != 0) return c;
+            if (c != 0)
+                return c;
             return a.Y.CompareTo(b.Y);
         }
 
         private static int ComparePointByYThenX(Point a, Point b)
         {
-            if (a == null && b == null) return 0;
-            if (a == null) return -1;
-            if (b == null) return 1;
+            if (a == null && b == null)
+                return 0;
+            if (a == null)
+                return -1;
+            if (b == null)
+                return 1;
 
             int c = a.Y.CompareTo(b.Y);
-            if (c != 0) return c;
+            if (c != 0)
+                return c;
             return a.X.CompareTo(b.X);
         }
 
@@ -4126,7 +4629,8 @@ namespace Tekla.Technology.Akit.UserScript
             Point[] points,
             Vector direction,
             double distance,
-            string attributeName)
+            string attributeName
+        )
         {
             try
             {
@@ -4158,8 +4662,12 @@ namespace Tekla.Technology.Akit.UserScript
                 if (list.Count < 2)
                     return false;
 
-                TSD.StraightDimensionSet dim =
-                    handler.CreateDimensionSet(view, list, direction, distance);
+                TSD.StraightDimensionSet dim = handler.CreateDimensionSet(
+                    view,
+                    list,
+                    direction,
+                    distance
+                );
 
                 if (dim != null && !string.IsNullOrEmpty(attributeName))
                     TryApplyStraightDimAttributes(dim, attributeName);
@@ -4174,7 +4682,8 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static void TryApplyStraightDimAttributes(
             TSD.StraightDimensionSet dim,
-            string attributeName)
+            string attributeName
+        )
         {
             try
             {
@@ -4185,12 +4694,14 @@ namespace Tekla.Technology.Akit.UserScript
                 if (attr == null)
                     return;
 
-                MethodInfo loadMethod = attr.GetType().GetMethod(
-                    "LoadAttributes",
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
-                    null,
-                    new Type[] { typeof(string) },
-                    null);
+                MethodInfo loadMethod = attr.GetType()
+                    .GetMethod(
+                        "LoadAttributes",
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
+                        null,
+                        new Type[] { typeof(string) },
+                        null
+                    );
 
                 if (loadMethod == null)
                     return;
@@ -4198,9 +4709,7 @@ namespace Tekla.Technology.Akit.UserScript
                 loadMethod.Invoke(attr, new object[] { attributeName });
                 dim.Modify();
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private static List<DrawingPart> GetSelectedDrawingParts(TSD.DrawingHandler dh)
@@ -4209,8 +4718,7 @@ namespace Tekla.Technology.Akit.UserScript
 
             try
             {
-                TSD.DrawingObjectEnumerator e =
-                    dh.GetDrawingObjectSelector().GetSelected();
+                TSD.DrawingObjectEnumerator e = dh.GetDrawingObjectSelector().GetSelected();
 
                 while (e != null && e.MoveNext())
                 {
@@ -4219,9 +4727,7 @@ namespace Tekla.Technology.Akit.UserScript
                         result.Add(dp);
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return result;
         }
@@ -4268,23 +4774,21 @@ namespace Tekla.Technology.Akit.UserScript
             if (drawingObject == null)
                 return null;
 
-            string[] methodNames = new string[]
-            {
-                "GetView",
-                "GetFatherView",
-                "GetParentView"
-            };
+            string[] methodNames = new string[] { "GetView", "GetFatherView", "GetParentView" };
 
             for (int i = 0; i < methodNames.Length; i++)
             {
                 try
                 {
-                    MethodInfo m = drawingObject.GetType().GetMethod(
-                        methodNames[i],
-                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
-                        null,
-                        Type.EmptyTypes,
-                        null);
+                    MethodInfo m = drawingObject
+                        .GetType()
+                        .GetMethod(
+                            methodNames[i],
+                            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
+                            null,
+                            Type.EmptyTypes,
+                            null
+                        );
 
                     if (m == null)
                         continue;
@@ -4294,17 +4798,10 @@ namespace Tekla.Technology.Akit.UserScript
                     if (view != null)
                         return view;
                 }
-                catch
-                {
-                }
+                catch { }
             }
 
-            string[] propertyNames = new string[]
-            {
-                "View",
-                "FatherView",
-                "ParentView"
-            };
+            string[] propertyNames = new string[] { "View", "FatherView", "ParentView" };
 
             for (int i = 0; i < propertyNames.Length; i++)
             {
@@ -4315,19 +4812,21 @@ namespace Tekla.Technology.Akit.UserScript
                     if (view != null)
                         return view;
                 }
-                catch
-                {
-                }
+                catch { }
             }
 
             return null;
         }
 
-        private static TSD.View FindViewContainingPart(TSD.Drawing drawing, Identifier id)
+        private static TSD.View FindViewContainingBothParts(
+            TSD.Drawing drawing,
+            Identifier firstIdentifier,
+            Identifier secondIdentifier
+        )
         {
             try
             {
-                if (drawing == null || id == null)
+                if (drawing == null || firstIdentifier == null || secondIdentifier == null)
                     return null;
 
                 TSD.ContainerView sheet = drawing.GetSheet();
@@ -4341,6 +4840,8 @@ namespace Tekla.Technology.Akit.UserScript
                     if (view == null)
                         continue;
 
+                    bool containsFirst = false;
+                    bool containsSecond = false;
                     TSD.DrawingObjectEnumerator parts = view.GetAllObjects(typeof(DrawingPart));
                     while (parts != null && parts.MoveNext())
                     {
@@ -4348,16 +4849,42 @@ namespace Tekla.Technology.Akit.UserScript
                         if (dp == null || dp.ModelIdentifier == null)
                             continue;
 
-                        if (SameIdentifier(dp.ModelIdentifier, id))
+                        if (SameIdentifier(dp.ModelIdentifier, firstIdentifier))
+                            containsFirst = true;
+                        if (SameIdentifier(dp.ModelIdentifier, secondIdentifier))
+                            containsSecond = true;
+
+                        if (containsFirst && containsSecond)
                             return view;
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             return null;
+        }
+
+        private static bool ViewContainsPart(TSD.View view, Identifier identifier)
+        {
+            try
+            {
+                if (view == null || identifier == null)
+                    return false;
+
+                TSD.DrawingObjectEnumerator parts = view.GetAllObjects(typeof(DrawingPart));
+                while (parts != null && parts.MoveNext())
+                {
+                    DrawingPart drawingPart = parts.Current as DrawingPart;
+                    if (
+                        drawingPart != null
+                        && SameIdentifier(drawingPart.ModelIdentifier, identifier)
+                    )
+                        return true;
+                }
+            }
+            catch { }
+
+            return false;
         }
 
         private static bool IsDummyReferencePart(ModelPart part)
@@ -4369,10 +4896,12 @@ namespace Tekla.Technology.Akit.UserScript
             string material = GetReportString(part, "MATERIAL").Trim().ToUpperInvariant();
             string name = GetReportString(part, "NAME").Trim().ToUpperInvariant();
 
-            if (partPos == "DUMMY-99" ||
-                partPos.StartsWith("DUMMY", StringComparison.OrdinalIgnoreCase) ||
-                material == "JOINT" ||
-                name.StartsWith("BJ", StringComparison.OrdinalIgnoreCase))
+            if (
+                partPos == "DUMMY-99"
+                || partPos.StartsWith("DUMMY", StringComparison.OrdinalIgnoreCase)
+                || material == "JOINT"
+                || name.StartsWith("BJ", StringComparison.OrdinalIgnoreCase)
+            )
                 return true;
 
             return false;
@@ -4396,11 +4925,13 @@ namespace Tekla.Technology.Akit.UserScript
             if (name.IndexOf("PLATE") >= 0)
                 return true;
 
-            if (profile.StartsWith("PL") ||
-                profile.StartsWith("PLT") ||
-                profile.StartsWith("FB") ||
-                profile.StartsWith("FL") ||
-                profile.IndexOf("PLATE") >= 0)
+            if (
+                profile.StartsWith("PL")
+                || profile.StartsWith("PLT")
+                || profile.StartsWith("FB")
+                || profile.StartsWith("FL")
+                || profile.IndexOf("PLATE") >= 0
+            )
                 return true;
 
             // Slot05 cho phép tấm dạng L/angle plate nếu người dùng pick trực tiếp.
@@ -4423,9 +4954,7 @@ namespace Tekla.Technology.Akit.UserScript
                 if (profileString != null)
                     return profileString.ToString();
             }
-            catch
-            {
-            }
+            catch { }
 
             string value = "";
             try
@@ -4433,9 +4962,7 @@ namespace Tekla.Technology.Akit.UserScript
                 if (part.GetReportProperty("PROFILE", ref value) && !string.IsNullOrEmpty(value))
                     return value;
             }
-            catch
-            {
-            }
+            catch { }
 
             return "";
         }
@@ -4466,9 +4993,11 @@ namespace Tekla.Technology.Akit.UserScript
                 if (obj == null || string.IsNullOrEmpty(name))
                     return null;
 
-                PropertyInfo p = obj.GetType().GetProperty(
-                    name,
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                PropertyInfo p = obj.GetType()
+                    .GetProperty(
+                        name,
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    );
 
                 if (p == null || !p.CanRead || p.GetIndexParameters().Length > 0)
                     return null;
@@ -4514,11 +5043,10 @@ namespace Tekla.Technology.Akit.UserScript
                     text,
                     "PHU Slot05 Selected Plate Edge Hole Dim",
                     System.Windows.Forms.MessageBoxButtons.OK,
-                    System.Windows.Forms.MessageBoxIcon.Information);
+                    System.Windows.Forms.MessageBoxIcon.Information
+                );
             }
-            catch
-            {
-            }
+            catch { }
         }
     }
 }

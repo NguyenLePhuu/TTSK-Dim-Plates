@@ -14,17 +14,18 @@ namespace TTSK_AutoDim_Plates
             if (string.IsNullOrEmpty(teklaBinPath))
             {
                 MessageBox.Show(
-                    "Không tìm thấy Tekla Structures 2025.\r\n\r\n" +
-                    "Hãy cài Tekla Structures 2025 SP7 hoặc đặt biến môi trường " +
-                    "TeklaBinPath trỏ tới thư mục bin của Tekla.",
+                    "Không tìm thấy Tekla Structures 2025.\r\n\r\n"
+                        + "Hãy cài Tekla Structures 2025 SP7 hoặc đặt biến môi trường "
+                        + "TeklaBinPath trỏ tới thư mục bin của Tekla.",
                     "TTSK Dim Plates",
                     MessageBoxButtons.OK,
-                    MessageBoxIcon.Error);
+                    MessageBoxIcon.Error
+                );
                 return;
             }
 
-            AppDomain.CurrentDomain.AssemblyResolve +=
-                (sender, args) => ResolveTeklaAssembly(args, teklaBinPath);
+            AppDomain.CurrentDomain.AssemblyResolve += (sender, args) =>
+                ResolveTeklaAssembly(args, teklaBinPath);
 
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
@@ -48,9 +49,11 @@ namespace TTSK_AutoDim_Plates
                     continue;
                 }
 
-                if (File.Exists(Path.Combine(candidate, "Tekla.Structures.dll")) &&
-                    File.Exists(Path.Combine(candidate, "Tekla.Structures.Drawing.dll")) &&
-                    File.Exists(Path.Combine(candidate, "Tekla.Structures.Model.dll")))
+                if (
+                    File.Exists(Path.Combine(candidate, "Tekla.Structures.dll"))
+                    && File.Exists(Path.Combine(candidate, "Tekla.Structures.Drawing.dll"))
+                    && File.Exists(Path.Combine(candidate, "Tekla.Structures.Model.dll"))
+                )
                 {
                     return candidate;
                 }

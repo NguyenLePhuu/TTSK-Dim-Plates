@@ -39,12 +39,14 @@ namespace TTSK_AutoDim_Plates
             }
 
             int denominator;
-            if (!int.TryParse(
+            if (
+                !int.TryParse(
                     value,
                     NumberStyles.None,
                     CultureInfo.InvariantCulture,
-                    out denominator) ||
-                !IsAllowedScale(denominator))
+                    out denominator
+                ) || !IsAllowedScale(denominator)
+            )
             {
                 scale = null;
                 return false;
@@ -76,12 +78,11 @@ namespace TTSK_AutoDim_Plates
 
         private static bool IsAllowedScale(double scale)
         {
-            return
-                Math.Abs(scale - 5.0) < 0.0001 ||
-                Math.Abs(scale - 10.0) < 0.0001 ||
-                Math.Abs(scale - 15.0) < 0.0001 ||
-                Math.Abs(scale - 20.0) < 0.0001 ||
-                Math.Abs(scale - 30.0) < 0.0001;
+            return Math.Abs(scale - 5.0) < 0.0001
+                || Math.Abs(scale - 10.0) < 0.0001
+                || Math.Abs(scale - 15.0) < 0.0001
+                || Math.Abs(scale - 20.0) < 0.0001
+                || Math.Abs(scale - 30.0) < 0.0001;
         }
 
         private sealed class RunScope : IDisposable

@@ -98,36 +98,66 @@ namespace Tekla.Technology.Akit.UserScript
         {
             switch (band)
             {
-                case TierBand.SectionProfile: return 13.55;
-                case TierBand.MainMajorInner: return 63.55;
-                case TierBand.MainMajorMiddle: return 79.40;
-                case TierBand.MainMajorOuter: return 91.95;
-                case TierBand.CrossMajorInner: return 72.15;
-                case TierBand.CrossMajorOuter: return 84.15;
-                case TierBand.CrossLocalEdge: return 15.25;
-                case TierBand.CrossLocalBolt: return 17.25;
-                case TierBand.MainLocalStartEdge: return 11.90;
-                case TierBand.MainLocalJointBolts: return 14.05;
-                case TierBand.MainLocalEndEdge: return 17.20;
-                case TierBand.MainEndWidth: return 14.10;
-                case TierBand.MainEndWidthWithBolt: return 7.85;
-                case TierBand.MainStartWidthWithBolt: return 15.60;
-                case TierBand.MainStartWidth: return 24.45;
-                case TierBand.CrossStartWidthWithBolt: return 14.10;
-                case TierBand.CrossStartWidth: return 22.30;
-                case TierBand.CrossStartJointWidth: return 29.20;
-                case TierBand.CrossEndJointWidth: return 23.80;
-                case TierBand.CrossEndWidthWithBolt: return 37.30;
-                case TierBand.CrossEndWidth: return 45.20;
-                case TierBand.BoundaryTopInner: return 52.00;
-                case TierBand.BoundaryTopOuter: return 62.75;
-                case TierBand.BoundaryBottomInner: return 29.70;
-                case TierBand.BoundaryBottomOuter: return 40.75;
-                case TierBand.BoundaryLeftInner: return 97.40;
-                case TierBand.BoundaryLeftOuter: return 110.75;
-                case TierBand.BoundaryRightInner: return 120.55;
-                case TierBand.BoundaryRightOuter: return 132.85;
-                default: throw new ArgumentOutOfRangeException("band");
+                case TierBand.SectionProfile:
+                    return 13.55;
+                case TierBand.MainMajorInner:
+                    return 63.55;
+                case TierBand.MainMajorMiddle:
+                    return 79.40;
+                case TierBand.MainMajorOuter:
+                    return 91.95;
+                case TierBand.CrossMajorInner:
+                    return 72.15;
+                case TierBand.CrossMajorOuter:
+                    return 84.15;
+                case TierBand.CrossLocalEdge:
+                    return 15.25;
+                case TierBand.CrossLocalBolt:
+                    return 17.25;
+                case TierBand.MainLocalStartEdge:
+                    return 11.90;
+                case TierBand.MainLocalJointBolts:
+                    return 14.05;
+                case TierBand.MainLocalEndEdge:
+                    return 17.20;
+                case TierBand.MainEndWidth:
+                    return 14.10;
+                case TierBand.MainEndWidthWithBolt:
+                    return 7.85;
+                case TierBand.MainStartWidthWithBolt:
+                    return 15.60;
+                case TierBand.MainStartWidth:
+                    return 24.45;
+                case TierBand.CrossStartWidthWithBolt:
+                    return 14.10;
+                case TierBand.CrossStartWidth:
+                    return 22.30;
+                case TierBand.CrossStartJointWidth:
+                    return 29.20;
+                case TierBand.CrossEndJointWidth:
+                    return 23.80;
+                case TierBand.CrossEndWidthWithBolt:
+                    return 37.30;
+                case TierBand.CrossEndWidth:
+                    return 45.20;
+                case TierBand.BoundaryTopInner:
+                    return 52.00;
+                case TierBand.BoundaryTopOuter:
+                    return 62.75;
+                case TierBand.BoundaryBottomInner:
+                    return 29.70;
+                case TierBand.BoundaryBottomOuter:
+                    return 40.75;
+                case TierBand.BoundaryLeftInner:
+                    return 97.40;
+                case TierBand.BoundaryLeftOuter:
+                    return 110.75;
+                case TierBand.BoundaryRightInner:
+                    return 120.55;
+                case TierBand.BoundaryRightOuter:
+                    return 132.85;
+                default:
+                    throw new ArgumentOutOfRangeException("band");
             }
         }
 
@@ -177,8 +207,7 @@ namespace Tekla.Technology.Akit.UserScript
             public readonly List<P2> Reference = new List<P2>();
             public readonly List<P2> Vertices = new List<P2>();
             public readonly List<Segment2> Segments = new List<Segment2>();
-            public readonly Dictionary<int, BoltData> BoltGroups =
-                new Dictionary<int, BoltData>();
+            public readonly Dictionary<int, BoltData> BoltGroups = new Dictionary<int, BoltData>();
         }
 
         private sealed class ViewData
@@ -188,8 +217,7 @@ namespace Tekla.Technology.Akit.UserScript
             public double Scale;
             public readonly List<PartData> Parts = new List<PartData>();
             public PartData Main;
-            public TSD.StraightDimensionSet.StraightDimensionSetAttributes
-                DimensionAttributes;
+            public TSD.StraightDimensionSet.StraightDimensionSetAttributes DimensionAttributes;
         }
 
         private sealed class Context
@@ -257,18 +285,15 @@ namespace Tekla.Technology.Akit.UserScript
 
         internal static string Run()
         {
-            List<TSD.StraightDimensionSet> created =
-                new List<TSD.StraightDimensionSet>();
+            List<TSD.StraightDimensionSet> created = new List<TSD.StraightDimensionSet>();
             try
             {
                 Context context = AnalyzeDrawing();
                 List<DimPlan> plans = BuildPlans(context);
                 ValidatePlans(context, plans);
-                ReplacementSnapshot replacement =
-                    SnapshotReplaceableDimensions(context, plans);
+                ReplacementSnapshot replacement = SnapshotReplaceableDimensions(context, plans);
 
-                TSD.StraightDimensionSetHandler handler =
-                    new TSD.StraightDimensionSetHandler();
+                TSD.StraightDimensionSetHandler handler = new TSD.StraightDimensionSetHandler();
                 for (int i = 0; i < plans.Count; i++)
                 {
                     DimPlan plan = plans[i];
@@ -279,23 +304,27 @@ namespace Tekla.Technology.Akit.UserScript
                     TSG.Vector normal = new TSG.Vector(
                         plan.PlacementNormal.X,
                         plan.PlacementNormal.Y,
-                        0.0);
+                        0.0
+                    );
                     TSD.StraightDimensionSet dimension =
                         plan.View.DimensionAttributes == null
                             ? handler.CreateDimensionSet(
                                 plan.View.View,
                                 pointList,
                                 normal,
-                                plan.Distance)
+                                plan.Distance
+                            )
                             : handler.CreateDimensionSet(
                                 plan.View.View,
                                 pointList,
                                 normal,
                                 plan.Distance,
-                                plan.View.DimensionAttributes);
+                                plan.View.DimensionAttributes
+                            );
                     if (dimension == null)
                         throw new InvalidOperationException(
-                            "Tekla khong tao duoc " + plan.Name + ".");
+                            "Tekla khong tao duoc " + plan.Name + "."
+                        );
 
                     created.Add(dimension);
                     if (plan.DisableCombine)
@@ -304,24 +333,28 @@ namespace Tekla.Technology.Akit.UserScript
 
                 if (created.Count != plans.Count)
                     throw new InvalidOperationException(
-                        "So dimension tao duoc khong khop plan da preflight.");
+                        "So dimension tao duoc khong khop plan da preflight."
+                    );
 
                 int deleted = 0;
                 for (int i = 0; i < replacement.Matched.Count; i++)
                 {
-                    if (replacement.Matched[i] != null &&
-                        replacement.Matched[i].Delete())
+                    if (replacement.Matched[i] != null && replacement.Matched[i].Delete())
                         deleted++;
                 }
                 if (deleted != replacement.Matched.Count)
                     throw new InvalidOperationException(
-                        "Khong xoa duoc day du dimension Slot 08 cu; dung truoc CommitChanges.");
+                        "Khong xoa duoc day du dimension Slot 08 cu; dung truoc CommitChanges."
+                    );
 
                 context.Drawing.CommitChanges();
-                return "Slot 08: tao " + created.Count +
-                    " dim lien ket giang xeo, thay " + deleted +
-                    " dim cu, bao toan " + replacement.ProtectedCount +
-                    " dim khong thuoc Slot 08";
+                return "Slot 08: tao "
+                    + created.Count
+                    + " dim lien ket giang xeo, thay "
+                    + deleted
+                    + " dim cu, bao toan "
+                    + replacement.ProtectedCount
+                    + " dim khong thuoc Slot 08";
             }
             catch (Exception ex)
             {
@@ -332,14 +365,10 @@ namespace Tekla.Technology.Akit.UserScript
                         if (created[i] != null)
                             created[i].Delete();
                     }
-                    catch
-                    {
-                    }
+                    catch { }
                 }
 
-                ShowWarning(
-                    "Slot 08 - lien ket giang xeo da dung an toan.\r\n\r\n" +
-                    ex.Message);
+                ShowWarning("Slot 08 - lien ket giang xeo da dung an toan.\r\n\r\n" + ex.Message);
                 return null;
             }
         }
@@ -351,8 +380,7 @@ namespace Tekla.Technology.Akit.UserScript
                 Context context = AnalyzeDrawing();
                 List<DimPlan> plans = BuildPlans(context);
                 ValidatePlans(context, plans);
-                ReplacementSnapshot replacement =
-                    SnapshotReplaceableDimensions(context, plans);
+                ReplacementSnapshot replacement = SnapshotReplaceableDimensions(context, plans);
 
                 StringBuilder text = new StringBuilder();
                 text.AppendLine("SLOT 08 DIAGONAL BRACE PLAN AUDIT - READ ONLY");
@@ -361,44 +389,68 @@ namespace Tekla.Technology.Akit.UserScript
                 {
                     text.Append("Variant=Type2 MainPartId=")
                         .Append(context.Type2Topology.Main.ModelId)
-                        .Append(" CrossId=").Append(context.Type2Topology.Cross.ModelId)
-                        .Append(" PlateId=").Append(context.Type2Topology.Plate.ModelId)
+                        .Append(" CrossId=")
+                        .Append(context.Type2Topology.Cross.ModelId)
+                        .Append(" PlateId=")
+                        .Append(context.Type2Topology.Plate.ModelId)
                         .AppendLine();
                 }
                 else
                 {
-                    text.Append("MainPartId=").Append(context.Topology.Main.ModelId)
-                        .Append(" CrossStartId=").Append(context.Topology.CrossStart.ModelId)
-                        .Append(" CrossEndId=").Append(context.Topology.CrossEnd.ModelId)
-                        .Append(" PlateId=").Append(context.Topology.Plate.ModelId)
+                    text.Append("MainPartId=")
+                        .Append(context.Topology.Main.ModelId)
+                        .Append(" CrossStartId=")
+                        .Append(context.Topology.CrossStart.ModelId)
+                        .Append(" CrossEndId=")
+                        .Append(context.Topology.CrossEnd.ModelId)
+                        .Append(" PlateId=")
+                        .Append(context.Topology.Plate.ModelId)
                         .AppendLine();
                 }
-                text.Append("PlanView=").Append(context.PlanView.Label)
-                    .Append(" scale=").Append(Format(context.PlanView.Scale))
-                    .Append(" SectionView=").Append(context.SectionView.Label)
-                    .Append(" scale=").Append(Format(context.SectionView.Scale))
+                text.Append("PlanView=")
+                    .Append(context.PlanView.Label)
+                    .Append(" scale=")
+                    .Append(Format(context.PlanView.Scale))
+                    .Append(" SectionView=")
+                    .Append(context.SectionView.Label)
+                    .Append(" scale=")
+                    .Append(Format(context.SectionView.Scale))
                     .AppendLine();
-                text.Append("PlanCount=").Append(plans.Count)
-                    .Append(" ExistingStraightSets=").Append(replacement.ExistingCount)
-                    .Append(" MatchedReplaceable=").Append(replacement.Matched.Count)
-                    .Append(" Protected=").Append(replacement.ProtectedCount)
+                text.Append("PlanCount=")
+                    .Append(plans.Count)
+                    .Append(" ExistingStraightSets=")
+                    .Append(replacement.ExistingCount)
+                    .Append(" MatchedReplaceable=")
+                    .Append(replacement.Matched.Count)
+                    .Append(" Protected=")
+                    .Append(replacement.ProtectedCount)
                     .AppendLine();
                 if (context.Variant == TopologyVariant.Type2)
                 {
-                    text.Append("Reference A=").Append(FormatPoint(context.Type2Topology.A))
-                        .Append(" B=").Append(FormatPoint(context.Type2Topology.B))
-                        .Append(" C=").Append(FormatPoint(context.Type2Topology.C))
-                        .Append(" D=").Append(FormatPoint(context.Type2Topology.D))
-                        .Append(" Joint=").Append(FormatPoint(context.Type2Topology.Joint))
+                    text.Append("Reference A=")
+                        .Append(FormatPoint(context.Type2Topology.A))
+                        .Append(" B=")
+                        .Append(FormatPoint(context.Type2Topology.B))
+                        .Append(" C=")
+                        .Append(FormatPoint(context.Type2Topology.C))
+                        .Append(" D=")
+                        .Append(FormatPoint(context.Type2Topology.D))
+                        .Append(" Joint=")
+                        .Append(FormatPoint(context.Type2Topology.Joint))
                         .AppendLine();
                 }
                 else
                 {
-                    text.Append("Reference A=").Append(FormatPoint(context.Topology.A))
-                        .Append(" B=").Append(FormatPoint(context.Topology.B))
-                        .Append(" C=").Append(FormatPoint(context.Topology.C))
-                        .Append(" D=").Append(FormatPoint(context.Topology.D))
-                        .Append(" Joint=").Append(FormatPoint(context.Topology.Joint))
+                    text.Append("Reference A=")
+                        .Append(FormatPoint(context.Topology.A))
+                        .Append(" B=")
+                        .Append(FormatPoint(context.Topology.B))
+                        .Append(" C=")
+                        .Append(FormatPoint(context.Topology.C))
+                        .Append(" D=")
+                        .Append(FormatPoint(context.Topology.D))
+                        .Append(" Joint=")
+                        .Append(FormatPoint(context.Topology.Joint))
                         .AppendLine();
                 }
 
@@ -406,17 +458,25 @@ namespace Tekla.Technology.Akit.UserScript
                 {
                     DimPlan plan = plans[i];
                     text.Append(plan.Name)
-                        .Append(" view=").Append(plan.View.Label)
-                        .Append(" semantic=").Append(plan.Semantic)
-                        .Append(" axis=").Append(FormatPoint(plan.MeasurementAxis))
-                        .Append(" normal=").Append(FormatPoint(plan.PlacementNormal))
-                        .Append(" tier=").Append(plan.Tier)
-                        .Append(" paperMm=").Append(Format(PaperDistance(plan.Tier)))
-                        .Append(" distance=").Append(Format(plan.Distance))
+                        .Append(" view=")
+                        .Append(plan.View.Label)
+                        .Append(" semantic=")
+                        .Append(plan.Semantic)
+                        .Append(" axis=")
+                        .Append(FormatPoint(plan.MeasurementAxis))
+                        .Append(" normal=")
+                        .Append(FormatPoint(plan.PlacementNormal))
+                        .Append(" tier=")
+                        .Append(plan.Tier)
+                        .Append(" paperMm=")
+                        .Append(Format(PaperDistance(plan.Tier)))
+                        .Append(" distance=")
+                        .Append(Format(plan.Distance))
                         .Append(" points=");
                     for (int p = 0; p < plan.Points.Count; p++)
                     {
-                        if (p > 0) text.Append(";");
+                        if (p > 0)
+                            text.Append(";");
                         text.Append(FormatPoint(plan.Points[p]));
                     }
                     text.AppendLine();
@@ -434,29 +494,25 @@ namespace Tekla.Technology.Akit.UserScript
             Context context = new Context();
             context.Model = new TSM.Model();
             TSD.DrawingHandler drawingHandler = new TSD.DrawingHandler();
-            if (!context.Model.GetConnectionStatus() ||
-                !drawingHandler.GetConnectionStatus())
-                throw new InvalidOperationException(
-                    "Khong ket noi duoc Tekla Model/Drawing API.");
+            if (!context.Model.GetConnectionStatus() || !drawingHandler.GetConnectionStatus())
+                throw new InvalidOperationException("Khong ket noi duoc Tekla Model/Drawing API.");
 
             context.Drawing = drawingHandler.GetActiveDrawing();
             if (context.Drawing == null)
                 throw new InvalidOperationException("Khong co ban ve dang mo.");
 
-            context.MainPart = PHU_MainPartResolver.Resolve(
-                context.Model,
-                context.Drawing);
+            context.MainPart = PHU_MainPartResolver.Resolve(context.Model, context.Drawing);
             if (context.MainPart == null)
                 throw new InvalidOperationException(
-                    "Khong xac dinh duoc Assembly MainPart cua ban ve.");
+                    "Khong xac dinh duoc Assembly MainPart cua ban ve."
+                );
 
-            context.OriginalPlane = context.Model.GetWorkPlaneHandler()
+            context.OriginalPlane = context
+                .Model.GetWorkPlaneHandler()
                 .GetCurrentTransformationPlane();
-            TSG.Matrix currentToGlobal =
-                context.OriginalPlane.TransformationMatrixToGlobal;
+            TSG.Matrix currentToGlobal = context.OriginalPlane.TransformationMatrixToGlobal;
 
-            TSD.DrawingObjectEnumerator views =
-                context.Drawing.GetSheet().GetAllViews();
+            TSD.DrawingObjectEnumerator views = context.Drawing.GetSheet().GetAllViews();
             int index = 0;
             while (views != null && views.MoveNext())
             {
@@ -468,17 +524,16 @@ namespace Tekla.Technology.Akit.UserScript
                     context.MainPart,
                     view,
                     currentToGlobal,
-                    ++index);
+                    ++index
+                );
                 if (data.Main != null)
                     context.Views.Add(data);
             }
 
             if (context.Views.Count < 2)
-                throw new InvalidOperationException(
-                    "Can toi thieu hai view co chua MainPart.");
+                throw new InvalidOperationException("Can toi thieu hai view co chua MainPart.");
 
-            List<Tuple<ViewData, Topology>> supported =
-                new List<Tuple<ViewData, Topology>>();
+            List<Tuple<ViewData, Topology>> supported = new List<Tuple<ViewData, Topology>>();
             List<Tuple<ViewData, Type2Topology>> supportedType2 =
                 new List<Tuple<ViewData, Type2Topology>>();
             for (int i = 0; i < context.Views.Count; i++)
@@ -487,15 +542,17 @@ namespace Tekla.Technology.Akit.UserScript
                 if (TryResolvePlanTopology(context.Views[i], out topology))
                     supported.Add(Tuple.Create(context.Views[i], topology));
                 Type2Topology type2Topology;
-                if (TryResolvePlanTopologyType2(
-                    context.Views[i], out type2Topology))
-                    supportedType2.Add(Tuple.Create(
-                        context.Views[i], type2Topology));
+                if (TryResolvePlanTopologyType2(context.Views[i], out type2Topology))
+                    supportedType2.Add(Tuple.Create(context.Views[i], type2Topology));
             }
             if (supported.Count + supportedType2.Count != 1)
                 throw new InvalidOperationException(
-                    "Khong xac dinh duy nhat topology Slot 08. Type1=" +
-                    supported.Count + ", Type2=" + supportedType2.Count + ".");
+                    "Khong xac dinh duy nhat topology Slot 08. Type1="
+                        + supported.Count
+                        + ", Type2="
+                        + supportedType2.Count
+                        + "."
+                );
 
             if (supported.Count == 1)
             {
@@ -507,19 +564,23 @@ namespace Tekla.Technology.Akit.UserScript
                     ViewData candidate = context.Views[i];
                     if (Object.ReferenceEquals(candidate, context.PlanView))
                         continue;
-                    if (FindPart(candidate, context.Topology.CrossStart.ModelId) != null &&
-                        FindPart(candidate, context.Topology.CrossEnd.ModelId) != null &&
-                        FindPart(candidate, context.Topology.Plate.ModelId) != null)
+                    if (
+                        FindPart(candidate, context.Topology.CrossStart.ModelId) != null
+                        && FindPart(candidate, context.Topology.CrossEnd.ModelId) != null
+                        && FindPart(candidate, context.Topology.Plate.ModelId) != null
+                    )
                     {
                         if (context.SectionView != null)
                             throw new InvalidOperationException(
-                                "Co nhieu hon mot view tiet dien phu hop Slot 08.");
+                                "Co nhieu hon mot view tiet dien phu hop Slot 08."
+                            );
                         context.SectionView = candidate;
                     }
                 }
                 if (context.SectionView == null)
                     throw new InvalidOperationException(
-                        "Khong tim thay view tiet dien cua lien ket giang xeo.");
+                        "Khong tim thay view tiet dien cua lien ket giang xeo."
+                    );
             }
             else
             {
@@ -537,37 +598,39 @@ namespace Tekla.Technology.Akit.UserScript
             TSM.Part mainPart,
             TSD.View view,
             TSG.Matrix currentToGlobal,
-            int index)
+            int index
+        )
         {
             ViewData result = new ViewData();
             result.View = view;
-            result.Label = "V" + index.ToString("00", CultureInfo.InvariantCulture) +
-                "[" + SafeViewName(view) + "]";
+            result.Label =
+                "V"
+                + index.ToString("00", CultureInfo.InvariantCulture)
+                + "["
+                + SafeViewName(view)
+                + "]";
             result.Scale = ReadScale(view);
             if (!IsFinite(result.Scale) || result.Scale <= 0.0)
                 throw new InvalidOperationException(
-                    "Khong doc duoc scale cua " + result.Label + ".");
+                    "Khong doc duoc scale cua " + result.Label + "."
+                );
             result.DimensionAttributes = ReadDimensionAttributes(view);
 
-            TSG.Matrix globalToView =
-                TSG.MatrixFactory.ToCoordinateSystem(view.DisplayCoordinateSystem);
-            TSD.DrawingObjectEnumerator drawingParts =
-                view.GetAllObjects(typeof(TSD.Part));
+            TSG.Matrix globalToView = TSG.MatrixFactory.ToCoordinateSystem(
+                view.DisplayCoordinateSystem
+            );
+            TSD.DrawingObjectEnumerator drawingParts = view.GetAllObjects(typeof(TSD.Part));
             while (drawingParts != null && drawingParts.MoveNext())
             {
                 TSD.Part drawingPart = drawingParts.Current as TSD.Part;
                 if (drawingPart == null || drawingPart.ModelIdentifier == null)
                     continue;
-                TSM.Part modelPart = model.SelectModelObject(
-                    drawingPart.ModelIdentifier) as TSM.Part;
+                TSM.Part modelPart =
+                    model.SelectModelObject(drawingPart.ModelIdentifier) as TSM.Part;
                 if (modelPart == null)
                     continue;
 
-                PartData part = ReadPart(
-                    modelPart,
-                    mainPart,
-                    currentToGlobal,
-                    globalToView);
+                PartData part = ReadPart(modelPart, mainPart, currentToGlobal, globalToView);
                 if (part.Vertices.Count == 0)
                     continue;
                 result.Parts.Add(part);
@@ -581,23 +644,22 @@ namespace Tekla.Technology.Akit.UserScript
             TSM.Part modelPart,
             TSM.Part mainPart,
             TSG.Matrix currentToGlobal,
-            TSG.Matrix globalToView)
+            TSG.Matrix globalToView
+        )
         {
             PartData result = new PartData();
             result.ModelPart = modelPart;
-            result.ModelId = modelPart.Identifier == null
-                ? 0
-                : modelPart.Identifier.ID;
+            result.ModelId = modelPart.Identifier == null ? 0 : modelPart.Identifier.ID;
             result.IsMain = SameIdentifier(modelPart, mainPart);
             result.Name = SafeUpper(modelPart.Name);
             result.Profile = SafeUpper(
-                modelPart.Profile == null ? "" : modelPart.Profile.ProfileString);
+                modelPart.Profile == null ? "" : modelPart.Profile.ProfileString
+            );
             try
             {
                 TSM.Assembly assembly = modelPart.GetAssembly();
-                result.AssemblyId = assembly == null || assembly.Identifier == null
-                    ? 0
-                    : assembly.Identifier.ID;
+                result.AssemblyId =
+                    assembly == null || assembly.Identifier == null ? 0 : assembly.Identifier.ID;
             }
             catch
             {
@@ -613,24 +675,22 @@ namespace Tekla.Technology.Akit.UserScript
                     {
                         TSG.Point point = value as TSG.Point;
                         if (point != null)
-                            AddUnique(result.Reference, Transform(
-                                point, currentToGlobal, globalToView));
+                            AddUnique(
+                                result.Reference,
+                                Transform(point, currentToGlobal, globalToView)
+                            );
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             try
             {
                 TSM.Solid solid = modelPart.GetSolid();
-                Tekla.Structures.Solid.EdgeEnumerator edges =
-                    solid.GetEdgeEnumerator();
+                Tekla.Structures.Solid.EdgeEnumerator edges = solid.GetEdgeEnumerator();
                 while (edges != null && edges.MoveNext())
                 {
-                    Tekla.Structures.Solid.Edge edge =
-                        edges.Current as Tekla.Structures.Solid.Edge;
+                    Tekla.Structures.Solid.Edge edge = edges.Current as Tekla.Structures.Solid.Edge;
                     if (edge == null || edge.StartPoint == null || edge.EndPoint == null)
                         continue;
                     P2 a = Transform(edge.StartPoint, currentToGlobal, globalToView);
@@ -640,9 +700,7 @@ namespace Tekla.Technology.Akit.UserScript
                     AddUniqueSegment(result.Segments, a, b);
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             try
             {
@@ -650,8 +708,7 @@ namespace Tekla.Technology.Akit.UserScript
                 while (bolts != null && bolts.MoveNext())
                 {
                     TSM.BoltGroup group = bolts.Current as TSM.BoltGroup;
-                    if (group == null || group.Identifier == null ||
-                        group.BoltPositions == null)
+                    if (group == null || group.Identifier == null || group.BoltPositions == null)
                         continue;
                     int id = group.Identifier.ID;
                     BoltData data;
@@ -665,20 +722,15 @@ namespace Tekla.Technology.Akit.UserScript
                     {
                         TSG.Point point = value as TSG.Point;
                         if (point != null)
-                            AddUnique(data.Points, Transform(
-                                point, currentToGlobal, globalToView));
+                            AddUnique(data.Points, Transform(point, currentToGlobal, globalToView));
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
             return result;
         }
 
-        private static bool TryResolvePlanTopology(
-            ViewData view,
-            out Topology topology)
+        private static bool TryResolvePlanTopology(ViewData view, out Topology topology)
         {
             topology = null;
             if (view == null || view.Main == null)
@@ -720,36 +772,54 @@ namespace Tekla.Technology.Akit.UserScript
                     P2 f1;
                     P2 s0;
                     P2 s1;
-                    if (!TryFarthestReferencePair(first, out f0, out f1) ||
-                        !TryFarthestReferencePair(second, out s0, out s1))
+                    if (
+                        !TryFarthestReferencePair(first, out f0, out f1)
+                        || !TryFarthestReferencePair(second, out s0, out s1)
+                    )
                         continue;
 
                     P2 jointFirst;
                     P2 outerFirst;
                     P2 jointSecond;
                     P2 outerSecond;
-                    if (!TrySharedEndpoint(
-                        f0, f1, s0, s1,
-                        out jointFirst, out outerFirst,
-                        out jointSecond, out outerSecond))
+                    if (
+                        !TrySharedEndpoint(
+                            f0,
+                            f1,
+                            s0,
+                            s1,
+                            out jointFirst,
+                            out outerFirst,
+                            out jointSecond,
+                            out outerSecond
+                        )
+                    )
                         continue;
 
                     P2 crossDirection = Normalize(Subtract(outerSecond, outerFirst));
-                    if (crossDirection == null ||
-                        Math.Abs(Dot(mainDirection, crossDirection)) >=
-                            DirectionTolerance)
+                    if (
+                        crossDirection == null
+                        || Math.Abs(Dot(mainDirection, crossDirection)) >= DirectionTolerance
+                    )
                         continue;
 
                     P2 joint = Midpoint(jointFirst, jointSecond);
                     P2 intersection;
-                    if (!TryInfiniteLineIntersection(
-                        main0, main1, outerFirst, outerSecond, out intersection) ||
-                        Distance(intersection, joint) > Math.Max(2.0, mainLength * 0.002))
+                    if (
+                        !TryInfiniteLineIntersection(
+                            main0,
+                            main1,
+                            outerFirst,
+                            outerSecond,
+                            out intersection
+                        )
+                        || Distance(intersection, joint) > Math.Max(2.0, mainLength * 0.002)
+                    )
                         continue;
 
-                    bool direct = Distance(main0, outerFirst) +
-                        Distance(main1, outerSecond) <=
-                        Distance(main0, outerSecond) + Distance(main1, outerFirst);
+                    bool direct =
+                        Distance(main0, outerFirst) + Distance(main1, outerSecond)
+                        <= Distance(main0, outerSecond) + Distance(main1, outerFirst);
 
                     Topology item = new Topology();
                     if (direct)
@@ -791,7 +861,8 @@ namespace Tekla.Technology.Akit.UserScript
                         view,
                         item.Main,
                         item.CrossStart,
-                        item.CrossEnd);
+                        item.CrossEnd
+                    );
                     if (item.Plate == null)
                         continue;
                     matches.Add(item);
@@ -808,20 +879,25 @@ namespace Tekla.Technology.Akit.UserScript
             ViewData view,
             PartData main,
             PartData crossStart,
-            PartData crossEnd)
+            PartData crossEnd
+        )
         {
             List<PartData> matches = new List<PartData>();
             for (int i = 0; i < view.Parts.Count; i++)
             {
                 PartData candidate = view.Parts[i];
-                if (candidate.ModelId == main.ModelId ||
-                    candidate.ModelId == crossStart.ModelId ||
-                    candidate.ModelId == crossEnd.ModelId ||
-                    candidate.AssemblyId != main.AssemblyId)
+                if (
+                    candidate.ModelId == main.ModelId
+                    || candidate.ModelId == crossStart.ModelId
+                    || candidate.ModelId == crossEnd.ModelId
+                    || candidate.AssemblyId != main.AssemblyId
+                )
                     continue;
-                if (SharesBoltGroup(candidate, main) &&
-                    SharesBoltGroup(candidate, crossStart) &&
-                    SharesBoltGroup(candidate, crossEnd))
+                if (
+                    SharesBoltGroup(candidate, main)
+                    && SharesBoltGroup(candidate, crossStart)
+                    && SharesBoltGroup(candidate, crossEnd)
+                )
                     matches.Add(candidate);
             }
             return matches.Count == 1 ? matches[0] : null;
@@ -842,33 +918,24 @@ namespace Tekla.Technology.Akit.UserScript
             if (context.Variant == TopologyVariant.Type2)
                 return BuildType2Plans(context);
             if (context.Variant != TopologyVariant.Type1)
-                throw new InvalidOperationException(
-                    "Topology Slot 08 chua duoc phan loai.");
+                throw new InvalidOperationException("Topology Slot 08 chua duoc phan loai.");
             List<DimPlan> plans = new List<DimPlan>();
             BuildPlanViewPlans(context, plans);
             BuildSectionViewPlan(context, plans);
             return plans;
         }
 
-        private static void BuildPlanViewPlans(
-            Context context,
-            List<DimPlan> plans)
+        private static void BuildPlanViewPlans(Context context, List<DimPlan> plans)
         {
             Topology t = context.Topology;
             ViewData view = context.PlanView;
 
-            TerminalFeature mainA = ResolveTerminal(
-                t.Main, t.A, t.MainNormal);
-            TerminalFeature mainD = ResolveTerminal(
-                t.Main, t.D, t.MainNormal);
-            TerminalFeature crossBOuter = ResolveTerminal(
-                t.CrossStart, t.B, t.CrossNormal);
-            TerminalFeature crossBJoint = ResolveTerminal(
-                t.CrossStart, t.Joint, t.CrossNormal);
-            TerminalFeature crossCOuter = ResolveTerminal(
-                t.CrossEnd, t.C, t.CrossNormal);
-            TerminalFeature crossCJoint = ResolveTerminal(
-                t.CrossEnd, t.Joint, t.CrossNormal);
+            TerminalFeature mainA = ResolveTerminal(t.Main, t.A, t.MainNormal);
+            TerminalFeature mainD = ResolveTerminal(t.Main, t.D, t.MainNormal);
+            TerminalFeature crossBOuter = ResolveTerminal(t.CrossStart, t.B, t.CrossNormal);
+            TerminalFeature crossBJoint = ResolveTerminal(t.CrossStart, t.Joint, t.CrossNormal);
+            TerminalFeature crossCOuter = ResolveTerminal(t.CrossEnd, t.C, t.CrossNormal);
+            TerminalFeature crossCJoint = ResolveTerminal(t.CrossEnd, t.Joint, t.CrossNormal);
 
             P2 mainABolt = ResolveTerminalBolt(t.Main, t.A);
             P2 mainDBolt = ResolveTerminalBolt(t.Main, t.D);
@@ -886,20 +953,46 @@ namespace Tekla.Technology.Akit.UserScript
             if (Dot(Subtract(t.D, t.B), boundaryVertical) < 0.0)
                 boundaryVertical = Scale(boundaryVertical, -1.0);
 
-            AddPlan(plans, view, "P-01", "main REF A -> REF D",
-                t.MainAxis, t.MainNormal, TierBand.MainMajorOuter,
-                t.A, t.D);
-            AddPlan(plans, view, "P-02",
+            AddPlan(
+                plans,
+                view,
+                "P-01",
+                "main REF A -> REF D",
+                t.MainAxis,
+                t.MainNormal,
+                TierBand.MainMajorOuter,
+                t.A,
+                t.D
+            );
+            AddPlan(
+                plans,
+                view,
+                "P-02",
                 "main exact terminal edge -> joint bolt -> exact terminal edge",
-                t.MainAxis, t.MainNormal, TierBand.MainMajorInner,
-                mainA.High, mainJointBolt, mainD.High);
-            AddViewProjectedBoundaryPlan(plans, view, "P-03", "top REF C -> REF D",
+                t.MainAxis,
+                t.MainNormal,
+                TierBand.MainMajorInner,
+                mainA.High,
+                mainJointBolt,
+                mainD.High
+            );
+            AddViewProjectedBoundaryPlan(
+                plans,
+                view,
+                "P-03",
+                "top REF C -> REF D",
                 BoundaryNormal(t.C, t.D, t.Joint),
                 TierBand.BoundaryTopOuter,
-                t.C, t.D);
-            AddPlan(plans, view, "P-04",
+                t.C,
+                t.D
+            );
+            AddPlan(
+                plans,
+                view,
+                "P-04",
                 "cross REF-edge-joint-edge-REF semantic chain",
-                Scale(t.CrossAxis, -1.0), t.CrossNormal,
+                Scale(t.CrossAxis, -1.0),
+                t.CrossNormal,
                 TierBand.CrossMajorInner,
                 t.C,
                 crossCOuter.High,
@@ -907,194 +1000,368 @@ namespace Tekla.Technology.Akit.UserScript
                 mainJointBolt,
                 crossBJoint.High,
                 crossBOuter.High,
-                t.B);
+                t.B
+            );
 
-            AddPlan(plans, view, "P-05",
+            AddPlan(
+                plans,
+                view,
+                "P-05",
                 "cross C outer exact edge -> nearest bolt",
-                Scale(t.CrossAxis, -1.0), t.CrossNormal,
+                Scale(t.CrossAxis, -1.0),
+                t.CrossNormal,
                 TierBand.CrossLocalEdge,
-                crossCOuter.High, crossCOuterBolt);
-            AddPlan(plans, view, "P-06",
+                crossCOuter.High,
+                crossCOuterBolt
+            );
+            AddPlan(
+                plans,
+                view,
+                "P-06",
                 "cross C joint exact edge -> nearest bolt",
-                Scale(t.CrossAxis, -1.0), t.CrossNormal,
+                Scale(t.CrossAxis, -1.0),
+                t.CrossNormal,
                 TierBand.CrossLocalBolt,
-                crossCJoint.High, crossCJointBolt);
-            AddPlan(plans, view, "P-07",
+                crossCJoint.High,
+                crossCJointBolt
+            );
+            AddPlan(
+                plans,
+                view,
+                "P-07",
                 "cross B joint exact edge -> nearest bolt",
-                Scale(t.CrossAxis, -1.0), t.CrossNormal,
+                Scale(t.CrossAxis, -1.0),
+                t.CrossNormal,
                 TierBand.CrossLocalEdge,
-                crossBJoint.High, crossBJointBolt);
-            AddPlan(plans, view, "P-08",
+                crossBJoint.High,
+                crossBJointBolt
+            );
+            AddPlan(
+                plans,
+                view,
+                "P-08",
                 "cross B outer exact edge -> nearest bolt",
-                Scale(t.CrossAxis, -1.0), t.CrossNormal,
+                Scale(t.CrossAxis, -1.0),
+                t.CrossNormal,
                 TierBand.CrossLocalBolt,
-                crossBOuter.High, crossBOuterBolt);
+                crossBOuter.High,
+                crossBOuterBolt
+            );
 
-            AddWidthPlan(plans, view, "P-09",
+            AddWidthPlan(
+                plans,
+                view,
+                "P-09",
                 "cross B outer profile width with nearest bolt",
-                t.CrossNormal, Scale(t.CrossAxis, -1.0),
+                t.CrossNormal,
+                Scale(t.CrossAxis, -1.0),
                 TierBand.CrossStartWidthWithBolt,
-                crossBOuter, crossBOuterBolt, true);
-            AddWidthPlan(plans, view, "P-10",
+                crossBOuter,
+                crossBOuterBolt,
+                true
+            );
+            AddWidthPlan(
+                plans,
+                view,
+                "P-10",
                 "main D terminal profile width",
-                t.MainNormal, t.MainAxis,
+                t.MainNormal,
+                t.MainAxis,
                 TierBand.MainEndWidth,
-                mainD, null, false);
-            AddWidthPlan(plans, view, "P-11",
+                mainD,
+                null,
+                false
+            );
+            AddWidthPlan(
+                plans,
+                view,
+                "P-11",
                 "main A terminal profile width with nearest bolt",
-                t.MainNormal, Scale(t.MainAxis, -1.0),
+                t.MainNormal,
+                Scale(t.MainAxis, -1.0),
                 TierBand.MainStartWidthWithBolt,
-                mainA, mainABolt, true);
+                mainA,
+                mainABolt,
+                true
+            );
 
-            AddPlan(plans, view, "P-12",
+            AddPlan(
+                plans,
+                view,
+                "P-12",
                 "main A exact edge -> nearest terminal bolt",
-                t.MainAxis, t.MainNormal,
+                t.MainAxis,
+                t.MainNormal,
                 TierBand.MainLocalStartEdge,
-                mainA.High, mainABolt);
+                mainA.High,
+                mainABolt
+            );
 
-            AddPlanList(plans, view, "P-13",
+            AddPlanList(
+                plans,
+                view,
+                "P-13",
                 "all actual bolts of the main/plate joint group",
-                t.MainAxis, t.MainNormal,
+                t.MainAxis,
+                t.MainNormal,
                 TierBand.MainLocalJointBolts,
-                SortAlong(mainJointBolts, t.MainAxis));
+                SortAlong(mainJointBolts, t.MainAxis)
+            );
 
-            AddPlan(plans, view, "P-14",
+            AddPlan(
+                plans,
+                view,
+                "P-14",
                 "main D exact terminal edge -> nearest bolt",
-                t.MainAxis, t.MainNormal,
+                t.MainAxis,
+                t.MainNormal,
                 TierBand.MainLocalEndEdge,
-                mainD.High, mainDBolt);
-            AddWidthPlan(plans, view, "P-15",
+                mainD.High,
+                mainDBolt
+            );
+            AddWidthPlan(
+                plans,
+                view,
+                "P-15",
                 "main D terminal profile width with nearest bolt",
-                t.MainNormal, t.MainAxis,
+                t.MainNormal,
+                t.MainAxis,
                 TierBand.MainEndWidthWithBolt,
-                mainD, mainDBolt, true);
-            AddWidthPlan(plans, view, "P-16",
+                mainD,
+                mainDBolt,
+                true
+            );
+            AddWidthPlan(
+                plans,
+                view,
+                "P-16",
                 "cross B outer profile width",
-                t.CrossNormal, Scale(t.CrossAxis, -1.0),
+                t.CrossNormal,
+                Scale(t.CrossAxis, -1.0),
                 TierBand.CrossStartWidth,
-                crossBOuter, null, false);
-            AddWidthPlan(plans, view, "P-17",
+                crossBOuter,
+                null,
+                false
+            );
+            AddWidthPlan(
+                plans,
+                view,
+                "P-17",
                 "cross B joint profile width with nearest bolt",
-                t.CrossNormal, Scale(t.CrossAxis, -1.0),
+                t.CrossNormal,
+                Scale(t.CrossAxis, -1.0),
                 TierBand.CrossStartJointWidth,
-                crossBJoint, crossBJointBolt, true);
-            AddWidthPlan(plans, view, "P-18",
+                crossBJoint,
+                crossBJointBolt,
+                true
+            );
+            AddWidthPlan(
+                plans,
+                view,
+                "P-18",
                 "cross C joint profile width with nearest bolt",
-                t.CrossNormal, t.CrossAxis,
+                t.CrossNormal,
+                t.CrossAxis,
                 TierBand.CrossEndJointWidth,
-                crossCJoint, crossCJointBolt, true);
-            AddWidthPlan(plans, view, "P-19",
+                crossCJoint,
+                crossCJointBolt,
+                true
+            );
+            AddWidthPlan(
+                plans,
+                view,
+                "P-19",
                 "main A terminal profile width",
-                t.MainNormal, Scale(t.MainAxis, -1.0),
+                t.MainNormal,
+                Scale(t.MainAxis, -1.0),
                 TierBand.MainStartWidth,
-                mainA, null, false);
-            AddWidthPlan(plans, view, "P-20",
+                mainA,
+                null,
+                false
+            );
+            AddWidthPlan(
+                plans,
+                view,
+                "P-20",
                 "cross C outer profile width with nearest bolt",
-                t.CrossNormal, t.CrossAxis,
+                t.CrossNormal,
+                t.CrossAxis,
                 TierBand.CrossEndWidthWithBolt,
-                crossCOuter, crossCOuterBolt, true);
-            AddWidthPlan(plans, view, "P-21",
+                crossCOuter,
+                crossCOuterBolt,
+                true
+            );
+            AddWidthPlan(
+                plans,
+                view,
+                "P-21",
                 "cross C outer profile width",
-                t.CrossNormal, t.CrossAxis,
+                t.CrossNormal,
+                t.CrossAxis,
                 TierBand.CrossEndWidth,
-                crossCOuter, null, false);
+                crossCOuter,
+                null,
+                false
+            );
 
-            AddPlan(plans, view, "P-22", "cross REF C -> joint -> REF B",
-                Scale(t.CrossAxis, -1.0), t.CrossNormal,
+            AddPlan(
+                plans,
+                view,
+                "P-22",
+                "cross REF C -> joint -> REF B",
+                Scale(t.CrossAxis, -1.0),
+                t.CrossNormal,
                 TierBand.CrossMajorOuter,
-                t.C, t.Joint, t.B);
-            AddPlan(plans, view, "P-23",
+                t.C,
+                t.Joint,
+                t.B
+            );
+            AddPlan(
+                plans,
+                view,
+                "P-23",
                 "main REF-edge-edge-REF semantic chain",
-                t.MainAxis, t.MainNormal,
+                t.MainAxis,
+                t.MainNormal,
                 TierBand.MainMajorMiddle,
-                t.A, mainA.High, mainD.High, t.D);
+                t.A,
+                mainA.High,
+                mainD.High,
+                t.D
+            );
 
-            AddViewProjectedBoundaryPlan(plans, view, "P-24",
+            AddViewProjectedBoundaryPlan(
+                plans,
+                view,
+                "P-24",
                 "top REF -> cross reference/solid intersection -> main reference/solid intersection -> REF",
                 BoundaryNormal(t.C, t.D, t.Joint),
                 TierBand.BoundaryTopInner,
-                t.C, crossCOuter.ReferenceIntersection,
-                mainD.ReferenceIntersection, t.D);
-            AddViewProjectedBoundaryPlan(plans, view, "P-25", "bottom REF A -> REF B",
+                t.C,
+                crossCOuter.ReferenceIntersection,
+                mainD.ReferenceIntersection,
+                t.D
+            );
+            AddViewProjectedBoundaryPlan(
+                plans,
+                view,
+                "P-25",
+                "bottom REF A -> REF B",
                 BoundaryNormal(t.A, t.B, t.Joint),
                 TierBand.BoundaryBottomOuter,
-                t.A, t.B);
-            AddViewProjectedBoundaryPlan(plans, view, "P-26",
+                t.A,
+                t.B
+            );
+            AddViewProjectedBoundaryPlan(
+                plans,
+                view,
+                "P-26",
                 "bottom REF -> main reference/solid intersection -> cross reference/solid intersection -> REF",
                 BoundaryNormal(t.A, t.B, t.Joint),
                 TierBand.BoundaryBottomInner,
-                t.A, mainA.ReferenceIntersection,
-                crossBOuter.ReferenceIntersection, t.B);
-            AddViewProjectedBoundaryPlan(plans, view, "P-27", "left REF A -> REF C",
+                t.A,
+                mainA.ReferenceIntersection,
+                crossBOuter.ReferenceIntersection,
+                t.B
+            );
+            AddViewProjectedBoundaryPlan(
+                plans,
+                view,
+                "P-27",
+                "left REF A -> REF C",
                 OutwardNormalForAxis(t.A, t.C, t.Joint, boundaryVertical),
                 TierBand.BoundaryLeftOuter,
-                t.A, t.C);
-            AddViewProjectedBoundaryPlan(plans, view, "P-28",
+                t.A,
+                t.C
+            );
+            AddViewProjectedBoundaryPlan(
+                plans,
+                view,
+                "P-28",
                 "left REF -> main reference/solid intersection -> cross reference/solid intersection -> REF",
                 OutwardNormalForAxis(t.A, t.C, t.Joint, boundaryVertical),
                 TierBand.BoundaryLeftInner,
-                t.A, mainA.ReferenceIntersection,
-                crossCOuter.ReferenceIntersection, t.C);
-            AddViewProjectedBoundaryPlan(plans, view, "P-29", "right REF B -> REF D",
+                t.A,
+                mainA.ReferenceIntersection,
+                crossCOuter.ReferenceIntersection,
+                t.C
+            );
+            AddViewProjectedBoundaryPlan(
+                plans,
+                view,
+                "P-29",
+                "right REF B -> REF D",
                 OutwardNormalForAxis(t.B, t.D, t.Joint, boundaryVertical),
                 TierBand.BoundaryRightOuter,
-                t.B, t.D);
-            AddViewProjectedBoundaryPlan(plans, view, "P-30",
+                t.B,
+                t.D
+            );
+            AddViewProjectedBoundaryPlan(
+                plans,
+                view,
+                "P-30",
                 "right REF -> cross reference/solid intersection -> main reference/solid intersection -> REF",
                 OutwardNormalForAxis(t.B, t.D, t.Joint, boundaryVertical),
                 TierBand.BoundaryRightInner,
-                t.B, crossBOuter.ReferenceIntersection,
-                mainD.ReferenceIntersection, t.D);
+                t.B,
+                crossBOuter.ReferenceIntersection,
+                mainD.ReferenceIntersection,
+                t.D
+            );
         }
 
-        private static void BuildSectionViewPlan(
-            Context context,
-            List<DimPlan> plans)
+        private static void BuildSectionViewPlan(Context context, List<DimPlan> plans)
         {
             ViewData view = context.SectionView;
             PartData main = FindPart(view, context.Topology.Main.ModelId);
             if (main == null)
-                throw new InvalidOperationException(
-                    "View tiet dien khong chua dung MainPart.");
+                throw new InvalidOperationException("View tiet dien khong chua dung MainPart.");
             P2 ref0;
             P2 ref1;
             if (!TryFarthestReferencePair(main, out ref0, out ref1))
                 throw new InvalidOperationException(
-                    "View tiet dien khong co MainPart reference line.");
+                    "View tiet dien khong co MainPart reference line."
+                );
             P2 axis = Normalize(Subtract(ref1, ref0));
             if (axis == null)
                 throw new InvalidOperationException(
-                    "MainPart reference line trong view tiet dien khong hop le.");
-            if (axis.X < -PointTolerance ||
-                (Math.Abs(axis.X) <= PointTolerance && axis.Y < 0.0))
+                    "MainPart reference line trong view tiet dien khong hop le."
+                );
+            if (axis.X < -PointTolerance || (Math.Abs(axis.X) <= PointTolerance && axis.Y < 0.0))
                 axis = Scale(axis, -1.0);
             P2 normal = PerpendicularLeft(axis);
-            P2 targetReference = Dot(ref0, axis) <= Dot(ref1, axis)
-                ? ref0
-                : ref1;
-            TerminalFeature target = ResolveTerminal(
-                main, targetReference, normal);
-            AddPlan(plans, view, "S-01",
+            P2 targetReference = Dot(ref0, axis) <= Dot(ref1, axis) ? ref0 : ref1;
+            TerminalFeature target = ResolveTerminal(main, targetReference, normal);
+            AddPlan(
+                plans,
+                view,
+                "S-01",
                 "main L exact profile width in section view, top -> bottom",
-                normal, Scale(axis, -1.0),
+                normal,
+                Scale(axis, -1.0),
                 TierBand.SectionProfile,
-                target.High, target.Low);
+                target.High,
+                target.Low
+            );
         }
 
         private static TerminalFeature ResolveTerminal(
             PartData part,
             P2 referenceTarget,
-            P2 semanticNormal)
+            P2 semanticNormal
+        )
         {
             P2 ref0;
             P2 ref1;
             if (!TryFarthestReferencePair(part, out ref0, out ref1))
                 throw new InvalidOperationException(
-                    "Part " + part.ModelId + " khong co reference line hop le.");
+                    "Part " + part.ModelId + " khong co reference line hop le."
+                );
             P2 axis = Normalize(Subtract(ref1, ref0));
             if (axis == null)
                 throw new InvalidOperationException(
-                    "Reference line cua part " + part.ModelId + " qua ngan.");
+                    "Reference line cua part " + part.ModelId + " qua ngan."
+                );
 
             double min = Double.PositiveInfinity;
             double max = Double.NegativeInfinity;
@@ -1104,30 +1371,35 @@ namespace Tekla.Technology.Akit.UserScript
                 min = Math.Min(min, value);
                 max = Math.Max(max, value);
             }
-            bool useMinimum = Math.Abs(Dot(referenceTarget, axis) - min) <=
-                Math.Abs(Dot(referenceTarget, axis) - max);
+            bool useMinimum =
+                Math.Abs(Dot(referenceTarget, axis) - min)
+                <= Math.Abs(Dot(referenceTarget, axis) - max);
             double targetProjection = useMinimum ? min : max;
 
             List<P2> terminal = new List<P2>();
             for (int i = 0; i < part.Vertices.Count; i++)
             {
-                if (Math.Abs(Dot(part.Vertices[i], axis) - targetProjection) <=
-                    PointTolerance)
+                if (Math.Abs(Dot(part.Vertices[i], axis) - targetProjection) <= PointTolerance)
                     AddUnique(terminal, part.Vertices[i]);
             }
             if (terminal.Count < 2)
                 throw new InvalidOperationException(
-                    "Khong tim duoc exact terminal edge cua part " + part.ModelId + ".");
+                    "Khong tim duoc exact terminal edge cua part " + part.ModelId + "."
+                );
 
             TerminalFeature result = new TerminalFeature();
             result.Low = Extreme(terminal, semanticNormal, false);
             result.High = Extreme(terminal, semanticNormal, true);
             result.ReferenceIntersection = ResolveReferenceEdgeIntersection(
-                part, ref0, ref1, referenceTarget);
-            if (result.Low == null || result.High == null ||
-                result.ReferenceIntersection == null)
+                part,
+                ref0,
+                ref1,
+                referenceTarget
+            );
+            if (result.Low == null || result.High == null || result.ReferenceIntersection == null)
                 throw new InvalidOperationException(
-                    "Khong resolve duoc terminal feature cua part " + part.ModelId + ".");
+                    "Khong resolve duoc terminal feature cua part " + part.ModelId + "."
+                );
             return result;
         }
 
@@ -1135,7 +1407,8 @@ namespace Tekla.Technology.Akit.UserScript
             PartData part,
             P2 referenceA,
             P2 referenceB,
-            P2 target)
+            P2 target
+        )
         {
             P2 best = null;
             double bestDistance = Double.PositiveInfinity;
@@ -1144,11 +1417,16 @@ namespace Tekla.Technology.Akit.UserScript
                 Segment2 segment = part.Segments[i];
                 P2 intersection;
                 double segmentParameter;
-                if (!TryLineSegmentIntersection(
-                    referenceA, referenceB,
-                    segment.A, segment.B,
-                    out intersection,
-                    out segmentParameter))
+                if (
+                    !TryLineSegmentIntersection(
+                        referenceA,
+                        referenceB,
+                        segment.A,
+                        segment.B,
+                        out intersection,
+                        out segmentParameter
+                    )
+                )
                     continue;
                 if (segmentParameter < -0.01 || segmentParameter > 1.01)
                     continue;
@@ -1178,7 +1456,8 @@ namespace Tekla.Technology.Akit.UserScript
             }
             if (best == null)
                 throw new InvalidOperationException(
-                    "Part " + part.ModelId + " khong co bolt tai feature yeu cau.");
+                    "Part " + part.ModelId + " khong co bolt tai feature yeu cau."
+                );
             return best;
         }
 
@@ -1202,7 +1481,8 @@ namespace Tekla.Technology.Akit.UserScript
             }
             if (best == null)
                 throw new InvalidOperationException(
-                    "Part " + part.ModelId + " khong co BoltGroup hop le.");
+                    "Part " + part.ModelId + " khong co BoltGroup hop le."
+                );
             return new List<P2>(best.Points);
         }
 
@@ -1216,7 +1496,8 @@ namespace Tekla.Technology.Akit.UserScript
             TierBand tier,
             TerminalFeature terminal,
             P2 bolt,
-            bool includeBolt)
+            bool includeBolt
+        )
         {
             List<P2> points = new List<P2>();
             points.Add(terminal.Low);
@@ -1224,9 +1505,15 @@ namespace Tekla.Technology.Akit.UserScript
                 points.Add(bolt);
             points.Add(terminal.High);
             AddPlanList(
-                plans, view, name, semantic,
-                widthAxis, placementNormal, tier,
-                SortAlong(points, widthAxis));
+                plans,
+                view,
+                name,
+                semantic,
+                widthAxis,
+                placementNormal,
+                tier,
+                SortAlong(points, widthAxis)
+            );
         }
 
         private static void AddSortedPlan(
@@ -1237,15 +1524,22 @@ namespace Tekla.Technology.Akit.UserScript
             P2 measurementAxis,
             P2 placementNormal,
             TierBand tier,
-            params P2[] points)
+            params P2[] points
+        )
         {
             List<P2> list = new List<P2>();
             for (int i = 0; points != null && i < points.Length; i++)
                 AddUnique(list, points[i]);
             AddPlanList(
-                plans, view, name, semantic,
-                measurementAxis, placementNormal, tier,
-                SortAlong(list, measurementAxis));
+                plans,
+                view,
+                name,
+                semantic,
+                measurementAxis,
+                placementNormal,
+                tier,
+                SortAlong(list, measurementAxis)
+            );
         }
 
         private static void AddViewProjectedBoundaryPlan(
@@ -1255,7 +1549,8 @@ namespace Tekla.Technology.Akit.UserScript
             string semantic,
             P2 outsideNormal,
             TierBand tier,
-            params P2[] points)
+            params P2[] points
+        )
         {
             double minX = Double.PositiveInfinity;
             double maxX = Double.NegativeInfinity;
@@ -1273,13 +1568,10 @@ namespace Tekla.Technology.Akit.UserScript
             }
 
             bool measureX = maxX - minX >= maxY - minY;
-            P2 measurementAxis = measureX
-                ? new P2(1.0, 0.0)
-                : new P2(0.0, 1.0);
+            P2 measurementAxis = measureX ? new P2(1.0, 0.0) : new P2(0.0, 1.0);
             P2 normal = Normalize(outsideNormal);
             if (normal == null)
-                throw new InvalidOperationException(
-                    name + " khong co huong dat dim bien.");
+                throw new InvalidOperationException(name + " khong co huong dat dim bien.");
 
             P2 placementNormal;
             if (measureX)
@@ -1287,8 +1579,7 @@ namespace Tekla.Technology.Akit.UserScript
             else
                 placementNormal = new P2(normal.X >= 0.0 ? 1.0 : -1.0, 0.0);
 
-            AddPlan(plans, view, name, semantic, measurementAxis,
-                placementNormal, tier, points);
+            AddPlan(plans, view, name, semantic, measurementAxis, placementNormal, tier, points);
         }
 
         private static void AddPlan(
@@ -1299,15 +1590,13 @@ namespace Tekla.Technology.Akit.UserScript
             P2 measurementAxis,
             P2 placementNormal,
             TierBand tier,
-            params P2[] points)
+            params P2[] points
+        )
         {
             List<P2> list = new List<P2>();
             for (int i = 0; points != null && i < points.Length; i++)
                 AddUnique(list, points[i]);
-            AddPlanList(
-                plans, view, name, semantic,
-                measurementAxis, placementNormal, tier,
-                list);
+            AddPlanList(plans, view, name, semantic, measurementAxis, placementNormal, tier, list);
         }
 
         private static void AddPlanList(
@@ -1318,7 +1607,8 @@ namespace Tekla.Technology.Akit.UserScript
             P2 measurementAxis,
             P2 placementNormal,
             TierBand tier,
-            List<P2> points)
+            List<P2> points
+        )
         {
             DimPlan plan = new DimPlan();
             plan.Name = name;
@@ -1340,8 +1630,7 @@ namespace Tekla.Technology.Akit.UserScript
                 return;
             }
             if (context.Variant != TopologyVariant.Type1)
-                throw new InvalidOperationException(
-                    "Topology Slot 08 chua duoc phan loai.");
+                throw new InvalidOperationException("Topology Slot 08 chua duoc phan loai.");
             ValidateType1Plans(context, plans);
         }
 
@@ -1349,26 +1638,32 @@ namespace Tekla.Technology.Akit.UserScript
         {
             if (plans == null || plans.Count != ExpectedPlanCount)
                 throw new InvalidOperationException(
-                    "Slot 08 phai co dung " + ExpectedPlanCount +
-                    " dimension plans; thuc te=" +
-                    (plans == null ? 0 : plans.Count) + ".");
+                    "Slot 08 phai co dung "
+                        + ExpectedPlanCount
+                        + " dimension plans; thuc te="
+                        + (plans == null ? 0 : plans.Count)
+                        + "."
+                );
 
             int planCount = 0;
             int sectionCount = 0;
-            HashSet<string> signatures =
-                new HashSet<string>(StringComparer.Ordinal);
+            HashSet<string> signatures = new HashSet<string>(StringComparer.Ordinal);
             for (int i = 0; i < plans.Count; i++)
             {
                 DimPlan plan = plans[i];
-                if (plan == null || plan.View == null ||
-                    plan.MeasurementAxis == null || plan.PlacementNormal == null)
+                if (
+                    plan == null
+                    || plan.View == null
+                    || plan.MeasurementAxis == null
+                    || plan.PlacementNormal == null
+                )
                     throw new InvalidOperationException("Plan Slot 08 bi null.");
                 if (plan.Points.Count < 2)
-                    throw new InvalidOperationException(
-                        plan.Name + " co it hon hai chan dim.");
+                    throw new InvalidOperationException(plan.Name + " co it hon hai chan dim.");
                 if (!IsFinite(plan.Distance) || plan.Distance <= PointTolerance)
                     throw new InvalidOperationException(
-                        plan.Name + " co khoang dat dim khong hop le.");
+                        plan.Name + " co khoang dat dim khong hop le."
+                    );
 
                 double min = Double.PositiveInfinity;
                 double max = Double.NegativeInfinity;
@@ -1377,55 +1672,58 @@ namespace Tekla.Technology.Akit.UserScript
                     P2 point = plan.Points[p];
                     if (point == null || !IsFinite(point.X) || !IsFinite(point.Y))
                         throw new InvalidOperationException(
-                            plan.Name + " co chan dim khong huu han.");
+                            plan.Name + " co chan dim khong huu han."
+                        );
                     double projection = Dot(point, plan.MeasurementAxis);
                     min = Math.Min(min, projection);
                     max = Math.Max(max, projection);
                 }
                 if (max - min <= MinimumMeasuredSpan)
-                    throw new InvalidOperationException(
-                        plan.Name + " co measured span bang 0.");
+                    throw new InvalidOperationException(plan.Name + " co measured span bang 0.");
 
-                string signature = RuntimeHelpers.GetHashCode(plan.View).ToString(
-                    CultureInfo.InvariantCulture) + "|" + plan.Name;
+                string signature =
+                    RuntimeHelpers.GetHashCode(plan.View).ToString(CultureInfo.InvariantCulture)
+                    + "|"
+                    + plan.Name;
                 if (!signatures.Add(signature))
                     throw new InvalidOperationException(
-                        "Trung semantic signature " + plan.Name + ".");
+                        "Trung semantic signature " + plan.Name + "."
+                    );
                 if (Object.ReferenceEquals(plan.View, context.PlanView))
                     planCount++;
                 else if (Object.ReferenceEquals(plan.View, context.SectionView))
                     sectionCount++;
                 else
-                    throw new InvalidOperationException(
-                        plan.Name + " thuoc view khong duoc phep.");
+                    throw new InvalidOperationException(plan.Name + " thuoc view khong duoc phep.");
             }
-            if (planCount != PlanViewPlanCount ||
-                sectionCount != SectionViewPlanCount)
+            if (planCount != PlanViewPlanCount || sectionCount != SectionViewPlanCount)
                 throw new InvalidOperationException(
-                    "Sai so plan theo view: main=" + planCount +
-                    ", section=" + sectionCount + ".");
+                    "Sai so plan theo view: main=" + planCount + ", section=" + sectionCount + "."
+                );
         }
 
         private static ReplacementSnapshot SnapshotReplaceableDimensions(
             Context context,
-            List<DimPlan> plans)
+            List<DimPlan> plans
+        )
         {
             ReplacementSnapshot result = new ReplacementSnapshot();
             HashSet<int> used = new HashSet<int>();
-            List<TSD.StraightDimensionSet> all =
-                new List<TSD.StraightDimensionSet>();
+            List<TSD.StraightDimensionSet> all = new List<TSD.StraightDimensionSet>();
             for (int v = 0; v < context.Views.Count; v++)
             {
                 ViewData view = context.Views[v];
-                if (!Object.ReferenceEquals(view, context.PlanView) &&
-                    !Object.ReferenceEquals(view, context.SectionView))
+                if (
+                    !Object.ReferenceEquals(view, context.PlanView)
+                    && !Object.ReferenceEquals(view, context.SectionView)
+                )
                     continue;
-                TSD.DrawingObjectEnumerator dimensions =
-                    view.View.GetAllObjects(typeof(TSD.StraightDimensionSet));
+                TSD.DrawingObjectEnumerator dimensions = view.View.GetAllObjects(
+                    typeof(TSD.StraightDimensionSet)
+                );
                 while (dimensions != null && dimensions.MoveNext())
                 {
-                    TSD.StraightDimensionSet set =
-                        dimensions.Current as TSD.StraightDimensionSet;
+                    TSD.StraightDimensionSet set = dimensions.Current as TSD.StraightDimensionSet;
                     if (set != null)
                         all.Add(set);
                 }
@@ -1439,12 +1737,13 @@ namespace Tekla.Technology.Akit.UserScript
                 {
                     TSD.StraightDimensionSet set = all[i];
                     int key = RuntimeHelpers.GetHashCode(set);
-                    if (used.Contains(key) ||
-                        !DimensionBelongsToView(set, plan.View.View))
+                    if (used.Contains(key) || !DimensionBelongsToView(set, plan.View.View))
                         continue;
                     List<P2> existing = ReadDimensionPoints(set);
-                    if (!PointChainsMatch(existing, plan.Points, MatchTolerance) ||
-                        !DimensionDirectionMatches(set, plan.PlacementNormal))
+                    if (
+                        !PointChainsMatch(existing, plan.Points, MatchTolerance)
+                        || !DimensionDirectionMatches(set, plan.PlacementNormal)
+                    )
                         continue;
                     result.Matched.Add(set);
                     used.Add(key);
@@ -1454,18 +1753,20 @@ namespace Tekla.Technology.Akit.UserScript
 
             result.ProtectedCount = all.Count - result.Matched.Count;
             int expected = ExpectedPlanCountFor(context);
-            if (result.Matched.Count > 0 &&
-                result.Matched.Count != expected)
+            if (result.Matched.Count > 0 && result.Matched.Count != expected)
             {
-                if (TrySnapshotType1BoundaryDirectionMigration(
-                    context, plans, all, result) ||
-                    TrySnapshotType2FootMigration(
-                        context, plans, all, result))
+                if (
+                    TrySnapshotType1BoundaryDirectionMigration(context, plans, all, result)
+                    || TrySnapshotType2FootMigration(context, plans, all, result)
+                )
                     return result;
                 throw new InvalidOperationException(
-                    "Preflight chi match " + result.Matched.Count + "/" +
-                    expected +
-                    " dim Slot 08 cu. Tu choi xoa mot phan de bao ve dim thu cong.");
+                    "Preflight chi match "
+                        + result.Matched.Count
+                        + "/"
+                        + expected
+                        + " dim Slot 08 cu. Tu choi xoa mot phan de bao ve dim thu cong."
+                );
             }
             return result;
         }
@@ -1474,38 +1775,41 @@ namespace Tekla.Technology.Akit.UserScript
             Context context,
             List<DimPlan> plans,
             List<TSD.StraightDimensionSet> all,
-            ReplacementSnapshot result)
+            ReplacementSnapshot result
+        )
         {
-            if (context == null || context.Variant != TopologyVariant.Type1 ||
-                context.Topology == null || plans == null ||
-                plans.Count != ExpectedPlanCount || all == null ||
-                result == null)
+            if (
+                context == null
+                || context.Variant != TopologyVariant.Type1
+                || context.Topology == null
+                || plans == null
+                || plans.Count != ExpectedPlanCount
+                || all == null
+                || result == null
+            )
                 return false;
 
-            List<TSD.StraightDimensionSet> matched =
-                new List<TSD.StraightDimensionSet>();
+            List<TSD.StraightDimensionSet> matched = new List<TSD.StraightDimensionSet>();
             HashSet<int> used = new HashSet<int>();
             for (int p = 0; p < plans.Count; p++)
             {
                 DimPlan plan = plans[p];
-                P2 legacyNormal = LegacyType1BoundaryPlacementNormal(
-                    context.Topology, plan.Name);
+                P2 legacyNormal = LegacyType1BoundaryPlacementNormal(context.Topology, plan.Name);
                 TSD.StraightDimensionSet found = null;
                 for (int i = 0; i < all.Count; i++)
                 {
                     TSD.StraightDimensionSet set = all[i];
                     int key = RuntimeHelpers.GetHashCode(set);
-                    if (used.Contains(key) ||
-                        !DimensionBelongsToView(set, plan.View.View) ||
-                        !PointChainsMatch(
-                            ReadDimensionPoints(set), plan.Points,
-                            MatchTolerance))
+                    if (
+                        used.Contains(key)
+                        || !DimensionBelongsToView(set, plan.View.View)
+                        || !PointChainsMatch(ReadDimensionPoints(set), plan.Points, MatchTolerance)
+                    )
                         continue;
 
-                    bool currentDirection = DimensionDirectionMatches(
-                        set, plan.PlacementNormal);
-                    bool legacyDirection = legacyNormal != null &&
-                        DimensionDirectionMatches(set, legacyNormal);
+                    bool currentDirection = DimensionDirectionMatches(set, plan.PlacementNormal);
+                    bool legacyDirection =
+                        legacyNormal != null && DimensionDirectionMatches(set, legacyNormal);
                     if (!currentDirection && !legacyDirection)
                         continue;
 
@@ -1526,17 +1830,19 @@ namespace Tekla.Technology.Akit.UserScript
             return true;
         }
 
-        private static P2 LegacyType1BoundaryPlacementNormal(
-            Topology topology,
-            string planName)
+        private static P2 LegacyType1BoundaryPlacementNormal(Topology topology, string planName)
         {
             if (topology == null || String.IsNullOrEmpty(planName))
                 return null;
-            if (String.Equals(planName, "P-03", StringComparison.Ordinal) ||
-                String.Equals(planName, "P-24", StringComparison.Ordinal))
+            if (
+                String.Equals(planName, "P-03", StringComparison.Ordinal)
+                || String.Equals(planName, "P-24", StringComparison.Ordinal)
+            )
                 return BoundaryNormal(topology.C, topology.D, topology.Joint);
-            if (String.Equals(planName, "P-25", StringComparison.Ordinal) ||
-                String.Equals(planName, "P-26", StringComparison.Ordinal))
+            if (
+                String.Equals(planName, "P-25", StringComparison.Ordinal)
+                || String.Equals(planName, "P-26", StringComparison.Ordinal)
+            )
                 return BoundaryNormal(topology.A, topology.B, topology.Joint);
 
             P2 horizontal = Normalize(Subtract(topology.B, topology.A));
@@ -1546,20 +1852,20 @@ namespace Tekla.Technology.Akit.UserScript
             if (Dot(Subtract(topology.D, topology.B), vertical) < 0.0)
                 vertical = Scale(vertical, -1.0);
 
-            if (String.Equals(planName, "P-27", StringComparison.Ordinal) ||
-                String.Equals(planName, "P-28", StringComparison.Ordinal))
-                return OutwardNormalForAxis(
-                    topology.A, topology.C, topology.Joint, vertical);
-            if (String.Equals(planName, "P-29", StringComparison.Ordinal) ||
-                String.Equals(planName, "P-30", StringComparison.Ordinal))
-                return OutwardNormalForAxis(
-                    topology.B, topology.D, topology.Joint, vertical);
+            if (
+                String.Equals(planName, "P-27", StringComparison.Ordinal)
+                || String.Equals(planName, "P-28", StringComparison.Ordinal)
+            )
+                return OutwardNormalForAxis(topology.A, topology.C, topology.Joint, vertical);
+            if (
+                String.Equals(planName, "P-29", StringComparison.Ordinal)
+                || String.Equals(planName, "P-30", StringComparison.Ordinal)
+            )
+                return OutwardNormalForAxis(topology.B, topology.D, topology.Joint, vertical);
             return null;
         }
 
-        private static bool DimensionBelongsToView(
-            TSD.StraightDimensionSet set,
-            TSD.View view)
+        private static bool DimensionBelongsToView(TSD.StraightDimensionSet set, TSD.View view)
         {
             try
             {
@@ -1581,13 +1887,13 @@ namespace Tekla.Technology.Akit.UserScript
             List<P2> result = new List<P2>();
             try
             {
-                PropertyInfo property = dimension.GetType().GetProperty(
-                    "DimensionPoints",
-                    BindingFlags.Public | BindingFlags.NonPublic |
-                    BindingFlags.Instance);
-                object value = property == null
-                    ? null
-                    : property.GetValue(dimension, null);
+                PropertyInfo property = dimension
+                    .GetType()
+                    .GetProperty(
+                        "DimensionPoints",
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    );
+                object value = property == null ? null : property.GetValue(dimension, null);
                 IEnumerable enumerable = value as IEnumerable;
                 if (enumerable != null)
                 {
@@ -1599,36 +1905,31 @@ namespace Tekla.Technology.Akit.UserScript
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
             return result;
         }
 
-        private static bool DimensionDirectionMatches(
-            object dimension,
-            P2 expectedNormal)
+        private static bool DimensionDirectionMatches(object dimension, P2 expectedNormal)
         {
             P2 actual = ReadPointLikeMember(dimension, "UpDirection");
             if (actual == null)
                 actual = ReadPointLikeMember(dimension, "OffsetDirection");
             actual = Normalize(actual);
             P2 expected = Normalize(expectedNormal);
-            return actual != null && expected != null &&
-                Dot(actual, expected) >= 0.95;
+            return actual != null && expected != null && Dot(actual, expected) >= 0.95;
         }
 
         private static P2 ReadPointLikeMember(object value, string name)
         {
             try
             {
-                PropertyInfo property = value.GetType().GetProperty(
-                    name,
-                    BindingFlags.Public | BindingFlags.NonPublic |
-                    BindingFlags.Instance);
-                object member = property == null
-                    ? null
-                    : property.GetValue(value, null);
+                PropertyInfo property = value
+                    .GetType()
+                    .GetProperty(
+                        name,
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    );
+                object member = property == null ? null : property.GetValue(value, null);
                 TSG.Point point = member as TSG.Point;
                 if (point != null)
                     return new P2(point.X, point.Y);
@@ -1641,10 +1942,7 @@ namespace Tekla.Technology.Akit.UserScript
             }
         }
 
-        private static bool PointChainsMatch(
-            List<P2> first,
-            List<P2> second,
-            double tolerance)
+        private static bool PointChainsMatch(List<P2> first, List<P2> second, double tolerance)
         {
             if (first == null || second == null || first.Count != second.Count)
                 return false;
@@ -1662,62 +1960,63 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static void DisableCombineAndVerify(
             DimPlan plan,
-            TSD.StraightDimensionSet dimension)
+            TSD.StraightDimensionSet dimension
+        )
         {
             TSD.StraightDimensionSet.StraightDimensionSetAttributes attributes =
                 dimension.Attributes;
             if (attributes == null)
                 throw new InvalidOperationException(
-                    "Khong doc duoc attributes cua " + plan.Name + ".");
+                    "Khong doc duoc attributes cua " + plan.Name + "."
+                );
             TSD.DimensionSetBaseAttributes.CombinedDimensionAttributes combined =
-                attributes.CombinedDimension ??
-                new TSD.DimensionSetBaseAttributes.CombinedDimensionAttributes();
-            combined.Format =
-                TSD.DimensionSetBaseAttributes.CombineFormats.Off;
+                attributes.CombinedDimension
+                ?? new TSD.DimensionSetBaseAttributes.CombinedDimensionAttributes();
+            combined.Format = TSD.DimensionSetBaseAttributes.CombineFormats.Off;
             combined.MinimumNumberToCombine = Math.Max(5, plan.Points.Count);
             attributes.CombinedDimension = combined;
             dimension.Attributes = attributes;
             if (!dimension.Modify())
                 throw new InvalidOperationException(
-                    "Khong tat duoc combined dimension cua " + plan.Name + ".");
+                    "Khong tat duoc combined dimension cua " + plan.Name + "."
+                );
 
             dimension.Select();
             TSD.DimensionSetBaseAttributes.CombinedDimensionAttributes verified =
-                dimension.Attributes == null
-                    ? null
-                    : dimension.Attributes.CombinedDimension;
-            if (verified == null ||
-                (verified.Format != TSD.DimensionSetBaseAttributes.CombineFormats.Off &&
-                 verified.MinimumNumberToCombine <= plan.Points.Count - 1))
+                dimension.Attributes == null ? null : dimension.Attributes.CombinedDimension;
+            if (
+                verified == null
+                || (
+                    verified.Format != TSD.DimensionSetBaseAttributes.CombineFormats.Off
+                    && verified.MinimumNumberToCombine <= plan.Points.Count - 1
+                )
+            )
                 throw new InvalidOperationException(
-                    "Tekla ghi de CombinedDimension cua " + plan.Name + ".");
+                    "Tekla ghi de CombinedDimension cua " + plan.Name + "."
+                );
         }
 
-        private static TSD.StraightDimensionSet.StraightDimensionSetAttributes
-            ReadDimensionAttributes(TSD.View view)
+        private static TSD.StraightDimensionSet.StraightDimensionSetAttributes ReadDimensionAttributes(
+            TSD.View view
+        )
         {
             try
             {
-                TSD.DrawingObjectEnumerator dimensions =
-                    view.GetAllObjects(typeof(TSD.StraightDimensionSet));
+                TSD.DrawingObjectEnumerator dimensions = view.GetAllObjects(
+                    typeof(TSD.StraightDimensionSet)
+                );
                 while (dimensions != null && dimensions.MoveNext())
                 {
-                    TSD.StraightDimensionSet set =
-                        dimensions.Current as TSD.StraightDimensionSet;
+                    TSD.StraightDimensionSet set = dimensions.Current as TSD.StraightDimensionSet;
                     if (set != null && set.Attributes != null)
                         return set.Attributes;
                 }
             }
-            catch
-            {
-            }
+            catch { }
             return null;
         }
 
-        private static bool TryFarthestReferencePair(
-            PartData part,
-            out P2 first,
-            out P2 second)
+        private static bool TryFarthestReferencePair(PartData part, out P2 first, out P2 second)
         {
             first = null;
             second = null;
@@ -1728,8 +2027,7 @@ namespace Tekla.Technology.Akit.UserScript
             {
                 for (int j = i + 1; j < part.Reference.Count; j++)
                 {
-                    double distance = Distance(
-                        part.Reference[i], part.Reference[j]);
+                    double distance = Distance(part.Reference[i], part.Reference[j]);
                     if (distance > best)
                     {
                         best = distance;
@@ -1749,7 +2047,8 @@ namespace Tekla.Technology.Akit.UserScript
             out P2 jointFirst,
             out P2 outerFirst,
             out P2 jointSecond,
-            out P2 outerSecond)
+            out P2 outerSecond
+        )
         {
             jointFirst = null;
             outerFirst = null;
@@ -1764,23 +2063,31 @@ namespace Tekla.Technology.Akit.UserScript
                 return false;
             if (best == d00)
             {
-                jointFirst = first0; outerFirst = first1;
-                jointSecond = second0; outerSecond = second1;
+                jointFirst = first0;
+                outerFirst = first1;
+                jointSecond = second0;
+                outerSecond = second1;
             }
             else if (best == d01)
             {
-                jointFirst = first0; outerFirst = first1;
-                jointSecond = second1; outerSecond = second0;
+                jointFirst = first0;
+                outerFirst = first1;
+                jointSecond = second1;
+                outerSecond = second0;
             }
             else if (best == d10)
             {
-                jointFirst = first1; outerFirst = first0;
-                jointSecond = second0; outerSecond = second1;
+                jointFirst = first1;
+                outerFirst = first0;
+                jointSecond = second0;
+                outerSecond = second1;
             }
             else
             {
-                jointFirst = first1; outerFirst = first0;
-                jointSecond = second1; outerSecond = second0;
+                jointFirst = first1;
+                outerFirst = first0;
+                jointSecond = second1;
+                outerSecond = second0;
             }
             return true;
         }
@@ -1790,7 +2097,8 @@ namespace Tekla.Technology.Akit.UserScript
             P2 a1,
             P2 b0,
             P2 b1,
-            out P2 intersection)
+            out P2 intersection
+        )
         {
             intersection = null;
             P2 r = Subtract(a1, a0);
@@ -1809,7 +2117,8 @@ namespace Tekla.Technology.Akit.UserScript
             P2 segment0,
             P2 segment1,
             out P2 intersection,
-            out double segmentParameter)
+            out double segmentParameter
+        )
         {
             intersection = null;
             segmentParameter = Double.NaN;
@@ -1837,11 +2146,7 @@ namespace Tekla.Technology.Akit.UserScript
             return normal;
         }
 
-        private static P2 OutwardNormalForAxis(
-            P2 first,
-            P2 second,
-            P2 center,
-            P2 measurementAxis)
+        private static P2 OutwardNormalForAxis(P2 first, P2 second, P2 center, P2 measurementAxis)
         {
             P2 axis = Normalize(measurementAxis);
             if (axis == null)
@@ -1861,27 +2166,27 @@ namespace Tekla.Technology.Akit.UserScript
             P2 direction = Normalize(axis);
             if (direction == null)
                 return result;
-            result.Sort(delegate(P2 a, P2 b)
-            {
-                int compare = Dot(a, direction).CompareTo(Dot(b, direction));
-                if (compare != 0) return compare;
-                compare = a.X.CompareTo(b.X);
-                return compare != 0 ? compare : a.Y.CompareTo(b.Y);
-            });
+            result.Sort(
+                delegate(P2 a, P2 b)
+                {
+                    int compare = Dot(a, direction).CompareTo(Dot(b, direction));
+                    if (compare != 0)
+                        return compare;
+                    compare = a.X.CompareTo(b.X);
+                    return compare != 0 ? compare : a.Y.CompareTo(b.Y);
+                }
+            );
             return result;
         }
 
         private static P2 Extreme(List<P2> points, P2 axis, bool maximum)
         {
             P2 best = null;
-            double value = maximum
-                ? Double.NegativeInfinity
-                : Double.PositiveInfinity;
+            double value = maximum ? Double.NegativeInfinity : Double.PositiveInfinity;
             for (int i = 0; points != null && i < points.Count; i++)
             {
                 double projection = Dot(points[i], axis);
-                if ((maximum && projection > value) ||
-                    (!maximum && projection < value))
+                if ((maximum && projection > value) || (!maximum && projection < value))
                 {
                     value = projection;
                     best = points[i];
@@ -1912,32 +2217,26 @@ namespace Tekla.Technology.Akit.UserScript
             points.Add(new P2(point.X, point.Y));
         }
 
-        private static void AddUniqueSegment(
-            List<Segment2> segments,
-            P2 a,
-            P2 b)
+        private static void AddUniqueSegment(List<Segment2> segments, P2 a, P2 b)
         {
             if (a == null || b == null || Distance(a, b) <= 0.01)
                 return;
             for (int i = 0; i < segments.Count; i++)
             {
                 Segment2 old = segments[i];
-                bool same = Distance(old.A, a) <= 0.01 &&
-                    Distance(old.B, b) <= 0.01;
-                bool reverse = Distance(old.A, b) <= 0.01 &&
-                    Distance(old.B, a) <= 0.01;
+                bool same = Distance(old.A, a) <= 0.01 && Distance(old.B, b) <= 0.01;
+                bool reverse = Distance(old.A, b) <= 0.01 && Distance(old.B, a) <= 0.01;
                 if (same || reverse)
                     return;
             }
-            segments.Add(new Segment2(
-                new P2(a.X, a.Y),
-                new P2(b.X, b.Y)));
+            segments.Add(new Segment2(new P2(a.X, a.Y), new P2(b.X, b.Y)));
         }
 
         private static P2 Transform(
             TSG.Point point,
             TSG.Matrix currentToGlobal,
-            TSG.Matrix globalToView)
+            TSG.Matrix globalToView
+        )
         {
             TSG.Point global = currentToGlobal.Transform(point);
             TSG.Point local = globalToView.Transform(global);
@@ -1961,13 +2260,14 @@ namespace Tekla.Technology.Akit.UserScript
             try
             {
                 PropertyInfo property = view.GetType().GetProperty("Name");
-                string value = property == null
-                    ? ""
-                    : Convert.ToString(property.GetValue(view, null),
-                        CultureInfo.InvariantCulture);
-                return String.IsNullOrWhiteSpace(value)
-                    ? view.GetType().Name
-                    : value;
+                string value =
+                    property == null
+                        ? ""
+                        : Convert.ToString(
+                            property.GetValue(view, null),
+                            CultureInfo.InvariantCulture
+                        );
+                return String.IsNullOrWhiteSpace(value) ? view.GetType().Name : value;
             }
             catch
             {
@@ -1984,9 +2284,11 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static bool SameIdentifier(TSM.Part first, TSM.Part second)
         {
-            return first != null && second != null &&
-                first.Identifier != null && second.Identifier != null &&
-                first.Identifier.ID == second.Identifier.ID;
+            return first != null
+                && second != null
+                && first.Identifier != null
+                && second.Identifier != null
+                && first.Identifier.ID == second.Identifier.ID;
         }
 
         private static int ReadIdentifier(object value)
@@ -1994,9 +2296,10 @@ namespace Tekla.Technology.Akit.UserScript
             try
             {
                 PropertyInfo property = value.GetType().GetProperty("Identifier");
-                Tekla.Structures.Identifier id = property == null
-                    ? null
-                    : property.GetValue(value, null) as Tekla.Structures.Identifier;
+                Tekla.Structures.Identifier id =
+                    property == null
+                        ? null
+                        : property.GetValue(value, null) as Tekla.Structures.Identifier;
                 return id == null ? 0 : id.ID;
             }
             catch
@@ -2022,9 +2325,7 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static P2 Midpoint(P2 first, P2 second)
         {
-            return new P2(
-                (first.X + second.X) * 0.5,
-                (first.Y + second.Y) * 0.5);
+            return new P2((first.X + second.X) * 0.5, (first.Y + second.Y) * 0.5);
         }
 
         private static P2 Normalize(P2 value)
@@ -2032,9 +2333,7 @@ namespace Tekla.Technology.Akit.UserScript
             if (value == null)
                 return null;
             double length = Math.Sqrt(value.X * value.X + value.Y * value.Y);
-            return length <= 1e-9
-                ? null
-                : new P2(value.X / length, value.Y / length);
+            return length <= 1e-9 ? null : new P2(value.X / length, value.Y / length);
         }
 
         private static P2 PerpendicularLeft(P2 value)
@@ -2073,9 +2372,7 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static string FormatPoint(P2 point)
         {
-            return point == null
-                ? "?"
-                : "(" + Format(point.X) + "," + Format(point.Y) + ")";
+            return point == null ? "?" : "(" + Format(point.X) + "," + Format(point.Y) + ")";
         }
 
         private static void ShowWarning(string message)
@@ -2086,11 +2383,10 @@ namespace Tekla.Technology.Akit.UserScript
                     message,
                     "Slot 08 - Lien ket giang xeo",
                     MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning);
+                    MessageBoxIcon.Warning
+                );
             }
-            catch
-            {
-            }
+            catch { }
         }
     }
 }

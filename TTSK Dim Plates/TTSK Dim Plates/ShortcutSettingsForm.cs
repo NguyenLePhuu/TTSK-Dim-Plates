@@ -45,7 +45,8 @@ namespace TTSK_AutoDim_Plates
             IntPtr hwnd,
             int attr,
             ref int attrValue,
-            int attrSize);
+            int attrSize
+        );
 
         private const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
 
@@ -54,7 +55,8 @@ namespace TTSK_AutoDim_Plates
             bool darkMode,
             bool autoSectionEnabled,
             bool autoSectionLocked,
-            Action<bool> applyAutoSectionSetting)
+            Action<bool> applyAutoSectionSetting
+        )
         {
             _manager = manager;
             _darkMode = darkMode;
@@ -92,11 +94,10 @@ namespace TTSK_AutoDim_Plates
                     Handle,
                     DWMWA_USE_IMMERSIVE_DARK_MODE,
                     ref useDark,
-                    sizeof(int));
+                    sizeof(int)
+                );
             }
-            catch
-            {
-            }
+            catch { }
         }
 
         private void BuildPalette()
@@ -153,9 +154,7 @@ namespace TTSK_AutoDim_Plates
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { }
 
             PictureBox logo = new PictureBox();
             logo.SizeMode = PictureBoxSizeMode.Zoom;
@@ -167,9 +166,7 @@ namespace TTSK_AutoDim_Plates
                 if (File.Exists(logoPath))
                     logo.Image = Image.FromFile(logoPath);
             }
-            catch
-            {
-            }
+            catch { }
             Controls.Add(logo);
 
             Label titleBar = new Label();
@@ -243,7 +240,10 @@ namespace TTSK_AutoDim_Plates
             txtSearch.Location = new Point(28, 170);
             txtSearch.Size = new Size(555, 32);
             txtSearch.Font = new Font("Segoe UI", 10F);
-            txtSearch.TextChanged += delegate { ApplySearchFilter(); };
+            txtSearch.TextChanged += delegate
+            {
+                ApplySearchFilter();
+            };
             Controls.Add(txtSearch);
 
             Label searchIcon = new Label();
@@ -254,7 +254,10 @@ namespace TTSK_AutoDim_Plates
             searchIcon.Size = new Size(18, 18);
             searchIcon.BackColor = Color.Transparent;
             searchIcon.Cursor = Cursors.IBeam;
-            searchIcon.Click += delegate { txtSearch.Focus(); };
+            searchIcon.Click += delegate
+            {
+                txtSearch.Focus();
+            };
             Controls.Add(searchIcon);
             searchIcon.BringToFront();
 
@@ -280,7 +283,8 @@ namespace TTSK_AutoDim_Plates
             info.Controls.Add(infoIcon);
 
             Label infoText = new Label();
-            infoText.Text = "Shortcuts are active only when the AutoDim window is open.\nClick Edit, then press a shortcut. Backspace clears it; Esc cancels.";
+            infoText.Text =
+                "Shortcuts are active only when the AutoDim window is open.\nClick Edit, then press a shortcut. Backspace clears it; Esc cancels.";
             infoText.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
             infoText.Location = new Point(68, 16);
             infoText.Size = new Size(560, 44);
@@ -299,7 +303,10 @@ namespace TTSK_AutoDim_Plates
             reset.Text = "⟳  Reset to Default";
             reset.Location = new Point(28, 590);
             reset.Size = new Size(200, 38);
-            reset.Click += delegate { ResetToDefault(); };
+            reset.Click += delegate
+            {
+                ResetToDefault();
+            };
             Controls.Add(reset);
 
             ShortcutFlatButton save = new ShortcutFlatButton();
@@ -307,7 +314,10 @@ namespace TTSK_AutoDim_Plates
             save.IsPrimary = true;
             save.Location = new Point(472, 590);
             save.Size = new Size(130, 38);
-            save.Click += delegate { SaveAndClose(); };
+            save.Click += delegate
+            {
+                SaveAndClose();
+            };
             Controls.Add(save);
 
             ShortcutFlatButton cancel = new ShortcutFlatButton();
@@ -372,7 +382,13 @@ namespace TTSK_AutoDim_Plates
             desc.BackColor = Color.Transparent;
             card.Controls.Add(desc);
 
-            if (string.Equals(def.ActionId, ShortcutManager.ActionAutoSection, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    def.ActionId,
+                    ShortcutManager.ActionAutoSection,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
             {
                 rowAutoSectionSwitch = new AutoSectionToggleSwitch();
                 rowAutoSectionSwitch.Location = new Point(350, 18);
@@ -397,14 +413,32 @@ namespace TTSK_AutoDim_Plates
             edit.UseNeutralStyle = true;
             edit.Location = new Point(572, 12);
             edit.Size = new Size(82, 36);
-            edit.Click += delegate { ToggleEdit(def.ActionId); };
+            edit.Click += delegate
+            {
+                ToggleEdit(def.ActionId);
+            };
             card.Controls.Add(edit);
 
-            card.Click += delegate { BeginEdit(def.ActionId); };
-            name.Click += delegate { BeginEdit(def.ActionId); };
-            desc.Click += delegate { BeginEdit(def.ActionId); };
-            badge.Click += delegate { BeginEdit(def.ActionId); };
-            keyBox.Click += delegate { BeginEdit(def.ActionId); };
+            card.Click += delegate
+            {
+                BeginEdit(def.ActionId);
+            };
+            name.Click += delegate
+            {
+                BeginEdit(def.ActionId);
+            };
+            desc.Click += delegate
+            {
+                BeginEdit(def.ActionId);
+            };
+            badge.Click += delegate
+            {
+                BeginEdit(def.ActionId);
+            };
+            keyBox.Click += delegate
+            {
+                BeginEdit(def.ActionId);
+            };
 
             ShortcutRow row = new ShortcutRow();
             row.ActionId = def.ActionId;
@@ -459,7 +493,9 @@ namespace TTSK_AutoDim_Plates
 
             string state = _workingAutoSectionEnabled ? "ON" : "OFF";
             lblAutoSectionState.Text = _autoSectionLocked ? state + "  LOCKED" : state;
-            lblAutoSectionState.ForeColor = _workingAutoSectionEnabled ? _accentColor : _mutedTextColor;
+            lblAutoSectionState.ForeColor = _workingAutoSectionEnabled
+                ? _accentColor
+                : _mutedTextColor;
         }
 
         private void BeginEdit(string actionId)
@@ -494,8 +530,10 @@ namespace TTSK_AutoDim_Plates
         {
             if (!string.IsNullOrEmpty(_editingActionId))
             {
-                if ((keyData & Keys.KeyCode) == Keys.Back &&
-                    (keyData & Keys.Modifiers) == Keys.None)
+                if (
+                    (keyData & Keys.KeyCode) == Keys.Back
+                    && (keyData & Keys.Modifiers) == Keys.None
+                )
                 {
                     ClearEditingShortcut();
                     return true;
@@ -518,9 +556,12 @@ namespace TTSK_AutoDim_Plates
 
                 if (ShortcutManager.IsBareModifier(normalized))
                 {
-                    if (ShortcutManager.IsAllowedModifierOnlyShortcut(
-                        _editingActionId,
-                        normalized & Keys.Modifiers))
+                    if (
+                        ShortcutManager.IsAllowedModifierOnlyShortcut(
+                            _editingActionId,
+                            normalized & Keys.Modifiers
+                        )
+                    )
                         _editingModifierCandidate = normalized & Keys.Modifiers;
                     return true;
                 }
@@ -569,9 +610,11 @@ namespace TTSK_AutoDim_Plates
 
         protected override void OnKeyUp(KeyEventArgs e)
         {
-            if (!string.IsNullOrEmpty(_editingActionId) &&
-                _editingModifierCandidate != Keys.None &&
-                (ModifierKeys & Keys.Modifiers) == Keys.None)
+            if (
+                !string.IsNullOrEmpty(_editingActionId)
+                && _editingModifierCandidate != Keys.None
+                && (ModifierKeys & Keys.Modifiers) == Keys.None
+            )
             {
                 Keys candidate = _editingModifierCandidate;
                 _editingModifierCandidate = Keys.None;
@@ -598,7 +641,10 @@ namespace TTSK_AutoDim_Plates
             {
                 ShortcutActionDefinition dup = _manager.FindDefinition(duplicateActionId);
                 string duplicateName = dup != null ? dup.DisplayName : duplicateActionId;
-                ShowMessage(ShortcutManager.Format(normalized) + " already used by " + duplicateName + ".", true);
+                ShowMessage(
+                    ShortcutManager.Format(normalized) + " already used by " + duplicateName + ".",
+                    true
+                );
                 return;
             }
 
@@ -698,10 +744,13 @@ namespace TTSK_AutoDim_Plates
                 if (!_rows.TryGetValue(def.ActionId, out row))
                     continue;
 
-                bool visible = string.IsNullOrEmpty(filter) ||
-                    def.DisplayName.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    def.Description.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    ShortcutManager.Format(GetWorkingShortcut(def.ActionId)).IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0;
+                bool visible =
+                    string.IsNullOrEmpty(filter)
+                    || def.DisplayName.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0
+                    || def.Description.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0
+                    || ShortcutManager
+                        .Format(GetWorkingShortcut(def.ActionId))
+                        .IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0;
 
                 row.Panel.Visible = visible;
 
@@ -725,9 +774,15 @@ namespace TTSK_AutoDim_Plates
         {
             foreach (ShortcutRow row in _rows.Values)
             {
-                bool editing = string.Equals(row.ActionId, _editingActionId, StringComparison.OrdinalIgnoreCase);
+                bool editing = string.Equals(
+                    row.ActionId,
+                    _editingActionId,
+                    StringComparison.OrdinalIgnoreCase
+                );
 
-                row.KeyBox.Text = editing ? "LISTENING..." : ShortcutManager.Format(GetWorkingShortcut(row.ActionId));
+                row.KeyBox.Text = editing
+                    ? "LISTENING..."
+                    : ShortcutManager.Format(GetWorkingShortcut(row.ActionId));
                 row.KeyBox.IsListening = editing;
                 row.KeyBox.Invalidate();
 
@@ -742,43 +797,157 @@ namespace TTSK_AutoDim_Plates
 
         private Color GetBadgeColor(string actionId)
         {
-            if (string.Equals(actionId, ShortcutManager.ActionCreateDrawing, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionCreateDrawing,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
                 return Color.FromArgb(249, 115, 22);
-            if (string.Equals(actionId, ShortcutManager.ActionBatchCreate, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionBatchCreate,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
                 return Color.FromArgb(244, 114, 112);
-            if (string.Equals(actionId, ShortcutManager.ActionCheckScale, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionCheckScale,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
                 return Color.FromArgb(201, 122, 64);
-            if (string.Equals(actionId, ShortcutManager.ActionLineDistance, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionLineDistance,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
                 return Color.FromArgb(45, 180, 168);
-            if (string.Equals(actionId, ShortcutManager.ActionRepeatLast, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionRepeatLast,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
                 return Color.FromArgb(167, 139, 250);
-            if (string.Equals(actionId, ShortcutManager.ActionOpenGrid, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionOpenGrid,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
                 return Color.FromArgb(245, 183, 77);
-            if (string.Equals(actionId, ShortcutManager.ActionFitView, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionFitView,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
                 return Color.FromArgb(96, 165, 250);
-            if (string.Equals(actionId, ShortcutManager.ActionNeighborGrid, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionNeighborGrid,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
                 return Color.FromArgb(34, 197, 94);
-            if (string.Equals(actionId, ShortcutManager.ActionArrangeView, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionArrangeView,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
                 return Color.FromArgb(124, 58, 237);
-            if (string.Equals(actionId, ShortcutManager.ActionAutoSection, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionAutoSection,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
                 return Color.FromArgb(217, 119, 6);
-            if (string.Equals(actionId, ShortcutManager.ActionSlot01, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionSlot01,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
                 return Color.FromArgb(13, 148, 136);
-            if (string.Equals(actionId, ShortcutManager.ActionSlot02, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionSlot02,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
                 return Color.FromArgb(14, 165, 233);
-            if (string.Equals(actionId, ShortcutManager.ActionSlot03, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionSlot03,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
                 return Color.FromArgb(139, 92, 246);
-            if (string.Equals(actionId, ShortcutManager.ActionSlot04, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionSlot04,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
                 return Color.FromArgb(245, 158, 11);
-            if (string.Equals(actionId, ShortcutManager.ActionSlot05, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionSlot05,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
                 return Color.FromArgb(239, 68, 68);
-            if (string.Equals(actionId, ShortcutManager.ActionSlot06, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionSlot06,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
                 return Color.FromArgb(20, 184, 166);
-            if (string.Equals(actionId, ShortcutManager.ActionSlot07, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionSlot07,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
                 return Color.FromArgb(0, 150, 125);
-            if (string.Equals(actionId, ShortcutManager.ActionSlot08, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionSlot08,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
                 return Color.FromArgb(14, 165, 233);
-            if (string.Equals(actionId, ShortcutManager.ActionSlot09, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionSlot09,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
                 return Color.FromArgb(48, 162, 121);
 
             return _accentColor;
@@ -845,24 +1014,44 @@ namespace TTSK_AutoDim_Plates
                 button.BackColor = _darkMode ? _formBack : Color.White;
                 button.BackColorValue = button.IsPrimary
                     ? _accentColor
-                    : (button.UseNeutralStyle
-                        ? (_darkMode ? Color.FromArgb(18, 24, 38) : Color.White)
-                        : (_darkMode ? Color.FromArgb(18, 18, 18) : Color.White));
+                    : (
+                        button.UseNeutralStyle
+                            ? (_darkMode ? Color.FromArgb(18, 24, 38) : Color.White)
+                            : (_darkMode ? Color.FromArgb(18, 18, 18) : Color.White)
+                    );
                 button.BorderColor = button.IsPrimary
                     ? _accentColor
-                    : (button.UseNeutralStyle
-                        ? (_darkMode ? Color.FromArgb(71, 85, 105) : Color.FromArgb(203, 213, 225))
-                        : _accentColor);
+                    : (
+                        button.UseNeutralStyle
+                            ? (
+                                _darkMode
+                                    ? Color.FromArgb(71, 85, 105)
+                                    : Color.FromArgb(203, 213, 225)
+                            )
+                            : _accentColor
+                    );
                 button.TextColor = button.IsPrimary
                     ? Color.White
-                    : (button.UseNeutralStyle
-                        ? (_darkMode ? Color.FromArgb(226, 232, 240) : Color.FromArgb(51, 65, 85))
-                        : _accentColor);
+                    : (
+                        button.UseNeutralStyle
+                            ? (
+                                _darkMode
+                                    ? Color.FromArgb(226, 232, 240)
+                                    : Color.FromArgb(51, 65, 85)
+                            )
+                            : _accentColor
+                    );
                 button.HoverBackColor = button.IsPrimary
                     ? (_darkMode ? Color.FromArgb(238, 139, 50) : Color.FromArgb(29, 78, 216))
-                    : (button.UseNeutralStyle
-                        ? (_darkMode ? Color.FromArgb(30, 41, 59) : Color.FromArgb(241, 245, 249))
-                        : (_darkMode ? Color.FromArgb(37, 26, 18) : _accentSoftColor));
+                    : (
+                        button.UseNeutralStyle
+                            ? (
+                                _darkMode
+                                    ? Color.FromArgb(30, 41, 59)
+                                    : Color.FromArgb(241, 245, 249)
+                            )
+                            : (_darkMode ? Color.FromArgb(37, 26, 18) : _accentSoftColor)
+                    );
                 button.Invalidate();
             }
 
@@ -923,7 +1112,14 @@ namespace TTSK_AutoDim_Plates
 
                 if (label == lblThemeIcon)
                     label.ForeColor = _accentColor;
-                else if (label.Font != null && string.Equals(label.Font.FontFamily.Name, "Segoe MDL2 Assets", StringComparison.OrdinalIgnoreCase))
+                else if (
+                    label.Font != null
+                    && string.Equals(
+                        label.Font.FontFamily.Name,
+                        "Segoe MDL2 Assets",
+                        StringComparison.OrdinalIgnoreCase
+                    )
+                )
                     label.ForeColor = _mutedTextColor;
                 else if (label.Font != null && label.Font.Size <= 8.5F)
                     label.ForeColor = _mutedTextColor;
@@ -1076,9 +1272,7 @@ namespace TTSK_AutoDim_Plates
                 e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
                 e.Graphics.PixelOffsetMode = PixelOffsetMode.Half;
 
-                Color trackColor = Enabled
-                    ? (Checked ? OnColor : OffColor)
-                    : DisabledTrackColor;
+                Color trackColor = Enabled ? (Checked ? OnColor : OffColor) : DisabledTrackColor;
                 RectangleF trackRect = new RectangleF(1, 1, Width - 2, Height - 2);
 
                 using (GraphicsPath trackPath = RoundedRectF(trackRect, trackRect.Height / 2f))
@@ -1242,8 +1436,12 @@ namespace TTSK_AutoDim_Plates
                         Font,
                         Rectangle.Round(rect),
                         Enabled ? TextColor : SystemColors.GrayText,
-                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
-                        TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
+                        TextFormatFlags.HorizontalCenter
+                            | TextFormatFlags.VerticalCenter
+                            | TextFormatFlags.EndEllipsis
+                            | TextFormatFlags.NoPadding
+                            | TextFormatFlags.SingleLine
+                    );
                     pevent.Graphics.Restore(state);
                 }
             }
@@ -1310,8 +1508,12 @@ namespace TTSK_AutoDim_Plates
                     Font,
                     Rectangle.Round(rect),
                     TextColor,
-                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
-                    TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
+                    TextFormatFlags.HorizontalCenter
+                        | TextFormatFlags.VerticalCenter
+                        | TextFormatFlags.EndEllipsis
+                        | TextFormatFlags.NoPadding
+                        | TextFormatFlags.SingleLine
+                );
             }
         }
 
@@ -1378,7 +1580,15 @@ namespace TTSK_AutoDim_Plates
 
             private Rectangle ScrollTrackRectangle
             {
-                get { return new Rectangle(Math.Max(0, ClientSize.Width - 16), 0, 16, ClientSize.Height); }
+                get
+                {
+                    return new Rectangle(
+                        Math.Max(0, ClientSize.Width - 16),
+                        0,
+                        16,
+                        ClientSize.Height
+                    );
+                }
             }
 
             private Rectangle ThumbRectangle
@@ -1388,11 +1598,17 @@ namespace TTSK_AutoDim_Plates
                     if (!NeedsScrollBar || ClientSize.Height <= 0)
                         return Rectangle.Empty;
 
-                    int thumbHeight = Math.Max(34,
-                        (int)Math.Round(ClientSize.Height * (ClientSize.Height / (double)_contentHeight)));
+                    int thumbHeight = Math.Max(
+                        34,
+                        (int)
+                            Math.Round(
+                                ClientSize.Height * (ClientSize.Height / (double)_contentHeight)
+                            )
+                    );
                     thumbHeight = Math.Min(ClientSize.Height - 8, thumbHeight);
                     int travel = Math.Max(1, ClientSize.Height - thumbHeight - 8);
-                    int thumbY = 4 + (int)Math.Round(travel * (_scrollOffset / (double)MaximumScrollOffset));
+                    int thumbY =
+                        4 + (int)Math.Round(travel * (_scrollOffset / (double)MaximumScrollOffset));
                     return new Rectangle(ClientSize.Width - 11, thumbY, 7, thumbHeight);
                 }
             }
@@ -1448,7 +1664,10 @@ namespace TTSK_AutoDim_Plates
                     }
                     else if (ScrollTrackRectangle.Contains(e.Location))
                     {
-                        SetScrollOffset(_scrollOffset + (e.Y < thumb.Top ? -ClientSize.Height : ClientSize.Height));
+                        SetScrollOffset(
+                            _scrollOffset
+                                + (e.Y < thumb.Top ? -ClientSize.Height : ClientSize.Height)
+                        );
                     }
                 }
 
@@ -1461,8 +1680,8 @@ namespace TTSK_AutoDim_Plates
                 {
                     Rectangle thumb = ThumbRectangle;
                     int travel = Math.Max(1, ClientSize.Height - thumb.Height - 8);
-                    int offsetDelta = (int)Math.Round((e.Y - _dragStartY) *
-                        (MaximumScrollOffset / (double)travel));
+                    int offsetDelta = (int)
+                        Math.Round((e.Y - _dragStartY) * (MaximumScrollOffset / (double)travel));
                     SetScrollOffset(_dragStartOffset + offsetDelta);
                 }
 
@@ -1520,19 +1739,31 @@ namespace TTSK_AutoDim_Plates
 
                 e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
                 Rectangle thumb = ThumbRectangle;
-                using (GraphicsPath path = RoundedRectF(
-                    new RectangleF(thumb.X, thumb.Y, thumb.Width, thumb.Height), 3.5f))
-                using (SolidBrush thumbBrush = new SolidBrush(
-                    _thumbHovered || _draggingThumb ? ScrollThumbHoverColor : ScrollThumbColor))
+                using (
+                    GraphicsPath path = RoundedRectF(
+                        new RectangleF(thumb.X, thumb.Y, thumb.Width, thumb.Height),
+                        3.5f
+                    )
+                )
+                using (
+                    SolidBrush thumbBrush = new SolidBrush(
+                        _thumbHovered || _draggingThumb ? ScrollThumbHoverColor : ScrollThumbColor
+                    )
+                )
                     e.Graphics.FillPath(thumbBrush, path);
             }
 
             protected override bool IsInputKey(Keys keyData)
             {
                 Keys keyCode = keyData & Keys.KeyCode;
-                if (keyCode == Keys.Up || keyCode == Keys.Down ||
-                    keyCode == Keys.PageUp || keyCode == Keys.PageDown ||
-                    keyCode == Keys.Home || keyCode == Keys.End)
+                if (
+                    keyCode == Keys.Up
+                    || keyCode == Keys.Down
+                    || keyCode == Keys.PageUp
+                    || keyCode == Keys.PageDown
+                    || keyCode == Keys.Home
+                    || keyCode == Keys.End
+                )
                     return true;
 
                 return base.IsInputKey(keyData);
@@ -1541,12 +1772,18 @@ namespace TTSK_AutoDim_Plates
             protected override void OnKeyDown(KeyEventArgs e)
             {
                 int next = _scrollOffset;
-                if (e.KeyCode == Keys.Up) next -= 22;
-                else if (e.KeyCode == Keys.Down) next += 22;
-                else if (e.KeyCode == Keys.PageUp) next -= ClientSize.Height;
-                else if (e.KeyCode == Keys.PageDown) next += ClientSize.Height;
-                else if (e.KeyCode == Keys.Home) next = 0;
-                else if (e.KeyCode == Keys.End) next = MaximumScrollOffset;
+                if (e.KeyCode == Keys.Up)
+                    next -= 22;
+                else if (e.KeyCode == Keys.Down)
+                    next += 22;
+                else if (e.KeyCode == Keys.PageUp)
+                    next -= ClientSize.Height;
+                else if (e.KeyCode == Keys.PageDown)
+                    next += ClientSize.Height;
+                else if (e.KeyCode == Keys.Home)
+                    next = 0;
+                else if (e.KeyCode == Keys.End)
+                    next = MaximumScrollOffset;
                 else
                 {
                     base.OnKeyDown(e);
@@ -1578,12 +1815,7 @@ namespace TTSK_AutoDim_Plates
             {
                 e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
                 e.Graphics.PixelOffsetMode = PixelOffsetMode.Half;
-                DrawGlyphCenteredByBounds(
-                    e.Graphics,
-                    Text,
-                    Font,
-                    GlyphColor,
-                    ClientRectangle);
+                DrawGlyphCenteredByBounds(e.Graphics, Text, Font, GlyphColor, ClientRectangle);
             }
         }
 
@@ -1612,12 +1844,7 @@ namespace TTSK_AutoDim_Plates
 
                 if (string.Equals(Text, "+", StringComparison.Ordinal))
                 {
-                    DrawGlyphCenteredByBounds(
-                        e.Graphics,
-                        Text,
-                        Font,
-                        TextColor,
-                        ClientRectangle);
+                    DrawGlyphCenteredByBounds(e.Graphics, Text, Font, TextColor, ClientRectangle);
                 }
                 else
                 {
@@ -1627,7 +1854,10 @@ namespace TTSK_AutoDim_Plates
                         Font,
                         ClientRectangle,
                         TextColor,
-                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                        TextFormatFlags.HorizontalCenter
+                            | TextFormatFlags.VerticalCenter
+                            | TextFormatFlags.EndEllipsis
+                    );
                 }
             }
         }
@@ -1734,9 +1964,15 @@ namespace TTSK_AutoDim_Plates
                     UpdatePlaceholderVisibility();
                     OnTextChanged(EventArgs.Empty);
                 };
-                _editor.GotFocus += delegate { UpdatePlaceholderVisibility(); };
-                _editor.LostFocus += delegate { UpdatePlaceholderVisibility(); };
-                _editor.KeyPress += delegate (object sender, KeyPressEventArgs e)
+                _editor.GotFocus += delegate
+                {
+                    UpdatePlaceholderVisibility();
+                };
+                _editor.LostFocus += delegate
+                {
+                    UpdatePlaceholderVisibility();
+                };
+                _editor.KeyPress += delegate(object sender, KeyPressEventArgs e)
                 {
                     if (e.KeyChar == '\r' || e.KeyChar == '\n')
                         e.Handled = true;
@@ -1749,7 +1985,10 @@ namespace TTSK_AutoDim_Plates
                 _placeholder.BackColor = BackColor;
                 _placeholder.Font = Font;
                 _placeholder.Cursor = Cursors.IBeam;
-                _placeholder.Click += delegate { _editor.Focus(); };
+                _placeholder.Click += delegate
+                {
+                    _editor.Focus();
+                };
                 Controls.Add(_placeholder);
                 _placeholder.BringToFront();
 
@@ -1884,9 +2123,12 @@ namespace TTSK_AutoDim_Plates
                         Font,
                         ClientRectangle,
                         ForeColor,
-                        TextFormatFlags.Left | TextFormatFlags.VerticalCenter |
-                        TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding |
-                        TextFormatFlags.SingleLine);
+                        TextFormatFlags.Left
+                            | TextFormatFlags.VerticalCenter
+                            | TextFormatFlags.EndEllipsis
+                            | TextFormatFlags.NoPadding
+                            | TextFormatFlags.SingleLine
+                    );
                 }
             }
         }
@@ -1909,7 +2151,8 @@ namespace TTSK_AutoDim_Plates
             string text,
             Font font,
             Color color,
-            Rectangle bounds)
+            Rectangle bounds
+        )
         {
             if (graphics == null || font == null || string.IsNullOrEmpty(text))
                 return;
@@ -1924,7 +2167,8 @@ namespace TTSK_AutoDim_Plates
                     (int)font.Style,
                     emSize,
                     PointF.Empty,
-                    format);
+                    format
+                );
 
                 RectangleF glyphBounds = glyphPath.GetBounds();
                 if (glyphBounds.Width <= 0f || glyphBounds.Height <= 0f)
@@ -1939,7 +2183,8 @@ namespace TTSK_AutoDim_Plates
                 {
                     moveToCenter.Translate(
                         targetCenterX - glyphCenterX,
-                        targetCenterY - glyphCenterY);
+                        targetCenterY - glyphCenterY
+                    );
                     glyphPath.Transform(moveToCenter);
                 }
 
@@ -1961,7 +2206,14 @@ namespace TTSK_AutoDim_Plates
 
             path.AddArc(bounds.Left, bounds.Top, diameter, diameter, 180, 90);
             path.AddArc(bounds.Right - diameter, bounds.Top, diameter, diameter, 270, 90);
-            path.AddArc(bounds.Right - diameter, bounds.Bottom - diameter, diameter, diameter, 0, 90);
+            path.AddArc(
+                bounds.Right - diameter,
+                bounds.Bottom - diameter,
+                diameter,
+                diameter,
+                0,
+                90
+            );
             path.AddArc(bounds.Left, bounds.Bottom - diameter, diameter, diameter, 90, 90);
             path.CloseFigure();
             return path;
