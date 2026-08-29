@@ -1149,24 +1149,7 @@ namespace TTSK_AutoDim_Plates
                 dataCenterSlotDescription = dataCenterSlotTile.Controls[2] as Label;
             }
 
-            Panel slot10 = MakeAutoDimSlotBox(
-                GetAutoDimCircledNumber(10),
-                "Liên kết dầm REF",
-                "Dim theo REF · Edge · Bolt · Plate",
-                innerMargin + boxW + gap,
-                boxH + gap,
-                boxW,
-                boxH,
-                delegate
-                {
-                    RunExternalAutoDimSlot(
-                        "Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot10"
-                    );
-                }
-            );
-            page2.Controls.Add(slot10);
-
-            AddAutoDimPlaceholderSlots(page2, 11, 12, innerMargin, gap, boxW, boxH);
+            AddAutoDimPlaceholderSlots(page2, 10, 12, innerMargin, gap, boxW, boxH);
             AddAutoDimPlaceholderSlots(page3, 13, 17, innerMargin, gap, boxW, boxH);
 
             Panel slot18 = MakeAutoDimSlotBox(
@@ -7695,8 +7678,6 @@ namespace TTSK_AutoDim_Plates
             Tekla.Technology.Akit.UserScript.PHU_BeamGridDimensionEngine.Reset();
             Tekla.Technology.Akit.UserScript.PHU_ColumnGridDimensionEngine.Reset();
             Tekla.Technology.Akit.UserScript.PHU_InzaiColumnNeighborDimensionEngine.Reset();
-            Tekla.Technology.Akit.UserScript.PHU_InzaiColumnSpliceDimensionEngine.Reset();
-            Tekla.Technology.Akit.UserScript.PHU_InzaiColumnSectionDimensionEngine.Reset();
             Tekla.Technology.Akit.UserScript.PHU_ColumnDimensionTierContext.Reset();
             Tekla.Technology.Akit.UserScript.PHU_VerticalShapeViewLayoutContext.Reset();
             AutoDimPartType partType = DetectActiveDrawingAutoDimPartType();
@@ -7990,12 +7971,6 @@ namespace TTSK_AutoDim_Plates
             Tekla.Technology.Akit.UserScript.PHU_InzaiColumnNeighborDimensionEngine.Configure(
                 runColumnGridDimensions
             );
-            Tekla.Technology.Akit.UserScript.PHU_InzaiColumnSpliceDimensionEngine.Configure(
-                runColumnGridDimensions
-            );
-            Tekla.Technology.Akit.UserScript.PHU_InzaiColumnSectionDimensionEngine.Configure(
-                runColumnGridDimensions
-            );
 
             if (shapeSupportsColumnGridDimensions && resolvedMainPart != null)
             {
@@ -8130,9 +8105,7 @@ namespace TTSK_AutoDim_Plates
                 }
 
                 // One connected column flow: Shape H/C/L -> optional routed
-                // Inzai Neighbor type 1 -> Inzai Splice type 2 ->
-                // project-routed Grid DIM -> optional independent Inzai
-                // Section B/C/D DIM -> alignment.
+                // Inzai Neighbor DIM -> project-routed Grid DIM -> alignment.
                 // General non-Inzai models skip Neighbor. Existing Shape,
                 // Neighbor and Grid feet stay in their own engines; only the
                 // active PHU_Shape_X tier contract is handed off between them.
@@ -8140,11 +8113,8 @@ namespace TTSK_AutoDim_Plates
                 // final horizontal alignment is performed exactly once.
                 if (runColumnGridDimensions)
                 {
-                    Tekla.Technology.Akit.UserScript.PHU_ColumnGridDimensionEngine.CaptureShapeDimensionsBeforeAddOns();
                     Tekla.Technology.Akit.UserScript.PHU_InzaiColumnNeighborDimensionEngine.ExecuteAfterShape();
-                    Tekla.Technology.Akit.UserScript.PHU_InzaiColumnSpliceDimensionEngine.ExecuteAfterShape();
                     Tekla.Technology.Akit.UserScript.PHU_ColumnGridDimensionEngine.ExecuteAfterShape();
-                    Tekla.Technology.Akit.UserScript.PHU_InzaiColumnSectionDimensionEngine.ExecuteAfterColumnFlow();
                 }
                 if (verticalShapeLayoutCaptured)
                 {
@@ -8217,20 +8187,6 @@ namespace TTSK_AutoDim_Plates
                             .Technology
                             .Akit
                             .UserScript
-                            .PHU_InzaiColumnSpliceDimensionEngine
-                            .LastRunMessage
-                        + " "
-                        + Tekla
-                            .Technology
-                            .Akit
-                            .UserScript
-                            .PHU_InzaiColumnSectionDimensionEngine
-                            .LastRunMessage
-                        + " "
-                        + Tekla
-                            .Technology
-                            .Akit
-                            .UserScript
                             .PHU_VerticalShapeViewLayoutContext
                             .LastMessage;
                 }
@@ -8238,8 +8194,6 @@ namespace TTSK_AutoDim_Plates
                 Tekla.Technology.Akit.UserScript.PHU_BeamGridDimensionEngine.Reset();
                 Tekla.Technology.Akit.UserScript.PHU_ColumnGridDimensionEngine.Reset();
                 Tekla.Technology.Akit.UserScript.PHU_InzaiColumnNeighborDimensionEngine.Reset();
-                Tekla.Technology.Akit.UserScript.PHU_InzaiColumnSpliceDimensionEngine.Reset();
-                Tekla.Technology.Akit.UserScript.PHU_InzaiColumnSectionDimensionEngine.Reset();
                 Tekla.Technology.Akit.UserScript.PHU_ColumnDimensionTierContext.Reset();
                 Tekla.Technology.Akit.UserScript.PHU_VerticalShapeViewLayoutContext.Reset();
             }

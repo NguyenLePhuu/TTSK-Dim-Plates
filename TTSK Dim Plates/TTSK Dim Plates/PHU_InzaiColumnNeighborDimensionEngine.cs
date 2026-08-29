@@ -1532,7 +1532,11 @@ namespace Tekla.Technology.Akit.UserScript
             while (views != null && views.MoveNext())
             {
                 TSD.View view = views.Current as TSD.View;
-                if (view == null || !ViewContainsPart(view, mainPart))
+                if (
+                    view == null
+                    || PHU_VerticalShapeViewLayoutContext.IsSectionView(view)
+                    || !ViewContainsPart(view, mainPart)
+                )
                     continue;
                 TSG.Matrix globalToView = TSG.MatrixFactory.ToCoordinateSystem(
                     view.DisplayCoordinateSystem

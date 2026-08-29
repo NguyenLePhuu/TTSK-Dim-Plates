@@ -7989,11 +7989,8 @@ namespace Tekla.Technology.Akit.UserScript
             public double Height;
             public string StyleKey;
             public int PreferredSide = -1;
-            public bool UseBottomRowCollectiveLayout;
-            public int CollectiveTangentSign;
             public int RequiredSide = -1;
             public double RequiredAngleDegrees = -1.0;
-            public int RequiredTangentSign;
             public int RequiredVerticalRank = -1;
             public bool RequireNoDimensionConflicts;
             public bool RequireAcceptableObliqueAngle;
@@ -8523,7 +8520,6 @@ namespace Tekla.Technology.Akit.UserScript
                     item.OccupiedLeaders = occupiedLeaders;
                     item.RequiredSide = -1;
                     item.RequiredAngleDegrees = -1.0;
-                    item.RequiredTangentSign = 0;
                     if (
                         requireGroupConsistency
                         && !string.IsNullOrEmpty(item.StyleKey)
@@ -8539,29 +8535,6 @@ namespace Tekla.Technology.Akit.UserScript
                         {
                             item.RequiredSide = groupSelectedSides[item.StyleKey];
                         }
-                    }
-                    else if (
-                        requireGroupConsistency
-                        && !string.IsNullOrEmpty(item.StyleKey)
-                        && item.UseBottomRowCollectiveLayout
-                        && item.PreferredSide >= 0
-                    )
-                    {
-                        // Chỉ hàng lỗ sát đáy dùng cạnh tập thể bottom. Nếu
-                        // bottom thật sự không khả thi, mode fallback bên ngoài
-                        // vẫn giữ nguyên thuật toán linh hoạt trước đây.
-                        item.RequiredSide = item.PreferredSide;
-                    }
-                    if (
-                        requireGroupConsistency
-                        && item.UseBottomRowCollectiveLayout
-                        && item.PreferredSide == 3
-                    )
-                    {
-                        // Riêng hàng lỗ sát cạnh dưới: xòe mark phía trái sang
-                        // trái và mark phía phải sang phải. Đây là bố cục ảnh 3,
-                        // tránh hai nhãn cùng dồn về một phía dù đều ở bottom.
-                        item.RequiredTangentSign = item.CollectiveTangentSign;
                     }
 
                     HoleMarkCandidateV3 candidate = FindBestHoleMarkCandidateV3(
@@ -8611,7 +8584,6 @@ namespace Tekla.Technology.Akit.UserScript
                     item.RequireAcceptableObliqueAngle = false;
                     item.RequiredSide = -1;
                     item.RequiredAngleDegrees = -1.0;
-                    item.RequiredTangentSign = 0;
                     item.OccupiedLeaders = new List<HoleMarkSegmentV3>();
                 }
             }
@@ -9465,23 +9437,6 @@ namespace Tekla.Technology.Akit.UserScript
             {
                 return currentBest;
             }
-            if (item.RequiredTangentSign != 0)
-            {
-                double tangentDelta = candidate.Side == 0 || candidate.Side == 3
-                    ? candidate.Contact.X - candidate.Anchor.X
-                    : candidate.Contact.Y - candidate.Anchor.Y;
-                double tangentTolerance = Math.Max(
-                    0.5,
-                    0.1 * Math.Max(1.0, scale)
-                );
-                if (
-                    tangentDelta * item.RequiredTangentSign
-                    <= tangentTolerance
-                )
-                {
-                    return currentBest;
-                }
-            }
             if (
                 item.RequiredVerticalRank >= 0
                 && candidate.VerticalPreferenceRank != item.RequiredVerticalRank
@@ -9583,8 +9538,6 @@ namespace Tekla.Technology.Akit.UserScript
             {
                 if (item == null)
                     continue;
-                item.UseBottomRowCollectiveLayout = false;
-                item.CollectiveTangentSign = 0;
                 item.PreferredSide = ResolvePreferredHoleMarkSideV3(
                     item,
                     partBox,
@@ -9657,19 +9610,7 @@ namespace Tekla.Technology.Akit.UserScript
                 foreach (HoleMarkLayoutItemV3 item in group)
                 {
                     if (item != null)
-                    {
                         item.PreferredSide = collectiveSide;
-                        if (collectiveSide == 3 && spanX > alignmentTolerance)
-                        {
-                            item.UseBottomRowCollectiveLayout = true;
-                            double deltaX = item.CurrentAnchor.X - sumX / count;
-                            double fanTolerance = Math.Max(0.5, 0.1 * scale);
-                            if (deltaX < -fanTolerance)
-                                item.CollectiveTangentSign = -1;
-                            else if (deltaX > fanTolerance)
-                                item.CollectiveTangentSign = 1;
-                        }
-                    }
                 }
             }
         }

@@ -40,6 +40,7 @@ namespace Tekla.Technology.Akit.UserScript
 
         private const double BOUND_TOL = 20.0;
         private const double FLANGE_FACE_MIN_ALIGNMENT = 0.98;
+        private const double REFERENCE_AXIS_MIN_ALIGNMENT = 0.999;
 
         public static void Run()
         {
@@ -283,6 +284,11 @@ namespace Tekla.Technology.Akit.UserScript
                 if (!mainBox.Valid)
                     return count;
 
+                // Các chân ngoài của DIM ngang phải nằm trên contour thật của dầm.
+                // MinimumPoint/MaximumPoint chỉ còn dùng cho phân loại và bố trí;
+                // không được ghép chéo thành một góc bounding-box không tồn tại.
+                List<Point> mainContourVertices = GetSolidEdgeVertices2D(mainBeam);
+
                 Point mainReferenceStart;
                 Point mainReferenceEnd;
                 if (
@@ -292,6 +298,12 @@ namespace Tekla.Technology.Akit.UserScript
                         out mainReferenceEnd
                     )
                 )
+                    return count;
+
+                // Slot02 đo theo X/Y của view: main bắt buộc gần ngang.
+                // Chế độ auto đã lọc bằng hình dáng; guard này bảo vệ cả flow
+                // selection thủ công khỏi tạo DIM chiếu sai cho view xoay chéo.
+                if (!IsReferenceAxisAligned(mainReferenceStart, mainReferenceEnd, true))
                     return count;
 
                 List<NeighborPlateGroup> groups = new List<NeighborPlateGroup>();
@@ -472,70 +484,100 @@ namespace Tekla.Technology.Akit.UserScript
                 if (topRefs.Count > 0)
                 {
                     Vector direction = new Vector(0, 1, 0);
-                    double mainEdgeY = mainBox.MaxY;
-                    Point mainLeftEdge = new Point(mainBox.MinX, mainEdgeY, 0);
-                    Point mainRightEdge = new Point(mainBox.MaxX, mainEdgeY, 0);
-
-                    List<Point> chain = new List<Point>();
-                    chain.Add(mainLeftEdge);
-                    for (int i = 0; i < topRefs.Count; i++)
-                        chain.Add(topRefs[i]);
-                    chain.Add(mainRightEdge);
-
-                    double distanceMainToNeighbor = GetHorizontalDistanceFromOuterBoundary(
-                        direction,
-                        mainLeftEdge,
-                        allMinY,
-                        allMaxY,
-                        MAIN_TO_NEIGHBOR_TIER
-                    );
-
+                    Point mainLeftEdge;
+                    Point mainRightEdge;
                     if (
-                        CreateDimChain(
-                            handler,
-                            view,
-                            chain.ToArray(),
-                            direction,
-                            distanceMainToNeighbor
+                        !TryResolveMainHorizontalRealEdgePoints(
+                            mainContourVertices,
+                            true,
+                            out mainLeftEdge,
+                            out mainRightEdge
                         )
                     )
                     {
-                        count++;
+                        mainLeftEdge = null;
+                        mainRightEdge = null;
+                    }
+
+                    if (mainLeftEdge != null && mainRightEdge != null)
+                    {
+                        List<Point> chain = new List<Point>();
+                        chain.Add(mainLeftEdge);
+                        for (int i = 0; i < topRefs.Count; i++)
+                            chain.Add(topRefs[i]);
+                        chain.Add(mainRightEdge);
+                        chain.Sort(ComparePointByXThenY);
+
+                        double distanceMainToNeighbor = GetHorizontalDistanceFromOuterBoundary(
+                            direction,
+                            mainLeftEdge,
+                            allMinY,
+                            allMaxY,
+                            MAIN_TO_NEIGHBOR_TIER
+                        );
+
+                        if (
+                            CreateDimChain(
+                                handler,
+                                view,
+                                chain.ToArray(),
+                                direction,
+                                distanceMainToNeighbor
+                            )
+                        )
+                        {
+                            count++;
+                        }
                     }
                 }
 
                 if (bottomRefs.Count > 0)
                 {
                     Vector direction = new Vector(0, -1, 0);
-                    double mainEdgeY = mainBox.MinY;
-                    Point mainLeftEdge = new Point(mainBox.MinX, mainEdgeY, 0);
-                    Point mainRightEdge = new Point(mainBox.MaxX, mainEdgeY, 0);
-
-                    List<Point> chain = new List<Point>();
-                    chain.Add(mainLeftEdge);
-                    for (int i = 0; i < bottomRefs.Count; i++)
-                        chain.Add(bottomRefs[i]);
-                    chain.Add(mainRightEdge);
-
-                    double distanceMainToNeighbor = GetHorizontalDistanceFromOuterBoundary(
-                        direction,
-                        mainLeftEdge,
-                        allMinY,
-                        allMaxY,
-                        MAIN_TO_NEIGHBOR_TIER
-                    );
-
+                    Point mainLeftEdge;
+                    Point mainRightEdge;
                     if (
-                        CreateDimChain(
-                            handler,
-                            view,
-                            chain.ToArray(),
-                            direction,
-                            distanceMainToNeighbor
+                        !TryResolveMainHorizontalRealEdgePoints(
+                            mainContourVertices,
+                            false,
+                            out mainLeftEdge,
+                            out mainRightEdge
                         )
                     )
                     {
-                        count++;
+                        mainLeftEdge = null;
+                        mainRightEdge = null;
+                    }
+
+                    if (mainLeftEdge != null && mainRightEdge != null)
+                    {
+                        List<Point> chain = new List<Point>();
+                        chain.Add(mainLeftEdge);
+                        for (int i = 0; i < bottomRefs.Count; i++)
+                            chain.Add(bottomRefs[i]);
+                        chain.Add(mainRightEdge);
+                        chain.Sort(ComparePointByXThenY);
+
+                        double distanceMainToNeighbor = GetHorizontalDistanceFromOuterBoundary(
+                            direction,
+                            mainLeftEdge,
+                            allMinY,
+                            allMaxY,
+                            MAIN_TO_NEIGHBOR_TIER
+                        );
+
+                        if (
+                            CreateDimChain(
+                                handler,
+                                view,
+                                chain.ToArray(),
+                                direction,
+                                distanceMainToNeighbor
+                            )
+                        )
+                        {
+                            count++;
+                        }
                     }
                 }
             }
@@ -1371,6 +1413,10 @@ namespace Tekla.Technology.Akit.UserScript
             )
                 return false;
 
+            // Neighbor của Slot02 có semantic H đứng trong view.
+            if (!IsReferenceAxisAligned(neighborReferenceStart, neighborReferenceEnd, false))
+                return false;
+
             Point candidate;
             if (
                 !TryIntersectInfiniteReferenceAxes(
@@ -1482,6 +1528,156 @@ namespace Tekla.Technology.Akit.UserScript
             catch { }
 
             return b;
+        }
+
+        private static List<Point> GetSolidEdgeVertices2D(ModelPart part)
+        {
+            List<Point> result = new List<Point>();
+
+            try
+            {
+                if (part == null)
+                    return result;
+
+                Solid solid = part.GetSolid();
+                Tekla.Structures.Solid.EdgeEnumerator edges = solid.GetEdgeEnumerator();
+                while (edges != null && edges.MoveNext())
+                {
+                    Tekla.Structures.Solid.Edge edge =
+                        edges.Current as Tekla.Structures.Solid.Edge;
+                    if (edge == null)
+                        continue;
+
+                    if (edge.StartPoint != null)
+                    {
+                        AddUniquePoint2D(
+                            result,
+                            new Point(edge.StartPoint.X, edge.StartPoint.Y, 0),
+                            0.01
+                        );
+                    }
+
+                    if (edge.EndPoint != null)
+                    {
+                        AddUniquePoint2D(
+                            result,
+                            new Point(edge.EndPoint.X, edge.EndPoint.Y, 0),
+                            0.01
+                        );
+                    }
+                }
+            }
+            catch { }
+
+            return result;
+        }
+
+        private static bool TryResolveMainHorizontalRealEdgePoints(
+            List<Point> contourVertices,
+            bool preferTop,
+            out Point leftPoint,
+            out Point rightPoint
+        )
+        {
+            leftPoint = null;
+            rightPoint = null;
+
+            try
+            {
+                if (contourVertices == null || contourVertices.Count < 2)
+                    return false;
+
+                // DIM đo theo X: trước hết chốt hai X cực trị của toàn contour.
+                // Tại mỗi X cực trị, TOP lấy vertex có Y lớn nhất, BOTTOM lấy Y
+                // nhỏ nhất. Nhờ vậy chân DIM luôn là vertex thật, kể cả khi bất kỳ
+                // góc trái/phải, trên/dưới bị khoét; không thể sinh góc bbox ảo.
+                double minX = Double.MaxValue;
+                double maxX = Double.MinValue;
+                for (int i = 0; i < contourVertices.Count; i++)
+                {
+                    Point point = contourVertices[i];
+                    if (!IsFinitePoint2D(point))
+                        continue;
+
+                    if (point.X < minX)
+                        minX = point.X;
+                    if (point.X > maxX)
+                        maxX = point.X;
+                }
+
+                if (!IsFinite(minX) || !IsFinite(maxX) || Math.Abs(maxX - minX) <= TOL)
+                    return false;
+
+                const double extremeTol = 0.01;
+                Point leftAnchor = null;
+                Point rightAnchor = null;
+
+                for (int i = 0; i < contourVertices.Count; i++)
+                {
+                    Point point = contourVertices[i];
+                    if (!IsFinitePoint2D(point))
+                        continue;
+
+                    if (Math.Abs(point.X - minX) <= extremeTol)
+                    {
+                        if (
+                            leftAnchor == null
+                            || (preferTop && point.Y > leftAnchor.Y)
+                            || (!preferTop && point.Y < leftAnchor.Y)
+                        )
+                            leftAnchor = point;
+                    }
+
+                    if (Math.Abs(point.X - maxX) <= extremeTol)
+                    {
+                        if (
+                            rightAnchor == null
+                            || (preferTop && point.Y > rightAnchor.Y)
+                            || (!preferTop && point.Y < rightAnchor.Y)
+                        )
+                            rightAnchor = point;
+                    }
+                }
+
+                if (leftAnchor == null || rightAnchor == null)
+                    return false;
+
+                leftPoint = new Point(minX, leftAnchor.Y, 0);
+                rightPoint = new Point(maxX, rightAnchor.Y, 0);
+                return true;
+            }
+            catch
+            {
+                leftPoint = null;
+                rightPoint = null;
+                return false;
+            }
+        }
+
+        private static bool IsFinite(double value)
+        {
+            return !Double.IsNaN(value) && !Double.IsInfinity(value);
+        }
+
+        private static bool IsReferenceAxisAligned(
+            Point axisStart,
+            Point axisEnd,
+            bool requireHorizontal
+        )
+        {
+            if (!IsFinitePoint2D(axisStart) || !IsFinitePoint2D(axisEnd))
+                return false;
+
+            double deltaX = axisEnd.X - axisStart.X;
+            double deltaY = axisEnd.Y - axisStart.Y;
+            double length = Math.Sqrt(deltaX * deltaX + deltaY * deltaY);
+            if (!IsFinite(length) || length <= TOL)
+                return false;
+
+            double alignment = requireHorizontal
+                ? Math.Abs(deltaX) / length
+                : Math.Abs(deltaY) / length;
+            return alignment >= REFERENCE_AXIS_MIN_ALIGNMENT;
         }
 
         private static Point GetPlateEdgePointTowardNeighbor(

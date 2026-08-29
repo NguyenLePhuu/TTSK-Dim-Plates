@@ -31,6 +31,19 @@ namespace Tekla.Technology.Akit.UserScript
             InzaiDataCenter = 2
         }
 
+        private enum InzaiVerticalTopology
+        {
+            OneInsideOneOutside = 0,
+            ColumnBetweenGrids = 1
+        }
+
+        private sealed class InzaiVerticalStationPlan
+        {
+            public InzaiVerticalTopology Topology;
+            public double[] ColumnStations;
+            public double[] FloorStations;
+        }
+
         private sealed class P2
         {
             public double X;
@@ -46,6 +59,12 @@ namespace Tekla.Technology.Akit.UserScript
             {
                 return new TSG.Point(X, Y, 0.0);
             }
+        }
+
+        private sealed class CompositeBottomBoltFeet
+        {
+            public readonly List<P2> Vertical = new List<P2>();
+            public readonly List<P2> Width = new List<P2>();
         }
 
         private sealed class Bounds2
@@ -116,6 +135,12 @@ namespace Tekla.Technology.Akit.UserScript
             public readonly List<ExistingDimension> Dimensions = new List<ExistingDimension>();
         }
 
+        private sealed class CapturedShapeDimension
+        {
+            public ViewSnapshot View;
+            public ExistingDimension Dimension;
+        }
+
         private sealed class DimPlan
         {
             public string Name;
@@ -138,6 +163,8 @@ namespace Tekla.Technology.Akit.UserScript
             public ViewSnapshot Right;
             public ExistingDimension ReplaceableLeftVerticalTotal;
             public ExistingDimension ReplaceableRightVerticalTotal;
+            public readonly List<CapturedShapeDimension> ShapeDimensions =
+                new List<CapturedShapeDimension>();
         }
 
         private static bool _enabled;
@@ -311,6 +338,71 @@ namespace Tekla.Technology.Akit.UserScript
         }
 
         /// <summary>
+        /// Pure regression for the Type-2-only horizontal terminal/grid tiers.
+        /// It proves that Type 2 consumes the published Shape-spaced grid line
+        /// while every other family retains the legacy clearance rule.
+        /// </summary>
+        public static string AuditType2HorizontalGridRegression()
+        {
+            const int total = 4;
+            int passed = 0;
+            try
+            {
+                ViewGeometry view = new ViewGeometry();
+                view.RefTopY = 5613.0;
+
+                PHU_InzaiCompositeViewGeometry type2 =
+                    new PHU_InzaiCompositeViewGeometry();
+                type2.HorizontalClearanceY = 6613.0;
+                type2.Type2TerminalFamily = true;
+                type2.Type2TerminalAxisLine = 6013.0;
+                if (Math.Abs(
+                    ResolveCompositeHorizontalGridLine(view, type2, 200.0)
+                    - 6013.0) <= MatchTolerance)
+                    passed++;
+                P2 type2Direction = ResolveCompositeHorizontalGridDirection(
+                    type2,
+                    6013.0,
+                    6791.0);
+                if (type2Direction != null
+                    && type2Direction.Y < -DirectionCosineTolerance)
+                    passed++;
+
+                PHU_InzaiCompositeViewGeometry nonType2 =
+                    new PHU_InzaiCompositeViewGeometry();
+                nonType2.HorizontalClearanceY = 6613.0;
+                nonType2.Type2TerminalFamily = false;
+                nonType2.Type2TerminalAxisLine = 6013.0;
+                if (Math.Abs(
+                    ResolveCompositeHorizontalGridLine(view, nonType2, 200.0)
+                    - 7013.0) <= MatchTolerance)
+                    passed++;
+                P2 nonType2Direction = ResolveCompositeHorizontalGridDirection(
+                    nonType2,
+                    7013.0,
+                    6791.0);
+                if (nonType2Direction != null
+                    && nonType2Direction.Y > DirectionCosineTolerance)
+                    passed++;
+
+                return "TYPE2 HORIZONTAL GRID REGRESSION="
+                    + passed.ToString(CultureInfo.InvariantCulture)
+                    + "/"
+                    + total.ToString(CultureInfo.InvariantCulture)
+                    + (passed == total ? " PASS" : " FAIL");
+            }
+            catch (Exception ex)
+            {
+                return "TYPE2 HORIZONTAL GRID REGRESSION="
+                    + passed.ToString(CultureInfo.InvariantCulture)
+                    + "/"
+                    + total.ToString(CultureInfo.InvariantCulture)
+                    + " FAIL "
+                    + ex.Message;
+            }
+        }
+
+        /// <summary>
         /// Read-only production audit for the routed Column strategy. It never
         /// creates, modifies, deletes, or commits a drawing object.
         /// </summary>
@@ -381,6 +473,41 @@ namespace Tekla.Technology.Akit.UserScript
         }
 
         /// <summary>
+        /// Captures only the dimension objects produced by the Shape stage. The
+        /// snapshot is taken before Neighbor/Connection run, so the final Inzai
+        /// composite stage can replace exactly these objects without scanning or
+        /// deleting any connection dimension by geometry or by drawing region.
+        /// General Column and non-prepared flows are intentionally untouched.
+        /// </summary>
+        public static bool CaptureShapeDimensionsBeforeAddOns()
+        {
+            if (
+                _context == null
+                || _context.Strategy != ColumnGridStrategy.InzaiDataCenter
+            )
+                return false;
+
+            _context.ShapeDimensions.Clear();
+            try
+            {
+                RebindCapturedViews(_context);
+                CaptureShapeDimensions(_context.Left, _context.ShapeDimensions);
+                CaptureShapeDimensions(_context.Right, _context.ShapeDimensions);
+                if (_context.ShapeDimensions.Count == 0)
+                    throw new InvalidOperationException(
+                        "Shape produced no straight dimension set to hand off."
+                    );
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _context.ShapeDimensions.Clear();
+                LastRunMessage = "Inzai Shape DIM handoff skipped. " + ex.Message;
+                return false;
+            }
+        }
+
+        /// <summary>
         /// Final connected flow: analyze after Shape, create and verify all four
         /// plans, align the captured views once, then delete only the exact Shape
         /// vertical total superseded by the left column chain.
@@ -415,8 +542,31 @@ namespace Tekla.Technology.Akit.UserScript
                     false,
                     false
                 );
+
+                PHU_InzaiCompositeViewGeometry leftComposite;
+                PHU_InzaiCompositeViewGeometry rightComposite;
+                if (
+                    _context.ShapeDimensions.Count > 0
+                    && PHU_InzaiColumnCompositeDimensionContext.TryGet(
+                        left.Snapshot.Identifier,
+                        out leftComposite
+                    )
+                    && PHU_InzaiColumnCompositeDimensionContext.TryGet(
+                        right.Snapshot.Identifier,
+                        out rightComposite
+                    )
+                )
+                {
+                    return ExecuteInzaiCompositeAfterShape(
+                        left,
+                        right,
+                        leftComposite,
+                        rightComposite
+                    );
+                }
+
                 List<DimPlan> plans = BuildInzaiPlans(left, right, _context);
-                ValidatePlans(plans);
+                ValidatePlans(plans, 4);
 
                 TSD.StraightDimensionSetHandler handler = new TSD.StraightDimensionSetHandler();
                 for (int i = 0; i < plans.Count; i++)
@@ -484,6 +634,50 @@ namespace Tekla.Technology.Akit.UserScript
                 TryCommit(_context == null ? null : _context.Drawing);
                 LastRunSucceeded = false;
                 LastRunMessage = "Inzai Column rolled back. " + ex.Message;
+                return false;
+            }
+        }
+
+        private static bool ExecuteInzaiCompositeAfterShape(
+            ViewGeometry left,
+            ViewGeometry right,
+            PHU_InzaiCompositeViewGeometry leftComposite,
+            PHU_InzaiCompositeViewGeometry rightComposite
+        )
+        {
+            List<TSD.StraightDimensionSet> created = new List<TSD.StraightDimensionSet>();
+            List<CapturedShapeDimension> deleted = new List<CapturedShapeDimension>();
+            try
+            {
+                List<DimPlan> plans = BuildInzaiCompositePlans(
+                    left,
+                    right,
+                    leftComposite,
+                    rightComposite,
+                    _context
+                );
+                ValidatePlans(plans, 9);
+                CreateDimensionPlans(plans, created);
+                VerifyCreatedDimensions(plans, created);
+                DeleteCapturedShapeDimensions(_context.ShapeDimensions, deleted);
+
+                _context.Drawing.CommitChanges();
+                LastRunSucceeded = true;
+                LastRunMessage =
+                    "Inzai composite Shape/Connection/Grid satisfied "
+                    + plans.Count.ToString(CultureInfo.InvariantCulture)
+                    + " final Shape/Grid plans; replaced exactly "
+                    + deleted.Count.ToString(CultureInfo.InvariantCulture)
+                    + " captured Shape DIMs.";
+                return true;
+            }
+            catch (Exception ex)
+            {
+                DeleteCreated(created);
+                RestoreCapturedShapeDimensions(deleted);
+                TryCommit(_context == null ? null : _context.Drawing);
+                LastRunSucceeded = false;
+                LastRunMessage = "Inzai composite rolled back. " + ex.Message;
                 return false;
             }
         }
@@ -1024,6 +1218,711 @@ namespace Tekla.Technology.Akit.UserScript
             deleted.Add(replacement);
         }
 
+        private static List<DimPlan> BuildInzaiCompositePlans(
+            ViewGeometry left,
+            ViewGeometry right,
+            PHU_InzaiCompositeViewGeometry leftGeometry,
+            PHU_InzaiCompositeViewGeometry rightGeometry,
+            Context context
+        )
+        {
+            ValidateCompositeGeometry(left, leftGeometry, "LEFT");
+            ValidateCompositeGeometry(right, rightGeometry, "RIGHT");
+            if (left.HorizontalLevels.Count != 2)
+                throw new InvalidOperationException(
+                    "Composite LEFT view must resolve exactly two floor Grid levels."
+                );
+
+            double lowerGrid = Math.Min(
+                left.HorizontalLevels[0].Coordinate,
+                left.HorizontalLevels[1].Coordinate
+            );
+            double upperGrid = Math.Max(
+                left.HorizontalLevels[0].Coordinate,
+                left.HorizontalLevels[1].Coordinate
+            );
+            if (upperGrid - lowerGrid <= MatchTolerance)
+                throw new InvalidOperationException(
+                    "Composite floor Grid levels are not distinct."
+                );
+
+            double tierBase;
+            double tierStep;
+            string tierMessage;
+            if (
+                !PHU_ColumnDimensionTierContext.TryGetShapeSpacing(
+                    out tierBase,
+                    out tierStep,
+                    out tierMessage
+                )
+            )
+                throw new InvalidOperationException(tierMessage);
+
+            TSD.StraightDimensionSet.StraightDimensionSetAttributes leftAttributes =
+                FindCapturedAttributes(context, left.Snapshot.Identifier)
+                ?? FindAnyDimensionAttributes(left);
+            TSD.StraightDimensionSet.StraightDimensionSetAttributes rightAttributes =
+                FindCapturedAttributes(context, right.Snapshot.Identifier)
+                ?? FindAnyDimensionAttributes(right);
+
+            double leftLine = ResolveCompositeFirstVerticalLine(
+                context,
+                left,
+                -1,
+                tierStep
+            );
+            double rightLine = ResolveCompositeFirstVerticalLine(
+                context,
+                right,
+                -1,
+                tierStep
+            );
+
+            List<DimPlan> plans = new List<DimPlan>();
+
+            plans.Add(
+                NewPlanAtLine(
+                    "LEFT BASE-FLOOR-SPLICE",
+                    left,
+                    new P2(-1.0, 0.0),
+                    leftLine,
+                    leftAttributes,
+                    true,
+                    NewFeet(
+                        new P2(leftGeometry.BaseLeftX, leftGeometry.BaseY),
+                        new P2(leftGeometry.BaseLeftX, lowerGrid),
+                        new P2(leftGeometry.SpliceLowLeftX, leftGeometry.SpliceLowY)
+                    )
+                )
+            );
+            leftLine -= tierStep;
+            plans.Add(
+                NewPlanAtLine(
+                    "LEFT COLUMN SEGMENTS",
+                    left,
+                    new P2(-1.0, 0.0),
+                    leftLine,
+                    leftAttributes,
+                    true,
+                    NewFeet(
+                        new P2(leftGeometry.BaseLeftX, leftGeometry.BaseY),
+                        new P2(leftGeometry.SpliceLowLeftX, leftGeometry.SpliceLowY),
+                        new P2(leftGeometry.SpliceHighLeftX, leftGeometry.SpliceHighY),
+                        new P2(leftGeometry.TerminalLeftX, leftGeometry.TerminalY)
+                    )
+                )
+            );
+            leftLine -= tierStep;
+            plans.Add(
+                NewPlanAtLine(
+                    "LEFT BASE-TERMINAL-UPPER GRID",
+                    left,
+                    new P2(-1.0, 0.0),
+                    leftLine,
+                    leftAttributes,
+                    true,
+                    NewFeet(
+                        new P2(leftGeometry.BaseLeftX, leftGeometry.BaseY),
+                        new P2(leftGeometry.TerminalLeftX, leftGeometry.TerminalY),
+                        new P2(leftGeometry.RefX, upperGrid)
+                    )
+                )
+            );
+            leftLine -= tierStep;
+            plans.Add(
+                NewPlanAtLine(
+                    "LEFT FLOOR TOTAL",
+                    left,
+                    new P2(-1.0, 0.0),
+                    leftLine,
+                    leftAttributes,
+                    true,
+                    NewFeet(
+                        new P2(leftGeometry.BaseLeftX, leftGeometry.BaseY),
+                        new P2(leftGeometry.BaseLeftX, lowerGrid),
+                        new P2(leftGeometry.RefX, upperGrid)
+                    )
+                )
+            );
+
+            plans.Add(
+                NewPlanAtLine(
+                    "RIGHT COLUMN SEGMENTS",
+                    right,
+                    new P2(-1.0, 0.0),
+                    rightLine,
+                    rightAttributes,
+                    true,
+                    NewFeet(
+                        new P2(rightGeometry.BaseLeftX, rightGeometry.BaseY),
+                        new P2(rightGeometry.SpliceLowLeftX, rightGeometry.SpliceLowY),
+                        new P2(rightGeometry.SpliceHighLeftX, rightGeometry.SpliceHighY),
+                        new P2(rightGeometry.TerminalLeftX, rightGeometry.TerminalY)
+                    )
+                )
+            );
+            rightLine -= tierStep;
+            plans.Add(
+                NewPlanAtLine(
+                    "RIGHT BASE-TERMINAL-UPPER GRID",
+                    right,
+                    new P2(-1.0, 0.0),
+                    rightLine,
+                    rightAttributes,
+                    true,
+                    NewFeet(
+                        new P2(rightGeometry.BaseLeftX, rightGeometry.BaseY),
+                        new P2(rightGeometry.TerminalLeftX, rightGeometry.TerminalY),
+                        new P2(rightGeometry.RefX, upperGrid)
+                    )
+                )
+            );
+
+            AppendCompositeBottomPlans(
+                plans,
+                left,
+                leftGeometry,
+                context,
+                leftAttributes,
+                tierBase
+            );
+
+            double rightGridLine = ResolveCompositeHorizontalGridLine(
+                right,
+                rightGeometry,
+                tierStep
+            );
+            P2 rightGridDirection = ResolveCompositeHorizontalGridDirection(
+                rightGeometry,
+                rightGridLine,
+                upperGrid);
+            plans.Add(
+                NewPlanAtLine(
+                    "RIGHT REF-GRID",
+                    right,
+                    rightGridDirection,
+                    rightGridLine,
+                    rightAttributes,
+                    false,
+                    NewFeet(
+                        new P2(right.VerticalGrid.Coordinate, upperGrid),
+                        new P2(rightGeometry.RefX, rightGeometry.TerminalRefY)
+                    )
+                )
+            );
+
+            if (plans.Count != 9)
+                throw new InvalidOperationException(
+                    "Composite planner did not produce the required nine Shape/Grid plans."
+                );
+            return plans;
+        }
+
+        private static void ValidateCompositeGeometry(
+            ViewGeometry view,
+            PHU_InzaiCompositeViewGeometry geometry,
+            string viewName
+        )
+        {
+            if (
+                view == null
+                || view.Snapshot == null
+                || geometry == null
+                || geometry.ViewIdentifier != view.Snapshot.Identifier
+            )
+                throw new InvalidOperationException(
+                    viewName + " composite geometry is not bound to the captured view."
+                );
+
+            double[] values = new double[]
+            {
+                geometry.RefX,
+                geometry.BaseY,
+                geometry.BaseLeftX,
+                geometry.BaseRightX,
+                geometry.SpliceLowY,
+                geometry.SpliceLowLeftX,
+                geometry.SpliceHighY,
+                geometry.SpliceHighLeftX,
+                geometry.TerminalY,
+                geometry.TerminalLeftX,
+                geometry.TerminalRightX,
+                geometry.TerminalRefY,
+                geometry.HorizontalClearanceY
+            };
+            for (int i = 0; i < values.Length; i++)
+            {
+                if (!IsFinite(values[i]))
+                    throw new InvalidOperationException(
+                        viewName + " composite geometry contains a non-finite coordinate."
+                    );
+            }
+            if (
+                geometry.SpliceLowY <= geometry.BaseY + GeometryTolerance
+                || geometry.SpliceHighY <= geometry.SpliceLowY + GeometryTolerance
+                || geometry.TerminalY <= geometry.SpliceHighY + GeometryTolerance
+                || geometry.TerminalRefY < geometry.TerminalY - MatchTolerance
+                || geometry.BaseRightX <= geometry.BaseLeftX + GeometryTolerance
+                || geometry.TerminalRightX <= geometry.TerminalLeftX + GeometryTolerance
+            )
+                throw new InvalidOperationException(
+                    viewName + " composite stations are not geometrically ordered."
+                );
+        }
+
+        private static List<P2> NewFeet(params P2[] points)
+        {
+            List<P2> result = new List<P2>();
+            for (int i = 0; points != null && i < points.Length; i++)
+                result.Add(points[i]);
+            return result;
+        }
+
+        private static double ResolveCompositeFirstVerticalLine(
+            Context context,
+            ViewGeometry view,
+            int side,
+            double tierStep
+        )
+        {
+            double connectionLine;
+            if (
+                PHU_ColumnDimensionTierContext.TryGetNeighborOutermostVerticalLine(
+                    view.Snapshot.Identifier,
+                    side,
+                    out connectionLine
+                )
+            )
+                return connectionLine + (side * tierStep);
+
+            double capturedLine;
+            if (
+                TryGetOutermostCapturedVerticalLine(
+                    context,
+                    view.Snapshot.Identifier,
+                    side,
+                    out capturedLine
+                )
+            )
+                return capturedLine;
+
+            throw new InvalidOperationException(
+                "Composite vertical tier cannot be anchored to Connection or Shape."
+            );
+        }
+
+        private static bool TryGetOutermostCapturedVerticalLine(
+            Context context,
+            int viewIdentifier,
+            int side,
+            out double line
+        )
+        {
+            line = side < 0 ? Double.PositiveInfinity : Double.NegativeInfinity;
+            bool found = false;
+            for (int i = 0; context != null && i < context.ShapeDimensions.Count; i++)
+            {
+                CapturedShapeDimension captured = context.ShapeDimensions[i];
+                ExistingDimension dimension = captured == null ? null : captured.Dimension;
+                if (
+                    captured == null
+                    || captured.View == null
+                    || captured.View.Identifier != viewIdentifier
+                    || dimension == null
+                    || dimension.Direction == null
+                    || Math.Abs(dimension.Direction.X) < DirectionCosineTolerance
+                    || !IsFinite(dimension.LineCoordinate)
+                )
+                    continue;
+                if (
+                    !found
+                    || (side < 0 && dimension.LineCoordinate < line)
+                    || (side > 0 && dimension.LineCoordinate > line)
+                )
+                {
+                    line = dimension.LineCoordinate;
+                    found = true;
+                }
+            }
+            return found;
+        }
+
+        private static TSD.StraightDimensionSet.StraightDimensionSetAttributes FindCapturedAttributes(
+            Context context,
+            int viewIdentifier
+        )
+        {
+            for (int i = 0; context != null && i < context.ShapeDimensions.Count; i++)
+            {
+                CapturedShapeDimension captured = context.ShapeDimensions[i];
+                if (
+                    captured != null
+                    && captured.View != null
+                    && captured.View.Identifier == viewIdentifier
+                    && captured.Dimension != null
+                    && captured.Dimension.Attributes != null
+                )
+                    return captured.Dimension.Attributes;
+            }
+            return null;
+        }
+
+        private static void AppendCompositeBottomPlans(
+            List<DimPlan> plans,
+            ViewGeometry view,
+            PHU_InzaiCompositeViewGeometry geometry,
+            Context context,
+            TSD.StraightDimensionSet.StraightDimensionSetAttributes fallbackAttributes,
+            double tierBase
+        )
+        {
+            List<P2> bolts = new List<P2>();
+            for (int i = 0; i < geometry.BottomBoltPoints.Count; i++)
+            {
+                TSG.Point raw = geometry.BottomBoltPoints[i];
+                if (raw != null)
+                    AddUniquePoint(bolts, new P2(raw.X, raw.Y));
+            }
+            CompositeBottomBoltFeet bottomFeet = BuildCompositeBottomBoltFeet(
+                bolts,
+                geometry.BaseLeftX,
+                geometry.BaseRightX,
+                geometry.BaseY
+            );
+
+            ExistingDimension verticalSource = FindCapturedBottomSource(
+                context,
+                view.Snapshot.Identifier,
+                geometry,
+                true
+            );
+            ExistingDimension horizontalSource = FindCapturedBottomSource(
+                context,
+                view.Snapshot.Identifier,
+                geometry,
+                false
+            );
+            double verticalLine = ResolveCompositeBottomLeftLine(
+                geometry.BaseLeftX,
+                geometry.BaseRightX,
+                tierBase,
+                verticalSource == null
+                    ? Double.NaN
+                    : verticalSource.LineCoordinate
+            );
+            double horizontalLine = horizontalSource == null
+                ? geometry.BaseY - tierBase
+                : horizontalSource.LineCoordinate;
+
+            plans.Add(
+                NewPlanAtLine(
+                    "LEFT BASE BOLT VERTICAL",
+                    view,
+                    new P2(-1.0, 0.0),
+                    verticalLine,
+                    verticalSource == null ? fallbackAttributes : verticalSource.Attributes,
+                    true,
+                    bottomFeet.Vertical
+                )
+            );
+            plans.Add(
+                NewPlanAtLine(
+                    "LEFT BASE BOLT WIDTH",
+                    view,
+                    new P2(0.0, -1.0),
+                    horizontalLine,
+                    horizontalSource == null ? fallbackAttributes : horizontalSource.Attributes,
+                    true,
+                    bottomFeet.Width
+                )
+            );
+        }
+
+        private static CompositeBottomBoltFeet BuildCompositeBottomBoltFeet(
+            List<P2> rawBolts,
+            double baseLeftX,
+            double baseRightX,
+            double baseY
+        )
+        {
+            if (
+                !IsFinite(baseLeftX)
+                || !IsFinite(baseRightX)
+                || !IsFinite(baseY)
+                || baseRightX <= baseLeftX + GeometryTolerance
+            )
+                throw new InvalidOperationException(
+                    "LEFT composite base geometry is invalid."
+                );
+
+            List<P2> bolts = new List<P2>();
+            for (int i = 0; rawBolts != null && i < rawBolts.Count; i++)
+            {
+                P2 bolt = rawBolts[i];
+                if (bolt == null || !IsFinite(bolt.X) || !IsFinite(bolt.Y))
+                    continue;
+                AddUniquePoint(bolts, new P2(bolt.X, bolt.Y));
+            }
+            if (bolts.Count < 2)
+                throw new InvalidOperationException(
+                    "LEFT composite base bolt group has fewer than two distinct feet."
+                );
+
+            bolts.Sort(
+                delegate(P2 a, P2 b)
+                {
+                    double dy = a.Y - b.Y;
+                    if (Math.Abs(dy) > GeometryTolerance)
+                        return dy < 0.0 ? -1 : 1;
+                    return a.X.CompareTo(b.X);
+                }
+            );
+
+            List<List<P2>> rows = new List<List<P2>>();
+            for (int i = 0; i < bolts.Count; i++)
+            {
+                P2 bolt = bolts[i];
+                List<P2> row = rows.Count == 0 ? null : rows[rows.Count - 1];
+                if (
+                    row == null
+                    || Math.Abs(bolt.Y - row[0].Y) > MatchTolerance
+                )
+                {
+                    row = new List<P2>();
+                    rows.Add(row);
+                }
+                row.Add(bolt);
+            }
+            if (rows.Count == 0)
+                throw new InvalidOperationException(
+                    "LEFT composite base bolt rows could not be resolved."
+                );
+
+            CompositeBottomBoltFeet result = new CompositeBottomBoltFeet();
+            result.Vertical.Add(new P2(baseLeftX, baseY));
+            for (int r = 0; r < rows.Count; r++)
+            {
+                List<P2> row = rows[r];
+                row.Sort(delegate(P2 a, P2 b) { return a.X.CompareTo(b.X); });
+                P2 rightmost = row[row.Count - 1];
+                if (rightmost.Y <= baseY + GeometryTolerance)
+                    throw new InvalidOperationException(
+                        "LEFT composite base bolt row is not above the base edge."
+                    );
+                result.Vertical.Add(new P2(rightmost.X, rightmost.Y));
+            }
+
+            List<P2> furthestRow = rows[rows.Count - 1];
+            P2 furthestLeft = furthestRow[0];
+            P2 furthestRight = furthestRow[furthestRow.Count - 1];
+            if (
+                furthestRight.X - furthestLeft.X <= GeometryTolerance
+                || furthestLeft.X <= baseLeftX + GeometryTolerance
+                || furthestRight.X >= baseRightX - GeometryTolerance
+            )
+                throw new InvalidOperationException(
+                    "LEFT composite furthest base bolt row is incomplete or outside the base edges."
+                );
+
+            result.Width.Add(new P2(baseLeftX, baseY));
+            result.Width.Add(new P2(furthestLeft.X, furthestLeft.Y));
+            result.Width.Add(new P2(furthestRight.X, furthestRight.Y));
+            result.Width.Add(new P2(baseRightX, baseY));
+            return result;
+        }
+
+        private static double ResolveCompositeBottomLeftLine(
+            double baseLeftX,
+            double baseRightX,
+            double tierBase,
+            double capturedRightLine
+        )
+        {
+            double gap = tierBase;
+            if (
+                IsFinite(capturedRightLine)
+                && capturedRightLine > baseRightX + GeometryTolerance
+            )
+                gap = capturedRightLine - baseRightX;
+            if (!IsFinite(gap) || gap <= GeometryTolerance)
+                throw new InvalidOperationException(
+                    "LEFT composite base bolt tier gap is invalid."
+                );
+            return baseLeftX - gap;
+        }
+
+        private static ExistingDimension FindCapturedBottomSource(
+            Context context,
+            int viewIdentifier,
+            PHU_InzaiCompositeViewGeometry geometry,
+            bool vertical
+        )
+        {
+            ExistingDimension best = null;
+            double bestGap = Double.PositiveInfinity;
+            for (int i = 0; context != null && i < context.ShapeDimensions.Count; i++)
+            {
+                CapturedShapeDimension captured = context.ShapeDimensions[i];
+                ExistingDimension dimension = captured == null ? null : captured.Dimension;
+                if (
+                    captured == null
+                    || captured.View == null
+                    || captured.View.Identifier != viewIdentifier
+                    || dimension == null
+                    || dimension.Direction == null
+                    || !IsFinite(dimension.LineCoordinate)
+                )
+                    continue;
+
+                double gap;
+                if (vertical)
+                {
+                    if (
+                        dimension.Direction.X < DirectionCosineTolerance
+                        || dimension.LineCoordinate <= geometry.BaseRightX + GeometryTolerance
+                    )
+                        continue;
+                    gap = dimension.LineCoordinate - geometry.BaseRightX;
+                }
+                else
+                {
+                    if (
+                        dimension.Direction.Y > -DirectionCosineTolerance
+                        || dimension.LineCoordinate >= geometry.BaseY - GeometryTolerance
+                    )
+                        continue;
+                    gap = geometry.BaseY - dimension.LineCoordinate;
+                }
+                if (gap < bestGap)
+                {
+                    best = dimension;
+                    bestGap = gap;
+                }
+            }
+            return best;
+        }
+
+        private static double ResolveCompositeHorizontalGridLine(
+            ViewGeometry view,
+            PHU_InzaiCompositeViewGeometry geometry,
+            double tierStep
+        )
+        {
+            if (geometry.Type2TerminalFamily
+                && IsFinite(geometry.Type2TerminalAxisLine))
+                return geometry.Type2TerminalAxisLine;
+
+            double line = Math.Max(
+                view.RefTopY + tierStep,
+                geometry.HorizontalClearanceY + (2.0 * tierStep)
+            );
+            for (int i = 0; i < view.Dimensions.Count; i++)
+            {
+                ExistingDimension dimension = view.Dimensions[i];
+                if (
+                    dimension.Direction == null
+                    || dimension.Direction.Y < DirectionCosineTolerance
+                    || !IsFinite(dimension.LineCoordinate)
+                )
+                    continue;
+                line = Math.Max(line, dimension.LineCoordinate + tierStep);
+            }
+            return line;
+        }
+
+        private static P2 ResolveCompositeHorizontalGridDirection(
+            PHU_InzaiCompositeViewGeometry geometry,
+            double line,
+            double upperGrid)
+        {
+            if (geometry != null
+                && geometry.Type2TerminalFamily
+                && IsFinite(line)
+                && IsFinite(upperGrid)
+                && line < upperGrid - MatchTolerance)
+                return new P2(0.0, -1.0);
+            return new P2(0.0, 1.0);
+        }
+
+        private static void DeleteCapturedShapeDimensions(
+            List<CapturedShapeDimension> captured,
+            List<CapturedShapeDimension> deleted
+        )
+        {
+            if (captured == null || captured.Count == 0)
+                throw new InvalidOperationException(
+                    "No exact Shape DIM snapshot is available for replacement."
+                );
+            for (int i = 0; i < captured.Count; i++)
+            {
+                CapturedShapeDimension item = captured[i];
+                if (
+                    item == null
+                    || item.View == null
+                    || item.Dimension == null
+                    || item.Dimension.Dimension == null
+                )
+                    throw new InvalidOperationException(
+                        "An exact captured Shape DIM could not be deleted safely."
+                    );
+                RefreshExistingDimensionSnapshot(item.Dimension);
+                if (!item.Dimension.Dimension.Delete())
+                    throw new InvalidOperationException(
+                        "An exact captured Shape DIM could not be deleted safely."
+                    );
+                deleted.Add(item);
+            }
+        }
+
+        private static void RefreshExistingDimensionSnapshot(ExistingDimension snapshot)
+        {
+            if (snapshot == null || snapshot.Dimension == null)
+                throw new InvalidOperationException(
+                    "A captured Shape DIM is unavailable for final-state snapshot."
+                );
+            try
+            {
+                snapshot.Dimension.Select();
+            }
+            catch { }
+
+            List<P2> points = ReadDimensionPoints(snapshot.Dimension);
+            P2 direction = ReadDirection(snapshot.Dimension);
+            double distance = ReadDoubleMember(snapshot.Dimension, "Distance");
+            if (points.Count < 2 || direction == null || !IsFinite(distance))
+                throw new InvalidOperationException(
+                    "A captured Shape DIM could not be read immediately before replacement."
+                );
+
+            snapshot.Points.Clear();
+            snapshot.Points.AddRange(points);
+            snapshot.Direction = direction;
+            snapshot.Distance = distance;
+            try
+            {
+                snapshot.Attributes = snapshot.Dimension.Attributes;
+            }
+            catch { }
+            snapshot.LineCoordinate =
+                Math.Abs(direction.X) >= Math.Abs(direction.Y)
+                    ? points[0].X + (direction.X * distance)
+                    : points[0].Y + (direction.Y * distance);
+        }
+
+        private static void RestoreCapturedShapeDimensions(
+            List<CapturedShapeDimension> deleted
+        )
+        {
+            for (int i = 0; deleted != null && i < deleted.Count; i++)
+            {
+                CapturedShapeDimension item = deleted[i];
+                RestoreReplacement(
+                    item == null ? null : item.Dimension,
+                    item == null || item.View == null ? null : item.View.View
+                );
+            }
+        }
+
         private static List<DimPlan> BuildInzaiPlans(
             ViewGeometry left,
             ViewGeometry right,
@@ -1039,38 +1938,12 @@ namespace Tekla.Technology.Akit.UserScript
                     "LEFT view must resolve exactly two unique floor Grid levels."
                 );
 
-            GridAxis inside = null;
-            GridAxis outside = null;
-            for (int i = 0; i < left.HorizontalLevels.Count; i++)
-            {
-                GridAxis level = left.HorizontalLevels[i];
-                if (
-                    level.Coordinate > left.MainBounds.MinY + MatchTolerance
-                    && level.Coordinate < left.MainBounds.MaxY - MatchTolerance
-                )
-                {
-                    if (inside != null)
-                        throw new InvalidOperationException(
-                            "LEFT view has more than one inside floor level."
-                        );
-                    inside = level;
-                }
-                else if (
-                    level.Coordinate < left.MainBounds.MinY - MatchTolerance
-                    || level.Coordinate > left.MainBounds.MaxY + MatchTolerance
-                )
-                {
-                    if (outside != null)
-                        throw new InvalidOperationException(
-                            "LEFT view has more than one exterior floor level."
-                        );
-                    outside = level;
-                }
-            }
-            if (inside == null || outside == null)
-                throw new InvalidOperationException(
-                    "LEFT floor topology must contain one inside and one exterior level."
-                );
+            InzaiVerticalStationPlan verticalGeometry = BuildInzaiVerticalStationPlan(
+                left.HorizontalLevels[0].Coordinate,
+                left.HorizontalLevels[1].Coordinate,
+                left.MainBounds.MinY,
+                left.MainBounds.MaxY
+            );
 
             ExistingDimension verticalTotal = FindReplaceableLeftVerticalTotal(left);
             if (verticalTotal == null)
@@ -1107,7 +1980,6 @@ namespace Tekla.Technology.Akit.UserScript
                     "Column Grid could not resolve the shared Shape tier sequence."
                 );
             double anchorX = left.MainBounds.MinX;
-            bool exteriorAbove = outside.Coordinate > left.MainBounds.MaxY;
 
             List<DimPlan> plans = new List<DimPlan>();
             DimPlan column = NewPlan(
@@ -1121,9 +1993,7 @@ namespace Tekla.Technology.Akit.UserScript
             AddSortedVerticalFeet(
                 column,
                 anchorX,
-                outside.Coordinate,
-                left.MainBounds.MinY,
-                left.MainBounds.MaxY
+                verticalGeometry.ColumnStations
             );
             plans.Add(column);
 
@@ -1138,9 +2008,7 @@ namespace Tekla.Technology.Akit.UserScript
             AddSortedVerticalFeet(
                 floors,
                 anchorX,
-                left.HorizontalLevels[0].Coordinate,
-                left.HorizontalLevels[1].Coordinate,
-                exteriorAbove ? left.MainBounds.MinY : left.MainBounds.MaxY
+                verticalGeometry.FloorStations
             );
             plans.Add(floors);
 
@@ -1149,6 +2017,107 @@ namespace Tekla.Technology.Akit.UserScript
                 BuildHorizontalGridPlan(right, FindAnyDimensionAttributes(right), false, tierStep)
             );
             return plans;
+        }
+
+        private static InzaiVerticalStationPlan BuildInzaiVerticalStationPlan(
+            double firstGrid,
+            double secondGrid,
+            double columnBottom,
+            double columnTop
+        )
+        {
+            if (
+                !IsFinite(firstGrid)
+                || !IsFinite(secondGrid)
+                || !IsFinite(columnBottom)
+                || !IsFinite(columnTop)
+                || columnTop - columnBottom <= MatchTolerance
+            )
+                throw new InvalidOperationException(
+                    "The Inzai Column floor coordinates are not valid."
+                );
+
+            double lower = Math.Min(firstGrid, secondGrid);
+            double upper = Math.Max(firstGrid, secondGrid);
+            if (upper - lower <= MatchTolerance)
+                throw new InvalidOperationException(
+                    "The two Inzai floor Grid levels are not distinct."
+                );
+
+            bool lowerInside =
+                lower > columnBottom + MatchTolerance
+                && lower < columnTop - MatchTolerance;
+            bool upperInside =
+                upper > columnBottom + MatchTolerance
+                && upper < columnTop - MatchTolerance;
+            bool lowerBelow = lower < columnBottom - MatchTolerance;
+            bool upperAbove = upper > columnTop + MatchTolerance;
+
+            InzaiVerticalStationPlan result = new InzaiVerticalStationPlan();
+            if (lowerInside != upperInside)
+            {
+                double outside = lowerInside ? upper : lower;
+                bool outsideBelow = outside < columnBottom - MatchTolerance;
+                bool outsideAbove = outside > columnTop + MatchTolerance;
+                if (!outsideBelow && !outsideAbove)
+                    throw new InvalidOperationException(
+                        "The exterior Inzai floor Grid is not outside the column span."
+                    );
+
+                result.Topology = InzaiVerticalTopology.OneInsideOneOutside;
+                result.ColumnStations = BuildSortedStations(
+                    outside,
+                    columnBottom,
+                    columnTop
+                );
+                result.FloorStations = BuildSortedStations(
+                    lower,
+                    upper,
+                    outsideAbove ? columnBottom : columnTop
+                );
+            }
+            else if (lowerBelow && upperAbove)
+            {
+                result.Topology = InzaiVerticalTopology.ColumnBetweenGrids;
+                result.ColumnStations = BuildSortedStations(
+                    lower,
+                    columnBottom,
+                    columnTop,
+                    upper
+                );
+                result.FloorStations = BuildSortedStations(lower, upper);
+            }
+            else
+            {
+                throw new InvalidOperationException(
+                    "LEFT floor topology must contain one inside/one exterior level "
+                        + "or two exterior levels bracketing the column."
+                );
+            }
+
+            int expectedColumnCount =
+                result.Topology == InzaiVerticalTopology.ColumnBetweenGrids ? 4 : 3;
+            int expectedFloorCount =
+                result.Topology == InzaiVerticalTopology.ColumnBetweenGrids ? 2 : 3;
+            if (
+                result.ColumnStations == null
+                || result.ColumnStations.Length != expectedColumnCount
+                || result.FloorStations == null
+                || result.FloorStations.Length != expectedFloorCount
+            )
+                throw new InvalidOperationException(
+                    "The Inzai floor topology did not retain its semantic DIM feet."
+                );
+            return result;
+        }
+
+        private static double[] BuildSortedStations(params double[] values)
+        {
+            List<double> result = new List<double>();
+            for (int i = 0; values != null && i < values.Length; i++)
+                AddUniqueCoordinate(result, values[i]);
+            result.Sort();
+            return result.ToArray();
         }
 
         private static DimPlan BuildHorizontalGridPlan(
@@ -1175,19 +2144,44 @@ namespace Tekla.Technology.Akit.UserScript
                     attributes = dimension.Attributes;
             }
 
-            DimPlan plan = NewPlan(
-                isLeft ? "LEFT REF-GRID" : "RIGHT REF-GRID",
+            bool coincident =
+                Math.Abs(view.VerticalGrid.Coordinate - view.RefX) <= MatchTolerance;
+            List<P2> feet = new List<P2>();
+            string name;
+            if (coincident)
+            {
+                P2 leftEdge = SelectTopExtremeVertex(view, false);
+                P2 rightEdge = SelectTopExtremeVertex(view, true);
+                if (
+                    view.RefX <= leftEdge.X + MatchTolerance
+                    || view.RefX >= rightEdge.X - MatchTolerance
+                )
+                    throw new InvalidOperationException(
+                        "A coincident Inzai vertical Grid is not between the MainPart edges."
+                    );
+
+                name = isLeft ? "LEFT EDGE-REF-EDGE" : "RIGHT EDGE-REF-EDGE";
+                feet.Add(leftEdge);
+                feet.Add(new P2(view.RefX, view.RefTopY));
+                feet.Add(rightEdge);
+            }
+            else
+            {
+                name = isLeft ? "LEFT REF-GRID" : "RIGHT REF-GRID";
+                // Preserve the approved legacy semantic order on either side.
+                feet.Add(new P2(view.RefX, view.RefTopY));
+                feet.Add(new P2(view.VerticalGrid.Coordinate, view.RefTopY));
+            }
+
+            return NewPlanAtLine(
+                name,
                 view,
                 new P2(0.0, 1.0),
-                topLine - view.RefTopY,
+                topLine,
                 attributes,
-                false
+                coincident,
+                feet
             );
-            // Semantic order is always REF -> GRID, independent of which side
-            // the vertical Grid lies on.
-            plan.Points.Add(new P2(view.RefX, view.RefTopY));
-            plan.Points.Add(new P2(view.VerticalGrid.Coordinate, view.RefTopY));
-            return plan;
         }
 
         private static DimPlan NewPlan(
@@ -1432,6 +2426,29 @@ namespace Tekla.Technology.Akit.UserScript
             return result;
         }
 
+        private static void CaptureShapeDimensions(
+            ViewSnapshot view,
+            List<CapturedShapeDimension> target
+        )
+        {
+            if (view == null || view.View == null || target == null)
+                throw new InvalidOperationException(
+                    "A captured Shape view is unavailable."
+                );
+
+            List<ExistingDimension> dimensions = ReadExistingDimensions(view.View);
+            for (int i = 0; i < dimensions.Count; i++)
+            {
+                ExistingDimension dimension = dimensions[i];
+                if (dimension == null || dimension.Dimension == null)
+                    continue;
+                CapturedShapeDimension captured = new CapturedShapeDimension();
+                captured.View = view;
+                captured.Dimension = dimension;
+                target.Add(captured);
+            }
+        }
+
         private static List<GridAxis> ReadDrawingGridAxes(TSD.View view)
         {
             List<GridAxis> result = new List<GridAxis>();
@@ -1486,6 +2503,7 @@ namespace Tekla.Technology.Akit.UserScript
         )
         {
             GridAxis best = null;
+            GridAxis coincident = null;
             double bestDistance = Double.PositiveInfinity;
             double minimumOverlap = Math.Max(
                 1.0,
@@ -1494,7 +2512,7 @@ namespace Tekla.Technology.Akit.UserScript
             for (int i = 0; grids != null && i < grids.Count; i++)
             {
                 GridAxis axis = grids[i];
-                if (!axis.IsVertical || Math.Abs(axis.Coordinate - view.RefX) <= MatchTolerance)
+                if (!axis.IsVertical)
                     continue;
                 double overlap =
                     Math.Min(axis.SpanMax, view.MainBounds.MaxY)
@@ -1502,13 +2520,21 @@ namespace Tekla.Technology.Akit.UserScript
                 if (overlap < minimumOverlap)
                     continue;
                 double distance = Math.Abs(axis.Coordinate - view.RefX);
+                if (distance <= MatchTolerance)
+                {
+                    if (coincident == null || CompareGridIdentity(axis, coincident) < 0)
+                        coincident = axis;
+                    continue;
+                }
                 if (distance < bestDistance)
                 {
                     best = axis;
                     bestDistance = distance;
                 }
             }
-            return best;
+            // Preserve the legacy non-coincident choice whenever one exists.
+            // A coincident Grid is a new fallback for edge -> REF -> edge only.
+            return best ?? coincident;
         }
 
         private static GridAxis ResolveGeneralOverlappingVerticalGrid(
@@ -1585,7 +2611,11 @@ namespace Tekla.Technology.Akit.UserScript
             while (views != null && views.MoveNext())
             {
                 TSD.View view = views.Current as TSD.View;
-                if (view == null || !ViewContainsPart(view, mainPart))
+                if (
+                    view == null
+                    || PHU_VerticalShapeViewLayoutContext.IsSectionView(view)
+                    || !ViewContainsPart(view, mainPart)
+                )
                     continue;
                 TSG.Matrix globalToView = TSG.MatrixFactory.ToCoordinateSystem(
                     view.DisplayCoordinateSystem
@@ -1729,11 +2759,13 @@ namespace Tekla.Technology.Akit.UserScript
             return bounds;
         }
 
-        private static void ValidatePlans(List<DimPlan> plans)
+        private static void ValidatePlans(List<DimPlan> plans, int expectedCount)
         {
-            if (plans == null || plans.Count != 4)
+            if (plans == null || plans.Count != expectedCount)
                 throw new InvalidOperationException(
-                    "Inzai Column requires exactly four DIM plans."
+                    "Inzai Column requires exactly "
+                        + expectedCount.ToString(CultureInfo.InvariantCulture)
+                        + " DIM plans for this strategy."
                 );
             for (int i = 0; i < plans.Count; i++)
             {

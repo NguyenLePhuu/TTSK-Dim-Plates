@@ -195,10 +195,7 @@ namespace Tekla.Technology.Akit.UserScript
         private const double HOLE_MARK_PREFERRED_ANGLE_TOL_DEG = 15.0;
         private const double HOLE_MARK_OBLIQUE_ANGLE_TOL_DEG = 25.0;
         private const double HOLE_MARK_ANGLE_PENALTY_PAPER_PER_DEG = 1.25;
-        private const double HOLE_MARK_EDGE_PREFERENCE_PENALTY_PAPER = 30.0;
-        private const double HOLE_MARK_DIM_CONFLICT_PENALTY_PAPER = 4.0;
-        private const double HOLE_MARK_VERTICAL_PREFERENCE_PENALTY_PAPER = 10.0;
-        private const double HOLE_MARK_GROUP_ANGLE_TOL_DEG = 2.0;
+        private const double HOLE_MARK_DIM_CONFLICT_PENALTY_PAPER = 10.0;
 
         #endregion
 
@@ -7552,24 +7549,6 @@ namespace Tekla.Technology.Akit.UserScript
             return false;
         }
 
-        private static string BuildHoleMarkStyleKeyV3(Mark mark)
-        {
-            try
-            {
-                string text = GetMarkTextForAutoFix(mark);
-                if (!string.IsNullOrEmpty(text))
-                    return text.Trim().ToUpperInvariant();
-            }
-            catch { }
-
-            HashSet<string> names = GetMarkContentPropertyNamesV3(mark);
-            if (names.Count == 0)
-                return string.Empty;
-            List<string> ordered = new List<string>(names);
-            ordered.Sort(StringComparer.OrdinalIgnoreCase);
-            return string.Join("|", ordered.ToArray()).ToUpperInvariant();
-        }
-
         private static HashSet<string> GetMarkContentPropertyNamesV3(Mark mark)
         {
             HashSet<string> names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -7964,8 +7943,6 @@ namespace Tekla.Technology.Akit.UserScript
         {
             public Point A;
             public Point B;
-            public bool IsDimensionLine;
-            public bool IsExtensionLine;
         }
 
         private sealed class HoleMarkRectV3
@@ -7980,23 +7957,10 @@ namespace Tekla.Technology.Akit.UserScript
         {
             public Mark Mark;
             public Point CurrentAnchor;
-            public Point LeaderContactOffset;
             public List<Point> Anchors = new List<Point>();
             public List<Point> GroupHoles = new List<Point>();
-            public List<HoleMarkSegmentV3> OccupiedLeaders =
-                new List<HoleMarkSegmentV3>();
             public double Width;
             public double Height;
-            public string StyleKey;
-            public int PreferredSide = -1;
-            public bool UseBottomRowCollectiveLayout;
-            public int CollectiveTangentSign;
-            public int RequiredSide = -1;
-            public double RequiredAngleDegrees = -1.0;
-            public int RequiredTangentSign;
-            public int RequiredVerticalRank = -1;
-            public bool RequireNoDimensionConflicts;
-            public bool RequireAcceptableObliqueAngle;
         }
 
         private sealed class HoleMarkCandidateV3
@@ -8013,23 +7977,9 @@ namespace Tekla.Technology.Akit.UserScript
             public double AngleDeviation;
             public int DimensionConflictCount;
             public int AngleQualityRank;
-            public int EdgePreferenceRank;
             public int VisualTier;
             public int VerticalPreferenceRank;
             public double Score;
-        }
-
-        private sealed class HoleMarkLayoutPlanEntryV3
-        {
-            public HoleMarkLayoutItemV3 Item;
-            public HoleMarkCandidateV3 Candidate;
-        }
-
-        private sealed class HoleMarkLayoutPlanV3
-        {
-            public List<HoleMarkLayoutPlanEntryV3> Entries =
-                new List<HoleMarkLayoutPlanEntryV3>();
-            public double TotalScore;
         }
 
         private static void AutoArrangeHoleMarksAesthetic(
@@ -8194,7 +8144,6 @@ namespace Tekla.Technology.Akit.UserScript
 
                     HoleMarkLayoutItemV3 item = new HoleMarkLayoutItemV3();
                     item.Mark = mark;
-                    item.StyleKey = BuildHoleMarkStyleKeyV3(mark);
                     item.CurrentAnchor = new Point(
                         placing.StartPoint.X,
                         placing.StartPoint.Y,
@@ -8202,29 +8151,6 @@ namespace Tekla.Technology.Akit.UserScript
                     );
                     item.Width = Math.Abs(boxMax.X - boxMin.X);
                     item.Height = Math.Abs(boxMax.Y - boxMin.Y);
-                    Point currentCenter = new Point(
-                        (boxMin.X + boxMax.X) * 0.5,
-                        (boxMin.Y + boxMax.Y) * 0.5,
-                        0
-                    );
-                    Point actualLeaderEnd;
-                    if (
-                        TryGetHoleMarkLeaderEndPointV3(
-                            mark,
-                            item.CurrentAnchor,
-                            out actualLeaderEnd
-                        )
-                    )
-                    {
-                        // MoveObjectRelative + LimitedModify tịnh tiến cứng cả
-                        // parent MARK và LeaderLine.EndPoint. Giữ offset thật này
-                        // để dự đoán đúng đường hiển thị; không dùng điểm clamp giả.
-                        item.LeaderContactOffset = new Point(
-                            actualLeaderEnd.X - currentCenter.X,
-                            actualLeaderEnd.Y - currentCenter.Y,
-                            0
-                        );
-                    }
                     // Chỉ move mark. Không đổi lỗ/bolt đang được leader trỏ tới.
                     item.Anchors.Add(
                         new Point(
@@ -8295,24 +8221,19 @@ namespace Tekla.Technology.Akit.UserScript
             partBox.MinY = partMinY;
             partBox.MaxY = partMaxY;
 
-            HoleMarkLayoutPlanV3 layoutPlan = BuildCoordinatedHoleMarkLayoutPlanV3(
-                items,
-                partBox,
-                dimensionSegments,
-                occupiedMarkBoxes,
-                scale
-            );
-            if (layoutPlan == null || layoutPlan.Entries.Count == 0)
-                return;
-
             bool movedAny = false;
-            foreach (HoleMarkLayoutPlanEntryV3 entry in layoutPlan.Entries)
+            foreach (HoleMarkLayoutItemV3 item in items)
             {
-                if (entry == null || entry.Item == null || entry.Candidate == null)
-                    continue;
+                HoleMarkCandidateV3 candidate = FindBestHoleMarkCandidateV3(
+                    item,
+                    partBox,
+                    dimensionSegments,
+                    occupiedMarkBoxes,
+                    scale
+                );
 
-                HoleMarkLayoutItemV3 item = entry.Item;
-                HoleMarkCandidateV3 candidate = entry.Candidate;
+                if (candidate == null)
+                    continue;
 
                 try
                 {
@@ -8334,6 +8255,7 @@ namespace Tekla.Technology.Akit.UserScript
                         movedAny = true;
                     }
 
+                    occupiedMarkBoxes.Add(candidate.Box);
                 }
                 catch { }
             }
@@ -8342,279 +8264,6 @@ namespace Tekla.Technology.Akit.UserScript
                 return;
 
             SafeCommitAndWait(drawing, 80);
-        }
-
-        private static HoleMarkLayoutPlanV3 BuildCoordinatedHoleMarkLayoutPlanV3(
-            List<HoleMarkLayoutItemV3> items,
-            HoleMarkRectV3 partBox,
-            List<HoleMarkSegmentV3> dimensionSegments,
-            List<HoleMarkRectV3> fixedMarkBoxes,
-            double scale
-        )
-        {
-            if (items == null || items.Count == 0)
-                return null;
-
-            AssignPreferredHoleMarkSidesV3(items, partBox, scale);
-
-            // Không ép toàn bộ mark cùng lên hoặc cùng xuống nữa. Mỗi mark lấy
-            // cạnh gần anchor làm hướng kỹ thuật; chỉ những mark cùng nội dung và
-            // cùng cạnh gần nhất mới khóa chung side/góc. Một lần cắt chân dóng
-            // đã được collision cho phép và scoring cân bằng với góc 45°.
-            HoleMarkLayoutPlanV3 plan = BuildBestHoleMarkLayoutPlanForModeV3(
-                items,
-                partBox,
-                dimensionSegments,
-                fixedMarkBoxes,
-                scale,
-                -1,
-                false,
-                true,
-                true
-            );
-            if (plan != null)
-                return plan;
-
-            plan = BuildBestHoleMarkLayoutPlanForModeV3(
-                items,
-                partBox,
-                dimensionSegments,
-                fixedMarkBoxes,
-                scale,
-                -1,
-                false,
-                true,
-                false
-            );
-            if (plan != null)
-                return plan;
-
-            plan = BuildBestHoleMarkLayoutPlanForModeV3(
-                items,
-                partBox,
-                dimensionSegments,
-                fixedMarkBoxes,
-                scale,
-                -1,
-                false,
-                false,
-                true
-            );
-            if (plan != null)
-                return plan;
-
-            return BuildBestHoleMarkLayoutPlanForModeV3(
-                items,
-                partBox,
-                dimensionSegments,
-                fixedMarkBoxes,
-                scale,
-                -1,
-                false,
-                false,
-                false
-            );
-        }
-
-        private static HoleMarkLayoutPlanV3 PickBetterHoleMarkLayoutPlanV3(
-            HoleMarkLayoutPlanV3 first,
-            HoleMarkLayoutPlanV3 second
-        )
-        {
-            if (first == null)
-                return second;
-            if (second == null)
-                return first;
-            return second.TotalScore < first.TotalScore - 0.000001 ? second : first;
-        }
-
-        private static HoleMarkLayoutPlanV3 BuildBestHoleMarkLayoutPlanForModeV3(
-            List<HoleMarkLayoutItemV3> items,
-            HoleMarkRectV3 partBox,
-            List<HoleMarkSegmentV3> dimensionSegments,
-            List<HoleMarkRectV3> fixedMarkBoxes,
-            double scale,
-            int requiredVerticalRank,
-            bool requireNoDimensionConflicts,
-            bool requireAcceptableObliqueAngle,
-            bool requireGroupConsistency
-        )
-        {
-            HoleMarkLayoutPlanV3 forward = TryBuildHoleMarkLayoutPlanInOrderV3(
-                items,
-                false,
-                partBox,
-                dimensionSegments,
-                fixedMarkBoxes,
-                scale,
-                requiredVerticalRank,
-                requireNoDimensionConflicts,
-                requireAcceptableObliqueAngle,
-                requireGroupConsistency
-            );
-            if (items.Count <= 1)
-                return forward;
-
-            HoleMarkLayoutPlanV3 reverse = TryBuildHoleMarkLayoutPlanInOrderV3(
-                items,
-                true,
-                partBox,
-                dimensionSegments,
-                fixedMarkBoxes,
-                scale,
-                requiredVerticalRank,
-                requireNoDimensionConflicts,
-                requireAcceptableObliqueAngle,
-                requireGroupConsistency
-            );
-            if (forward == null)
-                return reverse;
-            if (reverse == null)
-                return forward;
-            return reverse.TotalScore < forward.TotalScore - 0.000001
-                ? reverse
-                : forward;
-        }
-
-        private static HoleMarkLayoutPlanV3 TryBuildHoleMarkLayoutPlanInOrderV3(
-            List<HoleMarkLayoutItemV3> sourceItems,
-            bool reverseOrder,
-            HoleMarkRectV3 partBox,
-            List<HoleMarkSegmentV3> dimensionSegments,
-            List<HoleMarkRectV3> fixedMarkBoxes,
-            double scale,
-            int requiredVerticalRank,
-            bool requireNoDimensionConflicts,
-            bool requireAcceptableObliqueAngle,
-            bool requireGroupConsistency
-        )
-        {
-            if (sourceItems == null || sourceItems.Count == 0)
-                return null;
-
-            List<HoleMarkLayoutItemV3> orderedItems =
-                new List<HoleMarkLayoutItemV3>(sourceItems);
-            if (reverseOrder)
-                orderedItems.Reverse();
-
-            List<HoleMarkRectV3> occupiedBoxes = fixedMarkBoxes == null
-                ? new List<HoleMarkRectV3>()
-                : new List<HoleMarkRectV3>(fixedMarkBoxes);
-            List<HoleMarkSegmentV3> occupiedLeaders =
-                new List<HoleMarkSegmentV3>();
-            HoleMarkLayoutPlanV3 plan = new HoleMarkLayoutPlanV3();
-            Dictionary<string, int> groupPreferredSides =
-                new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            Dictionary<string, int> groupSelectedSides =
-                new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            Dictionary<string, double> groupAngles =
-                new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
-
-            try
-            {
-                foreach (HoleMarkLayoutItemV3 item in orderedItems)
-                {
-                    if (item == null)
-                        return null;
-
-                    item.RequiredVerticalRank = requiredVerticalRank;
-                    item.RequireNoDimensionConflicts = requireNoDimensionConflicts;
-                    item.RequireAcceptableObliqueAngle = requireAcceptableObliqueAngle;
-                    item.OccupiedLeaders = occupiedLeaders;
-                    item.RequiredSide = -1;
-                    item.RequiredAngleDegrees = -1.0;
-                    item.RequiredTangentSign = 0;
-                    if (
-                        requireGroupConsistency
-                        && !string.IsNullOrEmpty(item.StyleKey)
-                        && groupAngles.ContainsKey(item.StyleKey)
-                    )
-                    {
-                        item.RequiredAngleDegrees = groupAngles[item.StyleKey];
-                        if (
-                            groupPreferredSides.ContainsKey(item.StyleKey)
-                            && groupPreferredSides[item.StyleKey]
-                                == item.PreferredSide
-                        )
-                        {
-                            item.RequiredSide = groupSelectedSides[item.StyleKey];
-                        }
-                    }
-                    else if (
-                        requireGroupConsistency
-                        && !string.IsNullOrEmpty(item.StyleKey)
-                        && item.UseBottomRowCollectiveLayout
-                        && item.PreferredSide >= 0
-                    )
-                    {
-                        // Chỉ hàng lỗ sát đáy dùng cạnh tập thể bottom. Nếu
-                        // bottom thật sự không khả thi, mode fallback bên ngoài
-                        // vẫn giữ nguyên thuật toán linh hoạt trước đây.
-                        item.RequiredSide = item.PreferredSide;
-                    }
-                    if (
-                        requireGroupConsistency
-                        && item.UseBottomRowCollectiveLayout
-                        && item.PreferredSide == 3
-                    )
-                    {
-                        // Riêng hàng lỗ sát cạnh dưới: xòe mark phía trái sang
-                        // trái và mark phía phải sang phải. Đây là bố cục ảnh 3,
-                        // tránh hai nhãn cùng dồn về một phía dù đều ở bottom.
-                        item.RequiredTangentSign = item.CollectiveTangentSign;
-                    }
-
-                    HoleMarkCandidateV3 candidate = FindBestHoleMarkCandidateV3(
-                        item,
-                        partBox,
-                        dimensionSegments,
-                        occupiedBoxes,
-                        scale
-                    );
-                    if (candidate == null)
-                        return null;
-
-                    HoleMarkLayoutPlanEntryV3 entry = new HoleMarkLayoutPlanEntryV3();
-                    entry.Item = item;
-                    entry.Candidate = candidate;
-                    plan.Entries.Add(entry);
-                    plan.TotalScore += candidate.Score;
-                    occupiedBoxes.Add(candidate.Box);
-
-                    if (
-                        requireGroupConsistency
-                        && !string.IsNullOrEmpty(item.StyleKey)
-                        && !groupAngles.ContainsKey(item.StyleKey)
-                    )
-                    {
-                        groupPreferredSides[item.StyleKey] = item.PreferredSide;
-                        groupSelectedSides[item.StyleKey] = candidate.Side;
-                        groupAngles[item.StyleKey] = candidate.AngleDegrees;
-                    }
-
-                    HoleMarkSegmentV3 leader = new HoleMarkSegmentV3();
-                    leader.A = candidate.Anchor;
-                    leader.B = candidate.Contact;
-                    occupiedLeaders.Add(leader);
-                }
-
-                return plan;
-            }
-            finally
-            {
-                foreach (HoleMarkLayoutItemV3 item in sourceItems)
-                {
-                    if (item == null)
-                        continue;
-                    item.RequiredVerticalRank = -1;
-                    item.RequireNoDimensionConflicts = false;
-                    item.RequireAcceptableObliqueAngle = false;
-                    item.RequiredSide = -1;
-                    item.RequiredAngleDegrees = -1.0;
-                    item.RequiredTangentSign = 0;
-                    item.OccupiedLeaders = new List<HoleMarkSegmentV3>();
-                }
-            }
         }
 
         private static Point GetHoleMarkBoxCenterV3(Mark mark)
@@ -8629,52 +8278,6 @@ namespace Tekla.Technology.Akit.UserScript
                 (min.Y + max.Y) * 0.5,
                 0
             );
-        }
-
-        private static bool TryGetHoleMarkLeaderEndPointV3(
-            Mark mark,
-            Point expectedAnchor,
-            out Point endPoint
-        )
-        {
-            endPoint = null;
-            if (mark == null)
-                return false;
-
-            double bestDistance = 999999999.0;
-            try
-            {
-                DrawingObjectEnumerator children = mark.GetObjects();
-                while (children != null && children.MoveNext())
-                {
-                    LeaderLine leaderLine = children.Current as LeaderLine;
-                    if (leaderLine == null)
-                        continue;
-
-                    try { leaderLine.Select(); }
-                    catch { }
-
-                    if (leaderLine.EndPoint == null)
-                        continue;
-
-                    double anchorDistance = expectedAnchor == null
-                        || leaderLine.StartPoint == null
-                        ? 0.0
-                        : Distance2D(leaderLine.StartPoint, expectedAnchor);
-                    if (endPoint != null && anchorDistance >= bestDistance - 0.000001)
-                        continue;
-
-                    bestDistance = anchorDistance;
-                    endPoint = new Point(
-                        leaderLine.EndPoint.X,
-                        leaderLine.EndPoint.Y,
-                        0
-                    );
-                }
-            }
-            catch { }
-
-            return endPoint != null;
         }
 
         private static bool TryLimitedModifyHoleMarkV3(Mark mark)
@@ -8880,13 +8483,7 @@ namespace Tekla.Technology.Akit.UserScript
                             lineOrigin.Y + ty * projection,
                             0
                         );
-                        AddHoleMarkSegmentV3(
-                            result,
-                            point,
-                            onLine,
-                            false,
-                            true
-                        );
+                        AddHoleMarkSegmentV3(result, point, onLine);
                     }
 
                     double lineOverrun = 2.0 * scale;
@@ -8900,13 +8497,7 @@ namespace Tekla.Technology.Akit.UserScript
                         lineOrigin.Y + ty * (maxProjection + lineOverrun),
                         0
                     );
-                    AddHoleMarkSegmentV3(
-                        result,
-                        lineStart,
-                        lineEnd,
-                        true,
-                        false
-                    );
+                    AddHoleMarkSegmentV3(result, lineStart, lineEnd);
                 }
             }
             catch { }
@@ -8972,17 +8563,6 @@ namespace Tekla.Technology.Akit.UserScript
             Point second
         )
         {
-            AddHoleMarkSegmentV3(segments, first, second, false, false);
-        }
-
-        private static void AddHoleMarkSegmentV3(
-            List<HoleMarkSegmentV3> segments,
-            Point first,
-            Point second,
-            bool isDimensionLine,
-            bool isExtensionLine
-        )
-        {
             if (segments == null || first == null || second == null)
                 return;
 
@@ -8992,8 +8572,6 @@ namespace Tekla.Technology.Akit.UserScript
             HoleMarkSegmentV3 segment = new HoleMarkSegmentV3();
             segment.A = new Point(first.X, first.Y, 0);
             segment.B = new Point(second.X, second.Y, 0);
-            segment.IsDimensionLine = isDimensionLine;
-            segment.IsExtensionLine = isExtensionLine;
             segments.Add(segment);
         }
 
@@ -9102,9 +8680,6 @@ namespace Tekla.Technology.Akit.UserScript
                             bestForSide
                         );
 
-                        // Đi qua đúng endpoint chân DIM nằm trên biên tấm là hợp
-                        // lệ: leader tận dụng khoảng hở tại chân dóng, không cắt
-                        // phần thân của đường DIM. Giao ở vị trí khác vẫn bị phạt.
                         bestForSide = ConsiderHoleMarkDimensionFootCandidatesV3(
                             anchor,
                             side,
@@ -9122,7 +8697,6 @@ namespace Tekla.Technology.Akit.UserScript
                             scale,
                             bestForSide
                         );
-
                     }
 
                     // Lưới thô tìm vùng đúng; lưới mịn 0.1 mm giấy tối ưu
@@ -9250,99 +8824,6 @@ namespace Tekla.Technology.Akit.UserScript
             if (anchor == null || item == null || partBox == null)
                 return currentBest;
 
-            if (item.LeaderContactOffset != null)
-            {
-                // Giải đúng tia 45° từ endpoint thật của LeaderLine. Endpoint
-                // hole mark nằm ở đầu trái/phải của đường gạch ngang, không nằm
-                // ở điểm clamp gần nhất của hình chữ nhật như giả định cũ.
-                HoleMarkCandidateV3 baseCandidate = BuildHoleMarkSideCandidateV3(
-                    anchor,
-                    side,
-                    0.0,
-                    outwardOffset,
-                    partBox,
-                    boundaryGap,
-                    item.Width,
-                    item.Height
-                );
-                ApplyActualHoleMarkContactPredictionV3(baseCandidate, item);
-                if (baseCandidate == null || baseCandidate.Contact == null)
-                    return currentBest;
-
-                int[] actualSigns = new int[] { -1, 1 };
-                foreach (int actualSign in actualSigns)
-                {
-                    double tangentOffset;
-                    if (side == 0 || side == 3)
-                    {
-                        double normalRun = Math.Abs(
-                            baseCandidate.Contact.Y - anchor.Y
-                        );
-                        if (normalRun <= 0.000001)
-                            continue;
-                        double targetContactX =
-                            anchor.X + actualSign * normalRun;
-                        Point targetOffset = ResolveHoleMarkContactOffsetForTargetXV3(
-                            item,
-                            anchor,
-                            targetContactX
-                        );
-                        if (targetOffset == null)
-                            continue;
-                        tangentOffset =
-                            targetContactX - targetOffset.X - anchor.X;
-                    }
-                    else
-                    {
-                        double normalRun = Math.Abs(
-                            baseCandidate.Contact.X - anchor.X
-                        );
-                        if (normalRun <= 0.000001)
-                            continue;
-                        Point targetOffset = ResolvePredictedHoleMarkContactOffsetV3(
-                            item,
-                            anchor,
-                            baseCandidate.Center
-                        );
-                        if (targetOffset == null)
-                            continue;
-                        double targetContactY =
-                            anchor.Y + actualSign * normalRun;
-                        tangentOffset =
-                            targetContactY - targetOffset.Y - anchor.Y;
-                    }
-
-                    HoleMarkCandidateV3 actualCandidate =
-                        BuildHoleMarkSideCandidateV3(
-                            anchor,
-                            side,
-                            tangentOffset,
-                            outwardOffset,
-                            partBox,
-                            boundaryGap,
-                            item.Width,
-                            item.Height
-                        );
-                    currentBest = KeepBetterHoleMarkCandidateV3(
-                        actualCandidate,
-                        item,
-                        partBox,
-                        boundaryGap,
-                        dimensionSegments,
-                        dimensionClearance,
-                        occupiedMarkBoxes,
-                        markClearance,
-                        otherHoleClearance,
-                        sharedAnchorTolerance,
-                        sharedDimensionFootTolerance,
-                        scale,
-                        currentBest
-                    );
-                }
-
-                return currentBest;
-            }
-
             double normalDistance;
             double halfTangentSize;
             if (side == 0)
@@ -9425,12 +8906,9 @@ namespace Tekla.Technology.Akit.UserScript
             HoleMarkCandidateV3 currentBest
         )
         {
-            if (candidate == null)
-                return currentBest;
-
-            ApplyActualHoleMarkContactPredictionV3(candidate, item);
             if (
-                !IsHoleMarkCandidateCollisionFreeV3(
+                candidate == null
+                || !IsHoleMarkCandidateCollisionFreeV3(
                     candidate,
                     partBox,
                     boundaryGap,
@@ -9438,7 +8916,6 @@ namespace Tekla.Technology.Akit.UserScript
                     dimensionClearance,
                     occupiedMarkBoxes,
                     markClearance,
-                    item.OccupiedLeaders,
                     item.GroupHoles,
                     otherHoleClearance,
                     sharedAnchorTolerance,
@@ -9449,337 +8926,10 @@ namespace Tekla.Technology.Akit.UserScript
                 return currentBest;
             }
 
-            candidate.EdgePreferenceRank = GetHoleMarkEdgePreferenceRankV3(
-                candidate,
-                partBox,
-                scale
-            );
             ScoreHoleMarkCandidateV3(candidate, item.CurrentAnchor, scale);
-            if (item.RequiredSide >= 0 && candidate.Side != item.RequiredSide)
-                return currentBest;
-            if (
-                item.RequiredAngleDegrees >= 0.0
-                && Math.Abs(candidate.AngleDegrees - item.RequiredAngleDegrees)
-                    > HOLE_MARK_GROUP_ANGLE_TOL_DEG
-            )
-            {
-                return currentBest;
-            }
-            if (item.RequiredTangentSign != 0)
-            {
-                double tangentDelta = candidate.Side == 0 || candidate.Side == 3
-                    ? candidate.Contact.X - candidate.Anchor.X
-                    : candidate.Contact.Y - candidate.Anchor.Y;
-                double tangentTolerance = Math.Max(
-                    0.5,
-                    0.1 * Math.Max(1.0, scale)
-                );
-                if (
-                    tangentDelta * item.RequiredTangentSign
-                    <= tangentTolerance
-                )
-                {
-                    return currentBest;
-                }
-            }
-            if (
-                item.RequiredVerticalRank >= 0
-                && candidate.VerticalPreferenceRank != item.RequiredVerticalRank
-            )
-            {
-                return currentBest;
-            }
-            if (item.RequireNoDimensionConflicts && candidate.DimensionConflictCount > 0)
-                return currentBest;
-            if (item.RequireAcceptableObliqueAngle && candidate.AngleQualityRank > 2)
-                return currentBest;
-
             if (currentBest == null || candidate.Score < currentBest.Score - 0.000001)
                 return candidate;
             return currentBest;
-        }
-
-        private static int GetHoleMarkEdgePreferenceRankV3(
-            HoleMarkCandidateV3 candidate,
-            HoleMarkRectV3 partBox,
-            double scale
-        )
-        {
-            if (
-                candidate == null
-                || candidate.Anchor == null
-                || partBox == null
-                || candidate.Side < 0
-                || candidate.Side > 3
-            )
-            {
-                return 3;
-            }
-
-            double[] distances = new double[4];
-            distances[0] = Math.Max(0.0, partBox.MaxY - candidate.Anchor.Y);
-            distances[1] = Math.Max(0.0, candidate.Anchor.X - partBox.MinX);
-            distances[2] = Math.Max(0.0, partBox.MaxX - candidate.Anchor.X);
-            distances[3] = Math.Max(0.0, candidate.Anchor.Y - partBox.MinY);
-            int[] tiePriority = new int[] { 0, 2, 1, 3 };
-            int[] priorityIndex = new int[4];
-            for (int index = 0; index < tiePriority.Length; index++)
-                priorityIndex[tiePriority[index]] = index;
-
-            double tieTolerance = Math.Max(0.5, 0.5 * Math.Max(1.0, scale));
-            List<int> orderedSides = new List<int>(new int[] { 0, 1, 2, 3 });
-            orderedSides.Sort(
-                delegate(int first, int second)
-                {
-                    double delta = distances[first] - distances[second];
-                    if (Math.Abs(delta) > tieTolerance)
-                        return delta < 0.0 ? -1 : 1;
-                    return priorityIndex[first].CompareTo(priorityIndex[second]);
-                }
-            );
-
-            for (int rank = 0; rank < orderedSides.Count; rank++)
-            {
-                if (orderedSides[rank] == candidate.Side)
-                    return rank;
-            }
-            return 3;
-        }
-
-        private static int ResolvePreferredHoleMarkSideV3(
-            HoleMarkLayoutItemV3 item,
-            HoleMarkRectV3 partBox,
-            double scale
-        )
-        {
-            if (item == null || item.CurrentAnchor == null)
-                return -1;
-
-            HoleMarkCandidateV3 probe = new HoleMarkCandidateV3();
-            probe.Anchor = item.CurrentAnchor;
-            for (int side = 0; side < 4; side++)
-            {
-                probe.Side = side;
-                if (GetHoleMarkEdgePreferenceRankV3(probe, partBox, scale) == 0)
-                    return side;
-            }
-            return -1;
-        }
-
-        private static void AssignPreferredHoleMarkSidesV3(
-            List<HoleMarkLayoutItemV3> items,
-            HoleMarkRectV3 partBox,
-            double scale
-        )
-        {
-            if (items == null)
-                return;
-
-            Dictionary<string, List<HoleMarkLayoutItemV3>> styleGroups =
-                new Dictionary<string, List<HoleMarkLayoutItemV3>>(
-                    StringComparer.OrdinalIgnoreCase
-                );
-            foreach (HoleMarkLayoutItemV3 item in items)
-            {
-                if (item == null)
-                    continue;
-                item.UseBottomRowCollectiveLayout = false;
-                item.CollectiveTangentSign = 0;
-                item.PreferredSide = ResolvePreferredHoleMarkSideV3(
-                    item,
-                    partBox,
-                    scale
-                );
-                if (string.IsNullOrEmpty(item.StyleKey))
-                    continue;
-                List<HoleMarkLayoutItemV3> group;
-                if (!styleGroups.TryGetValue(item.StyleKey, out group))
-                {
-                    group = new List<HoleMarkLayoutItemV3>();
-                    styleGroups[item.StyleKey] = group;
-                }
-                group.Add(item);
-            }
-
-            foreach (KeyValuePair<string, List<HoleMarkLayoutItemV3>> pair in styleGroups)
-            {
-                List<HoleMarkLayoutItemV3> group = pair.Value;
-                if (group == null || group.Count < 2)
-                    continue;
-
-                double minX = 999999999.0;
-                double maxX = -999999999.0;
-                double minY = 999999999.0;
-                double maxY = -999999999.0;
-                double sumX = 0.0;
-                double sumY = 0.0;
-                int count = 0;
-                foreach (HoleMarkLayoutItemV3 item in group)
-                {
-                    if (item == null || item.CurrentAnchor == null)
-                        continue;
-                    Point anchor = item.CurrentAnchor;
-                    minX = Math.Min(minX, anchor.X);
-                    maxX = Math.Max(maxX, anchor.X);
-                    minY = Math.Min(minY, anchor.Y);
-                    maxY = Math.Max(maxY, anchor.Y);
-                    sumX += anchor.X;
-                    sumY += anchor.Y;
-                    count++;
-                }
-                if (count < 2)
-                    continue;
-
-                double spanX = maxX - minX;
-                double spanY = maxY - minY;
-                double alignmentTolerance = Math.Max(
-                    2.0 * Math.Max(1.0, scale),
-                    Math.Max(spanX, spanY) * 0.20
-                );
-                bool oneRowOrColumn = Math.Min(spanX, spanY) <= alignmentTolerance;
-                if (!oneRowOrColumn)
-                    continue;
-
-                HoleMarkLayoutItemV3 collective = new HoleMarkLayoutItemV3();
-                collective.CurrentAnchor = new Point(
-                    sumX / count,
-                    sumY / count,
-                    0
-                );
-                int collectiveSide = ResolvePreferredHoleMarkSideV3(
-                    collective,
-                    partBox,
-                    scale
-                );
-                if (collectiveSide < 0)
-                    continue;
-
-                foreach (HoleMarkLayoutItemV3 item in group)
-                {
-                    if (item != null)
-                    {
-                        item.PreferredSide = collectiveSide;
-                        if (collectiveSide == 3 && spanX > alignmentTolerance)
-                        {
-                            item.UseBottomRowCollectiveLayout = true;
-                            double deltaX = item.CurrentAnchor.X - sumX / count;
-                            double fanTolerance = Math.Max(0.5, 0.1 * scale);
-                            if (deltaX < -fanTolerance)
-                                item.CollectiveTangentSign = -1;
-                            else if (deltaX > fanTolerance)
-                                item.CollectiveTangentSign = 1;
-                        }
-                    }
-                }
-            }
-        }
-
-        private static void ApplyActualHoleMarkContactPredictionV3(
-            HoleMarkCandidateV3 candidate,
-            HoleMarkLayoutItemV3 item
-        )
-        {
-            if (
-                candidate == null
-                || candidate.Center == null
-                || candidate.Anchor == null
-                || item == null
-                || item.LeaderContactOffset == null
-            )
-            {
-                return;
-            }
-
-            Point contactOffset = ResolvePredictedHoleMarkContactOffsetV3(
-                item,
-                candidate.Anchor,
-                candidate.Center
-            );
-            if (contactOffset == null)
-                return;
-
-            candidate.Contact = new Point(
-                candidate.Center.X + contactOffset.X,
-                candidate.Center.Y + contactOffset.Y,
-                0
-            );
-            candidate.LeaderLength = Distance2D(candidate.Anchor, candidate.Contact);
-        }
-
-        private static Point ResolvePredictedHoleMarkContactOffsetV3(
-            HoleMarkLayoutItemV3 item,
-            Point anchor,
-            Point center
-        )
-        {
-            if (item == null || item.LeaderContactOffset == null)
-                return null;
-
-            Point observed = item.LeaderContactOffset;
-            double xOffset = observed.X;
-            if (
-                anchor != null
-                && center != null
-                && IsMirroredHorizontalHoleMarkContactV3(item)
-            )
-            {
-                double magnitude = Math.Abs(observed.X);
-                if (center.X < anchor.X - 0.000001)
-                    xOffset = magnitude;
-                else if (center.X > anchor.X + 0.000001)
-                    xOffset = -magnitude;
-            }
-
-            return new Point(xOffset, observed.Y, 0);
-        }
-
-        private static Point ResolveHoleMarkContactOffsetForTargetXV3(
-            HoleMarkLayoutItemV3 item,
-            Point anchor,
-            double targetContactX
-        )
-        {
-            if (item == null || item.LeaderContactOffset == null)
-                return null;
-
-            Point observed = item.LeaderContactOffset;
-            if (anchor == null || !IsMirroredHorizontalHoleMarkContactV3(item))
-                return new Point(observed.X, observed.Y, 0);
-
-            double magnitude = Math.Abs(observed.X);
-            double xOffset = observed.X;
-            if (targetContactX < anchor.X - 0.000001)
-                xOffset = magnitude;
-            else if (targetContactX > anchor.X + 0.000001)
-                xOffset = -magnitude;
-            return new Point(xOffset, observed.Y, 0);
-        }
-
-        private static bool IsMirroredHorizontalHoleMarkContactV3(
-            HoleMarkLayoutItemV3 item
-        )
-        {
-            if (
-                item == null
-                || item.LeaderContactOffset == null
-                || item.Width <= 0.0
-                || item.Height <= 0.0
-            )
-            {
-                return false;
-            }
-
-            // Hole mark tiêu chuẩn nối leader vào một trong hai đầu của đường
-            // gạch ngang giữa hai dòng chữ. Khi box vượt qua anchor, Tekla đổi
-            // đầu nối trái/phải nhưng giữ nguyên inset và cao độ tương đối.
-            double halfWidth = item.Width * 0.5;
-            double distanceFromHorizontalSide = Math.Abs(
-                halfWidth - Math.Abs(item.LeaderContactOffset.X)
-            );
-            double maximumSideInset = Math.Max(1.0, item.Width * 0.08);
-            double maximumCenterYOffset = Math.Max(1.0, item.Height * 0.20);
-            return distanceFromHorizontalSide <= maximumSideInset
-                && Math.Abs(item.LeaderContactOffset.Y) <= maximumCenterYOffset;
         }
 
         private static HoleMarkCandidateV3 ConsiderHoleMarkDimensionFootCandidatesV3(
@@ -9819,7 +8969,8 @@ namespace Tekla.Technology.Akit.UserScript
                             dimensionFoot,
                             partBox,
                             boundaryGap,
-                            item,
+                            item.Width,
+                            item.Height,
                             sharedDimensionFootTolerance
                         );
                     currentBest = KeepBetterHoleMarkCandidateV3(
@@ -9914,7 +9065,8 @@ namespace Tekla.Technology.Akit.UserScript
             Point dimensionFoot,
             HoleMarkRectV3 partBox,
             double boundaryGap,
-            HoleMarkLayoutItemV3 item,
+            double width,
+            double height,
             double footTolerance
         )
         {
@@ -9922,7 +9074,6 @@ namespace Tekla.Technology.Akit.UserScript
                 anchor == null
                 || dimensionFoot == null
                 || partBox == null
-                || item == null
                 || !IsHoleMarkDimensionFootOnSideV3(
                     dimensionFoot,
                     side,
@@ -9934,126 +9085,57 @@ namespace Tekla.Technology.Akit.UserScript
                 return null;
             }
 
+            double contactCoordinate;
             double rayFactor;
             double tangentOffset;
-            double width = item.Width;
-            double height = item.Height;
-            Point contactOffset = item.LeaderContactOffset;
 
-            if (contactOffset != null)
+            if (side == 0 || side == 3)
             {
-                HoleMarkCandidateV3 baseCandidate = BuildHoleMarkSideCandidateV3(
-                    anchor,
-                    side,
-                    0.0,
-                    outwardOffset,
-                    partBox,
-                    boundaryGap,
-                    width,
-                    height
-                );
-                ApplyActualHoleMarkContactPredictionV3(baseCandidate, item);
-                if (baseCandidate == null || baseCandidate.Contact == null)
+                contactCoordinate = side == 0
+                    ? partBox.MaxY + boundaryGap + outwardOffset
+                    : partBox.MinY - boundaryGap - outwardOffset;
+                double denominator = dimensionFoot.Y - anchor.Y;
+                if (Math.Abs(denominator) <= 0.000001)
                     return null;
 
-                if (side == 0 || side == 3)
-                {
-                    double denominator = dimensionFoot.Y - anchor.Y;
-                    if (Math.Abs(denominator) <= 0.000001)
-                        return null;
+                rayFactor = (contactCoordinate - anchor.Y) / denominator;
+                if (rayFactor < 1.0 - 0.000001)
+                    return null;
 
-                    rayFactor =
-                        (baseCandidate.Contact.Y - anchor.Y) / denominator;
-                    if (rayFactor < 1.0 - 0.000001)
-                        return null;
-
-                    double targetContactX =
-                        anchor.X + rayFactor * (dimensionFoot.X - anchor.X);
-                    Point targetOffset = ResolveHoleMarkContactOffsetForTargetXV3(
-                        item,
-                        anchor,
-                        targetContactX
-                    );
-                    if (targetOffset == null)
-                        return null;
-                    tangentOffset =
-                        targetContactX - targetOffset.X - anchor.X;
-                }
+                double contactX =
+                    anchor.X + rayFactor * (dimensionFoot.X - anchor.X);
+                double centerX;
+                if (contactX < anchor.X - 0.000001)
+                    centerX = contactX - width * 0.5;
+                else if (contactX > anchor.X + 0.000001)
+                    centerX = contactX + width * 0.5;
                 else
-                {
-                    double denominator = dimensionFoot.X - anchor.X;
-                    if (Math.Abs(denominator) <= 0.000001)
-                        return null;
-
-                    rayFactor =
-                        (baseCandidate.Contact.X - anchor.X) / denominator;
-                    if (rayFactor < 1.0 - 0.000001)
-                        return null;
-
-                    double targetContactY =
-                        anchor.Y + rayFactor * (dimensionFoot.Y - anchor.Y);
-                    Point predictedOffset = ResolvePredictedHoleMarkContactOffsetV3(
-                        item,
-                        anchor,
-                        baseCandidate.Center
-                    );
-                    if (predictedOffset == null)
-                        return null;
-                    tangentOffset =
-                        targetContactY - predictedOffset.Y - anchor.Y;
-                }
+                    centerX = anchor.X;
+                tangentOffset = centerX - anchor.X;
             }
             else
             {
-                double contactCoordinate;
-                if (side == 0 || side == 3)
-                {
-                    contactCoordinate = side == 0
-                        ? partBox.MaxY + boundaryGap + outwardOffset
-                        : partBox.MinY - boundaryGap - outwardOffset;
-                    double denominator = dimensionFoot.Y - anchor.Y;
-                    if (Math.Abs(denominator) <= 0.000001)
-                        return null;
+                contactCoordinate = side == 1
+                    ? partBox.MinX - boundaryGap - outwardOffset
+                    : partBox.MaxX + boundaryGap + outwardOffset;
+                double denominator = dimensionFoot.X - anchor.X;
+                if (Math.Abs(denominator) <= 0.000001)
+                    return null;
 
-                    rayFactor = (contactCoordinate - anchor.Y) / denominator;
-                    if (rayFactor < 1.0 - 0.000001)
-                        return null;
+                rayFactor = (contactCoordinate - anchor.X) / denominator;
+                if (rayFactor < 1.0 - 0.000001)
+                    return null;
 
-                    double contactX =
-                        anchor.X + rayFactor * (dimensionFoot.X - anchor.X);
-                    double centerX;
-                    if (contactX < anchor.X - 0.000001)
-                        centerX = contactX - width * 0.5;
-                    else if (contactX > anchor.X + 0.000001)
-                        centerX = contactX + width * 0.5;
-                    else
-                        centerX = anchor.X;
-                    tangentOffset = centerX - anchor.X;
-                }
+                double contactY =
+                    anchor.Y + rayFactor * (dimensionFoot.Y - anchor.Y);
+                double centerY;
+                if (contactY < anchor.Y - 0.000001)
+                    centerY = contactY - height * 0.5;
+                else if (contactY > anchor.Y + 0.000001)
+                    centerY = contactY + height * 0.5;
                 else
-                {
-                    contactCoordinate = side == 1
-                        ? partBox.MinX - boundaryGap - outwardOffset
-                        : partBox.MaxX + boundaryGap + outwardOffset;
-                    double denominator = dimensionFoot.X - anchor.X;
-                    if (Math.Abs(denominator) <= 0.000001)
-                        return null;
-
-                    rayFactor = (contactCoordinate - anchor.X) / denominator;
-                    if (rayFactor < 1.0 - 0.000001)
-                        return null;
-
-                    double contactY =
-                        anchor.Y + rayFactor * (dimensionFoot.Y - anchor.Y);
-                    double centerY;
-                    if (contactY < anchor.Y - 0.000001)
-                        centerY = contactY - height * 0.5;
-                    else if (contactY > anchor.Y + 0.000001)
-                        centerY = contactY + height * 0.5;
-                    else
-                        centerY = anchor.Y;
-                    tangentOffset = centerY - anchor.Y;
-                }
+                    centerY = anchor.Y;
+                tangentOffset = centerY - anchor.Y;
             }
 
             HoleMarkCandidateV3 candidate = BuildHoleMarkSideCandidateV3(
@@ -10066,7 +9148,6 @@ namespace Tekla.Technology.Akit.UserScript
                 width,
                 height
             );
-            ApplyActualHoleMarkContactPredictionV3(candidate, item);
             if (
                 candidate == null
                 || HoleMarkPointToSegmentDistanceV3(
@@ -10146,6 +9227,7 @@ namespace Tekla.Technology.Akit.UserScript
                     candidate.VerticalPreferenceRank = 2;
             }
 
+            bool touchesDimension = candidate.DimensionConflictCount > 0;
             const double angleTierTolerance = 0.000001;
             if (
                 candidate.AngleDeviation
@@ -10165,18 +9247,19 @@ namespace Tekla.Technology.Akit.UserScript
             else
                 candidate.AngleQualityRank = 3;
 
-            // Phân tầng mới:
-            // - leader phải xiên hợp lý; ngang/dọc chỉ là fallback cuối;
-            // - cạnh gần anchor là hướng kỹ thuật ưu tiên;
-            // - trong cùng hướng mới cân bằng 45°, một lần cắt chân dóng,
-            //   ưu tiên phía trên và chiều dài.
-            // Đường kích thước chính đã bị loại cứng ở bước collision, vì vậy
-            // endpoint chân DIM không còn được quyền ép một góc xấu.
+            // Ưu tiên kỹ thuật mới:
+            // 1) Giữ leader xiên chấp nhận được (20..70°); ngang/dọc chỉ fallback.
+            // 2) Trong nhóm xiên, né DIM rồi ưu tiên box nằm phía trên anchor.
+            // 3) Góc gần 45° và chiều dài chỉ tối ưu sau các điều kiện trên.
+            // Nhờ vậy 30° phía trên thắng 45° phía dưới, nhưng một leader ngang
+            // phía trên không thể thắng một leader 45° hợp lý ở phía dưới.
             bool hasAcceptableObliqueAngle = candidate.AngleQualityRank <= 2;
-            candidate.VisualTier = hasAcceptableObliqueAngle ? 0 : 1;
+            candidate.VisualTier = hasAcceptableObliqueAngle ? 0 : 6;
+            if (touchesDimension)
+                candidate.VisualTier += 3;
+            candidate.VisualTier += candidate.VerticalPreferenceRank;
 
-            // Trong cùng tầng dùng chi phí liên tục để một ứng viên 45° có quyền
-            // cắt đúng một chân dóng thay vì bị ứng viên bám endpoint 35° lấn át.
+            // Trong cùng tầng mới cân bằng: gần 45°, số lần chạm DIM và chiều dài.
             double anchorTieBreak = currentAnchor == null
                 ? 0.0
                 : Distance2D(candidate.Anchor, currentAnchor) * 0.000001;
@@ -10185,18 +9268,12 @@ namespace Tekla.Technology.Akit.UserScript
                 (Math.Abs(candidate.TangentOffset) + candidate.OutwardOffset)
                 * 0.000000001;
             candidate.Score = candidate.VisualTier * 1000000000.0
-                + candidate.EdgePreferenceRank
-                    * Math.Max(1.0, scale)
-                    * HOLE_MARK_EDGE_PREFERENCE_PENALTY_PAPER
                 + candidate.AngleDeviation
                     * Math.Max(1.0, scale)
                     * HOLE_MARK_ANGLE_PENALTY_PAPER_PER_DEG
                 + candidate.DimensionConflictCount
                     * Math.Max(1.0, scale)
                     * HOLE_MARK_DIM_CONFLICT_PENALTY_PAPER
-                + candidate.VerticalPreferenceRank
-                    * Math.Max(1.0, scale)
-                    * HOLE_MARK_VERTICAL_PREFERENCE_PENALTY_PAPER
                 + candidate.LeaderLength
                 + anchorTieBreak
                 + sideTieBreak
@@ -10220,7 +9297,6 @@ namespace Tekla.Technology.Akit.UserScript
             double dimensionClearance,
             List<HoleMarkRectV3> occupiedMarkBoxes,
             double markClearance,
-            List<HoleMarkSegmentV3> occupiedLeaders,
             List<Point> groupHoles,
             double otherHoleClearance,
             double sharedAnchorTolerance,
@@ -10239,7 +9315,6 @@ namespace Tekla.Technology.Akit.UserScript
             HoleMarkSegmentV3 leader = new HoleMarkSegmentV3();
             leader.A = candidate.Anchor;
             leader.B = candidate.Contact;
-            List<Point> uniqueExtensionCrossings = new List<Point>();
 
             if (dimensionSegments != null)
             {
@@ -10258,67 +9333,17 @@ namespace Tekla.Technology.Akit.UserScript
                             partBox,
                             sharedDimensionFootTolerance
                         );
-                    if (sharesAnchor || passesSharedDimensionFoot)
-                        continue;
 
-                    double obstacleDistance = HoleMarkSegmentDistanceV3(
-                        leader,
-                        obstacle
-                    );
-                    if (obstacleDistance > dimensionClearance)
-                        continue;
-
-                    // Đường kích thước chính và vùng chữ nằm trên đường này là
-                    // cấm tuyệt đối. Chỉ chân dóng mới được quyền bị cắt.
-                    if (obstacle.IsDimensionLine)
-                        return false;
-
-                    Point crossing;
-                    if (!TryGetHoleMarkSegmentIntersectionPointV3(
-                        leader,
-                        obstacle,
-                        out crossing
-                    ))
-                    {
-                        // Chạy song song/sát chân dóng không phải một giao cắt
-                        // gọn và luôn tạo cảm giác đè DIM, nên loại cứng.
-                        return false;
-                    }
-
-                    int beforeCount = uniqueExtensionCrossings.Count;
-                    AddUniquePoint(
-                        uniqueExtensionCrossings,
-                        crossing,
-                        Math.Max(0.1, dimensionClearance)
-                    );
-                    if (uniqueExtensionCrossings.Count > beforeCount)
-                        candidate.DimensionConflictCount++;
-                    if (candidate.DimensionConflictCount > 1)
-                        return false;
-                }
-            }
-
-            if (occupiedLeaders != null)
-            {
-                foreach (HoleMarkSegmentV3 occupiedLeader in occupiedLeaders)
-                {
-                    if (occupiedLeader == null)
-                        continue;
-
-                    // Kiểm tra hai chiều: leader mới không được đi qua box cũ
-                    // (đã kiểm tra ở trên), và box mới cũng không được đè lên
-                    // leader đã chọn trước đó. Hai leader cũng không được cắt nhau.
                     if (
-                        HoleMarkSegmentIntersectsRectV3(
-                            occupiedLeader,
-                            candidate.Box,
-                            markClearance
-                        )
-                        || HoleMarkSegmentDistanceV3(leader, occupiedLeader)
-                            <= markClearance
+                        !sharesAnchor
+                        && !passesSharedDimensionFoot
+                        && HoleMarkSegmentDistanceV3(leader, obstacle) <= dimensionClearance
                     )
                     {
-                        return false;
+                        // Leader chạm/cắt DIM là soft constraint. Giữ ứng viên để
+                        // có thể cứu góc đẹp trong bản vẽ chật, nhưng scoring sẽ
+                        // luôn ưu tiên ứng viên cùng chất lượng không chạm DIM.
+                        candidate.DimensionConflictCount++;
                     }
                 }
             }
@@ -10604,56 +9629,6 @@ namespace Tekla.Technology.Akit.UserScript
                 return true;
 
             return false;
-        }
-
-        private static bool TryGetHoleMarkSegmentIntersectionPointV3(
-            HoleMarkSegmentV3 first,
-            HoleMarkSegmentV3 second,
-            out Point intersection
-        )
-        {
-            intersection = null;
-            if (
-                first == null
-                || second == null
-                || first.A == null
-                || first.B == null
-                || second.A == null
-                || second.B == null
-            )
-            {
-                return false;
-            }
-
-            double rx = first.B.X - first.A.X;
-            double ry = first.B.Y - first.A.Y;
-            double sx = second.B.X - second.A.X;
-            double sy = second.B.Y - second.A.Y;
-            double denominator = rx * sy - ry * sx;
-            if (Math.Abs(denominator) <= 0.000001)
-                return false;
-
-            double qpx = second.A.X - first.A.X;
-            double qpy = second.A.Y - first.A.Y;
-            double t = (qpx * sy - qpy * sx) / denominator;
-            double u = (qpx * ry - qpy * rx) / denominator;
-            const double tolerance = 0.0001;
-            if (
-                t < -tolerance
-                || t > 1.0 + tolerance
-                || u < -tolerance
-                || u > 1.0 + tolerance
-            )
-            {
-                return false;
-            }
-
-            intersection = new Point(
-                first.A.X + t * rx,
-                first.A.Y + t * ry,
-                0
-            );
-            return true;
         }
 
         private static double HoleMarkOrientationV3(Point a, Point b, Point c)

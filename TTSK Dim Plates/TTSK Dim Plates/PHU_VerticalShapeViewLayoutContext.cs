@@ -208,7 +208,7 @@ namespace Tekla.Technology.Akit.UserScript
             while (views != null && views.MoveNext())
             {
                 TSD.View view = views.Current as TSD.View;
-                if (view == null || !ViewContainsPart(view, mainPart))
+                if (view == null || IsSectionView(view) || !ViewContainsPart(view, mainPart))
                     continue;
                 TSG.Matrix globalToView = TSG.MatrixFactory.ToCoordinateSystem(
                     view.DisplayCoordinateSystem
@@ -226,6 +226,35 @@ namespace Tekla.Technology.Akit.UserScript
                 result.Add(snapshot);
             }
             return result;
+        }
+
+        /// <summary>
+        /// Section views can contain the MainPart and expose a vertical REF,
+        /// but they are not one of the two user-positioned full column views.
+        /// Keep this classification shared by layout, Grid, and Neighbor
+        /// preflight so an added B/C/D section cannot become a third candidate.
+        /// </summary>
+        internal static bool IsSectionView(TSD.View view)
+        {
+            if (view == null)
+                return false;
+
+            string runtimeName = view.GetType().Name ?? String.Empty;
+            if (runtimeName.IndexOf("Section", StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+
+            try
+            {
+                string viewType = Convert.ToString(
+                    view.ViewType,
+                    CultureInfo.InvariantCulture
+                ) ?? String.Empty;
+                return viewType.IndexOf("Section", StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static bool HasVerticalReferenceLine(

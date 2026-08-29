@@ -1306,14 +1306,13 @@ namespace Tekla.Technology.Akit.UserScript
 
                 Vector direction = useTopSide ? new Vector(0, 1, 0) : new Vector(0, -1, 0);
 
-                double targetY = useTopSide ? beamMaxY : beamMinY;
                 Point beamLeftPoint;
                 Point beamRightPoint;
 
                 if (
                     !TryGetBeamHorizontalRealEdgePoints(
                         beamPolygon,
-                        targetY,
+                        useTopSide,
                         beamMinX,
                         beamMaxX,
                         beamMinY,
@@ -1323,8 +1322,9 @@ namespace Tekla.Technology.Akit.UserScript
                     )
                 )
                 {
-                    beamLeftPoint = new Point(beamMinX, targetY, 0);
-                    beamRightPoint = new Point(beamMaxX, targetY, 0);
+                    // Không dựng góc bounding-box khi contour thật không đọc được.
+                    // Bỏ riêng chain này an toàn hơn tạo một chân DIM không thuộc dầm.
+                    return count;
                 }
 
                 List<Point> chain = new List<Point>();
@@ -1417,14 +1417,12 @@ namespace Tekla.Technology.Akit.UserScript
                     ? new Vector(0, 1, 0)
                     : new Vector(0, -1, 0);
 
-                double targetY = useTopSide ? beamMaxY : beamMinY;
-
                 Point beamLeftPoint;
                 Point beamRightPoint;
                 if (
                     !TryGetBeamHorizontalRealEdgePoints(
                         beamPolygon,
-                        targetY,
+                        useTopSide,
                         beamMinX,
                         beamMaxX,
                         beamMinY,
@@ -1434,8 +1432,8 @@ namespace Tekla.Technology.Akit.UserScript
                     )
                 )
                 {
-                    beamLeftPoint = new Point(beamMinX, targetY, 0);
-                    beamRightPoint = new Point(beamMaxX, targetY, 0);
+                    // Không dựng góc bounding-box khi contour thật không đọc được.
+                    return count;
                 }
 
                 List<Point> chain = new List<Point>();
@@ -1645,7 +1643,7 @@ namespace Tekla.Technology.Akit.UserScript
                     if (
                         TryGetBeamHorizontalRealEdgePoints(
                             beamPolygon,
-                            hole.Y,
+                            horizontalDimDirection.Y >= 0.0,
                             beamMinX,
                             beamMaxX,
                             beamMinY,
@@ -2823,7 +2821,7 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static bool TryGetBeamHorizontalRealEdgePoints(
             List<Point> polygon,
-            double holeY,
+            bool preferTop,
             double fallbackMinX,
             double fallbackMaxX,
             double fallbackMinY,
@@ -2832,36 +2830,20 @@ namespace Tekla.Technology.Akit.UserScript
             out Point rightPoint
         )
         {
-            double centerY = (fallbackMinY + fallbackMaxY) / 2.0;
-            leftPoint = new Point(fallbackMinX, centerY, 0);
-            rightPoint = new Point(fallbackMaxX, centerY, 0);
+            leftPoint = null;
+            rightPoint = null;
 
             try
             {
-                double leftX;
-                double rightX;
-
-                // Ưu tiên bắt đúng giao điểm mép dầm tại cao độ tâm lỗ.
-                if (
-                    TryGetHorizontalRealEdgesAtY(
-                        polygon,
-                        holeY,
-                        fallbackMinX,
-                        fallbackMaxX,
-                        out leftX,
-                        out rightX
-                    )
-                )
-                {
-                    leftPoint = new Point(leftX, holeY, 0);
-                    rightPoint = new Point(rightX, holeY, 0);
-                    return true;
-                }
-
-                // Nếu tâm lỗ nằm ngoài vùng cắt của dầm, vẫn phải tạo DIM dầm.
-                // Lấy mép thật ngoài cùng của polygon dầm để chân dim không nằm lưng chừng.
-                Point leftMost = null;
-                Point rightMost = null;
+                // DIM ngang dầm đo theo trục X cục bộ, vì vậy hai chân ngoài phải
+                // luôn giữ cực trị X của TOÀN contour. Không cắt contour tại Y của
+                // phía đặt DIM: một khoét góc có thể làm giao điểm đó dừng ngay tại
+                // vai khoét và biến cạnh cắt thành "mép dầm".
+                //
+                // Sau khi chốt X ngoài cùng, chọn vertex ngoài nhất theo phía đặt
+                // DIM để chân vẫn nằm trên hình học thật: TOP lấy Y lớn nhất,
+                // BOTTOM lấy Y nhỏ nhất. Quy tắc này đối xứng cho khoét trái/phải,
+                // trên/dưới và không phụ thuộc thứ tự điểm contour.
                 double minX = 999999999.0;
                 double maxX = -999999999.0;
 
@@ -2873,35 +2855,63 @@ namespace Tekla.Technology.Akit.UserScript
                             continue;
 
                         if (p.X < minX)
-                        {
                             minX = p.X;
-                            leftMost = p;
-                        }
 
                         if (p.X > maxX)
-                        {
                             maxX = p.X;
-                            rightMost = p;
-                        }
                     }
                 }
 
-                if (
-                    leftMost != null
-                    && rightMost != null
-                    && Math.Abs(rightMost.X - leftMost.X) > 1.0
-                )
+                if (Math.Abs(maxX - minX) > 1.0)
                 {
-                    leftPoint = new Point(leftMost.X, leftMost.Y, 0);
-                    rightPoint = new Point(rightMost.X, rightMost.Y, 0);
-                    return true;
+                    Point leftAnchor = null;
+                    Point rightAnchor = null;
+                    const double extremeTol = 0.01;
+
+                    if (polygon != null)
+                    {
+                        foreach (Point p in polygon)
+                        {
+                            if (p == null)
+                                continue;
+
+                            if (Math.Abs(p.X - minX) <= extremeTol)
+                            {
+                                if (
+                                    leftAnchor == null
+                                    || (preferTop && p.Y > leftAnchor.Y)
+                                    || (!preferTop && p.Y < leftAnchor.Y)
+                                )
+                                    leftAnchor = p;
+                            }
+
+                            if (Math.Abs(p.X - maxX) <= extremeTol)
+                            {
+                                if (
+                                    rightAnchor == null
+                                    || (preferTop && p.Y > rightAnchor.Y)
+                                    || (!preferTop && p.Y < rightAnchor.Y)
+                                )
+                                    rightAnchor = p;
+                            }
+                        }
+                    }
+
+                    if (leftAnchor != null && rightAnchor != null)
+                    {
+                        leftPoint = new Point(minX, leftAnchor.Y, 0);
+                        rightPoint = new Point(maxX, rightAnchor.Y, 0);
+                        return true;
+                    }
                 }
 
-                return Math.Abs(fallbackMaxX - fallbackMinX) > 1.0;
+                return false;
             }
             catch
             {
-                return Math.Abs(fallbackMaxX - fallbackMinX) > 1.0;
+                leftPoint = null;
+                rightPoint = null;
+                return false;
             }
         }
 
