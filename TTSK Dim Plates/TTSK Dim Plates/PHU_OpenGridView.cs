@@ -1181,7 +1181,8 @@ public static class PHU_OpenGridView
 
     private static bool IsAutomaticGridViewType(View view)
     {
-        return ViewTypeMatches(view, "FrontView", "Front")
+        return IsSemanticFrontView(view)
+            || IsSemanticTopView(view)
             || ViewTypeMatches(view, "TopView", "Top")
             || ViewTypeMatches(view, "BottomView", "Bottom")
             || ViewTypeMatches(view, "BackView", "Back");
@@ -1199,7 +1200,21 @@ public static class PHU_OpenGridView
     /// </summary>
     public static bool IsFrontView(View view)
     {
-        return ViewTypeMatches(view, "FrontView", "Front");
+        return IsSemanticFrontView(view);
+    }
+
+    private static bool IsSemanticTopView(View view)
+    {
+        return Tekla.Technology.Akit.UserScript
+                .PHU_Slot09_DataCenterBeamType2Context.IsTopView(view)
+            || ViewTypeMatches(view, "TopView", "Top");
+    }
+
+    private static bool IsSemanticFrontView(View view)
+    {
+        return Tekla.Technology.Akit.UserScript
+                .PHU_Slot09_DataCenterBeamType2Context.IsFrontView(view)
+            || ViewTypeMatches(view, "FrontView", "Front");
     }
 
     // Cung cach xet ViewType dang dung trong PHU_Shape_L:
@@ -1922,10 +1937,10 @@ public static class PHU_OpenGridView
 
             foreach (View view in targetViews)
             {
-                if (ViewTypeMatches(view, "TopView", "Top"))
+                if (IsSemanticTopView(view))
                     topViews.Add(view);
 
-                if (ViewTypeMatches(view, "FrontView", "Front"))
+                if (IsSemanticFrontView(view))
                     frontViews.Add(view);
             }
 
@@ -2172,10 +2187,10 @@ public static class PHU_OpenGridView
             {
                 foreach (View view in targetViews)
                 {
-                    if (ViewTypeMatches(view, "TopView", "Top"))
+                    if (IsSemanticTopView(view))
                         topViews.Add(view);
 
-                    if (ViewTypeMatches(view, "FrontView", "Front"))
+                    if (IsSemanticFrontView(view))
                         frontViews.Add(view);
                 }
             }
@@ -3182,14 +3197,14 @@ public static class PHU_OpenGridView
             return false;
 
         bool topOrBottom =
-            ViewTypeMatches(view, "TopView", "Top")
+            IsSemanticTopView(view)
             || ViewTypeMatches(view, "BottomView", "Bottom");
 
         if (topOrBottom)
             return candidates.HasBothVerticalSides;
 
         bool frontOrBack =
-            ViewTypeMatches(view, "FrontView", "Front")
+            IsSemanticFrontView(view)
             || ViewTypeMatches(view, "BackView", "Back");
 
         if (frontOrBack)
@@ -3292,7 +3307,7 @@ public static class PHU_OpenGridView
             return selected;
 
         bool topOrBottom =
-            ViewTypeMatches(view, "TopView", "Top")
+            IsSemanticTopView(view)
             || ViewTypeMatches(view, "BottomView", "Bottom");
 
         if (topOrBottom)
@@ -3335,7 +3350,7 @@ public static class PHU_OpenGridView
         }
 
         bool frontOrBack =
-            ViewTypeMatches(view, "FrontView", "Front")
+            IsSemanticFrontView(view)
             || ViewTypeMatches(view, "BackView", "Back");
 
         if (frontOrBack)

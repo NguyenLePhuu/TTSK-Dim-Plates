@@ -892,7 +892,7 @@ namespace TTSK_AutoDim_Plates
                     StringComparison.OrdinalIgnoreCase
                 )
             )
-                return Color.FromArgb(14, 165, 233);
+                return Color.FromArgb(2, 132, 199);
             if (
                 string.Equals(
                     actionId,
@@ -949,6 +949,78 @@ namespace TTSK_AutoDim_Plates
                 )
             )
                 return Color.FromArgb(48, 162, 121);
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionSlot10,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
+                return Color.FromArgb(219, 39, 119);
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionSlot11,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
+                return Color.FromArgb(79, 70, 229);
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionSlot12,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
+                return Color.FromArgb(8, 145, 178);
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionSlot13,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
+                return Color.FromArgb(101, 163, 13);
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionSlot14,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
+                return Color.FromArgb(234, 88, 12);
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionSlot15,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
+                return Color.FromArgb(190, 24, 93);
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionSlot16,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
+                return Color.FromArgb(109, 40, 217);
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionSlot17,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
+                return Color.FromArgb(21, 128, 61);
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionSlot18,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
+                return Color.FromArgb(185, 28, 28);
 
             return _accentColor;
         }

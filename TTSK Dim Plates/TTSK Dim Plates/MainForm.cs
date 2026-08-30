@@ -341,18 +341,17 @@ namespace TTSK_AutoDim_Plates
             btnModeActive = MakeModeButton("🗎  ACTIVE", "Bản vẽ hiện hành", 95, 20, 350, 50);
             EventHandler activeModeClick = delegate
             {
-                if (_dataCenterModeEnabled)
-                {
-                    SetMainStatus(
-                        "Data Center chỉ chạy trong Batch. Hãy click Slot09 lần nữa để tắt mode.",
-                        MainStatusKind.Warning
-                    );
-                    return;
-                }
-
                 rbActive.Checked = true;
                 rbBatch.Checked = false;
                 UpdateModeUi();
+                ApplyDataCenterModeUi();
+                if (_dataCenterModeEnabled)
+                {
+                    SetMainStatus(
+                        "Data Center ACTIVE | Mở drawing dạng 1/2 → CREATE DRAWING để DIM + REF line.",
+                        MainStatusKind.Information
+                    );
+                }
             };
             WireClickToAll(btnModeActive, activeModeClick);
             modePanel.Controls.Add(btnModeActive);
@@ -363,6 +362,7 @@ namespace TTSK_AutoDim_Plates
                 rbBatch.Checked = true;
                 rbActive.Checked = false;
                 UpdateModeUi();
+                ApplyDataCenterModeUi();
             };
             WireClickToAll(btnModeBatch, batchModeClick);
             modePanel.Controls.Add(btnModeBatch);
@@ -1339,17 +1339,17 @@ namespace TTSK_AutoDim_Plates
 
             if (_dataCenterModeEnabled)
             {
-                if (rbBatch != null)
-                    rbBatch.Checked = true;
                 if (rbActive != null)
-                    rbActive.Checked = false;
+                    rbActive.Checked = true;
+                if (rbBatch != null)
+                    rbBatch.Checked = false;
 
                 SetAutoDimPage(1);
                 UpdateModeUi();
                 ApplyDataCenterModeUi();
 
                 SetMainStatus(
-                    "Data Center ON | Chọn drawing trong Document Manager → Load Selected → CREATE DRAWING.",
+                    "Data Center ACTIVE ON | Mở drawing dạng 1/2 hiện hành → CREATE DRAWING.",
                     MainStatusKind.Information
                 );
             }
@@ -1385,7 +1385,9 @@ namespace TTSK_AutoDim_Plates
             if (dataCenterSlotDescription != null)
             {
                 dataCenterSlotDescription.Text = _dataCenterModeEnabled
-                    ? "ON · 1 Grid · Gap 15/50 · Center"
+                    ? rbActive != null && rbActive.Checked
+                        ? "ON · ACTIVE · DIM + REF Line"
+                        : "ON · BATCH · Data Center"
                     : "1 Grid · Gap theo Grid · Center";
             }
 
@@ -2385,6 +2387,35 @@ namespace TTSK_AutoDim_Plates
             )
             {
                 ToggleDataCenterMode();
+                return;
+            }
+
+            int extendedSlotNumber;
+            if (
+                actionId.Length == 6
+                && actionId.StartsWith("Slot", StringComparison.OrdinalIgnoreCase)
+                && int.TryParse(actionId.Substring(4), out extendedSlotNumber)
+                && extendedSlotNumber >= 10
+                && extendedSlotNumber <= 17
+            )
+            {
+                RunExternalAutoDimSlot(
+                    "Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot"
+                        + extendedSlotNumber.ToString("00")
+                );
+                return;
+            }
+
+            if (
+                string.Equals(
+                    actionId,
+                    ShortcutManager.ActionSlot18,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
+            {
+                // Slot 18 currently exposes the DIM spacing audit entry point.
+                RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot06");
                 return;
             }
         }
@@ -7697,6 +7728,7 @@ namespace TTSK_AutoDim_Plates
             Tekla.Technology.Akit.UserScript.PHU_InzaiColumnNeighborDimensionEngine.Reset();
             Tekla.Technology.Akit.UserScript.PHU_InzaiColumnSpliceDimensionEngine.Reset();
             Tekla.Technology.Akit.UserScript.PHU_InzaiColumnSectionDimensionEngine.Reset();
+            Tekla.Technology.Akit.UserScript.PHU_Slot09_DataCenterBeamType2DimensionEngine.Reset();
             Tekla.Technology.Akit.UserScript.PHU_ColumnDimensionTierContext.Reset();
             Tekla.Technology.Akit.UserScript.PHU_VerticalShapeViewLayoutContext.Reset();
             AutoDimPartType partType = DetectActiveDrawingAutoDimPartType();
@@ -7996,6 +8028,13 @@ namespace TTSK_AutoDim_Plates
             Tekla.Technology.Akit.UserScript.PHU_InzaiColumnSectionDimensionEngine.Configure(
                 runColumnGridDimensions
             );
+            bool runDataCenterBeamType2Dimensions =
+                Tekla.Technology.Akit.UserScript
+                    .PHU_Slot09_DataCenterBeamType2Context.IsActive;
+            Tekla.Technology.Akit.UserScript
+                .PHU_Slot09_DataCenterBeamType2DimensionEngine.Configure(
+                    runDataCenterBeamType2Dimensions
+                );
 
             if (shapeSupportsColumnGridDimensions && resolvedMainPart != null)
             {
@@ -8129,6 +8168,29 @@ namespace TTSK_AutoDim_Plates
                     }
                 }
 
+                // Slot09 Data Center Beam Type-2 is a geometry-proven,
+                // fail-closed supplement. Shape H and Beam Grid retain their
+                // established ownership; this pass adds only the transverse
+                // and true-section relations that those engines do not own.
+                if (runDataCenterBeamType2Dimensions)
+                {
+                    bool type2DimSucceeded = Tekla.Technology.Akit.UserScript
+                        .PHU_Slot09_DataCenterBeamType2DimensionEngine
+                        .ExecuteAfterShape();
+                    string type2DimMessage = Tekla.Technology.Akit.UserScript
+                        .PHU_Slot09_DataCenterBeamType2DimensionEngine
+                        .LastRunMessage;
+                    execution.SectionMessage = String.IsNullOrWhiteSpace(
+                            execution.SectionMessage)
+                        ? type2DimMessage
+                        : execution.SectionMessage + " " + type2DimMessage;
+                    if (!type2DimSucceeded)
+                    {
+                        execution.CanSaveDrawing = false;
+                        return execution;
+                    }
+                }
+
                 // One connected column flow: Shape H/C/L -> optional routed
                 // Inzai Neighbor type 1 -> Inzai Splice type 2 ->
                 // project-routed Grid DIM -> optional independent Inzai
@@ -8240,6 +8302,7 @@ namespace TTSK_AutoDim_Plates
                 Tekla.Technology.Akit.UserScript.PHU_InzaiColumnNeighborDimensionEngine.Reset();
                 Tekla.Technology.Akit.UserScript.PHU_InzaiColumnSpliceDimensionEngine.Reset();
                 Tekla.Technology.Akit.UserScript.PHU_InzaiColumnSectionDimensionEngine.Reset();
+                Tekla.Technology.Akit.UserScript.PHU_Slot09_DataCenterBeamType2DimensionEngine.Reset();
                 Tekla.Technology.Akit.UserScript.PHU_ColumnDimensionTierContext.Reset();
                 Tekla.Technology.Akit.UserScript.PHU_VerticalShapeViewLayoutContext.Reset();
             }
@@ -8252,7 +8315,17 @@ namespace TTSK_AutoDim_Plates
 
         private DataCenterExecutionResult RunDataCenterCurrentDrawing()
         {
+            return RunDataCenterCurrentDrawing(false);
+        }
+
+        private DataCenterExecutionResult RunDataCenterCurrentDrawing(
+            bool activeQuickDimensionOnly
+        )
+        {
             DataCenterExecutionResult result = new DataCenterExecutionResult();
+            IDisposable beamType2Scope = null;
+            bool beamType2Active = false;
+            bool preservePreparedDataCenterLayout = activeQuickDimensionOnly;
 
             try
             {
@@ -8272,6 +8345,19 @@ namespace TTSK_AutoDim_Plates
                         "DC SKIP",
                         "PREFLIGHT",
                         "Không có active drawing."
+                    );
+
+                string beamType2Message;
+                beamType2Scope = Tekla.Technology.Akit.UserScript
+                    .PHU_Slot09_DataCenterBeamType2Context
+                    .TryBeginCurrentDrawing(out beamType2Active, out beamType2Message);
+                preservePreparedDataCenterLayout =
+                    activeQuickDimensionOnly
+                    || (
+                        beamType2Active
+                        && Tekla.Technology.Akit.UserScript
+                            .PHU_Slot09_DataCenterBeamType2Context
+                            .PreservePreparedDrawingLayout
                     );
 
                 AutoDimPartType actualPartType = DetectActiveDrawingAutoDimPartType();
@@ -8301,24 +8387,41 @@ namespace TTSK_AutoDim_Plates
                 }
                 bool hasSlot04PlateTargets = preflight.TargetCount > 0;
 
-                DataCenterStageResult openResult = RunDataCenterOpenGridCore();
-                if (!openResult.Success)
+                // ACTIVE Type1/Type2 and Batch Type2 already have approved
+                // view/Grid layout. The established Open/Fit preparation is
+                // retained only for the legacy Batch Type1 operation.
+                if (!preservePreparedDataCenterLayout)
                 {
-                    return FailDataCenter(result, "DC OPEN ERR", "OPEN GRID", openResult.Message);
-                }
-                result.OpenGridApplied = true;
+                    DataCenterStageResult openResult = RunDataCenterOpenGridCore();
+                    if (!openResult.Success)
+                    {
+                        return FailDataCenter(
+                            result,
+                            "DC OPEN ERR",
+                            "OPEN GRID",
+                            openResult.Message
+                        );
+                    }
+                    result.OpenGridApplied = true;
 
-                DataCenterStageResult fitResult = RunDataCenterFitGridCore();
-                if (!fitResult.Success)
-                {
-                    return FailDataCenter(result, "DC FIT ERR", "FIT 1 GRID", fitResult.Message);
+                    DataCenterStageResult fitResult = RunDataCenterFitGridCore();
+                    if (!fitResult.Success)
+                    {
+                        return FailDataCenter(
+                            result,
+                            "DC FIT ERR",
+                            "FIT 1 GRID",
+                            fitResult.Message
+                        );
+                    }
+                    result.FitApplied = true;
                 }
-                result.FitApplied = true;
 
                 AutoDimExecutionResult dimExecution;
                 using (
                     Tekla.Technology.Akit.UserScript.PHU_Slot09_DataCenterContext.Begin(
-                        hasSlot04PlateTargets
+                        hasSlot04PlateTargets,
+                        preservePreparedDataCenterLayout
                     )
                 )
                 {
@@ -8326,11 +8429,18 @@ namespace TTSK_AutoDim_Plates
                 }
 
                 result.DimResult = dimExecution;
-                string finalArrangeMessage;
-                bool finalArrangeSucceeded =
-                    Tekla.Technology.Akit.UserScript.PHU_Slot09_DataCenterContext.VerifyRegisteredTopFrontArrangement(
-                        out finalArrangeMessage
-                    );
+                string finalArrangeMessage = preservePreparedDataCenterLayout
+                    ? "Data Center giữ nguyên bố cục view đã chuẩn bị."
+                    : string.Empty;
+                bool finalArrangeSucceeded = true;
+                if (!preservePreparedDataCenterLayout)
+                {
+                    finalArrangeSucceeded = Tekla.Technology.Akit.UserScript
+                        .PHU_Slot09_DataCenterContext
+                        .VerifyRegisteredTopFrontArrangement(
+                            out finalArrangeMessage
+                        );
+                }
                 bool gridDimSucceeded =
                     dimExecution != null
                     && dimExecution.CanSaveDrawing
@@ -8362,7 +8472,7 @@ namespace TTSK_AutoDim_Plates
                         : dimExecution.SectionMessage;
                     return FailDataCenter(result, "DC DIM ERR", "DIM", dimMessage);
                 }
-                result.ArrangeApplied = true;
+                result.ArrangeApplied = !preservePreparedDataCenterLayout;
                 result.DimApplied = true;
                 result.ReferenceConnectorsApplied = true;
 
@@ -8392,31 +8502,43 @@ namespace TTSK_AutoDim_Plates
                     result.Slot04DimensionCount = slot04.CreatedCount;
                 }
 
-                DataCenterStageResult neighborGridResult = RunDataCenterTopNeighborGridMarkCore();
-                if (!neighborGridResult.Success)
+                if (!preservePreparedDataCenterLayout)
                 {
-                    return FailDataCenter(
-                        result,
-                        "DC NG ERR",
-                        "TOP NEIGHBOR GRID",
-                        neighborGridResult.Message
-                    );
+                    DataCenterStageResult neighborGridResult =
+                        RunDataCenterTopNeighborGridMarkCore();
+                    if (!neighborGridResult.Success)
+                    {
+                        return FailDataCenter(
+                            result,
+                            "DC NG ERR",
+                            "TOP NEIGHBOR GRID",
+                            neighborGridResult.Message
+                        );
+                    }
+                    result.TopNeighborGridMarksApplied = true;
                 }
-                result.TopNeighborGridMarksApplied = true;
 
                 result.Success = true;
                 result.ResultCode = "DC OK";
                 result.FailedStage = string.Empty;
-                result.Message = hasSlot04PlateTargets
-                    ? "OPEN GRID → FIT 1 → DIM Grid → REF LINE L/R → S04 FRONT Center → TOP NEIGHBOR MARK OK."
-                    : "OPEN GRID → FIT 1 → DIM Grid → REF LINE L/R → TOP NEIGHBOR MARK OK; FRONT không có plate tùy chọn.";
+                result.Message = preservePreparedDataCenterLayout
+                    ? hasSlot04PlateTargets
+                        ? (activeQuickDimensionOnly ? "ACTIVE" : "TYPE2")
+                            + " DIM ONLY → DIM các mặt/Grid → REF LINE L/R → S04 FRONT Center OK; giữ nguyên Grid và bố cục view."
+                        : (activeQuickDimensionOnly ? "ACTIVE" : "TYPE2")
+                            + " DIM ONLY → DIM các mặt/Grid → REF LINE L/R OK; giữ nguyên Grid và bố cục view, FRONT không có plate tùy chọn."
+                    : hasSlot04PlateTargets
+                        ? "OPEN GRID → FIT 1 → DIM Grid → REF LINE L/R → S04 FRONT Center → TOP NEIGHBOR MARK OK."
+                        : "OPEN GRID → FIT 1 → DIM Grid → REF LINE L/R → TOP NEIGHBOR MARK OK; FRONT không có plate tùy chọn.";
                 return result;
             }
             catch (Exception ex)
             {
                 return FailDataCenter(
                     result,
-                    result.OpenGridApplied
+                    preservePreparedDataCenterLayout
+                        ? result.DimApplied ? "DC S04 ERR" : "DC DIM ERR"
+                    : result.OpenGridApplied
                         ? result.FitApplied
                             ? result.DimApplied
                                 ? "DC S04 ERR"
@@ -8426,6 +8548,11 @@ namespace TTSK_AutoDim_Plates
                     "EXCEPTION",
                     ex.Message
                 );
+            }
+            finally
+            {
+                if (beamType2Scope != null)
+                    beamType2Scope.Dispose();
             }
         }
 
@@ -9579,6 +9706,34 @@ namespace TTSK_AutoDim_Plates
                 lblStatus.Text = "▶  Running active drawing...";
                 lblStatus.ForeColor = Blue;
                 Application.DoEvents();
+
+                if (_dataCenterModeEnabled)
+                {
+                    DataCenterExecutionResult dataCenterExecution;
+                    using (ManualDrawingScaleOverride.BeginRun(manualScale))
+                    {
+                        dataCenterExecution = RunDataCenterCurrentDrawing(true);
+                    }
+
+                    if (dataCenterExecution == null || !dataCenterExecution.Success)
+                    {
+                        string activeDataCenterError = dataCenterExecution == null
+                            ? "Data Center ACTIVE không trả kết quả."
+                            : dataCenterExecution.FailedStage
+                                + " | " + dataCenterExecution.Message;
+                        SetMainStatus(
+                            "Data Center ACTIVE lỗi: " + activeDataCenterError,
+                            MainStatusKind.Error
+                        );
+                        return;
+                    }
+
+                    SetMainStatus(
+                        "Data Center ACTIVE OK | " + dataCenterExecution.Message,
+                        MainStatusKind.Success
+                    );
+                    return;
+                }
 
                 // Chỉ chạy AutoDim 1 lần cho mỗi lần bấm CREATE DRAWING.
                 // Bản cũ gọi RunCurrentAutoDimScript() 2 lần nên Tekla tạo/dim drawing lặp lại.

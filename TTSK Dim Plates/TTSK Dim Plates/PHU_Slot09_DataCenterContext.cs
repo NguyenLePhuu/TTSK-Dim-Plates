@@ -36,6 +36,9 @@ namespace Tekla.Technology.Akit.UserScript
         private static bool _reserveFrontSlot04Tier;
 
         [ThreadStatic]
+        private static bool _preservePreparedDrawingLayout;
+
+        [ThreadStatic]
         private static TSD.View _registeredSlot04FrontView;
 
         [ThreadStatic]
@@ -60,10 +63,18 @@ namespace Tekla.Technology.Akit.UserScript
 
         public static IDisposable Begin()
         {
-            return Begin(false);
+            return Begin(false, false);
         }
 
         public static IDisposable Begin(bool reserveFrontSlot04Tier)
+        {
+            return Begin(reserveFrontSlot04Tier, false);
+        }
+
+        public static IDisposable Begin(
+            bool reserveFrontSlot04Tier,
+            bool preservePreparedDrawingLayout
+        )
         {
             if (_depth == 0)
             {
@@ -72,12 +83,20 @@ namespace Tekla.Technology.Akit.UserScript
                 _registeredTopFrontGap = 0.0;
                 _hasRegisteredTopFront = false;
                 _reserveFrontSlot04Tier = reserveFrontSlot04Tier;
+                _preservePreparedDrawingLayout = preservePreparedDrawingLayout;
                 _registeredSlot04FrontView = null;
                 _registeredSlot04FrontViewId = int.MaxValue;
                 _registeredSlot04AbsoluteLine = 0.0;
                 _registeredSlot04DirectionX = 0.0;
                 _registeredSlot04DirectionY = 0.0;
                 _hasRegisteredSlot04Tier = false;
+            }
+            else
+            {
+                _reserveFrontSlot04Tier =
+                    _reserveFrontSlot04Tier || reserveFrontSlot04Tier;
+                _preservePreparedDrawingLayout =
+                    _preservePreparedDrawingLayout || preservePreparedDrawingLayout;
             }
 
             _depth++;
@@ -87,6 +106,28 @@ namespace Tekla.Technology.Akit.UserScript
         public static bool ReserveFrontSlot04Tier
         {
             get { return IsActive && _reserveFrontSlot04Tier; }
+        }
+
+        /// <summary>
+        /// ACTIVE Data Center uses the prepared drawing layout for both Type1
+        /// and Type2.  Shape/Grid consumers must create dimensions and owned
+        /// REF lines without changing scale, view origin, restriction boxes,
+        /// selection, or Neighbor Grid marks.
+        /// </summary>
+        public static bool PreservePreparedDrawingLayout
+        {
+            get { return IsActive && _preservePreparedDrawingLayout; }
+        }
+
+        public static string AuditExecutionPolicy()
+        {
+            bool preserve = PreservePreparedDrawingLayout;
+            return "SLOT09 DATA CENTER ACTIVE POLICY: active=" + IsActive
+                + ", preserveLayout=" + preserve
+                + ", DIM=True, REF-lines=True, OpenGrid=" + (!preserve)
+                + ", FitGrid=" + (!preserve)
+                + ", ArrangeViews=" + (!preserve)
+                + ", NeighborGridMark=" + (!preserve) + ".";
         }
 
         public static void RegisterFrontSlot04Tier(

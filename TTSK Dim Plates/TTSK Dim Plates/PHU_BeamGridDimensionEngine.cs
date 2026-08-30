@@ -403,6 +403,36 @@ namespace Tekla.Technology.Akit.UserScript
         }
 
         /// <summary>
+        /// Pure regression for Slot09 mode-1 tier allocation. It proves that
+        /// Type1 retains its former reservation count and Type2 inserts one
+        /// real Shape tier before Slot04/Grid without hard-coded paper gaps.
+        /// </summary>
+        public static string AuditSlot09FrontTierReservationRegression()
+        {
+            int type1NoPlate = CountReservedFrontMode1Tiers(false, false);
+            int type1WithPlate = CountReservedFrontMode1Tiers(true, false);
+            int type2NoPlate = CountReservedFrontMode1Tiers(false, true);
+            int type2WithPlate = CountReservedFrontMode1Tiers(true, true);
+            bool pass = type1NoPlate == 0
+                && type1WithPlate == 1
+                && type2NoPlate == 1
+                && type2WithPlate == 2;
+            return pass
+                ? "SLOT09 FRONT TIER REGRESSION PASS: Type1=0/1 unchanged, Type2=1/2 sequential."
+                : "SLOT09 FRONT TIER REGRESSION FAILED: Type1="
+                    + type1NoPlate + "/" + type1WithPlate
+                    + " Type2=" + type2NoPlate + "/" + type2WithPlate + ".";
+        }
+
+        private static int CountReservedFrontMode1Tiers(
+            bool reserveSlot04Tier,
+            bool reserveBeamType2TransverseTier)
+        {
+            return (reserveSlot04Tier ? 1 : 0)
+                + (reserveBeamType2TransverseTier ? 1 : 0);
+        }
+
+        /// <summary>
         /// Receives the exact total-DIM location already calculated by Shape.
         /// The production engine derives outer Grid tiers from those tier values;
         /// it never reuses Slot 08 paper-offset constants.
@@ -692,6 +722,20 @@ namespace Tekla.Technology.Akit.UserScript
         {
             if (!LastRunSucceeded || _context == null)
                 return false;
+
+            // Data Center ACTIVE (Type1/Type2) and Batch Type2 view/Grid
+            // layouts are supplied and approved upstream.
+            // This guard sits at the mutation boundary so a future caller
+            // cannot move FRONT even if it forgets the Shape-level policy.
+            if (
+                PHU_Slot09_DataCenterBeamType2Context.PreservePreparedDrawingLayout
+                || PHU_Slot09_DataCenterContext.PreservePreparedDrawingLayout
+            )
+            {
+                LastRunMessage +=
+                    " Grid alignment skipped: Data Center prepared view layout preserved.";
+                return true;
+            }
 
             ViewGeometry top;
             ViewGeometry front;
@@ -1440,28 +1484,50 @@ namespace Tekla.Technology.Akit.UserScript
 
                 double tierStep = takeover.NextHorizontalTierOffset - takeover.HorizontalTierOffset;
                 bool reserveSlot04Tier = PHU_Slot09_DataCenterContext.ReserveFrontSlot04Tier;
+                bool reserveBeamType2TransverseTier =
+                    PHU_Slot09_DataCenterBeamType2Context.IsFrontView(view.View);
 
                 // Slot09 FRONT common tier order:
-                // existing edge-hole tiers -> Slot04 plates -> G1 -> G2.
+                // Type1: existing edge-hole tiers -> Slot04 plates -> G1 -> G2.
+                // Type2: existing edge-hole tiers -> transverse relation ->
+                //        Slot04 plates -> G1 -> G2.
                 // The old Shape total line is the exact next free tier after
-                // the existing FRONT hole dimensions. Reserve that line for
-                // Slot04, then move both Grid rows outward by one real Shape
-                // tier step. With no plate, no empty tier is introduced.
+                // the existing FRONT hole dimensions. Type2 owns that line;
+                // every later family is moved out by real Shape tier steps.
+                int reservedTierCount = 0;
+                if (reserveBeamType2TransverseTier)
+                {
+                    PHU_Slot09_DataCenterBeamType2Context
+                        .RegisterFrontTransverseDimensionTier(
+                            view.View,
+                            takeover.HorizontalTier
+                        );
+                    reservedTierCount++;
+                    view.HorizontalGridPlanCount++;
+                }
                 if (reserveSlot04Tier)
                 {
                     double absoluteSlot04Line =
-                        Dot(view.RefLeft, view.UpDirection) + takeover.HorizontalLineNormal;
+                        Dot(view.RefLeft, view.UpDirection)
+                        + takeover.HorizontalLineNormal
+                        + reservedTierCount * tierStep;
                     PHU_Slot09_DataCenterContext.RegisterFrontSlot04Tier(
                         view.View,
                         absoluteSlot04Line,
                         view.UpDirection.X,
                         view.UpDirection.Y
                     );
+                    reservedTierCount++;
                     view.HorizontalGridPlanCount++;
                 }
+                if (reservedTierCount != CountReservedFrontMode1Tiers(
+                        reserveSlot04Tier,
+                        reserveBeamType2TransverseTier))
+                    throw new InvalidOperationException(
+                        "Slot09 FRONT tier reservation contract is inconsistent.");
 
                 double g1Line =
-                    takeover.HorizontalLineNormal + (reserveSlot04Tier ? tierStep : 0.0);
+                    takeover.HorizontalLineNormal + reservedTierCount * tierStep;
                 double g2Line = g1Line + tierStep;
 
                 AddHorizontalPlanMode1(

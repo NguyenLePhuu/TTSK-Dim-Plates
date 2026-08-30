@@ -251,6 +251,16 @@ namespace Tekla.Technology.Akit.UserScript
                 View frontViewByType = FindViewByViewTypeForH(views, "FrontView", "Front");
                 View bottomViewByType = FindViewByViewTypeForH(views, "BottomView", "Bottom");
 
+                // Slot09 Data Center Beam Type-2 has a semantic Front that
+                // Tekla exposes as SectionView.  The scoped router has already
+                // proven this role from MainPart REF/solid/Grid topology; no
+                // sheet-position or name fallback is allowed here.
+                if (PHU_Slot09_DataCenterBeamType2Context.IsActive)
+                {
+                    topViewByType = PHU_Slot09_DataCenterBeamType2Context.TopView;
+                    frontViewByType = PHU_Slot09_DataCenterBeamType2Context.FrontView;
+                }
+
                 ClassifySectionViewsForH(
                     views,
                     frontViewByType,
@@ -456,6 +466,17 @@ namespace Tekla.Technology.Akit.UserScript
             View backViewByType = FindViewByViewTypeForH(views, "BackView", "Back");
             View bottomViewByType = FindViewByViewTypeForH(views, "BottomView", "Bottom");
 
+            if (PHU_Slot09_DataCenterBeamType2Context.IsActive)
+            {
+                topViewByType = PHU_Slot09_DataCenterBeamType2Context.TopView;
+                frontViewByType = PHU_Slot09_DataCenterBeamType2Context.FrontView;
+            }
+            bool preservePreparedDataCenterLayout =
+                PHU_Slot09_DataCenterBeamType2Context
+                    .PreservePreparedDrawingLayout
+                || PHU_Slot09_DataCenterContext
+                    .PreservePreparedDrawingLayout;
+
             List<View> specialTopSections = new List<View>();
             List<View> specialBottomSections = new List<View>();
             List<View> exactSectionViews = new List<View>();
@@ -551,13 +572,17 @@ namespace Tekla.Technology.Akit.UserScript
             // BƯỚC 2: Auto scale chỉ áp dụng cho Single Part Drawing.
             // Assembly Drawing giữ nguyên scale do người dùng thiết lập.
             bool hasManualScale = TTSK_AutoDim_Plates.ManualDrawingScaleOverride.HasOverride;
-            if (hasManualScale || (AUTO_SCALE_BY_PART_LENGTH && isSinglePartDrawing))
+            if (
+                !preservePreparedDataCenterLayout
+                && (hasManualScale || (AUTO_SCALE_BY_PART_LENGTH && isSinglePartDrawing))
+            )
             {
                 ApplyAutoScaleByPartLength(drawing, model, part, topView, views);
                 CommitAndWait(drawing, 500);
             }
 
-            VerifyManualScaleApplied(views);
+            if (!preservePreparedDataCenterLayout)
+                VerifyManualScaleApplied(views);
             InitializeCurrentDimTierSpacing(topView);
 
             // Grid DIM preflight is intentionally after AutoScale and before
@@ -745,8 +770,11 @@ namespace Tekla.Technology.Akit.UserScript
 
             bool preserveVerticalUserLayout =
                 PHU_VerticalShapeViewLayoutContext.ShouldPreserveUserViewLayout;
+            bool preserveCurrentViewLayout =
+                preserveVerticalUserLayout
+                || preservePreparedDataCenterLayout;
 
-            if (!preserveVerticalUserLayout && !hShapeLongitudinalVertical)
+            if (!preserveCurrentViewLayout && !hShapeLongitudinalVertical)
             {
                 AlignMainViewsByGeometry(
                     topView,
@@ -780,7 +808,7 @@ namespace Tekla.Technology.Akit.UserScript
                 frontView,
                 finalGreenBoxGap
             );
-            if (!preserveVerticalUserLayout)
+            if (!preserveCurrentViewLayout)
             {
                 ArrangeSectionViewRightOfFront(
                     smallestExactView,
@@ -804,7 +832,7 @@ namespace Tekla.Technology.Akit.UserScript
                     AddUniqueViewForMove(verticalCenterExtraViews, backView);
             }
 
-            if (!preserveVerticalUserLayout)
+            if (!preserveCurrentViewLayout)
             {
                 CenterShapeViewsByPurpleBoxOnSheet(
                     drawing,
@@ -818,7 +846,7 @@ namespace Tekla.Technology.Akit.UserScript
 
             // ARRANGE CUỐI MỚI: dùng KHUNG XANH để ép gap 15 có tính cả DIM/mark.
             // Chỉ xử lý cụm Top / Front / Bottom. Section bên cạnh không tham gia gap dọc.
-            if (!preserveVerticalUserLayout && hShapeLongitudinalVertical)
+            if (!preserveCurrentViewLayout && hShapeLongitudinalVertical)
             {
                 ForceFinalArrangeVerticalHShapeTwoColumns(
                     topView,
@@ -828,7 +856,7 @@ namespace Tekla.Technology.Akit.UserScript
                     finalGreenBoxGap
                 );
             }
-            else if (!preserveVerticalUserLayout)
+            else if (!preserveCurrentViewLayout)
             {
                 ForceFinalEqualArrangeShapeTopFrontBottomGap15(
                     topView,
@@ -843,7 +871,7 @@ namespace Tekla.Technology.Akit.UserScript
             // ALIGN LẠI MẶT CẮT SAU KHI CENTER + GAP 15.
             // Giữ nguyên thuật toán ArrangeSectionViewRightOfFront(), chỉ gọi thêm 1 lần sau cùng
             // để mặt cắt A-A bám lại theo vị trí Front cuối cùng.
-            if (!preserveVerticalUserLayout)
+            if (!preserveCurrentViewLayout)
             {
                 ArrangeSectionViewRightOfFront(
                     smallestExactView,
@@ -855,10 +883,16 @@ namespace Tekla.Technology.Akit.UserScript
             }
             CommitAndWait(drawing, 250);
 
-            UpdateDrawingTitle3Scale(drawing, topView);
-            CommitAndWait(drawing, 250);
+            if (!preservePreparedDataCenterLayout)
+            {
+                UpdateDrawingTitle3Scale(drawing, topView);
+                CommitAndWait(drawing, 250);
+            }
 
-            if (ENABLE_TOP_BOTTOM_HOLE_CHECK)
+            if (
+                ENABLE_TOP_BOTTOM_HOLE_CHECK
+                && !preservePreparedDataCenterLayout
+            )
             {
                 CheckTopBottomHolesAndMark(model, part, topView);
                 CommitAndWait(drawing, 250);
@@ -867,16 +901,23 @@ namespace Tekla.Technology.Akit.UserScript
             // This is deliberately the final geometry mutation in the Beam Grid
             // flow. It aligns corresponding real GridLine endpoints and moves
             // FRONT only; no later fit/center step may disturb the result.
-            if (beamGridDimensionsCreated)
+            if (
+                beamGridDimensionsCreated
+                && !preservePreparedDataCenterLayout
+            )
                 PHU_BeamGridDimensionEngine.AlignPreparedTopFrontByGrid();
 
-            PHU_Slot09_DataCenterContext.RegisterFinalTopFrontArrangement(
-                topView,
-                frontView,
-                hShapeLongitudinalVertical ? finalGreenBoxGap : finalTopFrontGreenBoxGap
-            );
+            if (!preservePreparedDataCenterLayout)
+            {
+                PHU_Slot09_DataCenterContext.RegisterFinalTopFrontArrangement(
+                    topView,
+                    frontView,
+                    hShapeLongitudinalVertical ? finalGreenBoxGap : finalTopFrontGreenBoxGap
+                );
+            }
 
-            SelectViews(dh, views);
+            if (!preservePreparedDataCenterLayout)
+                SelectViews(dh, views);
         }
 
         private struct TopBoundary
@@ -13671,6 +13712,13 @@ namespace Tekla.Technology.Akit.UserScript
 
                     // Nếu view này trùng Top/Bottom chuẩn thì không xử lý như Section thường.
                     if (
+                        // Type-2 semantic FRONT can be returned by a separate
+                        // Tekla wrapper instance.  The scoped context compares
+                        // stable drawing identifiers, while every other route
+                        // keeps the established object-identity check.
+                        PHU_Slot09_DataCenterBeamType2Context.IsFrontView(view)
+                        || IsSameViewForH(view, frontView)
+                        ||
                         IsSameViewForH(view, topViewByType)
                         || IsSameViewForH(view, bottomViewByType)
                     )

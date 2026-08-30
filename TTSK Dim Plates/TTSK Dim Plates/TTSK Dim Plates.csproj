@@ -181,17 +181,17 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <Compile Include="PHU_LoadStandard.cs" />
-    <Compile Include="PHU_Slot03_SECTION.cs" />
+    <Compile Include="PHU_Slot03_NeighborPlateSectionDim.cs" />
     <Compile Include="PHU_AutoDim_OK-V3.cs" />
     <Compile Include="PHU_DimSpacing.cs" />
-    <Compile Include="PHU_Slot04_Pallet01_02_Main.cs" />
-    <Compile Include="PHU_Slot05_DimPlate.cs" />
-    <Compile Include="PHU_Slot06_DumpSelectedPlateAndDims.cs" />
-    <Compile Include="PHU_NishiAzabuAutoDim.cs" />
-    <Compile Include="PHU_NishiAzabuAutoDimSlot07.cs" />
-    <Compile Include="PHU_AutoDimSlot08.cs" />
-    <Compile Include="PHU_AutoDimSlot08.Type2.cs" />
-    <Compile Include="PHU_AutoDimSlot10.cs" />
+    <Compile Include="PHU_Slot04_PalletAutoDim.cs" />
+    <Compile Include="PHU_Slot05_SelectedPlateEdgeHoleDim.cs" />
+    <Compile Include="PHU_Slot18_DimSpacingAudit.cs" />
+    <Compile Include="PHU_Slot06_NishiAzabuAutoDim.cs" />
+    <Compile Include="PHU_Slot07_NishiAzabuTopology2AutoDim.cs" />
+    <Compile Include="PHU_Slot08_BraceConnectionAutoDim.cs" />
+    <Compile Include="PHU_Slot08_BraceConnectionAutoDim.Type2.cs" />
+    <Compile Include="PHU_Slot10_RefConnectionAutoDim.cs" />
     <Compile Include="PHU_BeamGridDimensionEngine.cs" />
     <Compile Include="PHU_ColumnProjectRouter.cs" />
     <Compile Include="PHU_ColumnDimensionTierContext.cs" />
@@ -202,10 +202,12 @@
     <Compile Include="PHU_InzaiColumnSectionDimensionEngine.cs" />
     <Compile Include="PHU_VerticalShapeViewLayoutContext.cs" />
     <Compile Include="PHU_Slot09_DataCenterContext.cs" />
+    <Compile Include="PHU_Slot09_DataCenterBeamType2Context.cs" />
+    <Compile Include="PHU_Slot09_DataCenterBeamType2DimensionEngine.cs" />
     <Compile Include="PHU_LineDistance.cs" />
     <Compile Include="PHU_OpenGridView.cs" />
-    <Compile Include="PHU_Slot02_Select-Main-neighbor-Plate.cs" />
-    <Compile Include="PHU_Slot01_SelectedMainPart.cs" />
+    <Compile Include="PHU_Slot02_NeighborReferencePlateDim.cs" />
+    <Compile Include="PHU_Slot01_SelectedMainPartAutoDim.cs" />
     <Compile Include="PHU_Shape.cs" />
     <Compile Include="PHU_Section.cs" />
     <Compile Include="PHU_SectionViewAttributeResolver.cs" />

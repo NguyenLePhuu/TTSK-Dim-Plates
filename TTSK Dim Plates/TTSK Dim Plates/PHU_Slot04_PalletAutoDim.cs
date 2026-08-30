@@ -1144,6 +1144,20 @@ namespace Tekla.Technology.Akit.UserScript
                 bool reachesMainTop = candidate.Box.MinY <= main.Box.MaxY + AUTO_CASE_B_CONTACT_TOL;
                 if (!protrudesAboveMain || !reachesMainTop)
                     return false;
+
+                // Type-2 owns the plate at the transverse-member station as
+                // a local Plate-edge -> Beam-REF relation.  Keeping it out of
+                // Slot04 prevents that local plate from being inserted into
+                // the independent global top-plate chain.  The scope is
+                // geometry-proven and inactive for every Type-1 drawing.
+                if (
+                    PHU_Slot09_DataCenterBeamType2Context
+                        .ShouldExcludeFrontSlot04Target(
+                            candidate.Box.MinX,
+                            candidate.Box.MaxX
+                        )
+                )
+                    return false;
             }
 
             // Interval gap = 0 khi Plate02 giao/bao trùm bề dày main.

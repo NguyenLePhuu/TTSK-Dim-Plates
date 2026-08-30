@@ -27,6 +27,15 @@ namespace TTSK_AutoDim_Plates
         public const string ActionSlot07 = "Slot07";
         public const string ActionSlot08 = "Slot08";
         public const string ActionSlot09 = "Slot09";
+        public const string ActionSlot10 = "Slot10";
+        public const string ActionSlot11 = "Slot11";
+        public const string ActionSlot12 = "Slot12";
+        public const string ActionSlot13 = "Slot13";
+        public const string ActionSlot14 = "Slot14";
+        public const string ActionSlot15 = "Slot15";
+        public const string ActionSlot16 = "Slot16";
+        public const string ActionSlot17 = "Slot17";
+        public const string ActionSlot18 = "Slot18";
 
         private readonly string _filePath;
         private readonly List<ShortcutActionDefinition> _definitions;
@@ -569,6 +578,87 @@ namespace TTSK_AutoDim_Plates
                     "AutoDim function 9",
                     "9",
                     Keys.D9
+                )
+            );
+            list.Add(
+                new ShortcutActionDefinition(
+                    ActionSlot10,
+                    "Slot10 (Liên kết dầm REF)",
+                    "Dim theo REF · Edge · Bolt · Plate",
+                    "10",
+                    Keys.None
+                )
+            );
+            list.Add(
+                new ShortcutActionDefinition(
+                    ActionSlot11,
+                    "Slot11 (Function 11)",
+                    "Chờ gắn file CS",
+                    "11",
+                    Keys.None
+                )
+            );
+            list.Add(
+                new ShortcutActionDefinition(
+                    ActionSlot12,
+                    "Slot12 (Function 12)",
+                    "Chờ gắn file CS",
+                    "12",
+                    Keys.None
+                )
+            );
+            list.Add(
+                new ShortcutActionDefinition(
+                    ActionSlot13,
+                    "Slot13 (Function 13)",
+                    "Chờ gắn file CS",
+                    "13",
+                    Keys.None
+                )
+            );
+            list.Add(
+                new ShortcutActionDefinition(
+                    ActionSlot14,
+                    "Slot14 (Function 14)",
+                    "Chờ gắn file CS",
+                    "14",
+                    Keys.None
+                )
+            );
+            list.Add(
+                new ShortcutActionDefinition(
+                    ActionSlot15,
+                    "Slot15 (Function 15)",
+                    "Chờ gắn file CS",
+                    "15",
+                    Keys.None
+                )
+            );
+            list.Add(
+                new ShortcutActionDefinition(
+                    ActionSlot16,
+                    "Slot16 (Function 16)",
+                    "Chờ gắn file CS",
+                    "16",
+                    Keys.None
+                )
+            );
+            list.Add(
+                new ShortcutActionDefinition(
+                    ActionSlot17,
+                    "Slot17 (Function 17)",
+                    "Chờ gắn file CS",
+                    "17",
+                    Keys.None
+                )
+            );
+            list.Add(
+                new ShortcutActionDefinition(
+                    ActionSlot18,
+                    "Slot18 (Dim Spacing Audit)",
+                    "Kiểm tra khoảng cách đường kích thước",
+                    "18",
+                    Keys.None
                 )
             );
 
