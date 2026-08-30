@@ -699,21 +699,7 @@ namespace Tekla.Technology.Akit.UserScript
                 if (full.Plans.Count != 10)
                     throw new InvalidOperationException(
                         "Section full topology failed.");
-                DimPlan upperOrder = FindPlanByName(
-                    full.Plans,
-                    "T2-SECTION-B-UPPER-HOLE-Y");
-                DimPlan leftBracketOrder = FindPlanByName(
-                    full.Plans,
-                    "T2-SECTION-B-BRACKET-04-HOLE-Y");
-                if (upperOrder == null || upperOrder.Points.Count != 2
-                    || upperOrder.Points[0].Y <= upperOrder.Points[1].Y)
-                    throw new InvalidOperationException(
-                        "Section B right hole-to-beam point order failed.");
-                if (leftBracketOrder == null
-                    || leftBracketOrder.Points.Count != 2
-                    || leftBracketOrder.Points[0].Y <= leftBracketOrder.Points[1].Y)
-                    throw new InvalidOperationException(
-                        "Section B left beam-to-hole point order failed.");
+                AssertSyntheticSectionBVerticalPointOrder(full.Plans, "normal");
 
                 Analysis shuffled = new Analysis();
                 ViewData shuffledView = BuildSyntheticConnectionSection(
@@ -735,12 +721,13 @@ namespace Tekla.Technology.Akit.UserScript
                 if (mirrored.Plans.Count != 10)
                     throw new InvalidOperationException(
                         "Mirrored section topology failed.");
+                AssertSyntheticSectionBVerticalPointOrder(mirrored.Plans, "mirrored");
 
                 return "DATA CENTER BEAM TYPE2 GEOMETRY REGRESSION PASS: "
                     + "ShapeX tiers/fallback=3/3/1, transverse/mirror=2/2, "
                     + "projected-feet=2/2, top-extra-filter=6/6, "
                     + "front-slot04-filter=5/5, "
-                    + "section-point-order=3/3, real-notch-edge=1/1, "
+                    + "section-point-order=7/7, real-notch-edge=1/1, "
                     + "section plate/bracket/upper/lower/no-bracket/bare/full/"
                     + "shuffle/mirror=3/6/8/8/6/2/10/PASS/10.";
             }
@@ -1322,6 +1309,13 @@ namespace Tekla.Technology.Akit.UserScript
             }
 
             string side = upper ? "UPPER" : "LOWER";
+            P2 topVerticalFoot;
+            P2 bottomVerticalFoot;
+            OrderVerticalFeetTopToBottom(
+                hole.XY,
+                mainBoundary,
+                out topVerticalFoot,
+                out bottomVerticalFoot);
             analysis.Plans.Add(Plan(
                 view,
                 "T2-SECTION-B-" + side + "-HOLE-X",
@@ -1336,8 +1330,8 @@ namespace Tekla.Technology.Akit.UserScript
                 "SECTION-CONNECTION",
                 sideDirection,
                 upper ? 1 : 0,
-                upper ? hole.XY : mainBoundary,
-                upper ? mainBoundary : hole.XY));
+                topVerticalFoot,
+                bottomVerticalFoot));
         }
 
         private static void BuildSectionBracketLink(Analysis analysis, ViewData view)
@@ -1354,6 +1348,13 @@ namespace Tekla.Technology.Akit.UserScript
                 return;
 
             P2 sideDirection = farDirection.X < 0.0 ? new P2(-1, 0) : new P2(1, 0);
+            P2 topVerticalFoot;
+            P2 bottomVerticalFoot;
+            OrderVerticalFeetTopToBottom(
+                farTop,
+                hole.XY,
+                out topVerticalFoot,
+                out bottomVerticalFoot);
             analysis.Plans.Add(Plan(
                 view,
                 "T2-SECTION-B-BRACKET-01-REF-LENGTH",
@@ -1384,8 +1385,35 @@ namespace Tekla.Technology.Akit.UserScript
                 "SECTION-BRACKET",
                 sideDirection,
                 1,
-                farTop,
-                hole.XY));
+                topVerticalFoot,
+                bottomVerticalFoot));
+        }
+
+        /// <summary>
+        /// Section-B vertical dimensions use one semantic order in view
+        /// coordinates: the geometrically higher foot first, then the lower
+        /// foot. This stays correct for upper/lower and left/right links.
+        /// </summary>
+        private static void OrderVerticalFeetTopToBottom(
+            P2 first,
+            P2 second,
+            out P2 top,
+            out P2 bottom)
+        {
+            if (first == null || second == null)
+                throw new InvalidOperationException(
+                    "Section B vertical dimension has a null foot.");
+
+            if (first.Y >= second.Y)
+            {
+                top = first;
+                bottom = second;
+            }
+            else
+            {
+                top = second;
+                bottom = first;
+            }
         }
 
         private static bool TryResolveLongitudinalTransverse(
@@ -2097,6 +2125,12 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static ExistingPlanStatus FindExistingPlan(DimPlan plan)
         {
+            // Tekla 2025 canonicalizes stored StraightDimensionSet points by
+            // coordinate. Therefore persisted point order is not a reliable
+            // semantic signal and must not trigger delete/recreate churn.
+            // The planner preserves and regression-tests the requested order;
+            // existing-object matching intentionally compares projected feet
+            // as an unordered set plus the signed placement direction.
             bool sameFeet = false;
             for (int i = 0; i < plan.View.Dimensions.Count; i++)
             {
@@ -3105,24 +3139,59 @@ namespace Tekla.Technology.Akit.UserScript
             for (int i = 0; plans != null && i < plans.Count; i++)
             {
                 DimPlan plan = plans[i];
-                P2 measurement = new P2(-plan.Direction.Y, plan.Direction.X);
-                List<double> feet = new List<double>();
-                for (int p = 0; p < plan.Points.Count; p++)
-                    feet.Add(Dot(plan.Points[p], measurement));
-                feet.Sort();
                 StringBuilder item = new StringBuilder();
                 item.Append(plan.Name).Append('|')
                     .Append(Format(plan.Direction.X)).Append(',')
                     .Append(Format(plan.Direction.Y)).Append('|');
-                for (int p = 0; p < feet.Count; p++)
+                // This fingerprint is a planner regression, not an existing-
+                // Tekla-object matcher. Preserve semantic input order so a
+                // shuffled model enumeration cannot silently reverse feet.
+                for (int p = 0; p < plan.Points.Count; p++)
                 {
                     if (p > 0) item.Append(',');
-                    item.Append(Format(feet[p]));
+                    item.Append(Format(plan.Points[p].X)).Append(':')
+                        .Append(Format(plan.Points[p].Y));
                 }
                 items.Add(item.ToString());
             }
             items.Sort(StringComparer.Ordinal);
             return String.Join(";", items.ToArray());
+        }
+
+        /// <summary>
+        /// Pure synthetic contract for the Section-B vertical-foot rule:
+        /// every plan is supplied from the geometrically higher foot to the
+        /// lower foot, independent of upper/lower, side, and mirroring.
+        /// </summary>
+        private static void AssertSyntheticSectionBVerticalPointOrder(
+            List<DimPlan> plans,
+            string variant)
+        {
+            string[] names = new string[]
+            {
+                "T2-SECTION-B-LOWER-HOLE-Y",
+                "T2-SECTION-B-UPPER-HOLE-Y",
+                "T2-SECTION-B-BRACKET-04-HOLE-Y"
+            };
+            for (int i = 0; i < names.Length; i++)
+            {
+                DimPlan plan = FindPlanByName(plans, names[i]);
+                if (plan == null || plan.Direction == null
+                    || plan.Points.Count != 2)
+                    throw new InvalidOperationException(
+                        "Section B " + variant + " vertical-order plan is missing: "
+                        + names[i] + ".");
+
+                bool horizontalPlacement = Math.Abs(plan.Direction.X)
+                    >= DirectionCosineTolerance;
+                bool topToBottom = plan.Points[0].Y
+                    > plan.Points[1].Y + GeometryTolerance;
+                if (!horizontalPlacement || !topToBottom)
+                    throw new InvalidOperationException(
+                        "Section B " + variant
+                        + " top-to-bottom point order failed: "
+                        + names[i] + ".");
+            }
         }
 
         private static DimPlan FindPlanByName(
