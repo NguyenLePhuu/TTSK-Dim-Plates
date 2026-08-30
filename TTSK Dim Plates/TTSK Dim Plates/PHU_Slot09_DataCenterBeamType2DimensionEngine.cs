@@ -14,14 +14,14 @@ using TSM = Tekla.Structures.Model;
 namespace Tekla.Technology.Akit.UserScript
 {
     /// <summary>
-    /// Supplemental dimensions owned only by the geometry-proven Slot09 Data
-    /// Center Beam Type-2 route.  Shape H keeps ownership of the MainPart edge
-    /// and hole dimensions, BeamGrid keeps Grid/REF totals, and Slot04 keeps
-    /// the independent top-plate chain.  This engine owns only the transverse
-    /// member relations and the two true section-view families missing from
-    /// those stable engines.
+    /// Supplemental dimensions owned by the geometry-proven Slot09 Data
+    /// Center Beam routes. Shape H keeps ownership of the MainPart edge and
+    /// hole dimensions, BeamGrid keeps Grid/REF totals, and Slot04 keeps the
+    /// independent top-plate chain. The Type-2 route owns its transverse and
+    /// true-section relations; the partial Type-1 extension owns only optional
+    /// true Section-A plate/hole dimensions.
     /// </summary>
-    public static class PHU_Slot09_DataCenterBeamType2DimensionEngine
+    public static partial class PHU_Slot09_DataCenterBeamType2DimensionEngine
     {
         private const double GeometryTolerance = 0.75;
         private const double MatchTolerance = 2.0;
@@ -225,6 +225,9 @@ namespace Tekla.Technology.Akit.UserScript
         }
 
         private static bool _enabled;
+        private static bool _hasCapturedShapeXTierSpacing;
+        private static double _capturedShapeXTierBase;
+        private static double _capturedShapeXTierStep;
 
         public static bool LastRunApplicable { get; private set; }
         public static bool LastRunSucceeded { get; private set; }
@@ -244,7 +247,12 @@ namespace Tekla.Technology.Akit.UserScript
         public static void Reset()
         {
             _enabled = false;
+            _hasCapturedShapeXTierSpacing = false;
+            _capturedShapeXTierBase = 0.0;
+            _capturedShapeXTierStep = 0.0;
             ResetResult();
+            _type1SectionEnabled = false;
+            ResetType1SectionResult();
         }
 
         /// <summary>
@@ -261,6 +269,8 @@ namespace Tekla.Technology.Akit.UserScript
                 LastRunMessage = "Data Center Beam Type2 DIM skipped: route is inactive.";
                 return true;
             }
+
+            CaptureCurrentShapeXTierSpacing();
 
             List<TSD.StraightDimensionSet> created =
                 new List<TSD.StraightDimensionSet>();
@@ -488,16 +498,16 @@ namespace Tekla.Technology.Akit.UserScript
                 // Tier contract must remain byte-for-byte equivalent to Shape X.
                 double tierBase;
                 double tierStep;
-                ResolveShapeXTierSpacing(5.0, out tierBase, out tierStep);
+                ResolveShapeXTierSpacingFromScale(5.0, out tierBase, out tierStep);
                 if (tierBase != 50.0 || tierStep != 50.0)
                     throw new InvalidOperationException("Scale 5 tier regression failed.");
-                ResolveShapeXTierSpacing(15.0, out tierBase, out tierStep);
+                ResolveShapeXTierSpacingFromScale(15.0, out tierBase, out tierStep);
                 if (tierBase != 150.0 || tierStep != 150.0)
                     throw new InvalidOperationException("Scale 15 tier regression failed.");
-                ResolveShapeXTierSpacing(30.0, out tierBase, out tierStep);
+                ResolveShapeXTierSpacingFromScale(30.0, out tierBase, out tierStep);
                 if (tierBase != 300.0 || tierStep != 300.0)
                     throw new InvalidOperationException("Scale 30 tier regression failed.");
-                ResolveShapeXTierSpacing(7.0, out tierBase, out tierStep);
+                ResolveShapeXTierSpacingFromScale(7.0, out tierBase, out tierStep);
                 if (tierBase != 150.0 || tierStep != 150.0)
                     throw new InvalidOperationException(
                         "Unsupported-scale Shape X fallback regression failed.");
@@ -634,6 +644,18 @@ namespace Tekla.Technology.Akit.UserScript
                 if (plateAnalysis.Plans.Count != 3)
                     throw new InvalidOperationException(
                         "Section plate/hole partial topology failed.");
+                DimPlan sectionAOuter = FindPlanByName(
+                    plateAnalysis.Plans,
+                    "T2-SECTION-A-01-MAIN-PLATE-CHAIN");
+                if (sectionAOuter == null
+                    || sectionAOuter.Tier != 2
+                    || sectionAOuter.Points.Count != 4
+                    || Math.Abs(sectionAOuter.Points[0].X - 0.0) > 0.001
+                    || Math.Abs(sectionAOuter.Points[1].X - 37.5) > 0.001
+                    || Math.Abs(sectionAOuter.Points[2].X - 162.5) > 0.001
+                    || Math.Abs(sectionAOuter.Points[3].X - 200.0) > 0.001)
+                    throw new InvalidOperationException(
+                        "Section A narrow-plate edge-union/tier failed.");
                 DimPlan sectionAOrder = FindPlanByName(
                     plateAnalysis.Plans,
                     "T2-SECTION-A-03-MAIN-HOLE-Y");
@@ -1192,41 +1214,122 @@ namespace Tekla.Technology.Akit.UserScript
             if (plate == null || hole == null)
                 return;
 
-            P2 mainLeftTop = Corner(view.Main, new P2(1, 0), new P2(0, 1), false, true);
-            P2 mainRightTop = Corner(view.Main, new P2(1, 0), new P2(0, 1), true, true);
-            P2 plateLeftTop = Corner(plate, new P2(1, 0), new P2(0, 1), false, true);
-            P2 plateRightTop = Corner(plate, new P2(1, 0), new P2(0, 1), true, true);
+            BuildSectionPlateHolePlansCore(
+                analysis,
+                view,
+                plate,
+                hole,
+                "T2",
+                2);
+        }
+
+        /// <summary>
+        /// Shared geometric Section-A builder. The outer chain is the ordered
+        /// union of the real MainPart and plate side edges. Coincident edges
+        /// are collapsed by tangent projection, so a narrower plate produces
+        /// side-gap/plate/side-gap while an equal-width plate produces only
+        /// the overall plate width.
+        /// </summary>
+        private static void BuildSectionPlateHolePlansCore(
+            Analysis analysis,
+            ViewData view,
+            PartData plate,
+            P3 hole,
+            string prefix,
+            int outerTier)
+        {
+            if (analysis == null || view == null || view.Main == null
+                || plate == null || hole == null)
+                return;
+
+            P2 tangent = new P2(1, 0);
+            P2 outward = new P2(0, 1);
+            P2 mainLeftTop = Corner(view.Main, tangent, outward, false, true);
+            P2 mainRightTop = Corner(view.Main, tangent, outward, true, true);
+            P2 plateLeftTop = Corner(plate, tangent, outward, false, true);
+            P2 plateRightTop = Corner(plate, tangent, outward, true, true);
             if (mainLeftTop == null || mainRightTop == null
                 || plateLeftTop == null || plateRightTop == null)
                 return;
 
-            analysis.Plans.Add(Plan(
-                view,
-                "T2-SECTION-A-01-MAIN-PLATE-CHAIN",
-                "SECTION-PLATE-HOLE",
-                new P2(0, 1),
-                2,
+            List<P2> mainPlateFeet = BuildOrderedMainPlateWidthFeet(
                 mainLeftTop,
+                mainRightTop,
                 plateLeftTop,
                 plateRightTop,
-                mainRightTop));
+                tangent);
+            if (mainPlateFeet.Count < 2)
+                return;
+
             analysis.Plans.Add(Plan(
                 view,
-                "T2-SECTION-A-02-PLATE-HOLE-CHAIN",
+                prefix + "-SECTION-A-01-MAIN-PLATE-CHAIN",
                 "SECTION-PLATE-HOLE",
-                new P2(0, 1),
+                outward,
+                Math.Max(0, outerTier),
+                mainPlateFeet.ToArray()));
+            analysis.Plans.Add(Plan(
+                view,
+                prefix + "-SECTION-A-02-PLATE-HOLE-CHAIN",
+                "SECTION-PLATE-HOLE",
+                outward,
                 0,
                 plateLeftTop,
                 hole.XY,
                 plateRightTop));
             analysis.Plans.Add(Plan(
                 view,
-                "T2-SECTION-A-03-MAIN-HOLE-Y",
+                prefix + "-SECTION-A-03-MAIN-HOLE-Y",
                 "SECTION-PLATE-HOLE",
                 new P2(-1, 0),
                 0,
                 hole.XY,
                 mainLeftTop));
+        }
+
+        private static List<P2> BuildOrderedMainPlateWidthFeet(
+            P2 mainLeft,
+            P2 mainRight,
+            P2 plateLeft,
+            P2 plateRight,
+            P2 tangent)
+        {
+            List<P2> result = new List<P2>();
+
+            // Add plate feet first so coincident MainPart/plate edges retain
+            // the plate's true outer face as the extension-line owner.
+            AddProjectionUnique(result, plateLeft, tangent);
+            AddProjectionUnique(result, plateRight, tangent);
+            AddProjectionUnique(result, mainLeft, tangent);
+            AddProjectionUnique(result, mainRight, tangent);
+            result.Sort(delegate(P2 first, P2 second)
+            {
+                double a = Dot(first, tangent);
+                double b = Dot(second, tangent);
+                int primary = a.CompareTo(b);
+                if (primary != 0)
+                    return primary;
+                int x = first.X.CompareTo(second.X);
+                return x != 0 ? x : first.Y.CompareTo(second.Y);
+            });
+            return result;
+        }
+
+        private static void AddProjectionUnique(
+            List<P2> points,
+            P2 point,
+            P2 direction)
+        {
+            if (points == null || point == null || direction == null)
+                return;
+            double value = Dot(point, direction);
+            for (int i = 0; i < points.Count; i++)
+            {
+                if (Math.Abs(Dot(points[i], direction) - value)
+                    <= GeometryTolerance)
+                    return;
+            }
+            points.Add(point);
         }
 
         private static void BuildSectionConnectionPlans(Analysis analysis, ViewData view)
@@ -2481,6 +2584,36 @@ namespace Tekla.Technology.Akit.UserScript
         }
 
         private static void ResolveShapeXTierSpacing(
+            double scale,
+            out double tierBase,
+            out double tierStep)
+        {
+            if (_hasCapturedShapeXTierSpacing)
+            {
+                tierBase = _capturedShapeXTierBase;
+                tierStep = _capturedShapeXTierStep;
+                return;
+            }
+
+            ResolveShapeXTierSpacingFromScale(scale, out tierBase, out tierStep);
+        }
+
+        private static void CaptureCurrentShapeXTierSpacing()
+        {
+            double tierBase;
+            double tierStep;
+            _hasCapturedShapeXTierSpacing = ShapeScript
+                .TryGetCurrentColumnDimensionTierSpacing(
+                    out tierBase,
+                    out tierStep);
+            if (_hasCapturedShapeXTierSpacing)
+            {
+                _capturedShapeXTierBase = tierBase;
+                _capturedShapeXTierStep = tierStep;
+            }
+        }
+
+        private static void ResolveShapeXTierSpacingFromScale(
             double scale,
             out double tierBase,
             out double tierStep)

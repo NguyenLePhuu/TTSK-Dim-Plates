@@ -203,6 +203,7 @@
     <Compile Include="PHU_VerticalShapeViewLayoutContext.cs" />
     <Compile Include="PHU_Slot09_DataCenterContext.cs" />
     <Compile Include="PHU_Slot09_DataCenterBeamType2Context.cs" />
+    <Compile Include="PHU_Slot09_DataCenterBeamType1SectionDimensionEngine.cs" />
     <Compile Include="PHU_Slot09_DataCenterBeamType2DimensionEngine.cs" />
     <Compile Include="PHU_LineDistance.cs" />
     <Compile Include="PHU_OpenGridView.cs" />

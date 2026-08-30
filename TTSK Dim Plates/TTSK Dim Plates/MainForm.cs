@@ -8031,10 +8031,32 @@ namespace TTSK_AutoDim_Plates
             bool runDataCenterBeamType2Dimensions =
                 Tekla.Technology.Akit.UserScript
                     .PHU_Slot09_DataCenterBeamType2Context.IsActive;
+            bool runDataCenterBeamType1SectionDimensions =
+                Tekla.Technology.Akit.UserScript
+                    .PHU_Slot09_DataCenterContext.IsActive
+                && !runDataCenterBeamType2Dimensions
+                && partType == AutoDimPartType.ShapeIH;
             Tekla.Technology.Akit.UserScript
                 .PHU_Slot09_DataCenterBeamType2DimensionEngine.Configure(
                     runDataCenterBeamType2Dimensions
                 );
+            Tekla.Technology.Akit.UserScript
+                .PHU_Slot09_DataCenterBeamType2DimensionEngine.ConfigureType1Sections(
+                    runDataCenterBeamType1SectionDimensions
+                );
+            if (runDataCenterBeamType1SectionDimensions)
+            {
+                string type1SectionPreflightMessage;
+                bool type1SectionPreflightSucceeded = Tekla.Technology.Akit.UserScript
+                    .PHU_Slot09_DataCenterBeamType2DimensionEngine
+                    .PreflightType1Sections(out type1SectionPreflightMessage);
+                if (!type1SectionPreflightSucceeded)
+                {
+                    execution.SectionMessage = type1SectionPreflightMessage;
+                    execution.CanSaveDrawing = false;
+                    return execution;
+                }
+            }
 
             if (shapeSupportsColumnGridDimensions && resolvedMainPart != null)
             {
@@ -8165,6 +8187,29 @@ namespace TTSK_AutoDim_Plates
 
                         execution.SectionMessage = unknownResult.Message;
                         break;
+                    }
+                }
+
+                // Slot09 Data Center Beam Type-1 keeps Shape H ownership of
+                // the prepared main views, then adds only an optional,
+                // geometry-proven Section A. Absence is a valid no-op; an
+                // ambiguous observed relation fails closed before saving.
+                if (runDataCenterBeamType1SectionDimensions)
+                {
+                    bool type1SectionDimSucceeded = Tekla.Technology.Akit.UserScript
+                        .PHU_Slot09_DataCenterBeamType2DimensionEngine
+                        .ExecuteType1SectionsAfterShape();
+                    string type1SectionDimMessage = Tekla.Technology.Akit.UserScript
+                        .PHU_Slot09_DataCenterBeamType2DimensionEngine
+                        .LastType1SectionMessage;
+                    execution.SectionMessage = String.IsNullOrWhiteSpace(
+                            execution.SectionMessage)
+                        ? type1SectionDimMessage
+                        : execution.SectionMessage + " " + type1SectionDimMessage;
+                    if (!type1SectionDimSucceeded)
+                    {
+                        execution.CanSaveDrawing = false;
+                        return execution;
                     }
                 }
 

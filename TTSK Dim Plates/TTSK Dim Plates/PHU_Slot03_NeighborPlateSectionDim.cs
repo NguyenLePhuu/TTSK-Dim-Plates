@@ -3,7 +3,9 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Reflection;
+using System.Text;
 using Tekla.Structures;
 using Tekla.Structures.Geometry3d;
 using Tekla.Structures.Model;
@@ -27,9 +29,24 @@ namespace Tekla.Technology.Akit.UserScript
             get { return PHU_Slot03_NeighborPlateSectionDim.LastRunSucceeded; }
         }
 
+        public static string LastRunMessage
+        {
+            get { return PHU_Slot03_NeighborPlateSectionDim.LastRunMessage; }
+        }
+
         public static void Run()
         {
             PHU_Slot03_NeighborPlateSectionDim.Run();
+        }
+
+        public static string AuditAutoDiscovery()
+        {
+            return PHU_Slot03_NeighborPlateSectionDim.AuditAutoDiscovery();
+        }
+
+        public static string AuditAutoDiscoveryRegression()
+        {
+            return PHU_Slot03_NeighborPlateSectionDim.AuditAutoDiscoveryRegression();
         }
     }
 
@@ -37,6 +54,7 @@ namespace Tekla.Technology.Akit.UserScript
     {
         private const double TOL = 1.0;
         public static bool LastRunSucceeded { get; private set; }
+        public static string LastRunMessage { get; private set; }
 
         // Theo dump mẫu:
         // Chain ngang: lỗ plate trái -> ref main -> lỗ plate phải.
@@ -60,97 +78,303 @@ namespace Tekla.Technology.Akit.UserScript
         public static void Run()
         {
             LastRunSucceeded = false;
+            LastRunMessage = String.Empty;
 
             TSD.DrawingHandler dh = new TSD.DrawingHandler();
             if (!dh.GetConnectionStatus())
             {
-                Msg("DrawingHandler chưa kết nối.");
+                LastRunMessage = "Slot03: DrawingHandler chưa kết nối.";
+                Msg(LastRunMessage);
                 return;
             }
 
             TSD.Drawing drawing = dh.GetActiveDrawing();
             if (drawing == null)
             {
-                Msg("Không có active drawing.");
+                LastRunMessage = "Slot03: Không có active drawing.";
+                Msg(LastRunMessage);
                 return;
             }
 
             TSM.Model model = new TSM.Model();
             if (!model.GetConnectionStatus())
             {
-                Msg("Model chưa kết nối.");
+                LastRunMessage = "Slot03: Model chưa kết nối.";
+                Msg(LastRunMessage);
                 return;
             }
 
             List<DrawingPart> selectedParts = GetSelectedDrawingParts(dh);
-            if (selectedParts.Count < 2)
+            int created = 0;
+            int targetCount = 0;
+            bool allTargetsCreated = true;
+            string mode;
+
+            // Selection part luôn thắng Auto: đây là nhánh manual cũ và giữ
+            // nguyên toàn bộ cách nhận main/plate/neighbor/dummy hiện có.
+            if (selectedParts.Count > 0)
             {
-                Msg(
-                    "Slot03: Hãy chọn main shape + plate, hoặc main shape + neighbor + plate. Có thể chọn 1 bên hoặc 2 bên."
-                );
-                return;
-            }
-
-            Slot03SelectionContext manualContext;
-            bool manualHasDummy;
-            bool manualContextOk = TryBuildManualSelectionContext(
-                model,
-                drawing,
-                selectedParts,
-                out manualContext,
-                out manualHasDummy
-            );
-
-            Slot03SelectionContext filteredContext;
-            bool filteredContextOk = TryBuildGarbageFilteredContext(
-                model,
-                drawing,
-                selectedParts,
-                out filteredContext
-            );
-
-            bool hasGarbage =
-                filteredContextOk
-                && SelectionContainsGarbage(model, selectedParts, filteredContext);
-
-            Slot03SelectionContext context;
-            bool useLegacyDummyLogic;
-
-            if (!hasGarbage)
-            {
-                // Flow pick thu cong cu: giu nguyen cach nhan main/plate/neighbor/dummy.
-                if (!manualContextOk)
+                mode = ResolveSlot03InputMode(selectedParts.Count, 0);
+                if (selectedParts.Count < 2)
                 {
-                    Msg("Slot03: Khong nhan dien du main + plate trong selection thu cong.");
+                    LastRunMessage =
+                        "Slot03 Manual: hãy chọn main shape + plate, hoặc main shape + neighbor + plate. Có thể chọn 1 bên hoặc 2 bên.";
+                    Msg(LastRunMessage);
                     return;
                 }
 
-                context = manualContext;
-                useLegacyDummyLogic = manualHasDummy;
+                Slot03SelectionContext manualContext;
+                bool manualDummy;
+                string manualError;
+                if (!TryResolveManualSelectionContext(
+                        model,
+                        drawing,
+                        selectedParts,
+                        out manualContext,
+                        out manualDummy,
+                        out manualError))
+                {
+                    LastRunMessage = "Slot03 Manual: " + manualError;
+                    Msg(LastRunMessage);
+                    return;
+                }
+
+                targetCount = 1;
+                created = ExecuteSlot03SelectionContext(
+                    model,
+                    dh,
+                    manualContext,
+                    manualDummy);
+                allTargetsCreated = created > 0;
             }
             else
             {
-                // Flow quet co rac: loc sach xong moi check dummy/Joycon lai mot lan nua.
-                // Uu tien dummy nam trong selection nguoi dung vua quet; neu khong co thi moi fallback quet view.
-                context = filteredContext;
-                useLegacyDummyLogic = CheckDummyAfterGarbageFiltering(
+                List<TSD.View> selectedSectionViews = GetSelectedSectionViews(dh);
+                List<TSD.View> candidateViews = selectedSectionViews.Count > 0
+                    ? selectedSectionViews
+                    : GetAllSlot03SectionViews(drawing);
+                mode = ResolveSlot03InputMode(
+                    selectedParts.Count,
+                    selectedSectionViews.Count);
+
+                List<string> diagnostics;
+                List<Slot03AutoTarget> targets = BuildSlot03AutoTargets(
                     model,
-                    selectedParts,
-                    context
+                    drawing,
+                    candidateViews,
+                    out diagnostics
                 );
+
+                if (targets.Count == 0)
+                {
+                    LastRunMessage = "Slot03 " + mode
+                        + ": không tìm thấy Section có quan hệ main/plate/neighbor hợp lệ. "
+                        + JoinDiagnostics(diagnostics);
+                    Msg(LastRunMessage);
+                    return;
+                }
+
+                targetCount = targets.Count;
+                for (int i = 0; i < targets.Count; i++)
+                {
+                    int oneCreated = ExecuteSlot03SelectionContext(
+                        model,
+                        dh,
+                        targets[i].Context,
+                        targets[i].UseLegacyDummyLogic);
+                    targets[i].CreatedCount = oneCreated;
+                    created += oneCreated;
+                    if (oneCreated <= 0)
+                        allTargetsCreated = false;
+                }
             }
 
-            int created = ExecuteSlot03SelectionContext(model, dh, context, useLegacyDummyLogic);
-
-            try
+            bool committed = false;
+            if (created > 0)
             {
-                drawing.CommitChanges();
+                try
+                {
+                    committed = drawing.CommitChanges();
+                }
+                catch { committed = false; }
             }
-            catch { }
 
-            LastRunSucceeded = created > 0;
+            LastRunSucceeded = created > 0 && allTargetsCreated && committed;
+            LastRunMessage = "Slot03 " + mode
+                + ": sections=" + targetCount.ToString(CultureInfo.InvariantCulture)
+                + ", dimensions=" + created.ToString(CultureInfo.InvariantCulture)
+                + ", commit=" + (committed ? "OK" : "FAILED") + ".";
 
             // Không popup hoàn thành để chạy gọn.
+        }
+
+        /// <summary>
+        /// Read-only report of the exact Section views and semantic parts
+        /// that a one-click Slot03 run would use.
+        /// </summary>
+        public static string AuditAutoDiscovery()
+        {
+            StringBuilder text = new StringBuilder();
+            text.AppendLine("SLOT03 AUTO DISCOVERY - READ ONLY");
+            text.AppendLine("No Insert / Modify / Delete / CommitChanges calls.");
+            try
+            {
+                TSD.DrawingHandler handler = new TSD.DrawingHandler();
+                TSM.Model model = new TSM.Model();
+                if (!handler.GetConnectionStatus() || !model.GetConnectionStatus())
+                    return text.AppendLine("FAILED: Tekla API is unavailable.").ToString();
+                TSD.Drawing drawing = handler.GetActiveDrawing();
+                if (drawing == null)
+                    return text.AppendLine("FAILED: no active drawing.").ToString();
+
+                List<DrawingPart> selectedParts = GetSelectedDrawingParts(handler);
+                List<TSD.View> selectedViews = GetSelectedSectionViews(handler);
+                string mode = ResolveSlot03InputMode(
+                    selectedParts.Count,
+                    selectedViews.Count);
+                text.Append("Mode=").Append(mode)
+                    .Append(" SelectedParts=").Append(selectedParts.Count)
+                    .Append(" SelectedSectionViews=").Append(selectedViews.Count)
+                    .AppendLine();
+
+                if (selectedParts.Count > 0)
+                {
+                    Slot03SelectionContext manual = null;
+                    bool dummy = false;
+                    string error = String.Empty;
+                    bool ok = selectedParts.Count >= 2
+                        && TryResolveManualSelectionContext(
+                            model,
+                            drawing,
+                            selectedParts,
+                            out manual,
+                            out dummy,
+                            out error);
+                    text.AppendLine("ManualResolved=" + ok);
+                    if (ok)
+                    {
+                        text.AppendLine(DescribeContext(
+                            manual,
+                            "MANUAL",
+                            dummy,
+                            null));
+                    }
+                    else
+                    {
+                        text.AppendLine("ManualDiagnostic="
+                            + (selectedParts.Count < 2
+                                ? "selection has fewer than two drawing parts."
+                                : error));
+                    }
+                    return text.ToString();
+                }
+
+                List<TSD.View> candidateViews = selectedViews.Count > 0
+                    ? selectedViews
+                    : GetAllSlot03SectionViews(drawing);
+                List<string> diagnostics;
+                List<Slot03AutoTarget> targets = BuildSlot03AutoTargets(
+                    model,
+                    drawing,
+                    candidateViews,
+                    out diagnostics);
+                text.Append("CandidateSectionViews=").Append(candidateViews.Count)
+                    .Append(" ProvenTargets=").Append(targets.Count)
+                    .AppendLine();
+                for (int i = 0; i < targets.Count; i++)
+                {
+                    text.Append("TARGET ").Append(i + 1).Append(' ')
+                        .AppendLine(DescribeContext(
+                            targets[i].Context,
+                            targets[i].Topology,
+                            targets[i].UseLegacyDummyLogic,
+                            targets[i].RelatedDummies));
+                }
+                for (int i = 0; i < diagnostics.Count; i++)
+                    text.Append("SKIP ").AppendLine(diagnostics[i]);
+                return text.ToString();
+            }
+            catch (Exception ex)
+            {
+                return text.AppendLine("FAILED: " + ex.Message).ToString();
+            }
+        }
+
+        /// <summary>Pure selector regression; no Tekla object is mutated.</summary>
+        public static string AuditAutoDiscoveryRegression()
+        {
+            try
+            {
+                if (ResolveSlot03InputMode(2, 0) != "MANUAL-PARTS"
+                    || ResolveSlot03InputMode(1, 1) != "MANUAL-PARTS"
+                    || ResolveSlot03InputMode(0, 1) != "MANUAL-SECTION-VIEWS"
+                    || ResolveSlot03InputMode(0, 0) != "AUTO-ALL-SECTIONS")
+                    throw new InvalidOperationException(
+                        "manual/selected-view/auto priority failed.");
+
+                if (!IsDummyReferenceMetadata("BJ12z", "", "DUMMY-1768")
+                    || !IsDummyReferenceMetadata("PLATE", "", "DUMMY-1712")
+                    || !IsDummyReferenceMetadata("JOYCON", "SS400", "X-1")
+                    || IsDummyReferenceMetadata("PLATE", "SS400", "C2-GPz-4"))
+                    throw new InvalidOperationException(
+                        "dummy metadata classification failed.");
+
+                Bounds2D connection = new Bounds2D();
+                connection.Valid = true;
+                connection.MinX = -200.0;
+                connection.MaxX = 200.0;
+                connection.MinY = -25.0;
+                connection.MaxY = 105.0;
+                Bounds2D related = new Bounds2D();
+                related.Valid = true;
+                related.MinX = 67.5;
+                related.MaxX = 77.5;
+                related.MinY = 35.0;
+                related.MaxY = 45.0;
+                Bounds2D unrelated = new Bounds2D();
+                unrelated.Valid = true;
+                unrelated.MinX = 900.0;
+                unrelated.MaxX = 910.0;
+                unrelated.MinY = 900.0;
+                unrelated.MaxY = 910.0;
+                if (!BoundsOverlap2D(connection, related)
+                    || BoundsOverlap2D(connection, unrelated))
+                    throw new InvalidOperationException(
+                        "connection-local dummy geometry failed.");
+
+                Bounds2D main = new Bounds2D();
+                main.Valid = true;
+                main.MinX = -62.5;
+                main.MaxX = 62.5;
+                main.MinY = -22.5;
+                main.MaxY = 102.5;
+                Bounds2D attachedPlate = new Bounds2D();
+                attachedPlate.Valid = true;
+                attachedPlate.MinX = -62.5;
+                attachedPlate.MaxX = 62.5;
+                attachedPlate.MinY = 102.5;
+                attachedPlate.MaxY = 202.5;
+                Bounds2D farPlate = new Bounds2D();
+                farPlate.Valid = true;
+                farPlate.MinX = 500.0;
+                farPlate.MaxX = 625.0;
+                farPlate.MinY = 500.0;
+                farPlate.MaxY = 600.0;
+                if (!IsPlateAtMainInterface(main, attachedPlate)
+                    || IsPlateAtMainInterface(main, farPlate))
+                    throw new InvalidOperationException(
+                        "main-plate optional topology failed.");
+
+                return "SLOT03 AUTO DISCOVERY REGRESSION PASS: "
+                    + "manual priority/selected Section/all Section=PASS, "
+                    + "dummy BJ/DUMMY/JOYCON/real-plate=PASS, "
+                    + "connection-local/far-dummy=PASS, "
+                    + "main-plate attached/far=PASS.";
+            }
+            catch (Exception ex)
+            {
+                return "SLOT03 AUTO DISCOVERY REGRESSION FAILED: " + ex.Message;
+            }
         }
 
         private class Slot03SelectionContext
@@ -162,6 +386,435 @@ namespace Tekla.Technology.Akit.UserScript
             public List<DrawingPart> PlateDrawingParts = new List<DrawingPart>();
             public List<ModelPart> NeighborBeams = new List<ModelPart>();
             public List<DrawingPart> NeighborDrawingParts = new List<DrawingPart>();
+        }
+
+        private class Slot03AutoTarget
+        {
+            public TSD.View View;
+            public string Topology;
+            public Slot03SelectionContext Context;
+            public bool UseLegacyDummyLogic;
+            public readonly List<ModelPart> RelatedDummies = new List<ModelPart>();
+            public int DrawingPartCount;
+            public int CreatedCount;
+        }
+
+        private static bool TryResolveManualSelectionContext(
+            TSM.Model model,
+            TSD.Drawing drawing,
+            List<DrawingPart> selectedParts,
+            out Slot03SelectionContext context,
+            out bool useLegacyDummyLogic,
+            out string error)
+        {
+            context = null;
+            useLegacyDummyLogic = false;
+            error = String.Empty;
+
+            Slot03SelectionContext manualContext;
+            bool manualHasDummy;
+            bool manualContextOk = TryBuildManualSelectionContext(
+                model,
+                drawing,
+                selectedParts,
+                out manualContext,
+                out manualHasDummy);
+
+            Slot03SelectionContext filteredContext;
+            bool filteredContextOk = TryBuildGarbageFilteredContext(
+                model,
+                drawing,
+                selectedParts,
+                out filteredContext);
+
+            bool hasGarbage = filteredContextOk
+                && SelectionContainsGarbage(model, selectedParts, filteredContext);
+
+            if (!hasGarbage)
+            {
+                if (!manualContextOk)
+                {
+                    error = "không nhận diện đủ main + plate trong selection thủ công.";
+                    return false;
+                }
+                context = manualContext;
+                useLegacyDummyLogic = manualHasDummy;
+                return true;
+            }
+
+            context = filteredContext;
+            useLegacyDummyLogic = CheckDummyAfterGarbageFiltering(
+                model,
+                selectedParts,
+                context);
+            return context != null;
+        }
+
+        private static string ResolveSlot03InputMode(
+            int selectedPartCount,
+            int selectedSectionViewCount)
+        {
+            if (selectedPartCount > 0)
+                return "MANUAL-PARTS";
+            return selectedSectionViewCount > 0
+                ? "MANUAL-SECTION-VIEWS"
+                : "AUTO-ALL-SECTIONS";
+        }
+
+        private static List<Slot03AutoTarget> BuildSlot03AutoTargets(
+            TSM.Model model,
+            TSD.Drawing drawing,
+            List<TSD.View> candidateViews,
+            out List<string> diagnostics)
+        {
+            List<Slot03AutoTarget> result = new List<Slot03AutoTarget>();
+            diagnostics = new List<string>();
+            if (model == null || drawing == null || candidateViews == null)
+                return result;
+
+            List<TSD.View> ordered = new List<TSD.View>();
+            for (int i = 0; i < candidateViews.Count; i++)
+            {
+                TSD.View view = candidateViews[i];
+                if (view != null && IsSlot03SectionView(view))
+                    AddUniqueSlot03View(ordered, view);
+            }
+            ordered.Sort(delegate(TSD.View first, TSD.View second)
+            {
+                return GetSlot03ViewIdentifier(first)
+                    .CompareTo(GetSlot03ViewIdentifier(second));
+            });
+
+            for (int i = 0; i < ordered.Count; i++)
+            {
+                TSD.View view = ordered[i];
+                List<DrawingPart> parts = GetDrawingPartsInView(view);
+                Slot03SelectionContext context;
+                string topology;
+                if (TryBuildGarbageFilteredContext(
+                        model,
+                        drawing,
+                        parts,
+                        out context))
+                {
+                    topology = "MAIN-NEIGHBOR-PLATE";
+                }
+                else if (TryBuildAutoMainPlateOnlyContext(
+                        model,
+                        drawing,
+                        view,
+                        parts,
+                        out context))
+                {
+                    topology = "MAIN-PLATE";
+                }
+                else
+                {
+                    diagnostics.Add("view="
+                        + GetSlot03ViewIdentifier(view).ToString(
+                            CultureInfo.InvariantCulture)
+                        + " name=" + GetSlot03ViewName(view)
+                        + " parts=" + parts.Count.ToString(CultureInfo.InvariantCulture)
+                        + " reason=no unique Slot03 topology.");
+                    continue;
+                }
+
+                // The resolver is supplied only objects from this view. Keep
+                // the exact enumerated Section object as the writer owner.
+                context.View = view;
+                Slot03AutoTarget target = new Slot03AutoTarget();
+                target.View = view;
+                target.Topology = topology;
+                target.Context = context;
+                target.DrawingPartCount = parts.Count;
+                target.RelatedDummies.AddRange(FindRelatedAutoDummies(
+                    model,
+                    view,
+                    context,
+                    parts));
+                target.UseLegacyDummyLogic = target.RelatedDummies.Count > 0;
+                result.Add(target);
+            }
+            return result;
+        }
+
+        private static bool TryBuildAutoMainPlateOnlyContext(
+            TSM.Model model,
+            TSD.Drawing drawing,
+            TSD.View view,
+            List<DrawingPart> drawingParts,
+            out Slot03SelectionContext context)
+        {
+            context = null;
+            if (model == null || drawing == null || view == null
+                || drawingParts == null)
+                return false;
+
+            ModelPart mainPart = GetActiveAssemblyDrawingMainPart(model, drawing);
+            if (mainPart == null)
+                return false;
+            DrawingPart mainDrawingPart = null;
+            List<ModelPart> plates = new List<ModelPart>();
+            List<DrawingPart> plateDrawingParts = new List<DrawingPart>();
+            List<ModelPart> externalMembers = new List<ModelPart>();
+
+            for (int i = 0; i < drawingParts.Count; i++)
+            {
+                DrawingPart drawingPart = drawingParts[i];
+                ModelPart part = SelectModelPart(model, drawingPart);
+                if (part == null || IsDummyReferencePart(part))
+                    continue;
+                if (SameIdentifier(part.Identifier, mainPart.Identifier))
+                {
+                    mainDrawingPart = drawingPart;
+                    continue;
+                }
+                if (IsPartInSameAssembly(part, mainPart) && IsRealPlatePart(part))
+                {
+                    AddUniquePartAndDrawing(
+                        part,
+                        drawingPart,
+                        plates,
+                        plateDrawingParts);
+                }
+                else if (!IsPartInSameAssembly(part, mainPart)
+                    && !IsRealPlatePart(part))
+                {
+                    externalMembers.Add(part);
+                }
+            }
+            if (mainDrawingPart == null || plates.Count == 0)
+                return false;
+
+            // If any same-assembly plate is linked to an external member,
+            // this is a neighbor topology. A failed unique-neighbor resolver
+            // must remain rejected rather than silently falling back.
+            for (int i = 0; i < plates.Count; i++)
+                for (int j = 0; j < externalMembers.Count; j++)
+                    if (ArePartsDirectlyBoltConnected(plates[i], externalMembers[j]))
+                        return false;
+
+            TSM.TransformationPlane oldPlane = model
+                .GetWorkPlaneHandler().GetCurrentTransformationPlane();
+            List<ModelPart> attached = new List<ModelPart>();
+            List<DrawingPart> attachedDrawing = new List<DrawingPart>();
+            try
+            {
+                model.GetWorkPlaneHandler().SetCurrentTransformationPlane(
+                    new TSM.TransformationPlane(view.DisplayCoordinateSystem));
+                Bounds2D mainBounds = GetPartBounds2D(mainPart);
+                if (!mainBounds.Valid)
+                    return false;
+                for (int i = 0; i < plates.Count; i++)
+                {
+                    Bounds2D plateBounds = GetPartBounds2D(plates[i]);
+                    if (!plateBounds.Valid
+                        || !IsPlateAtMainInterface(mainBounds, plateBounds)
+                        || !HasAnyModelBolts(plates[i])
+                        || !ArePartsDirectlyBoltConnected(plates[i], mainPart))
+                        continue;
+                    AddUniquePartAndDrawing(
+                        plates[i],
+                        plateDrawingParts[i],
+                        attached,
+                        attachedDrawing);
+                }
+            }
+            catch { return false; }
+            finally
+            {
+                try { model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane); }
+                catch { }
+            }
+
+            if (attached.Count < 1 || attached.Count > 2)
+                return false;
+            Slot03SelectionContext result = new Slot03SelectionContext();
+            result.View = view;
+            result.MainBeam = mainPart;
+            result.MainDrawingPart = mainDrawingPart;
+            result.Plates.AddRange(attached);
+            result.PlateDrawingParts.AddRange(attachedDrawing);
+            context = result;
+            return true;
+        }
+
+        private static bool IsPlateAtMainInterface(
+            Bounds2D main,
+            Bounds2D plate)
+        {
+            if (!main.Valid || !plate.Valid)
+                return false;
+            double overlapX = Math.Min(main.MaxX, plate.MaxX)
+                - Math.Max(main.MinX, plate.MinX);
+            double overlapY = Math.Min(main.MaxY, plate.MaxY)
+                - Math.Max(main.MinY, plate.MinY);
+            double gapX = Math.Max(0.0,
+                Math.Max(main.MinX - plate.MaxX, plate.MinX - main.MaxX));
+            double gapY = Math.Max(0.0,
+                Math.Max(main.MinY - plate.MaxY, plate.MinY - main.MaxY));
+            double minWidth = Math.Min(
+                Math.Abs(main.MaxX - main.MinX),
+                Math.Abs(plate.MaxX - plate.MinX));
+            double minHeight = Math.Min(
+                Math.Abs(main.MaxY - main.MinY),
+                Math.Abs(plate.MaxY - plate.MinY));
+            bool horizontalInterface = gapY <= TOL * 5.0
+                && overlapX >= Math.Max(TOL, minWidth * 0.25);
+            bool verticalInterface = gapX <= TOL * 5.0
+                && overlapY >= Math.Max(TOL, minHeight * 0.25);
+            return horizontalInterface || verticalInterface;
+        }
+
+        private static bool HasAnyModelBolts(ModelPart part)
+        {
+            try
+            {
+                ModelObjectEnumerator bolts = part == null ? null : part.GetBolts();
+                return bolts != null && bolts.MoveNext();
+            }
+            catch { return false; }
+        }
+
+        private static List<ModelPart> FindRelatedAutoDummies(
+            TSM.Model model,
+            TSD.View view,
+            Slot03SelectionContext context,
+            List<DrawingPart> drawingParts)
+        {
+            List<ModelPart> result = new List<ModelPart>();
+            if (model == null || view == null || context == null
+                || drawingParts == null)
+                return result;
+            TSM.TransformationPlane oldPlane = model
+                .GetWorkPlaneHandler().GetCurrentTransformationPlane();
+            try
+            {
+                model.GetWorkPlaneHandler().SetCurrentTransformationPlane(
+                    new TSM.TransformationPlane(view.DisplayCoordinateSystem));
+                Bounds2D connection = GetAutoConnectionBounds2D(context);
+                if (!connection.Valid)
+                    return result;
+                double span = Math.Max(
+                    Math.Abs(connection.MaxX - connection.MinX),
+                    Math.Abs(connection.MaxY - connection.MinY));
+                double proximity = Math.Max(50.0, span * 0.50);
+
+                for (int i = 0; i < drawingParts.Count; i++)
+                {
+                    ModelPart part = SelectModelPart(model, drawingParts[i]);
+                    if (part == null || !IsDummyReferencePart(part)
+                        || !IsPartNearBounds2D(part, connection, proximity)
+                        || !PartOverlapsViewDepth(part, view))
+                        continue;
+                    AddUniqueModelPart(result, part);
+                }
+            }
+            catch { }
+            finally
+            {
+                try { model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane); }
+                catch { }
+            }
+            result.Sort(delegate(ModelPart first, ModelPart second)
+            {
+                return GetModelPartIdentifier(first)
+                    .CompareTo(GetModelPartIdentifier(second));
+            });
+            return result;
+        }
+
+        private static Bounds2D GetAutoConnectionBounds2D(
+            Slot03SelectionContext context)
+        {
+            Bounds2D result = new Bounds2D();
+            result.Valid = false;
+            if (context == null)
+                return result;
+            AddPartBoundsToUnion(context.MainBeam, ref result);
+            for (int i = 0; context.Plates != null && i < context.Plates.Count; i++)
+                AddPartBoundsToUnion(context.Plates[i], ref result);
+            return result;
+        }
+
+        private static bool PartOverlapsViewDepth(ModelPart part, TSD.View view)
+        {
+            try
+            {
+                object restriction = GetPropertyValue(view, "RestrictionBox");
+                Point viewMin = GetPropertyValue(restriction, "MinPoint") as Point;
+                Point viewMax = GetPropertyValue(restriction, "MaxPoint") as Point;
+                if (viewMin == null || viewMax == null)
+                    return false;
+                Solid solid = part == null ? null : part.GetSolid();
+                if (solid == null || solid.MinimumPoint == null || solid.MaximumPoint == null)
+                    return false;
+                double partMin = Math.Min(solid.MinimumPoint.Z, solid.MaximumPoint.Z);
+                double partMax = Math.Max(solid.MinimumPoint.Z, solid.MaximumPoint.Z);
+                double viewDepthMin = Math.Min(viewMin.Z, viewMax.Z);
+                double viewDepthMax = Math.Max(viewMin.Z, viewMax.Z);
+                return partMax >= viewDepthMin - TOL
+                    && partMin <= viewDepthMax + TOL;
+            }
+            catch { return false; }
+        }
+
+        private static void AddUniqueModelPart(
+            List<ModelPart> parts,
+            ModelPart part)
+        {
+            if (parts == null || part == null)
+                return;
+            for (int i = 0; i < parts.Count; i++)
+                if (SameIdentifier(parts[i].Identifier, part.Identifier))
+                    return;
+            parts.Add(part);
+        }
+
+        private static string DescribeContext(
+            Slot03SelectionContext context,
+            string topology,
+            bool hasDummy,
+            List<ModelPart> dummies)
+        {
+            if (context == null)
+                return "<null context>";
+            return "view=" + GetSlot03ViewIdentifier(context.View)
+                .ToString(CultureInfo.InvariantCulture)
+                + " name=" + GetSlot03ViewName(context.View)
+                + " topology=" + topology
+                + " main=" + GetModelPartIdentifier(context.MainBeam)
+                    .ToString(CultureInfo.InvariantCulture)
+                + " plates=" + FormatModelPartIds(context.Plates)
+                + " neighbors=" + FormatModelPartIds(context.NeighborBeams)
+                + " dummyMode=" + hasDummy
+                + " dummies=" + FormatModelPartIds(dummies);
+        }
+
+        private static string FormatModelPartIds(List<ModelPart> parts)
+        {
+            StringBuilder text = new StringBuilder("[");
+            for (int i = 0; parts != null && i < parts.Count; i++)
+            {
+                if (i > 0)
+                    text.Append(',');
+                text.Append(GetModelPartIdentifier(parts[i])
+                    .ToString(CultureInfo.InvariantCulture));
+            }
+            return text.Append(']').ToString();
+        }
+
+        private static int GetModelPartIdentifier(ModelPart part)
+        {
+            try { return part == null || part.Identifier == null ? 0 : part.Identifier.ID; }
+            catch { return 0; }
+        }
+
+        private static string JoinDiagnostics(List<string> diagnostics)
+        {
+            if (diagnostics == null || diagnostics.Count == 0)
+                return String.Empty;
+            return String.Join(" | ", diagnostics.ToArray());
         }
 
         private static bool TryBuildManualSelectionContext(
@@ -2526,6 +3179,131 @@ namespace Tekla.Technology.Akit.UserScript
             return result;
         }
 
+        private static List<TSD.View> GetSelectedSectionViews(
+            TSD.DrawingHandler drawingHandler)
+        {
+            List<TSD.View> result = new List<TSD.View>();
+            try
+            {
+                TSD.DrawingObjectEnumerator selected = drawingHandler == null
+                    ? null
+                    : drawingHandler.GetDrawingObjectSelector().GetSelected();
+                while (selected != null && selected.MoveNext())
+                {
+                    TSD.View view = selected.Current as TSD.View;
+                    if (view != null && IsSlot03SectionView(view))
+                        AddUniqueSlot03View(result, view);
+                }
+            }
+            catch { }
+            result.Sort(delegate(TSD.View first, TSD.View second)
+            {
+                return GetSlot03ViewIdentifier(first)
+                    .CompareTo(GetSlot03ViewIdentifier(second));
+            });
+            return result;
+        }
+
+        private static List<TSD.View> GetAllSlot03SectionViews(TSD.Drawing drawing)
+        {
+            List<TSD.View> result = new List<TSD.View>();
+            try
+            {
+                TSD.ContainerView sheet = drawing == null ? null : drawing.GetSheet();
+                TSD.DrawingObjectEnumerator views = sheet == null
+                    ? null : sheet.GetAllViews();
+                while (views != null && views.MoveNext())
+                {
+                    TSD.View view = views.Current as TSD.View;
+                    if (view != null && IsSlot03SectionView(view))
+                        AddUniqueSlot03View(result, view);
+                }
+            }
+            catch { }
+            result.Sort(delegate(TSD.View first, TSD.View second)
+            {
+                return GetSlot03ViewIdentifier(first)
+                    .CompareTo(GetSlot03ViewIdentifier(second));
+            });
+            return result;
+        }
+
+        private static List<DrawingPart> GetDrawingPartsInView(TSD.View view)
+        {
+            List<DrawingPart> result = new List<DrawingPart>();
+            HashSet<int> seen = new HashSet<int>();
+            try
+            {
+                TSD.DrawingObjectEnumerator parts = view == null
+                    ? null : view.GetAllObjects(typeof(DrawingPart));
+                while (parts != null && parts.MoveNext())
+                {
+                    DrawingPart drawingPart = parts.Current as DrawingPart;
+                    if (drawingPart == null || drawingPart.ModelIdentifier == null)
+                        continue;
+                    int identifier = drawingPart.ModelIdentifier.ID;
+                    if (identifier > 0 && seen.Add(identifier))
+                        result.Add(drawingPart);
+                }
+            }
+            catch { }
+            result.Sort(delegate(DrawingPart first, DrawingPart second)
+            {
+                int a = first == null || first.ModelIdentifier == null
+                    ? 0 : first.ModelIdentifier.ID;
+                int b = second == null || second.ModelIdentifier == null
+                    ? 0 : second.ModelIdentifier.ID;
+                return a.CompareTo(b);
+            });
+            return result;
+        }
+
+        private static bool IsSlot03SectionView(TSD.View view)
+        {
+            if (view == null)
+                return false;
+            try
+            {
+                string runtime = view.GetType().Name ?? String.Empty;
+                string viewType = view.ViewType.ToString() ?? String.Empty;
+                return runtime.IndexOf(
+                        "Section", StringComparison.OrdinalIgnoreCase) >= 0
+                    || viewType.IndexOf(
+                        "Section", StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+            catch { return false; }
+        }
+
+        private static void AddUniqueSlot03View(
+            List<TSD.View> views,
+            TSD.View view)
+        {
+            if (views == null || view == null)
+                return;
+            int identifier = GetSlot03ViewIdentifier(view);
+            for (int i = 0; i < views.Count; i++)
+                if (GetSlot03ViewIdentifier(views[i]) == identifier)
+                    return;
+            views.Add(view);
+        }
+
+        private static int GetSlot03ViewIdentifier(TSD.View view)
+        {
+            try
+            {
+                object value = GetPropertyValue(view, "Identifier");
+                Identifier identifier = value as Identifier;
+                return identifier == null ? 0 : identifier.ID;
+            }
+            catch { return 0; }
+        }
+
+        private static string GetSlot03ViewName(TSD.View view)
+        {
+            try { return view == null ? String.Empty : (view.Name ?? String.Empty); }
+            catch { return String.Empty; }
+        }
+
         private static ModelPart SelectModelPart(TSM.Model model, DrawingPart dp)
         {
             try
@@ -2715,6 +3493,18 @@ namespace Tekla.Technology.Akit.UserScript
             string name = GetReportString(part, "NAME").Trim().ToUpperInvariant();
             string material = GetReportString(part, "MATERIAL").Trim().ToUpperInvariant();
             string partPos = GetReportString(part, "PART_POS").Trim().ToUpperInvariant();
+
+            return IsDummyReferenceMetadata(name, material, partPos);
+        }
+
+        private static bool IsDummyReferenceMetadata(
+            string name,
+            string material,
+            string partPos)
+        {
+            name = (name ?? String.Empty).Trim().ToUpperInvariant();
+            material = (material ?? String.Empty).Trim().ToUpperInvariant();
+            partPos = (partPos ?? String.Empty).Trim().ToUpperInvariant();
 
             if (name.IndexOf("BJ") >= 0)
                 return true;
