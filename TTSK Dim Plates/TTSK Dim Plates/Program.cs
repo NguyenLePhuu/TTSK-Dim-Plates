@@ -8,7 +8,7 @@ namespace TTSK_AutoDim_Plates
     internal static class Program
     {
         [STAThread]
-        private static void Main()
+        private static int Main(string[] args)
         {
             string teklaBinPath = FindTeklaBinPath();
             if (string.IsNullOrEmpty(teklaBinPath))
@@ -21,15 +21,34 @@ namespace TTSK_AutoDim_Plates
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error
                 );
-                return;
+                return 1;
             }
 
-            AppDomain.CurrentDomain.AssemblyResolve += (sender, args) =>
-                ResolveTeklaAssembly(args, teklaBinPath);
+            AppDomain.CurrentDomain.AssemblyResolve += (sender, resolveArgs) =>
+                ResolveTeklaAssembly(resolveArgs, teklaBinPath);
+
+            if (
+                args != null
+                && args.Length > 0
+                && String.Equals(
+                    args[0],
+                    "--hole-mark-post-dim-worker",
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
+            {
+                return Tekla
+                    .Technology
+                    .Akit
+                    .UserScript
+                    .PHU_HoleMarkPostDimensionService
+                    .RunWorker(args);
+            }
 
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             Application.Run(new MainForm());
+            return 0;
         }
 
         private static string FindTeklaBinPath()

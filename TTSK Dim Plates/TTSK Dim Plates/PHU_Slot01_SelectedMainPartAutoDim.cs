@@ -543,6 +543,7 @@ namespace Tekla.Technology.Akit.UserScript
                 Slot01AxisAdapter axes = new Slot01AxisAdapter(mainIsVertical);
 
                 List<Point> beamPolygon = axes.ToLocal(beamPolygonInView);
+                List<Point> beamEdgeEndpoints = GetSolidEdgeEndpoints2D(beamSolid, axes);
                 Point localBeamMin = axes.ToLocal(beamMin);
                 Point localBeamMax = axes.ToLocal(beamMax);
 
@@ -559,6 +560,24 @@ namespace Tekla.Technology.Akit.UserScript
                         out beamMinY,
                         out beamMaxY
                     );
+
+                Point beamReferenceStart;
+                Point beamReferenceEnd;
+                if (
+                    !TryGetBeamReferenceAxisLocal(
+                        beam,
+                        axes,
+                        out beamReferenceStart,
+                        out beamReferenceEnd
+                    )
+                )
+                {
+                    Msg(
+                        "Slot 01: Reference của Main Part không phải một trục thẳng hợp lệ trong view. "
+                            + "Không tạo DIM dọc để tránh bắt nhầm hình học."
+                    );
+                    return count;
+                }
 
                 double beamCenterY = (beamMinY + beamMaxY) / 2.0;
                 double unifiedBeamLength = Math.Abs(beamMaxX - beamMinX);
@@ -774,14 +793,25 @@ namespace Tekla.Technology.Akit.UserScript
 
                         if (plateOuterPoint != null)
                         {
-                            Point beamCenterPoint = new Point(plateOuterPoint.X, beamCenterY, 0);
+                            Point beamReferencePoint;
+                            if (
+                                !TryResolveBeamReferencePointAtX(
+                                    beamReferenceStart,
+                                    beamReferenceEnd,
+                                    plateOuterPoint.X,
+                                    out beamReferencePoint
+                                )
+                            )
+                            {
+                                continue;
+                            }
 
                             double verticalTier = PLATE_VERTICAL_DIM_TIER_1;
                             if (PHU_UnifiedDimRuntime.IsActive)
                                 verticalTier = PeekLocalLeft(axes, unifiedBeamLength, 0);
 
                             double verticalDistance = GetLeftDistanceByFeet(
-                                new Point[] { plateOuterPoint, beamCenterPoint },
+                                new Point[] { plateOuterPoint, beamReferencePoint },
                                 plateMinX,
                                 verticalTier
                             );
@@ -790,7 +820,7 @@ namespace Tekla.Technology.Akit.UserScript
                                 CreateDimChain(
                                     handler,
                                     view,
-                                    new Point[] { plateOuterPoint, beamCenterPoint },
+                                    new Point[] { plateOuterPoint, beamReferencePoint },
                                     new Vector(-1, 0, 0),
                                     verticalDistance,
                                     axes
@@ -954,33 +984,45 @@ namespace Tekla.Technology.Akit.UserScript
 
                         Vector verticalDimDirection = new Vector(-1, 0, 0);
                         Point verticalHolePoint = new Point(hole.X, hole.Y, 0);
-                        Point beamEdgePointForVertical = new Point(hole.X, beamEdgeY, 0);
-                        Point beamCenterPointForVertical = new Point(hole.X, beamCenterY, 0);
+                        double verticalGeometryX = hole.X;
 
                         if (useBeamOutsideEdge)
                         {
                             double beamSideX = useLeftBeamEdge ? beamMinX : beamMaxX;
-
-                            Point realBeamEdgePoint = GetRealBeamSidePointNearY(
-                                beamPolygon,
-                                beamSideX,
-                                useLeftBeamEdge,
-                                beamEdgeY
-                            );
-
-                            if (realBeamEdgePoint == null)
-                                realBeamEdgePoint = new Point(beamSideX, beamEdgeY, 0);
-
-                            beamEdgePointForVertical = realBeamEdgePoint;
-                            beamCenterPointForVertical = new Point(
-                                realBeamEdgePoint.X,
-                                beamCenterY,
-                                0
-                            );
+                            verticalGeometryX = beamSideX;
 
                             verticalDimDirection = useLeftBeamEdge
                                 ? new Vector(-1, 0, 0)
                                 : new Vector(1, 0, 0);
+                        }
+
+                        Point beamEdgePointForVertical;
+                        if (
+                            !TryResolveBeamVerticalOuterEdgeFoot(
+                                beamEdgeEndpoints,
+                                beamPolygon,
+                                beamEdgeY,
+                                verticalGeometryX,
+                                out beamEdgePointForVertical
+                            )
+                        )
+                        {
+                            // Không dùng góc bounding-box ảo. Khi contour/solid không
+                            // chứng minh được mép thật thì bỏ DIM này thay vì bắt nhầm cut.
+                            continue;
+                        }
+
+                        Point beamReferencePointForVertical;
+                        if (
+                            !TryResolveBeamReferencePointAtX(
+                                beamReferenceStart,
+                                beamReferenceEnd,
+                                verticalGeometryX,
+                                out beamReferencePointForVertical
+                            )
+                        )
+                        {
+                            continue;
                         }
 
                         bool verticalUnifiedRight = verticalDimDirection.X > 0.0;
@@ -997,12 +1039,12 @@ namespace Tekla.Technology.Akit.UserScript
                                 useLeftBeamEdge
                                     ? GetLeftDistanceByFeet(
                                         new Point[] { beamEdgePointForVertical, verticalHolePoint },
-                                        beamEdgePointForVertical.X,
+                                        beamMinX,
                                         verticalTier1
                                     )
                                     : GetRightDistanceByFeet(
                                         new Point[] { beamEdgePointForVertical, verticalHolePoint },
-                                        beamEdgePointForVertical.X,
+                                        beamMaxX,
                                         verticalTier1
                                     )
                             )
@@ -1035,7 +1077,7 @@ namespace Tekla.Technology.Akit.UserScript
 
                         // Plate một phía giữ nguyên dim tầng 2 cũ.
                         // Plate hai phía sẽ gộp sau vòng lặp thành đúng một chain
-                        // lỗ dưới -> tâm dầm -> lỗ trên để tránh 2 set chồng nhau.
+                        // lỗ dưới -> reference Main -> lỗ trên để tránh 2 set chồng nhau.
                         if (!combineVerticalTier2)
                         {
                             double verticalTier2 = PLATE_VERTICAL_DIM_TIER_2;
@@ -1052,28 +1094,28 @@ namespace Tekla.Technology.Akit.UserScript
                                         ? GetLeftDistanceByFeet(
                                             new Point[]
                                             {
-                                                beamCenterPointForVertical,
+                                                beamReferencePointForVertical,
                                                 verticalHolePoint,
                                                 beamEdgePointForVertical
                                             },
-                                            beamEdgePointForVertical.X,
+                                            beamMinX,
                                             verticalTier2
                                         )
                                         : GetRightDistanceByFeet(
                                             new Point[]
                                             {
-                                                beamCenterPointForVertical,
+                                                beamReferencePointForVertical,
                                                 verticalHolePoint,
                                                 beamEdgePointForVertical
                                             },
-                                            beamEdgePointForVertical.X,
+                                            beamMaxX,
                                             verticalTier2
                                         )
                                 )
                                 : GetLeftDistanceByFeet(
                                     new Point[]
                                     {
-                                        beamCenterPointForVertical,
+                                        beamReferencePointForVertical,
                                         verticalHolePoint,
                                         beamEdgePointForVertical
                                     },
@@ -1085,7 +1127,11 @@ namespace Tekla.Technology.Akit.UserScript
                                 CreateDimChain(
                                     handler,
                                     view,
-                                    new Point[] { beamCenterPointForVertical, verticalHolePoint },
+                                    new Point[]
+                                    {
+                                        beamReferencePointForVertical,
+                                        verticalHolePoint
+                                    },
                                     verticalDimDirection,
                                     verticalDistance2,
                                     axes
@@ -1112,10 +1158,11 @@ namespace Tekla.Technology.Akit.UserScript
                             view,
                             holes,
                             plateMinX,
-                            beamPolygon,
                             beamMinX,
                             beamMaxX,
                             beamCenterY,
+                            beamReferenceStart,
+                            beamReferenceEnd,
                             unifiedBeamLength,
                             axes,
                             out usedRightSide
@@ -2237,10 +2284,11 @@ namespace Tekla.Technology.Akit.UserScript
             TSD.View view,
             List<Point> holes,
             double plateMinX,
-            List<Point> beamPolygon,
             double beamMinX,
             double beamMaxX,
             double beamCenterY,
+            Point beamReferenceStart,
+            Point beamReferenceEnd,
             double beamLength,
             Slot01AxisAdapter axes,
             out bool usedRightSide
@@ -2292,25 +2340,28 @@ namespace Tekla.Technology.Akit.UserScript
             bool useLeftBeamEdge = distToBeamLeft <= distToBeamRight;
 
             Vector direction = new Vector(-1, 0, 0);
-            Point beamCenterPoint = new Point(averageHoleX, beamCenterY, 0);
+            double referenceX = averageHoleX;
             double distanceBaseX = plateMinX;
 
             if (useBeamOutsideEdge)
             {
                 double beamSideX = useLeftBeamEdge ? beamMinX : beamMaxX;
-                Point realBeamCenterSidePoint = GetRealBeamSidePointNearY(
-                    beamPolygon,
-                    beamSideX,
-                    useLeftBeamEdge,
-                    beamCenterY
-                );
-
-                if (realBeamCenterSidePoint == null)
-                    realBeamCenterSidePoint = new Point(beamSideX, beamCenterY, 0);
-
-                beamCenterPoint = realBeamCenterSidePoint;
-                distanceBaseX = realBeamCenterSidePoint.X;
+                referenceX = beamSideX;
+                distanceBaseX = beamSideX;
                 direction = useLeftBeamEdge ? new Vector(-1, 0, 0) : new Vector(1, 0, 0);
+            }
+
+            Point beamReferencePoint;
+            if (
+                !TryResolveBeamReferencePointAtX(
+                    beamReferenceStart,
+                    beamReferenceEnd,
+                    referenceX,
+                    out beamReferencePoint
+                )
+            )
+            {
+                return 0;
             }
 
             usedRightSide = direction.X > 0.0;
@@ -2325,7 +2376,7 @@ namespace Tekla.Technology.Akit.UserScript
             Point[] feet = new Point[]
             {
                 new Point(bottomHole.X, bottomHole.Y, 0),
-                new Point(beamCenterPoint.X, beamCenterPoint.Y, 0),
+                new Point(beamReferencePoint.X, beamReferencePoint.Y, 0),
                 new Point(topHole.X, topHole.Y, 0)
             };
 
@@ -2530,6 +2581,308 @@ namespace Tekla.Technology.Akit.UserScript
                 distance = tier;
 
             return distance;
+        }
+
+        private static List<Point> GetSolidEdgeEndpoints2D(
+            Solid solid,
+            Slot01AxisAdapter axes
+        )
+        {
+            List<Point> result = new List<Point>();
+
+            try
+            {
+                if (solid == null || axes == null)
+                    return result;
+
+                Tekla.Structures.Solid.EdgeEnumerator edges = solid.GetEdgeEnumerator();
+                while (edges != null && edges.MoveNext())
+                {
+                    Tekla.Structures.Solid.Edge edge =
+                        edges.Current as Tekla.Structures.Solid.Edge;
+                    if (edge == null || edge.StartPoint == null || edge.EndPoint == null)
+                        continue;
+
+                    Point start = axes.ToLocal(edge.StartPoint);
+                    Point end = axes.ToLocal(edge.EndPoint);
+                    if (!IsFinitePoint2D(start) || !IsFinitePoint2D(end))
+                        continue;
+
+                    // Edge theo chiều sâu chiếu thành một điểm trong view không phải
+                    // là đoạn contour 2D dùng làm chân DIM.
+                    if (Distance2D(start, end) <= 0.001)
+                        continue;
+
+                    result.Add(new Point(start.X, start.Y, 0));
+                    result.Add(new Point(end.X, end.Y, 0));
+                }
+            }
+            catch { }
+
+            return result;
+        }
+
+        private static bool TryResolveBeamVerticalOuterEdgeFoot(
+            List<Point> edgeEndpoints,
+            List<Point> polygon,
+            double outerY,
+            double preferredX,
+            out Point foot
+        )
+        {
+            foot = null;
+
+            try
+            {
+                if (!IsFinite(outerY) || !IsFinite(preferredX))
+                    return false;
+
+                double coordinateTolerance = Math.Max(0.05, TOL * 0.10);
+                Point best = null;
+                double bestScore = Double.MaxValue;
+
+                // Mỗi cặp liên tiếp là một Solid.Edge thật đã chiếu vào hệ local.
+                // Nếu edge nằm trên biên ngoài, chiếu preferredX lên chính đoạn edge;
+                // khi đầu thanh bị notch, kết quả dừng ở endpoint thật của mép ngoài
+                // và không thể trượt sang vai/cạnh trong của phần khoét.
+                if (edgeEndpoints != null)
+                {
+                    for (int i = 0; i + 1 < edgeEndpoints.Count; i += 2)
+                    {
+                        Point a = edgeEndpoints[i];
+                        Point b = edgeEndpoints[i + 1];
+                        if (!IsFinitePoint2D(a) || !IsFinitePoint2D(b))
+                            continue;
+
+                        if (
+                            Math.Abs(a.Y - outerY) <= coordinateTolerance
+                            && Math.Abs(b.Y - outerY) <= coordinateTolerance
+                        )
+                        {
+                            double x = ClampDouble(
+                                preferredX,
+                                Math.Min(a.X, b.X),
+                                Math.Max(a.X, b.X)
+                            );
+                            double score = Math.Abs(x - preferredX);
+                            if (
+                                best == null
+                                || score < bestScore - 0.0001
+                                || (
+                                    Math.Abs(score - bestScore) <= 0.0001
+                                    && x < best.X
+                                )
+                            )
+                            {
+                                best = new Point(x, outerY, 0);
+                                bestScore = score;
+                            }
+                        }
+
+                        Point[] endpoints = new Point[] { a, b };
+                        for (int endpointIndex = 0; endpointIndex < endpoints.Length; endpointIndex++)
+                        {
+                            Point endpoint = endpoints[endpointIndex];
+                            if (Math.Abs(endpoint.Y - outerY) > coordinateTolerance)
+                                continue;
+
+                            double score = Math.Abs(endpoint.X - preferredX);
+                            if (
+                                best == null
+                                || score < bestScore - 0.0001
+                                || (
+                                    Math.Abs(score - bestScore) <= 0.0001
+                                    && endpoint.X < best.X
+                                )
+                            )
+                            {
+                                best = new Point(endpoint.X, endpoint.Y, 0);
+                                bestScore = score;
+                            }
+                        }
+                    }
+                }
+
+                // Fallback vẫn chỉ nhận vertex contour thật. Không dựng góc bbox ảo.
+                if (best == null && polygon != null)
+                {
+                    for (int i = 0; i < polygon.Count; i++)
+                    {
+                        Point candidate = polygon[i];
+                        if (
+                            !IsFinitePoint2D(candidate)
+                            || Math.Abs(candidate.Y - outerY) > coordinateTolerance
+                        )
+                            continue;
+
+                        double score = Math.Abs(candidate.X - preferredX);
+                        if (
+                            best == null
+                            || score < bestScore - 0.0001
+                            || (
+                                Math.Abs(score - bestScore) <= 0.0001
+                                && candidate.X < best.X
+                            )
+                        )
+                        {
+                            best = new Point(candidate.X, candidate.Y, 0);
+                            bestScore = score;
+                        }
+                    }
+                }
+
+                if (best == null)
+                    return false;
+
+                foot = best;
+                return true;
+            }
+            catch
+            {
+                foot = null;
+                return false;
+            }
+        }
+
+        private static bool TryGetBeamReferenceAxisLocal(
+            ModelPart beam,
+            Slot01AxisAdapter axes,
+            out Point axisStart,
+            out Point axisEnd
+        )
+        {
+            axisStart = null;
+            axisEnd = null;
+
+            try
+            {
+                if (beam == null || axes == null)
+                    return false;
+
+                List<Point> referencePoints = new List<Point>();
+                ArrayList rawReference = beam.GetReferenceLine(false);
+                if (rawReference != null)
+                {
+                    foreach (object value in rawReference)
+                    {
+                        Point point = axes.ToLocal(value as Point);
+                        if (IsFinitePoint2D(point))
+                            AddUniquePoint2D(
+                                referencePoints,
+                                new Point(point.X, point.Y, 0),
+                                TOL * 0.01
+                            );
+                    }
+                }
+
+                // Beam Start/End cũng là reference hình học thật, chỉ dùng khi API
+                // không trả được ReferenceLine(false).
+                if (referencePoints.Count < 2)
+                {
+                    TSM.Beam straightBeam = beam as TSM.Beam;
+                    if (straightBeam != null)
+                    {
+                        Point start = axes.ToLocal(straightBeam.StartPoint);
+                        Point end = axes.ToLocal(straightBeam.EndPoint);
+                        if (IsFinitePoint2D(start))
+                            AddUniquePoint2D(referencePoints, start, TOL * 0.01);
+                        if (IsFinitePoint2D(end))
+                            AddUniquePoint2D(referencePoints, end, TOL * 0.01);
+                    }
+                }
+
+                double longestDistance = 0.0;
+                for (int firstIndex = 0; firstIndex < referencePoints.Count; firstIndex++)
+                {
+                    for (
+                        int secondIndex = firstIndex + 1;
+                        secondIndex < referencePoints.Count;
+                        secondIndex++
+                    )
+                    {
+                        double distance = Distance2D(
+                            referencePoints[firstIndex],
+                            referencePoints[secondIndex]
+                        );
+                        if (distance > longestDistance)
+                        {
+                            longestDistance = distance;
+                            axisStart = referencePoints[firstIndex];
+                            axisEnd = referencePoints[secondIndex];
+                        }
+                    }
+                }
+
+                if (axisStart == null || axisEnd == null || longestDistance <= TOL)
+                    return false;
+
+                double axisX = axisEnd.X - axisStart.X;
+                double axisY = axisEnd.Y - axisStart.Y;
+                double collinearTolerance = Math.Max(TOL, longestDistance * 0.00001);
+                for (int i = 0; i < referencePoints.Count; i++)
+                {
+                    Point point = referencePoints[i];
+                    double signedArea =
+                        axisX * (point.Y - axisStart.Y)
+                        - axisY * (point.X - axisStart.X);
+                    if (Math.Abs(signedArea) / longestDistance > collinearTolerance)
+                        return false;
+                }
+
+                // Sau Slot01AxisAdapter, main phải chạy theo local X. Trường hợp
+                // xiên/không thẳng bị từ chối thay vì suy đoán reference bằng bbox.
+                if (Math.Abs(axisX) / longestDistance < 0.999)
+                    return false;
+
+                return true;
+            }
+            catch
+            {
+                axisStart = null;
+                axisEnd = null;
+                return false;
+            }
+        }
+
+        private static bool TryResolveBeamReferencePointAtX(
+            Point axisStart,
+            Point axisEnd,
+            double targetX,
+            out Point referencePoint
+        )
+        {
+            referencePoint = null;
+
+            if (
+                !IsFinitePoint2D(axisStart)
+                || !IsFinitePoint2D(axisEnd)
+                || !IsFinite(targetX)
+            )
+                return false;
+
+            double deltaX = axisEnd.X - axisStart.X;
+            double deltaY = axisEnd.Y - axisStart.Y;
+            double length = Math.Sqrt(deltaX * deltaX + deltaY * deltaY);
+            if (length <= TOL || Math.Abs(deltaX) / length < 0.999)
+                return false;
+
+            double parameter = (targetX - axisStart.X) / deltaX;
+            double y = axisStart.Y + parameter * deltaY;
+            if (!IsFinite(y))
+                return false;
+
+            referencePoint = new Point(targetX, y, 0);
+            return true;
+        }
+
+        private static bool IsFinitePoint2D(Point point)
+        {
+            return point != null && IsFinite(point.X) && IsFinite(point.Y);
+        }
+
+        private static bool IsFinite(double value)
+        {
+            return !Double.IsNaN(value) && !Double.IsInfinity(value);
         }
 
         private static Point GetRealBeamSidePointNearY(

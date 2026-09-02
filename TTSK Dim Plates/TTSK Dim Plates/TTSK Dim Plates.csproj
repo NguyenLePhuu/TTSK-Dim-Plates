@@ -183,6 +183,7 @@
     <Compile Include="PHU_LoadStandard.cs" />
     <Compile Include="PHU_Slot03_NeighborPlateSectionDim.cs" />
     <Compile Include="PHU_AutoDim_OK-V3.cs" />
+    <Compile Include="PHU_HoleMarkPostDimensionService.cs" />
     <Compile Include="PHU_DimSpacing.cs" />
     <Compile Include="PHU_Slot04_PalletAutoDim.cs" />
     <Compile Include="PHU_Slot05_SelectedPlateEdgeHoleDim.cs" />

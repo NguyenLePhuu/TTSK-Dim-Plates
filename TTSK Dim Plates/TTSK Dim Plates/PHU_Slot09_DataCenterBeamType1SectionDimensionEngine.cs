@@ -56,7 +56,11 @@ namespace Tekla.Technology.Akit.UserScript
                         + analysisMessage;
                     return false;
                 }
-                ValidatePlans(analysis.Plans);
+                // Section A của Data Center Type 1 là tùy chọn. Không có section
+                // được chứng minh là một no-op hợp lệ; validator chung chỉ áp dụng
+                // khi thực sự có supplemental plan cần kiểm tra.
+                if (analysis.Plans.Count > 0)
+                    ValidatePlans(analysis.Plans);
                 message = analysis.Plans.Count == 0
                     ? "Data Center Beam Type1: optional Section A is absent."
                     : "Data Center Beam Type1: optional Section A geometry is proven; plans="

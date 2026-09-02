@@ -275,7 +275,7 @@ namespace Tekla.Technology.Akit.UserScript
 
             InitializeCurrentDimTierSpacing(processedViews);
 
-            // BƯỚC 3: Tạo DIM + move mark.
+            // BƯỚC 3: Tạo DIM. Hole Mark do MainForm điều phối sau cùng.
             // LƯU Ý: Không tự set RestrictionBox thủ công nữa để tránh văng khung tím/cut area.
             int created = CreateDimsBySectionPolygon(
                 model,
@@ -291,15 +291,6 @@ namespace Tekla.Technology.Akit.UserScript
             // BƯỚC 3B: Tự động sửa Bolt Mark lỗi tiếng Nhật sang HOLE mark chuẩn.
             AutoFixBadJapaneseBoltMarks(drawing);
             SafeCommitAndWait(drawing, 80);
-
-            // BƯỚC 3C: Chọn vị trí hole mark theo phân tầng thẩm mỹ gần 45°,
-            // sau đó mới tối ưu chiều dài. Hộp chữ không được đè DIM/mark khác;
-            // leader chạm DIM chỉ là fallback có phạt trong bản vẽ chật.
-            if (AUTO_ARRANGE_HOLE_MARKS_AESTHETIC)
-            {
-                AutoArrangeHoleMarksAesthetic(model, drawing, part, processedViews);
-                SafeCommitAndWait(drawing, 120);
-            }
 
             // BƯỚC 4: Auto arrange bằng KHUNG XANH sau khi Tekla đã update DIM/mark.
             // Khung xanh giữ gap có tính cả DIM, tránh chồng dim lên mặt view.
@@ -323,8 +314,26 @@ namespace Tekla.Technology.Akit.UserScript
             // Chỉ chỉnh vị trí view theo Y để gap TOP/FRONT = 15, không center lại, không đụng DIM/mark/scale.
             if (AUTO_ARRANGE_VIEW_GAP)
             {
+                processedViews = GetMainPartViews(drawing, spDrawing);
+                topViewForArrange = FindSinglePlateViewByViewType(
+                    processedViews,
+                    "TopView",
+                    "Top"
+                );
+                frontViewForArrange = FindSinglePlateViewByViewType(
+                    processedViews,
+                    "FrontView",
+                    "Front"
+                );
                 ForceFinalEqualArrangeTopFrontGap15(
                     topViewForArrange,
+                    frontViewForArrange,
+                    VIEW_VERTICAL_GAP_AFTER_RUN
+                );
+                SafeCommitAndWait(drawing, 150);
+
+                ArrangeSinglePlateSectionsRightOfFrontWithEqualGap(
+                    processedViews,
                     frontViewForArrange,
                     VIEW_VERTICAL_GAP_AFTER_RUN
                 );
@@ -333,21 +342,24 @@ namespace Tekla.Technology.Akit.UserScript
 
             // BƯỚC 7: Cập nhật Title 3 theo scale view cuối cùng.
             // Chỉ ghi giá trị hiển thị scale, không đụng DIM / view / model.
+            processedViews = GetMainPartViews(drawing, spDrawing);
             UpdateDrawingTitle3ScaleFromViews(drawing, processedViews);
             SafeCommitAndWait(drawing, 150);
 
-            // BƯỚC 8 - MUTATION CUỐI CÙNG: mọi move view và Update Title 3 phía
-            // trên đều có thể làm Tekla regenerate LeaderLine mark. Vì vậy phải
-            // đặt lại MARK lỗ sau toàn bộ các Commit khác, rồi không được commit
-            // bất kỳ thay đổi drawing nào nữa trong Run().
-            if (AUTO_ARRANGE_HOLE_MARKS_AESTHETIC)
-            {
-                AutoArrangeHoleMarksAesthetic(model, drawing, part, processedViews);
-                SafeCommitAndWait(drawing, 120);
-            }
+            // BƯỚC 7B: SectionView có thể materialize contour thật muộn hơn main
+            // DIM pass. Chạy reconciliation idempotent sau mọi regenerate/layout.
+            ReconcileSectionThicknessChamferAngleDims(
+                model,
+                drawing,
+                spDrawing,
+                part,
+                thickness
+            );
+            SafeCommitAndWait(drawing, 150);
 
             if (SELECT_VIEWS_AFTER_RUN)
             {
+                processedViews = GetMainPartViews(drawing, spDrawing);
                 SelectProcessedViews(dh, processedViews);
             }
         }
@@ -367,6 +379,39 @@ namespace Tekla.Technology.Akit.UserScript
                     System.Threading.Thread.Sleep(milliseconds);
             }
             catch { }
+        }
+
+        internal static bool RunPlateHoleMarkPostDimensionPass(
+            Model model,
+            Drawing drawing,
+            ModelPart part,
+            out string message
+        )
+        {
+            message = "";
+            SinglePartDrawing singlePartDrawing = drawing as SinglePartDrawing;
+            if (
+                model == null
+                || !model.GetConnectionStatus()
+                || singlePartDrawing == null
+                || part == null
+            )
+            {
+                message = "Plate Hole Mark legacy pass thieu Model, SinglePartDrawing hoac Part.";
+                return false;
+            }
+
+            List<View> views = GetMainPartViews(drawing, singlePartDrawing);
+            if (views.Count == 0)
+            {
+                message = "Plate Hole Mark legacy pass khong tim thay view chua MainPart.";
+                return false;
+            }
+
+            AutoArrangeHoleMarksAesthetic(model, drawing, part, views);
+            SafeCommitAndWait(drawing, 120);
+            message = "MainForm final Hole Mark pass: Plate legacy layout completed.";
+            return true;
         }
 
         #endregion
@@ -497,7 +542,15 @@ namespace Tekla.Technology.Akit.UserScript
             string profile = "";
             part.GetReportProperty("PROFILE", ref profile);
 
-            string p = profile.ToUpper().Replace("PL", "").Replace(" ", "").Replace(",", ".");
+            return GetPlateThicknessFromProfileText(profile);
+        }
+
+        private static double GetPlateThicknessFromProfileText(string profile)
+        {
+            if (String.IsNullOrWhiteSpace(profile))
+                return 0.0;
+
+            string p = profile.ToUpperInvariant().Replace(" ", "").Replace(",", ".");
             string[] tokens = p.Split(
                 new char[] { '*', 'X', '-' },
                 StringSplitOptions.RemoveEmptyEntries
@@ -508,9 +561,10 @@ namespace Tekla.Technology.Akit.UserScript
             foreach (string token in tokens)
             {
                 double value;
+                string numericToken = TrimProfileTokenPrefix(token);
                 if (
                     double.TryParse(
-                        token,
+                        numericToken,
                         System.Globalization.NumberStyles.Any,
                         System.Globalization.CultureInfo.InvariantCulture,
                         out value
@@ -526,6 +580,24 @@ namespace Tekla.Technology.Akit.UserScript
                 return min;
 
             return 0.0;
+        }
+
+        private static string TrimProfileTokenPrefix(string token)
+        {
+            if (String.IsNullOrWhiteSpace(token))
+                return "";
+            int start = 0;
+            while (
+                start < token.Length
+                && !Char.IsDigit(token[start])
+                && token[start] != '.'
+                && token[start] != '+'
+                && token[start] != '-'
+            )
+            {
+                start++;
+            }
+            return start >= token.Length ? "" : token.Substring(start);
         }
 
         private static bool ShouldCreatePlateFaceDetailDimensions(double realThickness)
@@ -776,7 +848,13 @@ namespace Tekla.Technology.Akit.UserScript
                     if (thinOuterContour != null && thinOuterContour.Count >= 3)
                         thinBoundaries.Insert(0, thinOuterContour);
 
-                    count += CreateThinViewExactPlateDims(handler, view, thinOuterContour);
+                    // Dùng chung cho mọi vai trò view có hình chiếu bề dày:
+                    // Front, Top hoặc Section A-A. Không phân nhánh theo tên view.
+                    count += CreateThicknessProjectionExactPlateDims(
+                        handler,
+                        view,
+                        thinOuterContour
+                    );
 
                     double thinRadiusThickness = GetThinRadiusReferenceThickness(
                         part,
@@ -943,24 +1021,20 @@ namespace Tekla.Technology.Akit.UserScript
                 bool replaceSectionTotalThicknessWithLand =
                     sectionThicknessAcrossX && chamferTop;
 
-                int topTier = 1;
-                int bottomTier = 1;
-                int leftTier = 1;
-                int rightTier = 1;
-
-                // Chamfer/rãnh ngoài nếu có thì chiếm tầng đầu của đúng hướng đó.
-                // Chỉ dùng để quản lý tầng; không bù offset theo chamfer.
-                if (createContourChamferDimensions)
-                {
-                    if (chamferTop)
-                        topTier++;
-                    if (chamferBottom)
-                        bottomTier++;
-                    if (chamferLeft)
-                        leftTier++;
-                    if (chamferRight)
-                        rightTier++;
-                }
+                // Cùng một bộ chọn tầng cho Front / Top / Section, nhưng
+                // occupancy của Top / Bottom / Left / Right hoàn toàn độc lập.
+                int topTier = ResolvePlateDirectionalTier(
+                    createContourChamferDimensions && chamferTop
+                );
+                int bottomTier = ResolvePlateDirectionalTier(
+                    createContourChamferDimensions && chamferBottom
+                );
+                int leftTier = ResolvePlateDirectionalTier(
+                    createContourChamferDimensions && chamferLeft
+                );
+                int rightTier = ResolvePlateDirectionalTier(
+                    createContourChamferDimensions && chamferRight
+                );
 
                 bool hasHoleDims = false;
                 int holeLeftDimCount = 0;
@@ -1712,6 +1786,18 @@ namespace Tekla.Technology.Akit.UserScript
                         continue;
                     }
 
+                    if (
+                        HasMatchingThinChamferAngleDimension(
+                            view,
+                            origin,
+                            point1,
+                            point2
+                        )
+                    )
+                    {
+                        continue;
+                    }
+
                     AngleDimensionAttributes attributes = new AngleDimensionAttributes();
                     attributes.Type = AngleTypes.AngleOnSide;
                     attributes.TransparentBackground = false;
@@ -1742,6 +1828,90 @@ namespace Tekla.Technology.Akit.UserScript
             return count;
         }
 
+        private static int ReconcileSectionThicknessChamferAngleDims(
+            Model model,
+            Drawing drawing,
+            SinglePartDrawing singlePartDrawing,
+            ModelPart part,
+            double realThickness
+        )
+        {
+            int count = 0;
+            if (
+                model == null
+                || !model.GetConnectionStatus()
+                || drawing == null
+                || singlePartDrawing == null
+                || part == null
+            )
+            {
+                return count;
+            }
+
+            TransformationPlane oldPlane = null;
+            try
+            {
+                oldPlane = model.GetWorkPlaneHandler().GetCurrentTransformationPlane();
+                List<View> views = GetMainPartViews(drawing, singlePartDrawing);
+                for (int i = 0; i < views.Count; i++)
+                {
+                    View view = views[i];
+                    if (view == null || !IsSectionView(view))
+                        continue;
+
+                    model.GetWorkPlaneHandler().SetCurrentTransformationPlane(
+                        new TransformationPlane(view.DisplayCoordinateSystem)
+                    );
+                    Solid solid = part.GetSolid();
+                    if (solid == null)
+                        continue;
+
+                    List<Point> projected = GetProjectedSolidPointsForTotalDims(solid);
+                    List<Point> contour = BuildConvexHull2D(projected);
+                    if (contour == null || contour.Count < 3)
+                        continue;
+
+                    double minX;
+                    double maxX;
+                    double minY;
+                    double maxY;
+                    GetMinMax(contour, out minX, out maxX, out minY, out maxY);
+                    if (
+                        !IsSectionThicknessAcrossX(
+                            true,
+                            Math.Abs(maxX - minX),
+                            Math.Abs(maxY - minY),
+                            realThickness
+                        )
+                    )
+                    {
+                        continue;
+                    }
+
+                    count += CreateSectionThicknessChamferAngleDims(
+                        view,
+                        contour,
+                        minX,
+                        maxX,
+                        minY,
+                        maxY
+                    );
+                }
+            }
+            catch { }
+            finally
+            {
+                try
+                {
+                    if (oldPlane != null)
+                        model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane);
+                }
+                catch { }
+            }
+
+            return count;
+        }
+
         private static bool TryGetSectionThicknessChamferAnglePoints(
             Point first,
             Point second,
@@ -1758,13 +1928,21 @@ namespace Tekla.Technology.Akit.UserScript
             point1 = null;
             point2 = null;
 
-            if (!IsValidChamferSegment(first, second, minX, maxX, minY, maxY))
+            bool rightSide;
+            bool topSide;
+            if (
+                !TryClassifySectionThicknessChamferCorner(
+                    first,
+                    second,
+                    minX,
+                    maxX,
+                    minY,
+                    maxY,
+                    out rightSide,
+                    out topSide
+                )
+            )
                 return false;
-
-            double centerX = (minX + maxX) * 0.5;
-            double centerY = (minY + maxY) * 0.5;
-            bool rightSide = (first.X + second.X) * 0.5 >= centerX;
-            bool topSide = (first.Y + second.Y) * 0.5 >= centerY;
 
             Point inner;
             Point outer;
@@ -1820,6 +1998,55 @@ namespace Tekla.Technology.Akit.UserScript
                 - (point1.Y - origin.Y) * (point2.X - origin.X);
 
             return Math.Abs(cross) > 0.000001;
+        }
+
+        private static bool TryClassifySectionThicknessChamferCorner(
+            Point first,
+            Point second,
+            double minX,
+            double maxX,
+            double minY,
+            double maxY,
+            out bool rightSide,
+            out bool topSide
+        )
+        {
+            rightSide = false;
+            topSide = false;
+            if (first == null || second == null)
+                return false;
+
+            double dx = Math.Abs(first.X - second.X);
+            double dy = Math.Abs(first.Y - second.Y);
+            if (
+                dx <= PLATE_EDGE_FOOT_ALIGNMENT_TOL
+                || dy <= PLATE_EDGE_FOOT_ALIGNMENT_TOL
+            )
+            {
+                return false;
+            }
+
+            bool touchesLeft =
+                Math.Abs(first.X - minX) <= THIN_CHAMFER_EDGE_TOL
+                || Math.Abs(second.X - minX) <= THIN_CHAMFER_EDGE_TOL;
+            bool touchesRight =
+                Math.Abs(first.X - maxX) <= THIN_CHAMFER_EDGE_TOL
+                || Math.Abs(second.X - maxX) <= THIN_CHAMFER_EDGE_TOL;
+            bool touchesBottom =
+                Math.Abs(first.Y - minY) <= THIN_CHAMFER_EDGE_TOL
+                || Math.Abs(second.Y - minY) <= THIN_CHAMFER_EDGE_TOL;
+            bool touchesTop =
+                Math.Abs(first.Y - maxY) <= THIN_CHAMFER_EDGE_TOL
+                || Math.Abs(second.Y - maxY) <= THIN_CHAMFER_EDGE_TOL;
+
+            // Một cạnh vát chiều dày phải nối đúng một mặt trái/phải với đúng
+            // một mặt trên/dưới. Không dùng ngưỡng kích thước tuyệt đối 5 mm.
+            if (touchesLeft == touchesRight || touchesBottom == touchesTop)
+                return false;
+
+            rightSide = touchesRight;
+            topSide = touchesTop;
+            return true;
         }
 
         private static double GetHoleDimOffsetByPolygon(List<Point> polygon)
@@ -4097,7 +4324,7 @@ namespace Tekla.Technology.Akit.UserScript
             return result;
         }
 
-        private static int CreateThinViewExactPlateDims(
+        private static int CreateThicknessProjectionExactPlateDims(
             StraightDimensionSetHandler handler,
             View view,
             List<Point> contour
@@ -4118,6 +4345,7 @@ namespace Tekla.Technology.Akit.UserScript
             double centerY = (minY + maxY) * 0.5;
             bool hasLeftChamfer = false;
             bool hasRightChamfer = false;
+            bool hasTopChamferDimension = false;
             int chamferCount = 0;
 
             for (int i = 0; i < contour.Count; i++)
@@ -4198,6 +4426,11 @@ namespace Tekla.Technology.Akit.UserScript
                 double midX = (a.X + b.X) * 0.5;
                 bool isLeft = midX <= centerX;
                 bool isTop = ResolveThinChamferTopSideFromInnerEndpoint(a, b, !isLeft, centerY);
+
+                // Theo dõi occupancy riêng cho từng phía. Chamfer ở phía dưới
+                // không được phép đẩy DIM tổng phía trên lên tầng xa hơn.
+                if (isTop)
+                    hasTopChamferDimension = true;
 
                 Point horizontalInner;
                 Point horizontalOuter;
@@ -4309,7 +4542,11 @@ namespace Tekla.Technology.Akit.UserScript
                     overallBottom,
                     overallTop,
                     overallOnRight ? new Vector(1, 0, 0) : new Vector(-1, 0, 0),
-                    GetCleanDimOffsetByTier(2)
+                    GetCleanDimOffsetByTier(
+                        ResolvePlateDirectionalTier(
+                            overallOnRight ? hasRightChamfer : hasLeftChamfer
+                        )
+                    )
                 )
             )
             {
@@ -4323,7 +4560,9 @@ namespace Tekla.Technology.Akit.UserScript
                     leftLengthFoot,
                     rightLengthFoot,
                     new Vector(0, 1, 0),
-                    GetCleanDimOffsetByTier(3)
+                    GetCleanDimOffsetByTier(
+                        ResolvePlateDirectionalTier(hasTopChamferDimension)
+                    )
                 )
             )
             {
@@ -4331,6 +4570,11 @@ namespace Tekla.Technology.Akit.UserScript
             }
 
             return count;
+        }
+
+        private static int ResolvePlateDirectionalTier(bool sideAlreadyOccupied)
+        {
+            return sideAlreadyOccupied ? 2 : 1;
         }
 
         private static bool ShouldCreateThinOverallThickness(
@@ -11461,6 +11705,114 @@ namespace Tekla.Technology.Akit.UserScript
                 catch { }
             }
             catch { }
+        }
+
+        private static void ArrangeSinglePlateSectionsRightOfFrontWithEqualGap(
+            List<View> processedViews,
+            View frontView,
+            double gap
+        )
+        {
+            try
+            {
+                if (processedViews == null || frontView == null)
+                    return;
+                if (gap < 0.0)
+                    gap = 0.0;
+
+                ViewPaperBox frontBox;
+                if (!TryGetViewPaperBox(frontView, out frontBox) || frontBox == null)
+                    return;
+
+                List<View> sections = new List<View>();
+                for (int i = 0; i < processedViews.Count; i++)
+                {
+                    View candidate = processedViews[i];
+                    if (
+                        candidate != null
+                        && !object.ReferenceEquals(candidate, frontView)
+                        && IsSectionView(candidate)
+                    )
+                    {
+                        sections.Add(candidate);
+                    }
+                }
+                sections.Sort(
+                    delegate(View first, View second)
+                    {
+                        string firstName = first == null ? "" : first.Name ?? "";
+                        string secondName = second == null ? "" : second.Name ?? "";
+                        return String.Compare(
+                            firstName,
+                            secondName,
+                            StringComparison.OrdinalIgnoreCase
+                        );
+                    }
+                );
+
+                double anchorRight = frontBox.MaxX;
+                Point frontOrigin = frontView.Origin;
+                if (frontOrigin == null)
+                    return;
+                for (int i = 0; i < sections.Count; i++)
+                {
+                    View section = sections[i];
+                    ViewPaperBox sectionBox;
+                    if (!TryGetViewPaperBox(section, out sectionBox) || sectionBox == null)
+                        continue;
+                    Point sectionOrigin = section.Origin;
+                    if (sectionOrigin == null)
+                        continue;
+
+                    double[] move = BuildSinglePlateSectionRightMove(
+                        anchorRight,
+                        frontOrigin.Y,
+                        sectionBox.MinX,
+                        sectionBox.MaxX,
+                        sectionOrigin.Y,
+                        gap
+                    );
+                    if (move == null || move.Length != 2)
+                        continue;
+                    if (Math.Abs(move[0]) > 300.0 || Math.Abs(move[1]) > 300.0)
+                        continue;
+
+                    TrySetFixedViewPlacing(section, true);
+                    if (Math.Abs(move[0]) >= 0.1 || Math.Abs(move[1]) >= 0.1)
+                    {
+                        MoveViewByOriginOnly(section, move[0], move[1]);
+                        try { section.Modify(); }
+                        catch { }
+                    }
+
+                    anchorRight += gap + sectionBox.Width;
+                }
+            }
+            catch { }
+        }
+
+        private static double[] BuildSinglePlateSectionRightMove(
+            double anchorRight,
+            double targetOriginY,
+            double sectionMinX,
+            double sectionMaxX,
+            double currentSectionOriginY,
+            double gap
+        )
+        {
+            double width = Math.Abs(sectionMaxX - sectionMinX);
+            if (width <= 0.0)
+                return null;
+            if (gap < 0.0)
+                gap = 0.0;
+
+            double currentCenterX = (sectionMinX + sectionMaxX) * 0.5;
+            double targetCenterX = anchorRight + gap + width * 0.5;
+            return new double[]
+            {
+                targetCenterX - currentCenterX,
+                targetOriginY - currentSectionOriginY
+            };
         }
 
         private static double[] BuildSinglePlateTopFrontTargetCenters(

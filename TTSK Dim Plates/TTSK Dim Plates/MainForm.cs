@@ -7595,6 +7595,7 @@ namespace TTSK_AutoDim_Plates
             public AutoSectionStatus SectionStatus = AutoSectionStatus.NotApplicable;
             public int OriginalHoleResult = -1;
             public string SectionMessage = "";
+            public bool IsPlateSection = false;
             public bool GridDimensionRequested = false;
             public bool GridDimensionApplied = false;
             public string GridDimensionMessage = "";
@@ -7747,20 +7748,10 @@ namespace TTSK_AutoDim_Plates
             }
 
             int resolvedMainPartId = 0;
-            Tekla.Structures.Model.Part resolvedMainPart = null;
-            if (
-                partType == AutoDimPartType.ShapeIH
-                || partType == AutoDimPartType.ShapeC
-                || partType == AutoDimPartType.ShapeL
-                || partType == AutoDimPartType.ShapeBox
-                || partType == AutoDimPartType.ShapeUnknown
-            )
+            Tekla.Structures.Model.Part resolvedMainPart = GetActiveDrawingMainModelPart();
+            if (resolvedMainPart != null && resolvedMainPart.Identifier != null)
             {
-                resolvedMainPart = GetActiveDrawingMainModelPart();
-                if (resolvedMainPart != null && resolvedMainPart.Identifier != null)
-                {
-                    resolvedMainPartId = resolvedMainPart.Identifier.ID;
-                }
+                resolvedMainPartId = resolvedMainPart.Identifier.ID;
             }
 
             // Capture the user's sheet placement before AutoSection or any
@@ -7790,8 +7781,110 @@ namespace TTSK_AutoDim_Plates
             }
 
             bool runAutoSection = ShouldRunAutoSection(partType);
+            bool autoSectionWorkerRequired = runAutoSection;
             bool autoSectionDimPassRequired = false;
             bool autoSectionSingleLayout = false;
+            Tekla.Technology.Akit.UserScript.AutoSectionWorkerResult
+                createdAutoSectionWorkerResult = null;
+            Tekla.Technology.Akit.UserScript.SectionViewAttributeResolution
+                sectionAttributeResolutionBeforeLoad = null;
+
+            // Plate geometry precheck is read-only and must run before opening
+            // Drawing Properties. Only a REQUIRED Section needs the expensive
+            // live Section-row attribute capture dialog.
+            if (runAutoSection && partType == AutoDimPartType.Plate)
+            {
+                DrawingHandler precheckDrawingHandler = new DrawingHandler();
+                Drawing precheckDrawing = precheckDrawingHandler.GetActiveDrawing();
+                Model precheckModel = new Model();
+                Tekla.Structures.Model.Part precheckPart = ResolveAutoSectionModelPart(
+                    precheckDrawing,
+                    precheckModel,
+                    resolvedMainPartId
+                );
+                Tekla.Technology.Akit.UserScript.PlateAutoSectionAnalysisResult
+                    platePrecheck = Tekla.Technology.Akit.UserScript.SectionScript
+                        .AnalyzePlateFrontBevel(
+                            precheckDrawing,
+                            precheckModel,
+                            precheckPart
+                        );
+
+                if (platePrecheck == null)
+                {
+                    execution.SectionStatus = AutoSectionStatus.PreflightFailed;
+                    execution.SectionMessage =
+                        "Plate Auto Section precheck khong tra ket qua.";
+                    execution.CanSaveDrawing = false;
+                    return execution;
+                }
+
+                if (
+                    platePrecheck.Decision
+                        == Tekla.Technology.Akit.UserScript.PlateAutoSectionDecision.NoSection
+                    || platePrecheck.Decision
+                        == Tekla.Technology.Akit.UserScript.PlateAutoSectionDecision.Rejected
+                )
+                {
+                    autoSectionWorkerRequired = false;
+                    execution.SectionStatus = AutoSectionStatus.NotApplicable;
+                    execution.SectionMessage =
+                        platePrecheck.Decision
+                            == Tekla.Technology.Akit.UserScript.PlateAutoSectionDecision.Rejected
+                        ? "Auto Section bo qua an toan; tiep tuc Plate AutoDim. "
+                            + platePrecheck.Message
+                        : platePrecheck.Message;
+                }
+                else if (
+                    platePrecheck.Decision
+                    == Tekla.Technology.Akit.UserScript.PlateAutoSectionDecision.ExistingEquivalent
+                )
+                {
+                    autoSectionWorkerRequired = false;
+                    execution.SectionStatus = AutoSectionStatus.ExistingLayout;
+                    execution.SectionMessage = platePrecheck.Message;
+                }
+            }
+
+            // Section View property belongs to the original drawing-property
+            // contract. Capture it before PHU_LoadStandardService changes any
+            // view attributes. The resolver opens wdraw_dial for Single Part
+            // and adraw_dial only for Assembly, loads the active values with
+            // Get, then closes only dialogs that it opened itself.
+            if (autoSectionWorkerRequired)
+            {
+                try
+                {
+                    DrawingHandler attributeDrawingHandler = new DrawingHandler();
+                    Drawing attributeDrawing = attributeDrawingHandler.GetActiveDrawing();
+                    Model attributeModel = new Model();
+                    sectionAttributeResolutionBeforeLoad = Tekla
+                        .Technology
+                        .Akit
+                        .UserScript
+                        .SectionViewAttributeResolver
+                        .Resolve(attributeDrawing, attributeModel);
+                }
+                catch (Exception ex)
+                {
+                    sectionAttributeResolutionBeforeLoad =
+                        new Tekla.Technology.Akit.UserScript.SectionViewAttributeResolution();
+                    sectionAttributeResolutionBeforeLoad.Error =
+                        "Section View property capture failed before Load Standard: "
+                        + ex.Message;
+                }
+
+                if (
+                    sectionAttributeResolutionBeforeLoad != null
+                    && !sectionAttributeResolutionBeforeLoad.LiveDialogStateSafe
+                )
+                {
+                    execution.SectionStatus = AutoSectionStatus.PreflightFailed;
+                    execution.SectionMessage = sectionAttributeResolutionBeforeLoad.Error;
+                    execution.CanSaveDrawing = false;
+                    return execution;
+                }
+            }
 
             // Geometry Standard is independent from Auto Section and must
             // finish before geometry analysis or any Section-specific work.
@@ -7802,12 +7895,16 @@ namespace TTSK_AutoDim_Plates
             // MainPart identity is preserved by model ID; drawing selection is not restored.
 
             if (
-                (partType == AutoDimPartType.ShapeIH || partType == AutoDimPartType.ShapeC)
+                (
+                    partType == AutoDimPartType.Plate
+                    || partType == AutoDimPartType.ShapeIH
+                    || partType == AutoDimPartType.ShapeC
+                )
                 && !runAutoSection
             )
                 execution.SectionStatus = AutoSectionStatus.Disabled;
 
-            if (runAutoSection)
+            if (autoSectionWorkerRequired)
             {
                 DrawingHandler drawingHandler = new DrawingHandler();
                 Drawing drawing = drawingHandler.GetActiveDrawing();
@@ -7817,150 +7914,33 @@ namespace TTSK_AutoDim_Plates
                     model,
                     resolvedMainPartId
                 );
-                bool useLegacyAutoSectionPrecheck =
-                    partType == AutoDimPartType.ShapeIH
-                    || (partType == AutoDimPartType.ShapeC && IsBracketShapeProfile(part));
 
-                Tekla.Technology.Akit.UserScript.HShapeAutoSectionPrecheckResult precheck =
-                    useLegacyAutoSectionPrecheck
-                        ? Tekla.Technology.Akit.UserScript.ShapeScript.PrepareAutoSectionPrecheck(
-                            drawing,
-                            model,
-                            part
-                        )
-                        : Tekla.Technology.Akit.UserScript.ShapeCScript.PrepareAutoSectionPrecheck(
-                            drawing,
-                            model,
-                            part
-                        );
+                Tekla.Technology.Akit.UserScript.AutoSectionTargetKind targetKind =
+                    partType == AutoDimPartType.Plate
+                        ? Tekla.Technology.Akit.UserScript.AutoSectionTargetKind.Plate
+                        : partType == AutoDimPartType.ShapeIH
+                            ? Tekla.Technology.Akit.UserScript.AutoSectionTargetKind.ShapeIH
+                            : Tekla.Technology.Akit.UserScript.AutoSectionTargetKind.ShapeC;
 
-                execution.OriginalHoleResult = precheck != null ? precheck.HoleResult : -1;
+                Tekla.Technology.Akit.UserScript.AutoSectionWorkerResult workerResult =
+                    Tekla.Technology.Akit.UserScript.AutoSectionCoordinator.Run(
+                        drawing,
+                        model,
+                        part,
+                        targetKind,
+                        sectionAttributeResolutionBeforeLoad
+                    );
 
-                if (precheck == null)
-                {
-                    execution.SectionStatus = AutoSectionStatus.HoleCheckUnknown;
-                    execution.SectionMessage = "Precheck Auto Section khong tra ket qua.";
-                }
-                else if (precheck.HasPartialSectionLayout)
-                {
-                    execution.SectionStatus = AutoSectionStatus.PartialLayout;
-                    execution.SectionMessage = "Section layout dang co mot phan; khong tu repair.";
-                }
-                else if (
-                    (drawing is SinglePartDrawing && precheck.HasCompleteSingleLayout)
-                    || (drawing is AssemblyDrawing && precheck.HasCompleteAssemblyLayout)
-                )
-                {
-                    execution.SectionStatus = AutoSectionStatus.ExistingLayout;
-                    execution.SectionMessage = "Section layout da ton tai.";
-                }
-                else if (!precheck.IsValid)
-                {
-                    execution.SectionStatus = AutoSectionStatus.HoleCheckUnknown;
-                    execution.SectionMessage = precheck.Message;
-                }
-                else if (!precheck.HasTopBottomDifference)
-                {
-                    execution.SectionStatus = AutoSectionStatus.HolesSame;
-                    execution.SectionMessage = precheck.Message;
-                }
-                else
-                {
-                    Tekla.Technology.Akit.UserScript.SectionViewAttributeResolution sectionAttributeResolution =
-                        Tekla.Technology.Akit.UserScript.SectionViewAttributeResolver.Resolve(
-                            drawing,
-                            model
-                        );
-                    Tekla.Technology.Akit.UserScript.AutoSectionWorkerResult workerResult;
+                execution.OriginalHoleResult =
+                    workerResult != null ? workerResult.OriginalHoleResult : -1;
+                ApplyAutoSectionWorkerResult(execution, workerResult);
 
-                    if (
-                        sectionAttributeResolution == null
-                        || !sectionAttributeResolution.Success
-                        || string.IsNullOrWhiteSpace(sectionAttributeResolution.AttributeName)
-                    )
-                    {
-                        workerResult =
-                            new Tekla.Technology.Akit.UserScript.AutoSectionWorkerResult();
-                        workerResult.Status = Tekla
-                            .Technology
-                            .Akit
-                            .UserScript
-                            .AutoSectionWorkerStatus
-                            .PreflightFailed;
-                        workerResult.Message =
-                            "Khong xac dinh duoc Section view property sau "
-                            + "khi precheck ket luan can tao Section. "
-                            + (
-                                sectionAttributeResolution == null
-                                    ? "Resolver did not run."
-                                    : sectionAttributeResolution.Error
-                            );
-                    }
-                    else if (drawing is SinglePartDrawing)
-                    {
-                        workerResult = Tekla.Technology.Akit.UserScript.SectionScript.RunSingleSafe(
-                            drawing,
-                            model,
-                            part,
-                            precheck.TopView,
-                            precheck.FrontView,
-                            sectionAttributeResolution.AttributeName
-                        );
-                    }
-                    else if (drawing is AssemblyDrawing)
-                    {
-                        workerResult =
-                            Tekla.Technology.Akit.UserScript.SectionScript.RunAssemblySafe(
-                                drawing,
-                                model,
-                                part,
-                                precheck.TopView,
-                                precheck.FrontView,
-                                sectionAttributeResolution.AttributeName
-                            );
-                    }
-                    else
-                    {
-                        workerResult =
-                            new Tekla.Technology.Akit.UserScript.AutoSectionWorkerResult();
-                        workerResult.Status = Tekla
-                            .Technology
-                            .Akit
-                            .UserScript
-                            .AutoSectionWorkerStatus
-                            .PreflightFailed;
-                        workerResult.Message = "Drawing khong phai Single Part hoac Assembly.";
-                    }
-
-                    ApplyAutoSectionWorkerResult(execution, workerResult);
-
-                    if (
-                        workerResult != null
-                        && workerResult.Status
-                            == Tekla
-                                .Technology
-                                .Akit
-                                .UserScript
-                                .AutoSectionWorkerStatus
-                                .CreatedSingle
-                    )
-                    {
-                        autoSectionDimPassRequired = true;
-                        autoSectionSingleLayout = true;
-                    }
-                    else if (
-                        workerResult != null
-                        && workerResult.Status
-                            == Tekla
-                                .Technology
-                                .Akit
-                                .UserScript
-                                .AutoSectionWorkerStatus
-                                .CreatedAssemblyBottom
-                    )
-                    {
-                        autoSectionDimPassRequired = true;
-                    }
+                if (workerResult != null)
+                {
+                    autoSectionDimPassRequired = workerResult.RequiresDimensionPass;
+                    autoSectionSingleLayout = workerResult.HasSingleLayout;
+                    if (workerResult.RelocateMarksAfterDimension)
+                        createdAutoSectionWorkerResult = workerResult;
                 }
 
                 if (!execution.CanSaveDrawing)
@@ -8253,6 +8233,26 @@ namespace TTSK_AutoDim_Plates
                     Tekla.Technology.Akit.UserScript.PHU_ColumnGridDimensionEngine.ExecuteAfterShape();
                     Tekla.Technology.Akit.UserScript.PHU_InzaiColumnSectionDimensionEngine.ExecuteAfterColumnFlow();
                 }
+                if (createdAutoSectionWorkerResult != null)
+                {
+                    DrawingHandler sectionMarkDrawingHandler = new DrawingHandler();
+                    Drawing sectionMarkDrawing = sectionMarkDrawingHandler.GetActiveDrawing();
+                    string sectionMarkPlacementMessage;
+                    bool sectionMarkPlaced = Tekla.Technology.Akit.UserScript.SectionScript
+                        .RelocateCreatedMarksBeyondOutermostLeftDimension(
+                            sectionMarkDrawing,
+                            createdAutoSectionWorkerResult,
+                            out sectionMarkPlacementMessage
+                        );
+                    execution.SectionMessage = String.IsNullOrWhiteSpace(execution.SectionMessage)
+                        ? sectionMarkPlacementMessage
+                        : execution.SectionMessage + " " + sectionMarkPlacementMessage;
+                    if (!sectionMarkPlaced)
+                    {
+                        execution.CanSaveDrawing = false;
+                        return execution;
+                    }
+                }
                 if (verticalShapeLayoutCaptured)
                 {
                     Tekla.Technology.Akit.UserScript.PHU_VerticalShapeViewLayoutContext.AlignOnceAfterShape();
@@ -8352,10 +8352,117 @@ namespace TTSK_AutoDim_Plates
                 Tekla.Technology.Akit.UserScript.PHU_VerticalShapeViewLayoutContext.Reset();
             }
 
+            string holeMarkPostMessage;
+            bool holeMarkPostSucceeded = TryRunFinalHoleMarkPostDimensionPass(
+                partType,
+                resolvedMainPartId,
+                out holeMarkPostMessage
+            );
+            if (!holeMarkPostSucceeded)
+            {
+                execution.SectionMessage = String.IsNullOrWhiteSpace(execution.SectionMessage)
+                    ? holeMarkPostMessage
+                    : execution.SectionMessage + " " + holeMarkPostMessage;
+                execution.CanSaveDrawing = false;
+                return execution;
+            }
+
             if (!runAutoSection)
                 execution.OriginalHoleResult = GetTopBottomHoleCheckResult();
 
             return execution;
+        }
+
+        private bool TryRunFinalHoleMarkPostDimensionPass(
+            AutoDimPartType partType,
+            int resolvedMainPartId,
+            out string message
+        )
+        {
+            message = "";
+            string resultPath = System.IO.Path.Combine(
+                System.IO.Path.GetTempPath(),
+                "TTSK_HoleMarkPostDim_" + Guid.NewGuid().ToString("N") + ".txt"
+            );
+            try
+            {
+                string executablePath = typeof(MainForm).Assembly.Location;
+                if (
+                    String.IsNullOrWhiteSpace(executablePath)
+                    || !System.IO.File.Exists(executablePath)
+                )
+                {
+                    message = "Khong tim thay executable de chay Hole Mark worker.";
+                    return false;
+                }
+
+                DrawingHandler drawingHandler = new DrawingHandler();
+                Drawing drawing = drawingHandler.GetActiveDrawing();
+                if (drawing == null || !drawing.CommitChanges())
+                {
+                    message = "Khong commit duoc DIM truoc Hole Mark worker.";
+                    return false;
+                }
+
+                string scope = partType == AutoDimPartType.Plate ? "plate" : "shape";
+                System.Diagnostics.ProcessStartInfo startInfo =
+                    new System.Diagnostics.ProcessStartInfo();
+                startInfo.FileName = executablePath;
+                startInfo.WorkingDirectory = System.IO.Path.GetDirectoryName(executablePath);
+                startInfo.UseShellExecute = false;
+                startInfo.CreateNoWindow = true;
+                startInfo.WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden;
+                startInfo.Arguments =
+                    "--hole-mark-post-dim-worker "
+                    + scope
+                    + " "
+                    + resolvedMainPartId.ToString()
+                    + " \""
+                    + resultPath.Replace("\"", "\\\"")
+                    + "\"";
+
+                using (System.Diagnostics.Process worker = System.Diagnostics.Process.Start(startInfo))
+                {
+                    if (worker == null)
+                    {
+                        message = "Khong khoi dong duoc Hole Mark worker.";
+                        return false;
+                    }
+                    if (!worker.WaitForExit(60000))
+                    {
+                        try { worker.Kill(); }
+                        catch { }
+                        message = "Hole Mark worker timeout sau 60 giay.";
+                        return false;
+                    }
+
+                    if (System.IO.File.Exists(resultPath))
+                        message = System.IO.File.ReadAllText(resultPath);
+                    if (worker.ExitCode != 0)
+                    {
+                        if (String.IsNullOrWhiteSpace(message))
+                            message = "Hole Mark worker exit code " + worker.ExitCode.ToString();
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Exception real = ex.InnerException != null ? ex.InnerException : ex;
+                message = "MainForm Hole Mark worker loi: " + real.Message;
+                return false;
+            }
+            finally
+            {
+                try
+                {
+                    if (System.IO.File.Exists(resultPath))
+                        System.IO.File.Delete(resultPath);
+                }
+                catch { }
+            }
         }
 
         private DataCenterExecutionResult RunDataCenterCurrentDrawing()
@@ -8832,7 +8939,11 @@ namespace TTSK_AutoDim_Plates
                     : _autoSectionEnabled;
 
             return enabled
-                && (partType == AutoDimPartType.ShapeIH || partType == AutoDimPartType.ShapeC);
+                && (
+                    partType == AutoDimPartType.Plate
+                    || partType == AutoDimPartType.ShapeIH
+                    || partType == AutoDimPartType.ShapeC
+                );
         }
 
         private bool IsGridDimensionModeEnabledForAutoDim()
@@ -8933,9 +9044,28 @@ namespace TTSK_AutoDim_Plates
                 return;
 
             execution.SectionMessage = workerResult.Message ?? "";
+            execution.IsPlateSection = workerResult.IsPlateSection;
 
             switch (workerResult.Status)
             {
+                case Tekla.Technology.Akit.UserScript.AutoSectionWorkerStatus.NoSectionRequired:
+                    execution.SectionStatus = workerResult.IsPlateSection
+                        ? AutoSectionStatus.NotApplicable
+                        : AutoSectionStatus.HolesSame;
+                    break;
+
+                case Tekla.Technology.Akit.UserScript.AutoSectionWorkerStatus.ExistingLayout:
+                    execution.SectionStatus = AutoSectionStatus.ExistingLayout;
+                    break;
+
+                case Tekla.Technology.Akit.UserScript.AutoSectionWorkerStatus.PartialLayout:
+                    execution.SectionStatus = AutoSectionStatus.PartialLayout;
+                    break;
+
+                case Tekla.Technology.Akit.UserScript.AutoSectionWorkerStatus.PrecheckUnknown:
+                    execution.SectionStatus = AutoSectionStatus.HoleCheckUnknown;
+                    break;
+
                 case Tekla.Technology.Akit.UserScript.AutoSectionWorkerStatus.CreatedSingle:
                     execution.SectionStatus = AutoSectionStatus.CreatedSingle;
                     break;
@@ -9002,7 +9132,9 @@ namespace TTSK_AutoDim_Plates
             switch (execution.SectionStatus)
             {
                 case AutoSectionStatus.CreatedSingle:
-                    lblStatus.Text = "Done | Single Section B/C created";
+                    lblStatus.Text = execution.IsPlateSection
+                        ? "Done | Plate Section A-A created"
+                        : "Done | Single Section B/C created";
                     lblStatus.ForeColor = Color.FromArgb(22, 163, 74);
                     return;
 
@@ -9089,7 +9221,7 @@ namespace TTSK_AutoDim_Plates
             switch (execution.SectionStatus)
             {
                 case AutoSectionStatus.CreatedSingle:
-                    return "SECTION B/C";
+                    return execution.IsPlateSection ? "SECTION A-A" : "SECTION B/C";
 
                 case AutoSectionStatus.CreatedAssemblyBottom:
                     return "BOTTOM SECTION";

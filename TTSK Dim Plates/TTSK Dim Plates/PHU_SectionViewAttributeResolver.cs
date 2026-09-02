@@ -181,9 +181,11 @@ namespace Tekla.Technology.Akit.UserScript
             // This targets the same tree/tab/table/row as Viewpropertive1.cs,
             // without invoking its deselect/Modify/Apply/OK commands.
             List<string> viewAttributeFiles = CollectAttributeFiles(".vi", modelPath);
+            List<string> drawingPropertyFiles = CollectAttributeFiles(extension, modelPath);
             bool liveDialogResolved = TryResolveFromLiveDrawingPropertiesDialog(
                 result,
                 viewAttributeFiles,
+                drawingPropertyFiles,
                 isAssembly
             );
             if (liveDialogResolved)
@@ -355,6 +357,7 @@ namespace Tekla.Technology.Akit.UserScript
         private static bool TryResolveFromLiveDrawingPropertiesDialog(
             SectionViewAttributeResolution result,
             List<string> viewAttributeFiles,
+            List<string> drawingPropertyFiles,
             bool isAssemblyDrawing
         )
         {
@@ -363,6 +366,7 @@ namespace Tekla.Technology.Akit.UserScript
                 return TryResolveFromLiveDrawingPropertiesDialogLocked(
                     result,
                     viewAttributeFiles,
+                    drawingPropertyFiles,
                     isAssemblyDrawing
                 );
             }
@@ -371,6 +375,7 @@ namespace Tekla.Technology.Akit.UserScript
         private static bool TryResolveFromLiveDrawingPropertiesDialogLocked(
             SectionViewAttributeResolution result,
             List<string> viewAttributeFiles,
+            List<string> drawingPropertyFiles,
             bool isAssemblyDrawing
         )
         {
@@ -392,6 +397,7 @@ namespace Tekla.Technology.Akit.UserScript
             bool dialogThreadStarted = false;
             IntPtr dialogHandle = IntPtr.Zero;
             IntPtr viewPropertiesDialogHandle = IntPtr.Zero;
+            bool drawingPropertiesDialogOwned = false;
 
             try
             {
@@ -400,79 +406,154 @@ namespace Tekla.Technology.Akit.UserScript
                 for (int i = 0; i < beforeWindows.Count; i++)
                     beforeHandles.Add(beforeWindows[i].Handle.ToInt64());
 
-                string invokeError = "";
-                dialogThread = new Thread(
-                    delegate()
-                    {
-                        try
-                        {
-                            InvokeDisplayDrawingPropertiesDialog();
-                        }
-                        catch (Exception ex)
-                        {
-                            Exception real = ex.InnerException ?? ex;
-                            invokeError = real.GetType().Name + ": " + real.Message;
-                        }
-                    }
+                // Respect the runtime Drawing type exactly. A SinglePartDrawing
+                // must use wdraw_dial; only an AssemblyDrawing may use adraw_dial.
+                // The old DrawingInternal export could open the Assembly dialog
+                // while a SinglePartDrawing was active, so its HWND and the Akit
+                // target belonged to different dialogs.
+                dialogHandle = FindVisibleExpectedDrawingPropertiesDialog(
+                    beforeWindows,
+                    isAssemblyDrawing
                 );
-                dialogThread.IsBackground = true;
-                try
-                {
-                    dialogThread.SetApartmentState(ApartmentState.STA);
-                }
-                catch { }
-                dialogThread.Start();
-                dialogThreadStarted = true;
 
-                for (int attempt = 0; attempt < 60; attempt++)
+                string invokeError = "";
+                if (dialogHandle == IntPtr.Zero)
                 {
-                    Thread.Sleep(100);
-                    List<NativeWindowInfo> currentWindows = GetVisibleNativeWindows(
-                        teklaProcess.Id
+                    dialogThread = new Thread(
+                        delegate()
+                        {
+                            try
+                            {
+                                InvokeDisplayDrawingPropertiesDialog(
+                                    teklaProcess.Id,
+                                    isAssemblyDrawing
+                                );
+                            }
+                            catch (Exception ex)
+                            {
+                                Exception real = ex.InnerException ?? ex;
+                                invokeError = real.GetType().Name + ": " + real.Message;
+                            }
+                        }
                     );
-
-                    int bestScore = int.MinValue;
-
-                    for (int windowIndex = 0; windowIndex < currentWindows.Count; windowIndex++)
+                    dialogThread.IsBackground = true;
+                    try
                     {
-                        NativeWindowInfo window = currentWindows[windowIndex];
-                        long handleValue = window.Handle.ToInt64();
-                        if (
-                            handleValue == 0
-                            || beforeHandles.Contains(handleValue)
-                            || IsIgnoredNativeWindowClass(window.ClassName)
+                        dialogThread.SetApartmentState(ApartmentState.STA);
+                    }
+                    catch { }
+                    dialogThread.Start();
+                    dialogThreadStarted = true;
+
+                    for (int attempt = 0; attempt < 60; attempt++)
+                    {
+                        Thread.Sleep(100);
+                        List<NativeWindowInfo> currentWindows = GetVisibleNativeWindows(
+                            teklaProcess.Id
+                        );
+
+                        for (
+                            int windowIndex = 0;
+                            windowIndex < currentWindows.Count;
+                            windowIndex++
                         )
                         {
-                            continue;
+                            NativeWindowInfo window = currentWindows[windowIndex];
+                            long handleValue = window.Handle.ToInt64();
+                            if (
+                                handleValue == 0
+                                || beforeHandles.Contains(handleValue)
+                                || IsIgnoredNativeWindowClass(window.ClassName)
+                                || !IsExpectedDrawingPropertiesDialog(
+                                    window,
+                                    isAssemblyDrawing
+                                )
+                            )
+                            {
+                                continue;
+                            }
+
+                            dialogHandle = window.Handle;
+                            drawingPropertiesDialogOwned = true;
+                            break;
                         }
 
-                        int score = ScoreNativeDialogWindow(window);
-                        if (score <= 0 || score <= bestScore)
-                            continue;
+                        if (dialogHandle != IntPtr.Zero)
+                            break;
 
-                        bestScore = score;
-                        dialogHandle = window.Handle;
-                    }
-
-                    if (dialogHandle != IntPtr.Zero)
-                        break;
-
-                    if (!dialogThread.IsAlive && !string.IsNullOrWhiteSpace(invokeError))
-                    {
-                        break;
+                        if (
+                            !dialogThread.IsAlive
+                            && !string.IsNullOrWhiteSpace(invokeError)
+                        )
+                        {
+                            break;
+                        }
                     }
                 }
 
                 if (dialogHandle == IntPtr.Zero)
                 {
                     result.LiveDialogError =
-                        "Drawing Properties dialog did not open"
+                        (isAssemblyDrawing
+                            ? "Assembly drawing properties"
+                            : "Single-part drawing properties")
+                        + " dialog did not open"
                         + (string.IsNullOrWhiteSpace(invokeError) ? "." : ": " + invokeError);
                     return false;
                 }
 
                 try
                 {
+                    if (!drawingPropertiesDialogOwned)
+                    {
+                        string existingDialogDiagnostic;
+                        if (
+                            TryCompleteFromCurrentDrawingProperty(
+                                result,
+                                dialogHandle,
+                                drawingPropertyFiles,
+                                viewAttributeFiles,
+                                isAssemblyDrawing,
+                                out existingDialogDiagnostic
+                            )
+                        )
+                        {
+                            return true;
+                        }
+
+                        result.LiveDialogError =
+                            "A matching Drawing Properties dialog was already open. "
+                            + "It was not changed because it may contain unsaved user edits. "
+                            + existingDialogDiagnostic;
+                        return false;
+                    }
+
+                    string getError;
+                    if (!TryLoadCurrentDrawingProperties(dialogHandle, out getError))
+                    {
+                        result.LiveDialogError = getError;
+                        return false;
+                    }
+
+                    string propertyDiagnostic = "";
+                    for (int propertyAttempt = 0; propertyAttempt < 30; propertyAttempt++)
+                    {
+                        Thread.Sleep(100);
+                        if (
+                            TryCompleteFromCurrentDrawingProperty(
+                                result,
+                                dialogHandle,
+                                drawingPropertyFiles,
+                                viewAttributeFiles,
+                                isAssemblyDrawing,
+                                out propertyDiagnostic
+                            )
+                        )
+                        {
+                            return true;
+                        }
+                    }
+
                     string targetError;
                     if (
                         !TryTargetSectionViewRowWithAkit(
@@ -483,7 +564,8 @@ namespace Tekla.Technology.Akit.UserScript
                     )
                     {
                         result.LiveDialogError =
-                            "Drawing Properties dialog opened, but Views row 6 "
+                            propertyDiagnostic
+                            + " | Drawing Properties dialog opened, but Views row 6 "
                             + "could not be selected: "
                             + targetError;
                         return false;
@@ -500,7 +582,8 @@ namespace Tekla.Technology.Akit.UserScript
                     )
                     {
                         result.LiveDialogError =
-                            "Views row 6 was selected, but its View properties "
+                            propertyDiagnostic
+                            + " | Views row 6 was selected, but its View properties "
                             + "dialog did not open: "
                             + openViewPropertiesError;
                         return false;
@@ -581,7 +664,9 @@ namespace Tekla.Technology.Akit.UserScript
                     viewPropertiesDialogHandle,
                     3000
                 );
-                bool drawingPropertiesClosed = CloseNativeWindowAndWait(dialogHandle, 3000);
+                bool drawingPropertiesClosed =
+                    !drawingPropertiesDialogOwned
+                    || CloseNativeWindowAndWait(dialogHandle, 3000);
 
                 if (
                     !viewPropertiesClosed
@@ -729,6 +814,161 @@ namespace Tekla.Technology.Akit.UserScript
             return score;
         }
 
+        private static IntPtr FindVisibleExpectedDrawingPropertiesDialog(
+            List<NativeWindowInfo> windows,
+            bool isAssemblyDrawing
+        )
+        {
+            if (windows == null)
+                return IntPtr.Zero;
+
+            for (int i = 0; i < windows.Count; i++)
+            {
+                if (IsExpectedDrawingPropertiesDialog(windows[i], isAssemblyDrawing))
+                    return windows[i].Handle;
+            }
+
+            return IntPtr.Zero;
+        }
+
+        private static bool IsExpectedDrawingPropertiesDialog(
+            NativeWindowInfo window,
+            bool isAssemblyDrawing
+        )
+        {
+            if (window == null || string.IsNullOrWhiteSpace(window.Text))
+                return false;
+
+            bool isSingleTitle =
+                window.Text.IndexOf(
+                    "Single-part drawing properties",
+                    StringComparison.OrdinalIgnoreCase
+                ) >= 0;
+            bool isAssemblyTitle =
+                window.Text.IndexOf(
+                    "Assembly drawing properties",
+                    StringComparison.OrdinalIgnoreCase
+                ) >= 0;
+
+            return isAssemblyDrawing ? isAssemblyTitle : isSingleTitle;
+        }
+
+        private static bool TryLoadCurrentDrawingProperties(
+            IntPtr drawingPropertiesDialogHandle,
+            out string error
+        )
+        {
+            error = "";
+            IntPtr getButton = FindVisibleNativeChildButton(
+                drawingPropertiesDialogHandle,
+                "Get"
+            );
+            if (getButton == IntPtr.Zero)
+            {
+                error = "The current Drawing Properties Get button was not found.";
+                return false;
+            }
+
+            if (!PostMessage(getButton, BmClick, IntPtr.Zero, IntPtr.Zero))
+            {
+                error = "Cannot load the active drawing values with Get.";
+                return false;
+            }
+
+            return true;
+        }
+
+        private static bool TryCompleteFromCurrentDrawingProperty(
+            SectionViewAttributeResolution result,
+            IntPtr drawingPropertiesDialogHandle,
+            List<string> drawingPropertyFiles,
+            List<string> viewAttributeFiles,
+            bool isAssemblyDrawing,
+            out string diagnostic
+        )
+        {
+            diagnostic = "The current Drawing Properties Save/Load value "
+                + "did not resolve to one usable drawing property file.";
+            if (
+                result == null
+                || drawingPropertiesDialogHandle == IntPtr.Zero
+                || drawingPropertyFiles == null
+                || drawingPropertyFiles.Count == 0
+            )
+                return false;
+
+            List<string> allValues = new List<string>();
+            List<string> preferredValues = new List<string>();
+            CollectNativeWindowValues(
+                drawingPropertiesDialogHandle,
+                allValues,
+                preferredValues
+            );
+
+            for (int i = 0; i < allValues.Count; i++)
+                AddUniqueLimited(result.LiveDialogValues, allValues[i], 150);
+
+            string drawingPropertyFile = FindViewAttributeFileFromDialogValues(
+                preferredValues,
+                drawingPropertyFiles
+            );
+            if (string.IsNullOrWhiteSpace(drawingPropertyFile))
+            {
+                drawingPropertyFile = FindViewAttributeFileFromDialogValues(
+                    allValues,
+                    drawingPropertyFiles
+                );
+            }
+            if (string.IsNullOrWhiteSpace(drawingPropertyFile))
+                return false;
+
+            DrawingPropertyData data = ReadDrawingProperty(drawingPropertyFile);
+            DrawingViewRow sectionRow = FindSectionRow(data);
+            if (sectionRow == null)
+            {
+                diagnostic = "The selected drawing property has no Section views row.";
+                return false;
+            }
+            if (string.Equals(sectionRow.EnabledCode, "0", StringComparison.OrdinalIgnoreCase))
+            {
+                diagnostic = "The selected drawing property disables Section views.";
+                return false;
+            }
+
+            string attributeName = NormalizeViewAttributeName(
+                sectionRow.ViewAttributeName
+            );
+            List<string> attributeValue = new List<string>();
+            attributeValue.Add(attributeName);
+            string viewAttributeFile = FindViewAttributeFileFromDialogValues(
+                attributeValue,
+                viewAttributeFiles
+            );
+            if (string.IsNullOrWhiteSpace(viewAttributeFile))
+            {
+                diagnostic = "Section views references missing View property: "
+                    + attributeName
+                    + ".";
+                return false;
+            }
+
+            result.DrawingAttributeName = Path.GetFileNameWithoutExtension(
+                drawingPropertyFile
+            );
+            CompleteFromPropertyFile(
+                result,
+                data,
+                sectionRow,
+                isAssemblyDrawing
+                    ? "Live Assembly drawing properties / Get / drawing property file"
+                    : "Live Single-part drawing properties / Get / drawing property file"
+            );
+            result.Error = "";
+            result.LiveDialogError = "";
+            diagnostic = "";
+            return result.Success;
+        }
+
         private static void CollectNativeWindowValues(
             IntPtr dialogHandle,
             List<string> allValues,
@@ -864,36 +1104,131 @@ namespace Tekla.Technology.Akit.UserScript
             }
         }
 
-        private static void InvokeDisplayDrawingPropertiesDialog()
+        private static void InvokeDisplayDrawingPropertiesDialog(
+            int teklaProcessId,
+            bool isAssemblyDrawing
+        )
         {
-            System.Reflection.Assembly assembly = typeof(DrawingHandler).Assembly;
-            Type proxyType = assembly.GetType(
-                "Tekla.Structures.DrawingInternal.DelegateProxy",
-                true
-            );
-            MethodInfo getDelegate = proxyType.GetMethod(
-                "get_Delegate",
-                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static
-            );
-            if (getDelegate == null)
-                throw new MissingMethodException(proxyType.FullName, "get_Delegate");
+            object proxy = null;
+            MethodInfo unsubscribe = null;
+            bool subscribed = false;
 
-            object drawingDelegate = getDelegate.Invoke(null, null);
-            if (drawingDelegate == null)
-                throw new InvalidOperationException("Drawing delegate is null.");
+            try
+            {
+                Process teklaProcess = Process.GetProcessById(teklaProcessId);
+                string teklaBin = teklaProcess.MainModule == null
+                    ? ""
+                    : Path.GetDirectoryName(teklaProcess.MainModule.FileName);
+                if (string.IsNullOrWhiteSpace(teklaBin))
+                    teklaBin = Path.GetDirectoryName(typeof(DrawingHandler).Assembly.Location);
 
-            Type delegateType = assembly.GetType(
-                "Tekla.Structures.DrawingInternal.ICDelegate",
-                true
-            );
-            MethodInfo display = delegateType.GetMethod("ExportDisplayDrawingPropertiesDialog");
-            if (display == null)
-                throw new MissingMethodException(
-                    delegateType.FullName,
-                    "ExportDisplayDrawingPropertiesDialog"
+                string macroAkitFile = Path.Combine(teklaBin, "Tekla.Macros.Akit.dll");
+                string akitFile = Path.Combine(teklaBin, "Akit5.dll");
+                if (!File.Exists(macroAkitFile) || !File.Exists(akitFile))
+                    throw new FileNotFoundException(
+                        "Tekla Akit assemblies were not found in " + teklaBin + "."
+                    );
+
+                System.Reflection.Assembly macroAkitAssembly =
+                    System.Reflection.Assembly.LoadFrom(macroAkitFile);
+                System.Reflection.Assembly akitAssembly =
+                    System.Reflection.Assembly.LoadFrom(akitFile);
+                Type proxyType = macroAkitAssembly.GetType(
+                    "Tekla.Macros.Akit.DynamicScriptMessengerClientProxy",
+                    true
+                );
+                Type scriptType = akitAssembly.GetType(
+                    "Tekla.Technology.Akit.IScript",
+                    true
                 );
 
-            display.Invoke(drawingDelegate, null);
+                MethodInfo create = proxyType.GetMethod(
+                    "Create",
+                    BindingFlags.Public | BindingFlags.Static
+                );
+                MethodInfo subscribe = proxyType.GetMethod(
+                    "Subscribe",
+                    BindingFlags.Public | BindingFlags.Instance
+                );
+                unsubscribe = proxyType.GetMethod(
+                    "Unsubscribe",
+                    BindingFlags.Public | BindingFlags.Instance
+                );
+                MethodInfo getRemoteScript = proxyType.GetMethod(
+                    "GetRemoteScriptAdapter",
+                    BindingFlags.Public | BindingFlags.Instance
+                );
+                MethodInfo callback = scriptType.GetMethod(
+                    "Callback",
+                    new Type[] { typeof(string), typeof(string), typeof(string) }
+                );
+                if (
+                    create == null
+                    || subscribe == null
+                    || unsubscribe == null
+                    || getRemoteScript == null
+                    || callback == null
+                )
+                {
+                    throw new MissingMethodException(
+                        "Required Tekla Akit drawing-property methods are missing."
+                    );
+                }
+
+                proxy = create.Invoke(null, new object[] { null });
+                if (proxy == null)
+                    throw new InvalidOperationException("Tekla Akit proxy is null.");
+
+                object subscribeResult = subscribe.Invoke(
+                    proxy,
+                    new object[] { teklaProcessId }
+                );
+                subscribed = subscribeResult is bool && (bool)subscribeResult;
+                if (!subscribed)
+                    throw new InvalidOperationException(
+                        "Cannot subscribe to the active Tekla process."
+                    );
+
+                object script = getRemoteScript.Invoke(
+                    proxy,
+                    new object[] { teklaProcessId }
+                );
+                if (script == null)
+                    throw new InvalidOperationException(
+                        "Tekla remote Akit script adapter is null."
+                    );
+
+                string dialogId = GetDrawingPropertiesDialogId(isAssemblyDrawing);
+                callback.Invoke(
+                    script,
+                    new object[]
+                    {
+                        "acmd_display_attr_dialog",
+                        dialogId,
+                        "main_frame"
+                    }
+                );
+            }
+            finally
+            {
+                if (subscribed && proxy != null && unsubscribe != null)
+                {
+                    try
+                    {
+                        unsubscribe.Invoke(proxy, new object[] { teklaProcessId });
+                    }
+                    catch { }
+                }
+
+                DisposeAkitMessengerProxy(proxy);
+            }
+        }
+
+        private static string GetDrawingPropertiesDialogId(bool isAssemblyDrawing)
+        {
+            return isAssemblyDrawing
+                ? AssemblyDrawingPropertiesDialogId
+                : SinglePartDrawingPropertiesDialogId;
         }
 
         private static bool TryTargetSectionViewRowWithAkit(
@@ -1019,9 +1354,9 @@ namespace Tekla.Technology.Akit.UserScript
                     return false;
                 }
 
-                string drawingPropertiesDialogId = isAssemblyDrawing
-                    ? AssemblyDrawingPropertiesDialogId
-                    : SinglePartDrawingPropertiesDialogId;
+                string drawingPropertiesDialogId = GetDrawingPropertiesDialogId(
+                    isAssemblyDrawing
+                );
 
                 treeSelect.Invoke(
                     script,
@@ -1261,7 +1596,11 @@ namespace Tekla.Technology.Akit.UserScript
             try
             {
                 string extension = Path.GetExtension(result);
-                if (string.Equals(extension, ".vi", StringComparison.OrdinalIgnoreCase))
+                if (
+                    string.Equals(extension, ".vi", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(extension, ".wd", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(extension, ".ad", StringComparison.OrdinalIgnoreCase)
+                )
                 {
                     result = Path.GetFileNameWithoutExtension(result);
                 }
