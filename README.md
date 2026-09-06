@@ -13,6 +13,7 @@ The repository includes a ready-to-run Windows package in the `portable` folder,
 3. Start Tekla Structures, open the required model/drawing.
 4. Open `portable/TTSK Dim Plates.exe` to start the application immediately on any PC.
 5. (Optional) Run `Tao_Phim_Tat_Desktop.bat` to create a working shortcut with the official logo on your Desktop.
+6. (For Developers) Double-click `Cap_Nhat_Portable.bat` in the root folder anytime you edit code to automatically compile the latest Release x64 build and update the `portable` package without opening Visual Studio.
 
 The portable package includes this application's executable, NuGet dependencies, dictionary data, and artwork. It intentionally does not redistribute Tekla Structures product binaries; the application loads those assemblies from the local Tekla installation. If Tekla is installed in a non-standard location, set `TeklaBinPath` to its `bin` folder before starting the application.
 
