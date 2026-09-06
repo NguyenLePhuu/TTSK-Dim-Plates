@@ -11,8 +11,8 @@ The repository includes a ready-to-run Windows package in the `portable` folder,
 1. Download the repository as a ZIP from [TTSK-Dim-Plates on GitHub](https://github.com/NguyenLePhuu/TTSK-Dim-Plates) and extract it.
 2. Make sure **Tekla Structures 2025 SP7** is installed and activated.
 3. Start Tekla Structures, open the required model/drawing.
-4. Double-click `Chay_TTSK_Dim_Plates.bat` in the root folder to start the application immediately (or run `portable/TTSK Dim Plates.exe`).
-5. (Optional) Run `Tao_Phim_Tat_Desktop.bat` to create a convenient shortcut on your Windows Desktop.
+4. Double-click `TTSK Dim Plates` (shortcut with official logo) or open `portable/TTSK Dim Plates.exe`.
+5. On a new PC, run `Tao_Phim_Tat_Desktop.bat` once to instantly configure working shortcuts with logos on both Desktop and the root folder.
 
 The portable package includes this application's executable, NuGet dependencies, dictionary data, and artwork. It intentionally does not redistribute Tekla Structures product binaries; the application loads those assemblies from the local Tekla installation. If Tekla is installed in a non-standard location, set `TeklaBinPath` to its `bin` folder before starting the application.
 
