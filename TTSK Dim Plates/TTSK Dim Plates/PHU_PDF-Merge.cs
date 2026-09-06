@@ -170,6 +170,9 @@ namespace TTSK_AutoDim_Plates
                         job.DrawnBy,
                         GetDrawingDrawnBy(job.Drawing)
                     );
+                    itemResult.DrawingName = string.IsNullOrWhiteSpace(job.DrawingName)
+                        ? (job.Drawing != null ? job.Drawing.Name : string.Empty)
+                        : job.DrawingName;
 
                     string baseFileName = BuildDrawingFileBaseName(
                         itemResult.Mark,
@@ -196,18 +199,21 @@ namespace TTSK_AutoDim_Plates
 
                         // Thực thi in PDF chuẩn Tekla API với đầy đủ màu sắc (Full Color)
                         bool printSucceeded = false;
+                        string printErrorMessage = null;
                         try
                         {
                             printSucceeded = PrintDrawingWithTeklaApi(
                                 drawingHandler,
                                 job.Drawing,
                                 printAttributes,
-                                outputFilePath
+                                outputFilePath,
+                                out printErrorMessage
                             );
                         }
-                        catch
+                        catch (Exception printEx)
                         {
                             printSucceeded = false;
+                            printErrorMessage = "Ngoại lệ khi in: " + GetDeepestExceptionMessage(printEx);
                         }
 
                         itemResult.TeklaPrintReturnedSuccess = printSucceeded;
@@ -222,16 +228,23 @@ namespace TTSK_AutoDim_Plates
                         if (printSucceeded && outputCreated)
                         {
                             itemResult.Success = true;
-                            itemResult.Message = "Đã tạo PDF.";
+                            itemResult.Message = "Đã tạo PDF thành công.";
                             result.SuccessfulDrawingCount++;
                         }
                         else
                         {
                             itemResult.Success = false;
-                            itemResult.Message = BuildItemFailureMessage(
-                                printSucceeded,
-                                outputCreated
-                            );
+                            if (!string.IsNullOrWhiteSpace(printErrorMessage))
+                            {
+                                itemResult.Message = printErrorMessage;
+                            }
+                            else
+                            {
+                                itemResult.Message = BuildItemFailureMessage(
+                                    printSucceeded,
+                                    outputCreated
+                                );
+                            }
                             result.FailedDrawingCount++;
                         }
                     }
@@ -1083,23 +1096,49 @@ namespace TTSK_AutoDim_Plates
         }
 
         /// <summary>
+        /// Ghi file chẩn đoán tạm thời từ Worker để chuyển tiếp nguyên nhân lỗi cụ thể về tiến trình chính.
+        /// </summary>
+        private static void WriteWorkerDiagFile(string diagFilePath, string message)
+        {
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(diagFilePath) && !string.IsNullOrWhiteSpace(message))
+                {
+                    string parentDir = Path.GetDirectoryName(diagFilePath);
+                    if (!string.IsNullOrEmpty(parentDir) && !Directory.Exists(parentDir))
+                    {
+                        Directory.CreateDirectory(parentDir);
+                    }
+                    File.WriteAllText(diagFilePath, message.Trim(), Encoding.UTF8);
+                }
+            }
+            catch { }
+        }
+
+        /// <summary>
         /// Điểm vào (Worker EntryPoint) cho tiến trình Worker in PDF màu độc lập (--print-color-worker).
         /// Chạy trong tiến trình con riêng biệt để toàn bộ việc nạp WPF/AkitUI và kích hoạt DPI awareness
         /// của Tekla DpmPrinter chỉ diễn ra trong Worker, giúp bảo vệ 100% kích thước giao diện chính (MainForm).
         /// </summary>
         public static int ExecuteColorPrintWorker(string drawingKeyBase64, string outputFilePathBase64)
         {
+            string diagFilePath = null;
             try
             {
                 if (string.IsNullOrWhiteSpace(drawingKeyBase64) || string.IsNullOrWhiteSpace(outputFilePathBase64))
                     return 1;
 
                 string outputFilePath = Encoding.UTF8.GetString(Convert.FromBase64String(outputFilePathBase64));
+                diagFilePath = outputFilePath + ".diag";
+
                 DrawingSelectionKey key = DecodeDrawingSelectionKey(drawingKeyBase64);
 
                 DrawingHandler drawingHandler = new DrawingHandler();
                 if (!drawingHandler.GetConnectionStatus())
+                {
+                    WriteWorkerDiagFile(diagFilePath, "Mất kết nối Drawing API với Tekla Structures.");
                     return 2;
+                }
 
                 string resolveDiag;
                 Drawing target = ResolveDrawingBySelectionKey(drawingHandler, key, out resolveDiag);
@@ -1107,19 +1146,29 @@ namespace TTSK_AutoDim_Plates
                 if (target == null)
                 {
                     // Không xác định được duy nhất bản vẽ nguồn (count == 0 hoặc count > 1)
+                    WriteWorkerDiagFile(diagFilePath, resolveDiag);
                     return 3;
                 }
 
-                bool success = PrintDrawingWithTeklaApiDirect(drawingHandler, target, outputFilePath);
+                string directError;
+                bool success = PrintDrawingWithTeklaApiDirect(drawingHandler, target, outputFilePath, out directError);
                 if (success && File.Exists(outputFilePath) && new FileInfo(outputFilePath).Length > 0)
                 {
+                    try { if (File.Exists(diagFilePath)) File.Delete(diagFilePath); } catch { }
                     return 0;
                 }
 
+                WriteWorkerDiagFile(
+                    diagFilePath,
+                    !string.IsNullOrWhiteSpace(directError)
+                        ? directError
+                        : "Tekla DPM Printer không xuất được file PDF đầu ra."
+                );
                 return 4;
             }
-            catch
+            catch (Exception ex)
             {
+                WriteWorkerDiagFile(diagFilePath, "Lỗi ngoại lệ trong Worker: " + GetDeepestExceptionMessage(ex));
                 return -1;
             }
         }
@@ -1135,8 +1184,26 @@ namespace TTSK_AutoDim_Plates
             string outputFilePath
         )
         {
+            string unusedError;
+            return PrintDrawingWithTeklaApiDirect(drawingHandler, drawing, outputFilePath, out unusedError);
+        }
+
+        /// <summary>
+        /// Thực thi in màu trực tiếp qua engine DpmPrinter của Tekla Structures (có thông điệp lỗi chi tiết).
+        /// </summary>
+        private static bool PrintDrawingWithTeklaApiDirect(
+            DrawingHandler drawingHandler,
+            Drawing drawing,
+            string outputFilePath,
+            out string errorDiag
+        )
+        {
+            errorDiag = null;
             if (drawingHandler == null || drawing == null || string.IsNullOrWhiteSpace(outputFilePath))
+            {
+                errorDiag = "Tham số DrawingHandler hoặc Drawing đầu vào là null.";
                 return false;
+            }
 
             bool needCloseAfterPrint = false;
             try
@@ -1163,11 +1230,11 @@ namespace TTSK_AutoDim_Plates
                 if (confirmedActive == null || !IsSameDrawingIdentity(confirmedActive, drawing))
                 {
                     // Nếu Active Drawing thực tế không khớp với target drawing, lập tức hủy lệnh in!
-                    // Tuyệt đối không nạp dữ liệu DPM từ một bản vẽ khác đang mở.
                     if (needCloseAfterPrint)
                     {
                         try { drawingHandler.CloseActiveDrawing(false); } catch { }
                     }
+                    errorDiag = "Không thể kích hoạt đúng bản vẽ mục tiêu trong Tekla Structures.";
                     return false;
                 }
 
@@ -1184,50 +1251,59 @@ namespace TTSK_AutoDim_Plates
                     dpmLoaded = false;
                 }
 
-                if (dpmLoaded)
+                if (!dpmLoaded)
                 {
-                    // Thiết lập các bộ xử lý cấu hình in của Tekla Structures
-                    var advHandler = new DefaultAdvancedOptionHandler();
-                    var fileHandler = new DefaultSettingsFileHandler(advHandler);
-                    var paperSettings = new DefaultPaperSettingsHandler(fileHandler);
-                    var printOptions = new PrintOptions(paperSettings);
-                    var paperSizeHandler = new DefaultPaperSizeHandler(printOptions);
-                    var colorHandler = new DefaultColorTableHandler();
-                    var dpmHandler = new DefaultDpmHandler(colorHandler, advHandler);
-                    var modelHandler = new DefaultModelHandler();
-                    var printer = new DpmPrinter(dpmHandler, modelHandler, true);
-
-                    // Thiết lập chế độ in màu đầy đủ (Full Color)
-                    printer.SetColorMode(PrintOptions.ColorModeEnum.Color);
-
-                    var dpmOptions = printOptions.GetDpmPrinterOptions(colorHandler);
-                    dpmOptions.ColorMode = PrintOptions.ColorModeEnum.Color;
-                    dpmOptions.EmbedFonts = false;
-
-                    // Đảm bảo thư mục lưu file tồn tại
-                    string parentDir = Path.GetDirectoryName(outputFilePath);
-                    if (!string.IsNullOrEmpty(parentDir) && !Directory.Exists(parentDir))
+                    if (needCloseAfterPrint)
                     {
-                        Directory.CreateDirectory(parentDir);
+                        try { drawingHandler.CloseActiveDrawing(false); } catch { }
                     }
-
-                    if (File.Exists(outputFilePath))
-                    {
-                        try { File.Delete(outputFilePath); } catch { }
-                    }
-
-                    var uiHooks = new PrintUiHooks();
-                    printer.WritePdf(dpm, paperSizeHandler, dpmOptions, outputFilePath, uiHooks);
-
-                    if (File.Exists(outputFilePath) && new FileInfo(outputFilePath).Length > 0)
-                    {
-                        return true;
-                    }
+                    errorDiag = "Tekla Structures không nạp được dữ liệu vector màu (DpmData) từ bản vẽ.";
+                    return false;
                 }
+
+                // Thiết lập các bộ xử lý cấu hình in của Tekla Structures
+                var advHandler = new DefaultAdvancedOptionHandler();
+                var fileHandler = new DefaultSettingsFileHandler(advHandler);
+                var paperSettings = new DefaultPaperSettingsHandler(fileHandler);
+                var printOptions = new PrintOptions(paperSettings);
+                var paperSizeHandler = new DefaultPaperSizeHandler(printOptions);
+                var colorHandler = new DefaultColorTableHandler();
+                var dpmHandler = new DefaultDpmHandler(colorHandler, advHandler);
+                var modelHandler = new DefaultModelHandler();
+                var printer = new DpmPrinter(dpmHandler, modelHandler, true);
+
+                // Thiết lập chế độ in màu đầy đủ (Full Color)
+                printer.SetColorMode(PrintOptions.ColorModeEnum.Color);
+
+                var dpmOptions = printOptions.GetDpmPrinterOptions(colorHandler);
+                dpmOptions.ColorMode = PrintOptions.ColorModeEnum.Color;
+                dpmOptions.EmbedFonts = false;
+
+                // Đảm bảo thư mục lưu file tồn tại
+                string parentDir = Path.GetDirectoryName(outputFilePath);
+                if (!string.IsNullOrEmpty(parentDir) && !Directory.Exists(parentDir))
+                {
+                    Directory.CreateDirectory(parentDir);
+                }
+
+                if (File.Exists(outputFilePath))
+                {
+                    try { File.Delete(outputFilePath); } catch { }
+                }
+
+                var uiHooks = new PrintUiHooks();
+                printer.WritePdf(dpm, paperSizeHandler, dpmOptions, outputFilePath, uiHooks);
+
+                if (File.Exists(outputFilePath) && new FileInfo(outputFilePath).Length > 0)
+                {
+                    return true;
+                }
+
+                errorDiag = "Tekla DPM Printer hoàn tất nhưng không tạo được file PDF.";
             }
-            catch
+            catch (Exception ex)
             {
-                // Bỏ qua ngoại lệ để fallback
+                errorDiag = "Lỗi khi in DpmPrinter: " + GetDeepestExceptionMessage(ex);
             }
             finally
             {
@@ -1244,6 +1320,20 @@ namespace TTSK_AutoDim_Plates
         /// <summary>
         /// Phương thức proxy an toàn thực hiện in màu bản vẽ bám sát Tekla Open API.
         /// Bản vẽ được truyền vào (job.Drawing) là SOURCE OF TRUTH tuyệt đối.
+        /// </summary>
+        private static bool PrintDrawingWithTeklaApi(
+            DrawingHandler drawingHandler,
+            Drawing drawing,
+            DPMPrinterAttributes printAttributes,
+            string outputFilePath
+        )
+        {
+            string unusedError;
+            return PrintDrawingWithTeklaApi(drawingHandler, drawing, printAttributes, outputFilePath, out unusedError);
+        }
+
+        /// <summary>
+        /// Phương thức proxy an toàn thực hiện in màu bản vẽ bám sát Tekla Open API (có out errorReason).
         /// Ưu tiên 1: Chạy tiến trình Worker độc lập ngầm (--print-color-worker) mang theo
         /// DrawingSelectionKey để bảo toàn DPI và kích thước UI chính (MainForm) không bị co nhỏ.
         /// Ưu tiên 2 (Fallback): In trực tiếp in-process qua DpmPrinter với chính đối tượng drawing nguồn.
@@ -1253,11 +1343,16 @@ namespace TTSK_AutoDim_Plates
             DrawingHandler drawingHandler,
             Drawing drawing,
             DPMPrinterAttributes printAttributes,
-            string outputFilePath
+            string outputFilePath,
+            out string errorReason
         )
         {
+            errorReason = null;
             if (drawingHandler == null || drawing == null || string.IsNullOrWhiteSpace(outputFilePath))
+            {
+                errorReason = "Tham số drawing hoặc đường dẫn đầu ra không hợp lệ.";
                 return false;
+            }
 
             // Ưu tiên 1: Chạy Worker Sub-process độc lập để bảo toàn DPI và kích thước UI của MainForm
             try
@@ -1268,6 +1363,7 @@ namespace TTSK_AutoDim_Plates
                     DrawingSelectionKey key = BuildDrawingSelectionKey(drawing);
                     string keyBase64 = EncodeDrawingSelectionKey(key);
                     string pathBase64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(outputFilePath ?? string.Empty));
+                    string diagFilePath = outputFilePath + ".diag";
 
                     ProcessStartInfo psi = new ProcessStartInfo();
                     psi.FileName = exePath;
@@ -1284,41 +1380,80 @@ namespace TTSK_AutoDim_Plates
                             if (!exited)
                             {
                                 try { worker.Kill(); } catch { }
+                                errorReason = "Tiến trình in ngầm quá thời gian chờ (Timeout 60s).";
                             }
-                            else if (worker.ExitCode == 0 && File.Exists(outputFilePath) && new FileInfo(outputFilePath).Length > 0)
+                            else
                             {
-                                return true;
+                                if (File.Exists(diagFilePath))
+                                {
+                                    try
+                                    {
+                                        errorReason = File.ReadAllText(diagFilePath, Encoding.UTF8);
+                                        File.Delete(diagFilePath);
+                                    }
+                                    catch { }
+                                }
+
+                                if (worker.ExitCode == 0 && File.Exists(outputFilePath) && new FileInfo(outputFilePath).Length > 0)
+                                {
+                                    errorReason = null;
+                                    return true;
+                                }
+
+                                if (string.IsNullOrWhiteSpace(errorReason))
+                                {
+                                    errorReason = "Tiến trình in Worker kết thúc với mã lỗi: " + worker.ExitCode;
+                                }
                             }
                         }
                     }
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // Fallback tiếp theo nếu worker gặp sự cố khởi chạy
+                errorReason = "Lỗi khởi chạy Worker in màu: " + GetDeepestExceptionMessage(ex);
             }
 
             // Ưu tiên 2: In trực tiếp in-process qua DpmPrinter với chính đối tượng drawing nguồn
             try
             {
-                bool directSuccess = PrintDrawingWithTeklaApiDirect(drawingHandler, drawing, outputFilePath);
+                string directError;
+                bool directSuccess = PrintDrawingWithTeklaApiDirect(drawingHandler, drawing, outputFilePath, out directError);
                 if (directSuccess && File.Exists(outputFilePath) && new FileInfo(outputFilePath).Length > 0)
                 {
+                    errorReason = null;
                     return true;
                 }
+
+                if (!string.IsNullOrWhiteSpace(directError))
+                {
+                    errorReason = directError;
+                }
             }
-            catch
+            catch (Exception ex)
             {
-                // Fallback tiếp theo nếu in trực tiếp gặp lỗi
+                errorReason = "Lỗi in trực tiếp DpmPrinter: " + GetDeepestExceptionMessage(ex);
             }
 
             // Ưu tiên 3 (Fallback an toàn): In thông qua drawingHandler.PrintDrawing tiêu chuẩn của Tekla với chính đối tượng drawing nguồn
             try
             {
-                return drawingHandler.PrintDrawing(drawing, printAttributes, outputFilePath);
+                bool legacySuccess = drawingHandler.PrintDrawing(drawing, printAttributes, outputFilePath);
+                if (legacySuccess)
+                {
+                    errorReason = null;
+                    return true;
+                }
+
+                if (string.IsNullOrWhiteSpace(errorReason))
+                {
+                    errorReason = "Lệnh in tiêu chuẩn của Tekla trả về thất bại.";
+                }
+                return false;
             }
-            catch
+            catch (Exception ex)
             {
+                errorReason = "Lỗi khi gọi drawingHandler.PrintDrawing: " + GetDeepestExceptionMessage(ex);
                 return false;
             }
         }
@@ -1693,73 +1828,94 @@ namespace TTSK_AutoDim_Plates
                 );
 
                 List<string> lines = new List<string>();
-                lines.Add("TTSK PRINT / MERGE PDF DIAGNOSTIC");
-                lines.Add("Time: " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
-                lines.Add("Merge requested: " + result.MergeRequested);
-                lines.Add("Requested drawings: " + result.RequestedDrawingCount);
-                lines.Add("Successful drawings: " + result.SuccessfulDrawingCount);
-                lines.Add("Failed drawings: " + result.FailedDrawingCount);
-                lines.Add("Output folder: " + SafeText(result.OutputDirectory));
-                lines.Add("Merge attempted: " + result.MergeAttempted);
-                lines.Add("Merge success: " + result.MergeSuccess);
-                lines.Add("Merged file: " + SafeText(result.MergedFilePath));
-                lines.Add("Merge message: " + SafeText(result.MergeMessage));
-                lines.Add("Cleanup attempted: " + result.CleanupAttempted);
-                lines.Add("Cleanup success: " + result.CleanupSuccess);
-                lines.Add("Deleted child files: " + result.DeletedChildFileCount);
-                lines.Add("Cleanup message: " + SafeText(result.CleanupMessage));
-                lines.Add("DPMPrinter log: " + SafeText(result.LogFilePath));
-                lines.Add("Message: " + SafeText(result.Message));
+                lines.Add("================================================================================");
+                lines.Add("                    TTSK AUTO DIM - BÁO CÁO LỖI IN BẢN VẼ");
+                lines.Add("================================================================================");
+                lines.Add("Thời gian chạy : " + DateTime.Now.ToString("dd/MM/yyyy HH:mm:ss"));
+                lines.Add("Thư mục PDF    : " + SafeText(result.OutputDirectory));
+                lines.Add("Chế độ in      : " + (result.MergeRequested ? "In và gộp PDF (Merge)" : "In các file PDF riêng"));
+                lines.Add(string.Empty);
 
-                if (!string.IsNullOrWhiteSpace(result.MergeExceptionDetails))
+                int totalCount = result.RequestedDrawingCount;
+                int successCount = result.SuccessfulDrawingCount;
+                int failedCount = result.FailedDrawingCount;
+                double percentage = totalCount > 0 ? ((double)successCount / totalCount) * 100.0 : 0;
+
+                lines.Add("[1] TỔNG QUAN PHIÊN IN:");
+                lines.Add("--------------------------------------------------------------------------------");
+                lines.Add(string.Format(CultureInfo.InvariantCulture, "  • Tổng số bản vẽ cần in : {0} bản", totalCount));
+                lines.Add(string.Format(CultureInfo.InvariantCulture, "  • In thành công          : {0} bản", successCount));
+                lines.Add(string.Format(CultureInfo.InvariantCulture, "  • In thất bại (Lỗi)      : {0} bản", failedCount));
+                lines.Add(string.Format(CultureInfo.InvariantCulture, "  • Tỷ lệ hoàn thành       : {0:0.#}% ({1}/{2})", percentage, successCount, totalCount));
+
+                if (result.MergeRequested && result.MergeAttempted)
                 {
-                    lines.Add(string.Empty);
-                    lines.Add("PDF MERGE EXCEPTION");
-                    lines.Add(result.MergeExceptionDetails);
+                    lines.Add("  • Kết quả gộp PDF tổng   : " + (result.MergeSuccess ? "Thành công" : "Thất bại (" + SafeText(result.MergeMessage) + ")"));
                 }
+                lines.Add(string.Empty);
 
-                if (result.ItemResults != null && result.ItemResults.Count > 0)
+                // [2] CHI TIẾT CÁC BẢN VẼ BỊ LỖI
+                List<DrawingPdfItemResult> failedItems = result.ItemResults != null
+                    ? result.ItemResults.Where(item => item != null && !item.Success).ToList()
+                    : new List<DrawingPdfItemResult>();
+
+                if (failedItems.Count > 0)
                 {
-                    lines.Add(string.Empty);
-                    lines.Add("DRAWING RESULTS");
+                    lines.Add(string.Format(CultureInfo.InvariantCulture, "[2] CHI TIẾT CÁC BẢN VẼ BỊ LỖI ({0} BẢN):", failedItems.Count));
+                    lines.Add("--------------------------------------------------------------------------------");
 
-                    foreach (DrawingPdfItemResult item in result.ItemResults)
+                    for (int i = 0; i < failedItems.Count; i++)
                     {
-                        lines.Add(
-                            (item.Index + 1).ToString("000")
-                                + " | "
-                                + (item.Success ? "OK" : "ERROR")
-                                + " | MARK="
-                                + SafeText(item.Mark)
-                                + " | REV="
-                                + SafeText(item.Revision)
-                                + " | DRAWN_BY="
-                                + SafeText(item.DrawnBy)
-                                + " | Tekla="
-                                + item.TeklaPrintReturnedSuccess
-                                + " | FileVerified="
-                                + item.OutputFileVerified
-                                + " | ChildDeleted="
-                                + item.ChildFileDeleted
-                                + " | File="
-                                + SafeText(item.OutputFilePath)
-                                + " | Message="
-                                + SafeText(item.Message)
-                        );
-
+                        DrawingPdfItemResult item = failedItems[i];
+                        lines.Add(string.Format(CultureInfo.InvariantCulture, "(!) Bản vẽ lỗi {0}:", i + 1));
+                        lines.Add("    • Mark bản vẽ  : " + SafeText(item.Mark));
+                        if (!string.IsNullOrWhiteSpace(item.DrawingName))
+                        {
+                            lines.Add("    • Tên bản vẽ   : " + item.DrawingName);
+                        }
+                        if (!string.IsNullOrWhiteSpace(item.Revision) && item.Revision != "-")
+                        {
+                            lines.Add("    • Ký hiệu REV  : " + item.Revision);
+                        }
+                        lines.Add("    • Nguyên nhân  : " + SafeText(item.Message));
                         if (!string.IsNullOrWhiteSpace(item.ExceptionDetails))
-                            lines.Add(item.ExceptionDetails);
+                        {
+                            lines.Add("      [Chi tiết kỹ thuật: " + item.ExceptionDetails.Trim() + "]");
+                        }
+                        lines.Add(string.Empty);
                     }
                 }
 
-                if (!string.IsNullOrWhiteSpace(result.DiagnosticDetails))
+                // [3] CÁC BẢN VẼ ĐÃ IN THÀNH CÔNG
+                List<DrawingPdfItemResult> successItems = result.ItemResults != null
+                    ? result.ItemResults.Where(item => item != null && item.Success).ToList()
+                    : new List<DrawingPdfItemResult>();
+
+                if (successItems.Count > 0)
                 {
+                    lines.Add(string.Format(CultureInfo.InvariantCulture, "[3] CÁC BẢN VẼ ĐÃ IN THÀNH CÔNG ({0} BẢN):", successItems.Count));
+                    lines.Add("--------------------------------------------------------------------------------");
+
+                    for (int i = 0; i < successItems.Count; i++)
+                    {
+                        DrawingPdfItemResult item = successItems[i];
+                        string revText = (!string.IsNullOrWhiteSpace(item.Revision) && item.Revision != "-") ? " (REV: " + item.Revision + ")" : string.Empty;
+                        lines.Add(string.Format(
+                            CultureInfo.InvariantCulture,
+                            "    ✓ [{0:00}] {1}{2} -> Đã tạo PDF thành công",
+                            i + 1,
+                            SafeText(item.Mark),
+                            revText
+                        ));
+                    }
                     lines.Add(string.Empty);
-                    lines.Add("DIAGNOSTIC DETAILS");
-                    lines.Add(result.DiagnosticDetails);
                 }
 
-                File.WriteAllLines(diagnosticPath, lines.ToArray());
+                lines.Add("================================================================================");
+                lines.Add("* Gợi ý: Hãy kiểm tra lại các bản vẽ bị lỗi trong Document Manager của Tekla!");
+                lines.Add("================================================================================");
+
+                File.WriteAllLines(diagnosticPath, lines.ToArray(), Encoding.UTF8);
                 return diagnosticPath;
             }
             catch
@@ -2190,6 +2346,7 @@ namespace TTSK_AutoDim_Plates
         public string Mark { get; set; }
         public string Revision { get; set; }
         public string DrawnBy { get; set; }
+        public string DrawingName { get; set; }
     }
 
     public sealed class DrawingPdfItemResult
@@ -2202,6 +2359,7 @@ namespace TTSK_AutoDim_Plates
         public string Mark { get; set; }
         public string Revision { get; set; }
         public string DrawnBy { get; set; }
+        public string DrawingName { get; set; }
         public string OutputFilePath { get; set; }
         public string Message { get; set; }
         public string ExceptionDetails { get; set; }

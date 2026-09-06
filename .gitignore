@@ -22,6 +22,7 @@ theme.cfg
 shortcut.cfg
 auto_section.cfg
 *.log
+*.pdb
 
 # Local shortcuts and OS files
 *.lnk
