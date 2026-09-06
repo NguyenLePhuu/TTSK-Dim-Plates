@@ -19,11 +19,13 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Threading;
+using System.Text;
 using System.Windows.Forms;
 using PdfSharp.Pdf;
 using PdfSharp.Pdf.IO;
 using Tekla.Structures.Drawing;
 using Tekla.Structures.Model;
+using Tekla.Structures.DPMPrinter;
 
 namespace TTSK_AutoDim_Plates
 {
@@ -34,6 +36,36 @@ namespace TTSK_AutoDim_Plates
         private const int OutputWaitTimeoutMilliseconds = 60000;
         private const int OutputWaitIntervalMilliseconds = 250;
         private const int DelayBetweenDrawingsMilliseconds = 150;
+
+        static DrawingPdfPrinter()
+        {
+            // Đăng ký AssemblyResolve đảm bảo nạp đúng DPMPrinter.dll từ thư mục bin Tekla khi ứng dụng chạy ở môi trường khác
+            try
+            {
+                AppDomain.CurrentDomain.AssemblyResolve += (sender, args) =>
+                {
+                    try
+                    {
+                        string assemblySimpleName = new AssemblyName(args.Name).Name;
+                        if (assemblySimpleName.StartsWith("Tekla", StringComparison.OrdinalIgnoreCase)
+                            || assemblySimpleName.StartsWith("DPMPrinter", StringComparison.OrdinalIgnoreCase)
+                            || assemblySimpleName.StartsWith("DotNetKit", StringComparison.OrdinalIgnoreCase)
+                            || assemblySimpleName.StartsWith("Trimble", StringComparison.OrdinalIgnoreCase))
+                        {
+                            string binPath = @"C:\Program Files\Tekla Structures\2025.0\bin";
+                            string targetPath = Path.Combine(binPath, assemblySimpleName + ".dll");
+                            if (File.Exists(targetPath))
+                            {
+                                return System.Reflection.Assembly.LoadFrom(targetPath);
+                            }
+                        }
+                    }
+                    catch { }
+                    return null;
+                };
+            }
+            catch { }
+        }
 
         public static DrawingPdfPrintResult PrintToSeparatePdfs(
             IList<DrawingPdfPrintJob> jobs,
@@ -114,23 +146,17 @@ namespace TTSK_AutoDim_Plates
                 Drawing activeDrawing = drawingHandler.GetActiveDrawing();
                 if (activeDrawing != null)
                 {
-                    DialogResult continueResult = MessageBox.Show(
-                        owner,
-                        "Hiện đang có một drawing mở. Trong lúc xuất PDF, Tekla có thể đóng drawing đang mở.\r\n\r\n"
-                            + "Hãy chắc chắn drawing đã được lưu. Tiếp tục?",
-                        mergeAndDeleteChildren ? "TTSK Merge PDF" : "TTSK Print PDF",
-                        MessageBoxButtons.YesNo,
-                        MessageBoxIcon.Warning,
-                        MessageBoxDefaultButton.Button2
-                    );
-
-                    if (continueResult != DialogResult.Yes)
+                    // Đóng và lưu bản vẽ đang mở theo yêu cầu để giải phóng Document Manager và tiến hành in
+                    try
                     {
-                        result.Cancelled = true;
-                        result.Message = "Đã hủy để bảo vệ drawing đang mở.";
-                        return result;
+                        drawingHandler.CloseActiveDrawing(true);
+                    }
+                    catch
+                    {
+                        try { drawingHandler.CloseActiveDrawing(); } catch { }
                     }
                 }
+
 
                 for (int index = 0; index < validJobs.Count; index++)
                 {
@@ -167,11 +193,21 @@ namespace TTSK_AutoDim_Plates
                             job.Drawing
                         );
 
-                        bool printSucceeded = drawingHandler.PrintDrawing(
-                            job.Drawing,
-                            printAttributes,
-                            outputFilePath
-                        );
+                        // Thực thi in PDF chuẩn Tekla API với đầy đủ màu sắc (Full Color)
+                        bool printSucceeded = false;
+                        try
+                        {
+                            printSucceeded = PrintDrawingWithTeklaApi(
+                                drawingHandler,
+                                job.Drawing,
+                                printAttributes,
+                                outputFilePath
+                            );
+                        }
+                        catch
+                        {
+                            printSucceeded = false;
+                        }
 
                         itemResult.TeklaPrintReturnedSuccess = printSucceeded;
 
@@ -578,11 +614,266 @@ namespace TTSK_AutoDim_Plates
             printAttributes.OutputFileName = outputFilePath;
             printAttributes.OpenFileWhenFinished = false;
             printAttributes.Orientation = DotPrintOrientationType.Auto;
-            printAttributes.ColorMode = (DotPrintColor)0;
+            printAttributes.ColorMode = DotPrintColor.Color;
             printAttributes.PaperSize = GetPdfPaperSize(drawing);
             printAttributes.ScalingMethod = DotPrintScalingType.Auto;
             printAttributes.PrintToMultipleSheet = DotPrintToMultipleSheet.Off;
             return printAttributes;
+        }
+
+        /// <summary>
+        /// Điểm vào (Worker EntryPoint) cho tiến trình Worker in PDF màu độc lập (--print-color-worker).
+        /// Chạy trong tiến trình con riêng biệt để toàn bộ việc nạp WPF/AkitUI và kích hoạt DPI awareness
+        /// của Tekla DpmPrinter chỉ diễn ra trong Worker, giúp bảo vệ 100% kích thước giao diện chính (MainForm).
+        /// </summary>
+        public static int ExecuteColorPrintWorker(string drawingMarkBase64, string outputFilePathBase64)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(drawingMarkBase64) || string.IsNullOrWhiteSpace(outputFilePathBase64))
+                    return 1;
+
+                string drawingMark = Encoding.UTF8.GetString(Convert.FromBase64String(drawingMarkBase64));
+                string outputFilePath = Encoding.UTF8.GetString(Convert.FromBase64String(outputFilePathBase64));
+
+                DrawingHandler drawingHandler = new DrawingHandler();
+                if (!drawingHandler.GetConnectionStatus())
+                    return 2;
+
+                Drawing target = null;
+                Drawing activeDrawing = null;
+                try { activeDrawing = drawingHandler.GetActiveDrawing(); } catch { }
+
+                if (activeDrawing != null && MatchDrawingMark(activeDrawing.Mark, drawingMark))
+                {
+                    target = activeDrawing;
+                }
+                else
+                {
+                    DrawingEnumerator enumerator = drawingHandler.GetDrawings();
+                    while (enumerator.MoveNext())
+                    {
+                        Drawing current = enumerator.Current;
+                        if (current != null && MatchDrawingMark(current.Mark, drawingMark))
+                        {
+                            target = current;
+                            break;
+                        }
+                    }
+                }
+
+                if (target == null)
+                    return 3;
+
+                bool success = PrintDrawingWithTeklaApiDirect(drawingHandler, target, outputFilePath);
+                if (success && File.Exists(outputFilePath) && new FileInfo(outputFilePath).Length > 0)
+                {
+                    return 0;
+                }
+
+                return 4;
+            }
+            catch
+            {
+                return -1;
+            }
+        }
+
+        /// <summary>
+        /// So sánh tên bản vẽ (Mark) linh hoạt, hỗ trợ cả trường hợp có hoặc không có dấu ngoặc vuông '[' và ']'.
+        /// </summary>
+        private static bool MatchDrawingMark(string actualMark, string searchMark)
+        {
+            if (string.Equals(actualMark, searchMark, StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (string.IsNullOrWhiteSpace(actualMark) || string.IsNullOrWhiteSpace(searchMark))
+                return false;
+
+            string cleanActual = actualMark.Trim().Trim('[', ']');
+            string cleanSearch = searchMark.Trim().Trim('[', ']');
+            return string.Equals(cleanActual, cleanSearch, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Thực thi in màu trực tiếp qua engine DpmPrinter của Tekla Structures.
+        /// </summary>
+        private static bool PrintDrawingWithTeklaApiDirect(
+            DrawingHandler drawingHandler,
+            Drawing drawing,
+            string outputFilePath
+        )
+        {
+            if (drawingHandler == null || drawing == null || string.IsNullOrWhiteSpace(outputFilePath))
+                return false;
+
+            try
+            {
+                // Mở bản vẽ ở chế độ ngầm (silent mode) nếu chưa phải là Active Drawing để Tekla nạp đủ dữ liệu vector màu
+                Drawing currentActive = null;
+                try { currentActive = drawingHandler.GetActiveDrawing(); } catch { }
+
+                bool needCloseAfterPrint = false;
+                if (currentActive == null || !string.Equals(currentActive.Mark, drawing.Mark, StringComparison.OrdinalIgnoreCase))
+                {
+                    bool opened = drawingHandler.SetActiveDrawing(drawing, false);
+                    if (opened)
+                    {
+                        needCloseAfterPrint = true;
+                    }
+                }
+
+                // Nạp DpmData từ Active Drawing của Tekla
+                var dpm = new DpmData();
+                bool dpmLoaded = false;
+                try
+                {
+                    dpm.LoadDpmFromActiveDrawing();
+                    dpmLoaded = true;
+                }
+                catch
+                {
+                    dpmLoaded = false;
+                }
+
+                if (dpmLoaded)
+                {
+                    // Thiết lập các bộ xử lý cấu hình in của Tekla Structures
+                    var advHandler = new DefaultAdvancedOptionHandler();
+                    var fileHandler = new DefaultSettingsFileHandler(advHandler);
+                    var paperSettings = new DefaultPaperSettingsHandler(fileHandler);
+                    var printOptions = new PrintOptions(paperSettings);
+                    var paperSizeHandler = new DefaultPaperSizeHandler(printOptions);
+                    var colorHandler = new DefaultColorTableHandler();
+                    var dpmHandler = new DefaultDpmHandler(colorHandler, advHandler);
+                    var modelHandler = new DefaultModelHandler();
+                    var printer = new DpmPrinter(dpmHandler, modelHandler, true);
+
+                    // Thiết lập chế độ in màu đầy đủ (Full Color)
+                    printer.SetColorMode(PrintOptions.ColorModeEnum.Color);
+
+                    var dpmOptions = printOptions.GetDpmPrinterOptions(colorHandler);
+                    dpmOptions.ColorMode = PrintOptions.ColorModeEnum.Color;
+                    dpmOptions.EmbedFonts = false;
+
+                    // Đảm bảo thư mục lưu file tồn tại
+                    string parentDir = Path.GetDirectoryName(outputFilePath);
+                    if (!string.IsNullOrEmpty(parentDir) && !Directory.Exists(parentDir))
+                    {
+                        Directory.CreateDirectory(parentDir);
+                    }
+
+                    if (File.Exists(outputFilePath))
+                    {
+                        try { File.Delete(outputFilePath); } catch { }
+                    }
+
+                    var uiHooks = new PrintUiHooks();
+                    printer.WritePdf(dpm, paperSizeHandler, dpmOptions, outputFilePath, uiHooks);
+
+                    // Đóng bản vẽ ngầm nếu mở trong lượt in này
+                    if (needCloseAfterPrint)
+                    {
+                        try { drawingHandler.CloseActiveDrawing(false); } catch { }
+                    }
+
+                    if (File.Exists(outputFilePath) && new FileInfo(outputFilePath).Length > 0)
+                    {
+                        return true;
+                    }
+                }
+
+                if (needCloseAfterPrint)
+                {
+                    try { drawingHandler.CloseActiveDrawing(false); } catch { }
+                }
+            }
+            catch
+            {
+                // Bỏ qua ngoại lệ để fallback
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Phương thức proxy an toàn thực hiện in màu bản vẽ bám sát Tekla Open API.
+        /// Ưu tiên 1: Chạy tiến trình Worker độc lập ngầm (--print-color-worker) để kích hoạt
+        /// engine DpmPrinter in ra màu sắc nguyên bản của Tekla mà không làm ảnh hưởng hay thu nhỏ
+        /// kích thước giao diện chính (MainForm) do WPF/AkitUI DPI awareness.
+        /// Ưu tiên 2 (Fallback): In trực tiếp in-process qua DpmPrinter.
+        /// Ưu tiên 3 (Fallback gốc): In qua drawingHandler.PrintDrawing tiêu chuẩn.
+        /// </summary>
+        private static bool PrintDrawingWithTeklaApi(
+            DrawingHandler drawingHandler,
+            Drawing drawing,
+            DPMPrinterAttributes printAttributes,
+            string outputFilePath
+        )
+        {
+            if (drawingHandler == null || drawing == null || string.IsNullOrWhiteSpace(outputFilePath))
+                return false;
+
+            // Ưu tiên 1: Chạy Worker Sub-process độc lập để bảo toàn DPI và kích thước UI của MainForm
+            try
+            {
+                string exePath = Application.ExecutablePath;
+                if (File.Exists(exePath))
+                {
+                    string markBase64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(drawing.Mark ?? string.Empty));
+                    string pathBase64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(outputFilePath ?? string.Empty));
+
+                    ProcessStartInfo psi = new ProcessStartInfo();
+                    psi.FileName = exePath;
+                    psi.Arguments = string.Format("--print-color-worker \"{0}\" \"{1}\"", markBase64, pathBase64);
+                    psi.UseShellExecute = false;
+                    psi.CreateNoWindow = true;
+                    psi.WindowStyle = ProcessWindowStyle.Hidden;
+
+                    using (Process worker = Process.Start(psi))
+                    {
+                        if (worker != null)
+                        {
+                            bool exited = worker.WaitForExit(60000);
+                            if (!exited)
+                            {
+                                try { worker.Kill(); } catch { }
+                            }
+                            else if (worker.ExitCode == 0 && File.Exists(outputFilePath) && new FileInfo(outputFilePath).Length > 0)
+                            {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // Fallback tiếp theo nếu worker gặp sự cố khởi chạy
+            }
+
+            // Ưu tiên 2: In trực tiếp in-process qua DpmPrinter
+            try
+            {
+                bool directSuccess = PrintDrawingWithTeklaApiDirect(drawingHandler, drawing, outputFilePath);
+                if (directSuccess && File.Exists(outputFilePath) && new FileInfo(outputFilePath).Length > 0)
+                {
+                    return true;
+                }
+            }
+            catch
+            {
+                // Fallback tiếp theo nếu in trực tiếp gặp lỗi
+            }
+
+            // Ưu tiên 3 (Fallback an toàn): In thông qua drawingHandler.PrintDrawing của Tekla
+            try
+            {
+                return drawingHandler.PrintDrawing(drawing, printAttributes, outputFilePath);
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static DotPrintPaperSize GetPdfPaperSize(Drawing drawing)

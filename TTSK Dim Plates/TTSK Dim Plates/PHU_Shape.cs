@@ -93,6 +93,14 @@ namespace Tekla.Technology.Akit.UserScript
         private const double H_HOLE_DIRECTION_TIE_TOL = 0.02;
         private const double H_HOLE_CENTER_SIDE_TOL = 0.5;
 
+        // H/I SEMANTIC VIEW ROLE CLASSIFICATION:
+        // Tekla's ViewType describes the drawing camera, not necessarily the
+        // physical H/I face after the member has been rolled around its length.
+        // Only swap Top/Front algorithms when both view normals prove the
+        // opposite physical roles against the part-local profile axes.
+        private const double H_VIEW_ROLE_MIN_ALIGNMENT = 0.75;
+        private const double H_VIEW_ROLE_MIN_MARGIN = 0.20;
+
         // TOP VIEW - GIỚI HẠN HÌNH CHIẾU THEO COORDINATE:
         // Chỉ dùng cho biên dạng chiếu TOP để dim tổng/chamfer/rãnh.
         // Không dùng độ sâu cố định 20mm nữa.
@@ -458,9 +466,8 @@ namespace Tekla.Technology.Akit.UserScript
                 }
             );
 
-            // BƯỚC 0: NHẬN DIỆN VIEW THEO VIEWTYPE + SECTION ĐẶC BIỆT.
-            // Chỉ thay phần chọn Top / Front / Bottom / Section Exact.
-            // Các thuật toán DIM / MOVE / CENTER / ARRANGE phía dưới giữ nguyên.
+            // BƯỚC 0: NHẬN DIỆN VIEW VẬT LÝ THEO VIEWTYPE + SECTION ĐẶC BIỆT.
+            // Các tham chiếu này giữ nguyên cho Auto Section, Grid, scale và arrange.
             View topViewByType = FindViewByViewTypeForH(views, "TopView", "Top");
             View frontViewByType = FindViewByViewTypeForH(views, "FrontView", "Front");
             View backViewByType = FindViewByViewTypeForH(views, "BackView", "Back");
@@ -526,12 +533,28 @@ namespace Tekla.Technology.Akit.UserScript
             if (frontViewByType == null || topViewByType == null)
                 return;
 
+            // Chỉ DIM Shape H/I dùng vai trò hình học mặt cánh/mặt bụng.
+            // Không ghi đè các biến *ByType để Grid, Arrange, Auto Section,
+            // scale và hole-check tiếp tục nhận đúng view vật lý như bản gốc.
+            View dimensionTopView = topViewByType;
+            View dimensionFrontView = frontViewByType;
+            bool dimensionRolesSwapped = false;
+            if (!PHU_Slot09_DataCenterBeamType2Context.IsActive)
+            {
+                dimensionRolesSwapped = ResolveHShapeSemanticDimensionViews(
+                    model,
+                    part,
+                    ref dimensionTopView,
+                    ref dimensionFrontView
+                );
+            }
+
             // Chỉ tách nhánh khi trục dài của I/H thực sự dựng đứng trong Top view.
             // Trường hợp ngang tiếp tục đi nguyên flow legacy phía dưới.
             bool hShapeLongitudinalVertical =
                 isAssemblyDrawing && IsHShapeLongitudinalVerticalInView(model, part, topViewByType);
 
-            InitializeHShapeHoleCatalog(model, part, topViewByType, frontViewByType);
+            InitializeHShapeHoleCatalog(model, part, dimensionTopView, dimensionFrontView);
 
             // Tên biến giữ nguyên để không đụng các thuật toán arrange/center phía dưới.
             // Giá trị không còn lấy bằng FindSmallestViewByRestrictionBox nữa.
@@ -553,8 +576,8 @@ namespace Tekla.Technology.Akit.UserScript
             }
 
             List<View> dimViews = BuildDimViewsByViewTypeForH(
-                topViewByType,
-                frontViewByType,
+                dimensionTopView,
+                dimensionFrontView,
                 bottomViewByType,
                 specialBottomSections
             );
@@ -562,7 +585,10 @@ namespace Tekla.Technology.Akit.UserScript
             if (dimViews.Count == 0)
                 return;
 
+            // Từ đây, topView/frontView vẫn là view vật lý phục vụ layout.
+            // dimensionTopView/dimensionFrontView chỉ phục vụ lời gọi tạo DIM.
             View topView = topViewByType;
+            View frontView = frontViewByType;
 
             // BƯỚC 1: Xóa DIM cũ trước giống code plate chuẩn.
             // Chỉ xóa DIM cũ, không đụng thuật toán tạo DIM shape phía dưới.
@@ -608,69 +634,75 @@ namespace Tekla.Technology.Akit.UserScript
                 ? new ChamferInfluence()
                 : DetectFrontNotchInfluenceOnly(model, part, frontViewForTopBottomNotch);
 
-            TopBoundary boundary;
+            TopBoundary dimensionTopBoundary;
             CreateDimsForTopView(
                 model,
                 part,
-                topView,
+                dimensionTopView,
                 frontNotchInfluenceForTopBottom,
                 isAssemblyDrawing,
-                out boundary
+                out dimensionTopBoundary
             );
             CommitAndWait(drawing, 250);
 
-            if (boundary.IsValid)
+            if (dimensionTopBoundary.IsValid)
             {
                 ResizeViewBoundaryKeepDepth(
-                    topView,
-                    boundary.MinX,
-                    boundary.MaxX,
-                    boundary.MinY,
-                    boundary.MaxY
+                    dimensionTopView,
+                    dimensionTopBoundary.MinX,
+                    dimensionTopBoundary.MaxX,
+                    dimensionTopBoundary.MinY,
+                    dimensionTopBoundary.MaxY
                 );
             }
             else
             {
-                ResizeViewBoundaryKeepDepthBySolid(topView, model, part);
+                ResizeViewBoundaryKeepDepthBySolid(dimensionTopView, model, part);
             }
 
             CommitAndWait(drawing, 250);
 
-            View frontView = null;
-            TopBoundary frontBoundary = new TopBoundary();
+            TopBoundary dimensionFrontBoundary = new TopBoundary();
 
             // FRONT VIEW: view thứ 2 sau khi đã loại view mặt cắt nhỏ Exact.
             // Top view giữ nguyên, front view chạy thêm sau top view.
             if (dimViews.Count > 1)
             {
-                frontView = dimViews[1];
-
                 CreateDimsForFrontView(
                     model,
                     part,
-                    frontView,
+                    dimensionFrontView,
                     isAssemblyDrawing,
-                    out frontBoundary
+                    out dimensionFrontBoundary
                 );
                 CommitAndWait(drawing, 250);
 
-                if (frontBoundary.IsValid)
+                if (dimensionFrontBoundary.IsValid)
                 {
                     ResizeViewBoundaryKeepDepth(
-                        frontView,
-                        frontBoundary.MinX,
-                        frontBoundary.MaxX,
-                        frontBoundary.MinY,
-                        frontBoundary.MaxY
+                        dimensionFrontView,
+                        dimensionFrontBoundary.MinX,
+                        dimensionFrontBoundary.MaxX,
+                        dimensionFrontBoundary.MinY,
+                        dimensionFrontBoundary.MaxY
                     );
                 }
                 else
                 {
-                    ResizeViewBoundaryKeepDepthBySolid(frontView, model, part);
+                    ResizeViewBoundaryKeepDepthBySolid(dimensionFrontView, model, part);
                 }
 
                 CommitAndWait(drawing, 250);
             }
+
+            // Trả boundary về đúng view vật lý để toàn bộ layout phía dưới chạy
+            // đúng như file nguyên bản, bất kể hai rule DIM có bị swap hay không.
+            TopBoundary boundary = dimensionRolesSwapped
+                ? dimensionFrontBoundary
+                : dimensionTopBoundary;
+            TopBoundary frontBoundary = dimensionRolesSwapped
+                ? dimensionTopBoundary
+                : dimensionFrontBoundary;
 
             // BACK VIEW chỉ tham gia flow Assembly + dầm dọc. Dùng nguyên thuật toán
             // FRONT để tạo đầy đủ DIM tổng/lỗ/rãnh theo hệ tọa độ riêng của view.
@@ -894,6 +926,9 @@ namespace Tekla.Technology.Akit.UserScript
                 && !preservePreparedDataCenterLayout
             )
             {
+                // DIM đã dùng catalog semantic. Hole check là luồng nền độc lập,
+                // nên trả catalog về đúng Top/Front vật lý như file nguyên bản.
+                InitializeHShapeHoleCatalog(model, part, topViewByType, frontViewByType);
                 CheckTopBottomHolesAndMark(model, part, topView);
                 CommitAndWait(drawing, 250);
             }
@@ -13644,6 +13679,136 @@ namespace Tekla.Technology.Akit.UserScript
             catch { }
 
             return null;
+        }
+
+        private static bool ResolveHShapeSemanticDimensionViews(
+            Model model,
+            ModelPart part,
+            ref View topView,
+            ref View frontView
+        )
+        {
+            if (model == null || part == null || topView == null || frontView == null)
+                return false;
+
+            TransformationPlane oldPlane = null;
+            try
+            {
+                oldPlane = model.GetWorkPlaneHandler().GetCurrentTransformationPlane();
+                model
+                    .GetWorkPlaneHandler()
+                    .SetCurrentTransformationPlane(new TransformationPlane());
+
+                ModelPart globalPart = part.Identifier == null
+                    ? part
+                    : model.SelectModelObject(part.Identifier) as ModelPart;
+                if (globalPart == null)
+                    globalPart = part;
+
+                CoordinateSystem partCs = globalPart.GetCoordinateSystem();
+                if (
+                    partCs == null
+                    || partCs.AxisX == null
+                    || partCs.AxisY == null
+                )
+                    return false;
+
+                Vector longitudinalAxis;
+                Vector flangeNormal;
+                Vector webNormal;
+                if (
+                    !TryNormalizeHShapeVector(partCs.AxisX, out longitudinalAxis)
+                    || !TryNormalizeHShapeVector(partCs.AxisY, out flangeNormal)
+                    || !TryNormalizeHShapeVector(
+                        CrossHShapeVectors(longitudinalAxis, flangeNormal),
+                        out webNormal
+                    )
+                )
+                    return false;
+
+                Vector topNormal;
+                Vector frontNormal;
+                if (
+                    !TryGetHShapeViewNormal(topView, out topNormal)
+                    || !TryGetHShapeViewNormal(frontView, out frontNormal)
+                )
+                    return false;
+
+                // In this H/I engine, part-local Y is already the established
+                // profile-height axis (see TryGetHShapePartLocalYRange). A view
+                // looking along local Y sees a flange face; a view looking along
+                // local Z = X x Y sees the web face.
+                double topFlangeAlignment = Math.Abs(
+                    DotHShapeVectors(topNormal, flangeNormal)
+                );
+                double topWebAlignment = Math.Abs(DotHShapeVectors(topNormal, webNormal));
+                double frontFlangeAlignment = Math.Abs(
+                    DotHShapeVectors(frontNormal, flangeNormal)
+                );
+                double frontWebAlignment = Math.Abs(
+                    DotHShapeVectors(frontNormal, webNormal)
+                );
+
+                if (
+                    !ShouldSwapHShapeTopFrontSemanticRoles(
+                        topFlangeAlignment,
+                        topWebAlignment,
+                        frontFlangeAlignment,
+                        frontWebAlignment
+                    )
+                )
+                    return false;
+
+                // Scope is deliberately limited to the two Shape DIM consumers.
+                // Physical ViewType references remain unchanged for Grid/Arrange.
+                View runtimeTop = topView;
+                View runtimeFront = frontView;
+
+                topView = runtimeFront;
+                frontView = runtimeTop;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+            finally
+            {
+                try
+                {
+                    if (oldPlane != null)
+                        model.GetWorkPlaneHandler().SetCurrentTransformationPlane(oldPlane);
+                }
+                catch { }
+            }
+        }
+
+        internal static bool ShouldSwapHShapeTopFrontSemanticRoles(
+            double topFlangeAlignment,
+            double topWebAlignment,
+            double frontFlangeAlignment,
+            double frontWebAlignment
+        )
+        {
+            return IsConfidentHShapeViewRole(topWebAlignment, topFlangeAlignment)
+                && IsConfidentHShapeViewRole(frontFlangeAlignment, frontWebAlignment);
+        }
+
+        private static bool IsConfidentHShapeViewRole(
+            double expectedAlignment,
+            double competingAlignment
+        )
+        {
+            if (
+                Double.IsNaN(expectedAlignment)
+                || Double.IsInfinity(expectedAlignment)
+                || Double.IsNaN(competingAlignment)
+                || Double.IsInfinity(competingAlignment)
+            )
+                return false;
+
+            return expectedAlignment >= H_VIEW_ROLE_MIN_ALIGNMENT
+                && expectedAlignment - competingAlignment >= H_VIEW_ROLE_MIN_MARGIN;
         }
 
         private static bool ViewTypeMatchesForH(

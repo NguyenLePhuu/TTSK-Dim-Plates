@@ -45,6 +45,20 @@ namespace TTSK_AutoDim_Plates
                     .RunWorker(args);
             }
 
+            // Chế độ Worker cách ly tiến trình để in màu qua Tekla DpmPrinter mà không làm thay đổi DPI của UI chính
+            if (
+                args != null
+                && args.Length >= 3
+                && String.Equals(
+                    args[0],
+                    "--print-color-worker",
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
+            {
+                return DrawingPdfPrinter.ExecuteColorPrintWorker(args[1], args[2]);
+            }
+
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             Application.Run(new MainForm());
