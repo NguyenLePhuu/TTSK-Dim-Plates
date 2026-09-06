@@ -1,13 +1,13 @@
 @echo off
 setlocal EnableDelayedExpansion
-title Cap Nhat Portable - TTSK Auto Dim
+title Cap Nhat Portable va Day Len GitHub - TTSK Auto Dim
 cd /d "%~dp0"
 
 echo ========================================================================
-echo        TTSK AUTO DIM - TRINH TU DONG BIEN DICH VA CAP NHAT PORTABLE
+echo   TTSK AUTO DIM - BIEN DICH, CAP NHAT PORTABLE VA DAY LEN GITHUB
 echo ========================================================================
 echo.
-echo [1/3] Dang tim kiem trinh bien dich Visual Studio MSBuild...
+echo [1/4] Dang tim kiem trinh bien dich Visual Studio MSBuild...
 
 set "MSBUILD_EXE="
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
@@ -32,7 +32,7 @@ if not defined MSBUILD_EXE (
 
 if not defined MSBUILD_EXE (
     echo [LOI] Khong tim thay MSBuild.exe tren may tinh!
-    echo Vui long cai dat Visual Studio voi workload '.NET Desktop Development'.
+    echo Vui long cai dat Visual Studio voi workload .NET Desktop Development.
     echo.
     pause
     exit /b 1
@@ -40,7 +40,7 @@ if not defined MSBUILD_EXE (
 
 echo        Tim thay MSBuild: "%MSBUILD_EXE%"
 echo.
-echo [2/3] Dang bien dich ma nguon Release x64 voi thuat toan moi nhat...
+echo [2/4] Dang bien dich ma nguon Release x64 voi thuat toan moi nhat...
 echo.
 
 set "PROJ_DIR=%~dp0TTSK Dim Plates\TTSK Dim Plates"
@@ -61,7 +61,7 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 echo.
-echo [3/3] Dang dong bo tep thuc thi sang thu muc portable...
+echo [3/4] Dang dong bo tep thuc thi sang thu muc portable...
 
 set "OUT_DIR=%PROJ_DIR%\bin\x64\Release"
 set "PORTABLE_DIR=%~dp0portable"
@@ -73,12 +73,41 @@ if exist "%OUT_DIR%\TTSK Dim Plates.pdb" (
     copy /y "%OUT_DIR%\TTSK Dim Plates.pdb" "%PORTABLE_DIR%\TTSK Dim Plates.pdb" >nul
 )
 
+echo        Da cap nhat xong ban portable moi nhat.
+echo.
+echo [4/4] Dang tu dong kiem tra va day (push) len GitHub...
+
+where git >nul 2>nul
+if %ERRORLEVEL% NEQ 0 (
+    echo        [BO QUA] Git chua duoc cai dat hoac chua duoc them vao PATH.
+) else (
+    cd /d "%~dp0"
+    set "HAS_CHANGES="
+    for /f "tokens=*" %%g in ('git status --porcelain') do set "HAS_CHANGES=1"
+    
+    if defined HAS_CHANGES (
+        echo        Phat hien thay doi, dang commit va day len GitHub...
+        git add -A
+        git commit -m "Cap nhat thuat toan moi va dong bo portable (%DATE% %TIME%)"
+        git push origin main
+        if !ERRORLEVEL! EQU 0 (
+            echo.
+            echo        [THANH CONG] Da day thanh cong toan bo thay doi len GitHub!
+        ) else (
+            echo.
+            echo        [CANH BAO] Khong the day len GitHub. Vui long kiem tra ket noi mang.
+        )
+    ) else (
+        echo        Ma nguon va ban portable da dong bo voi GitHub, khong co gi moi can day.
+    )
+)
+
 echo.
 echo ========================================================================
-echo   [THANH CONG] DA BIEN DICH VA CAP NHAT PORTABLE HOAN TAT!
+echo   [HOAN TAT] QUA TRINH CAP NHAT VA DONG BO DA THANH CONG!
 echo.
-echo   - Toan bo thuat toan moi nhat da duoc nap vao: portable\TTSK Dim Plates.exe
-echo   - Ban co the mo ung dung truc tiep de kiem tra va su dung ngay.
+echo   - Thuat toan moi nhat da duoc nap vao: portable\TTSK Dim Plates.exe
+echo   - Ma nguon va ban portable da duoc dong bo an toan len GitHub.
 echo ========================================================================
 echo.
 pause
