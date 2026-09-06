@@ -23,6 +23,7 @@ using System.Text;
 using System.Windows.Forms;
 using PdfSharp.Pdf;
 using PdfSharp.Pdf.IO;
+using Tekla.Structures;
 using Tekla.Structures.Drawing;
 using Tekla.Structures.Model;
 using Tekla.Structures.DPMPrinter;
@@ -622,48 +623,492 @@ namespace TTSK_AutoDim_Plates
         }
 
         /// <summary>
+        /// Khóa định danh bản vẽ chính xác và duy nhất từ Document Manager / Drawing List (Source of Truth).
+        /// Bao gồm cả định danh nội tại (Drawing Database Identifier), định danh liên kết Model Object,
+        /// số sheet, loại bản vẽ (Assembly/SinglePart/CastUnit/GA), Mark và Name.
+        /// </summary>
+        internal sealed class DrawingSelectionKey
+        {
+            public string DrawingType { get; set; }
+            public int DrawingId { get; set; }
+            public int DrawingId2 { get; set; }
+            public string DrawingGuid { get; set; }
+            public int ModelObjectId { get; set; }
+            public int ModelObjectId2 { get; set; }
+            public string ModelObjectGuid { get; set; }
+            public int SheetNumber { get; set; }
+            public string Mark { get; set; }
+            public string Name { get; set; }
+
+            public override string ToString()
+            {
+                return string.Format(
+                    CultureInfo.InvariantCulture,
+                    "Type={0}|DrawId={1}|DrawGuid={2}|ModelId={3}|Sheet={4}|Mark={5}|Name={6}",
+                    DrawingType ?? string.Empty,
+                    DrawingId,
+                    DrawingGuid ?? string.Empty,
+                    ModelObjectId,
+                    SheetNumber,
+                    Mark ?? string.Empty,
+                    Name ?? string.Empty
+                );
+            }
+        }
+
+        /// <summary>
+        /// Lấy Identifier độc nhất của bản vẽ từ Drawing Database (kế thừa từ DatabaseObject).
+        /// </summary>
+        private static Identifier GetDatabaseObjectIdentifier(Drawing drawing)
+        {
+            if (drawing == null)
+                return null;
+
+            try
+            {
+                PropertyInfo prop = typeof(DatabaseObject).GetProperty(
+                    "Identifier",
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                );
+                if (prop != null)
+                {
+                    Identifier id = prop.GetValue(drawing, null) as Identifier;
+                    if (id != null)
+                        return id;
+                }
+            }
+            catch { }
+
+            try
+            {
+                PropertyInfo prop = drawing.GetType().GetProperty(
+                    "Identifier",
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                );
+                if (prop != null)
+                {
+                    Identifier id = prop.GetValue(drawing, null) as Identifier;
+                    if (id != null)
+                        return id;
+                }
+            }
+            catch { }
+
+            try
+            {
+                FieldInfo field = typeof(DatabaseObject).GetField(
+                    "_Identifier",
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                );
+                if (field != null)
+                {
+                    Identifier id = field.GetValue(drawing) as Identifier;
+                    if (id != null)
+                        return id;
+                }
+            }
+            catch { }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Lấy Model Object Identifier tương ứng với bản vẽ (AssemblyIdentifier / PartIdentifier / CastUnitIdentifier).
+        /// </summary>
+        private static Identifier GetModelObjectIdentifier(Drawing drawing)
+        {
+            if (drawing == null)
+                return null;
+
+            try
+            {
+                if (drawing is AssemblyDrawing)
+                    return ((AssemblyDrawing)drawing).AssemblyIdentifier;
+                if (drawing is SinglePartDrawing)
+                    return ((SinglePartDrawing)drawing).PartIdentifier;
+                if (drawing is CastUnitDrawing)
+                    return ((CastUnitDrawing)drawing).CastUnitIdentifier;
+            }
+            catch { }
+
+            try
+            {
+                PropertyInfo prop = typeof(Drawing).GetProperty(
+                    "ModelObjectIdentifier",
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                );
+                if (prop != null)
+                {
+                    Identifier id = prop.GetValue(drawing, null) as Identifier;
+                    if (id != null)
+                        return id;
+                }
+            }
+            catch { }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Lấy số SheetNumber của bản vẽ.
+        /// </summary>
+        private static int GetDrawingSheetNumber(Drawing drawing)
+        {
+            if (drawing == null)
+                return 0;
+
+            try
+            {
+                if (drawing is AssemblyDrawing)
+                    return ((AssemblyDrawing)drawing).SheetNumber;
+                if (drawing is SinglePartDrawing)
+                    return ((SinglePartDrawing)drawing).SheetNumber;
+                if (drawing is CastUnitDrawing)
+                    return ((CastUnitDrawing)drawing).SheetNumber;
+            }
+            catch { }
+
+            try
+            {
+                FieldInfo field = typeof(Drawing).GetField(
+                    "_SheetNumber",
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                );
+                if (field != null)
+                {
+                    object val = field.GetValue(drawing);
+                    if (val is int)
+                        return (int)val;
+                }
+            }
+            catch { }
+
+            return 0;
+        }
+
+        /// <summary>
+        /// Xây dựng khóa định danh đầy đủ DrawingSelectionKey từ chính đối tượng drawing nguồn (Source of Truth).
+        /// </summary>
+        private static DrawingSelectionKey BuildDrawingSelectionKey(Drawing drawing)
+        {
+            if (drawing == null)
+                return null;
+
+            DrawingSelectionKey key = new DrawingSelectionKey();
+            key.DrawingType = drawing.GetType().Name;
+            key.Mark = drawing.Mark ?? string.Empty;
+            key.Name = drawing.Name ?? string.Empty;
+
+            Identifier drawId = GetDatabaseObjectIdentifier(drawing);
+            if (drawId != null)
+            {
+                key.DrawingId = drawId.ID;
+                key.DrawingId2 = drawId.ID2;
+                key.DrawingGuid = drawId.GUID.ToString();
+            }
+
+            Identifier modelId = GetModelObjectIdentifier(drawing);
+            if (modelId != null)
+            {
+                key.ModelObjectId = modelId.ID;
+                key.ModelObjectId2 = modelId.ID2;
+                key.ModelObjectGuid = modelId.GUID.ToString();
+            }
+
+            key.SheetNumber = GetDrawingSheetNumber(drawing);
+            return key;
+        }
+
+        /// <summary>
+        /// Mã hóa DrawingSelectionKey thành chuỗi Base64 an toàn để truyền qua command-line argument.
+        /// </summary>
+        private static string EncodeDrawingSelectionKey(DrawingSelectionKey key)
+        {
+            if (key == null)
+                return string.Empty;
+
+            StringBuilder sb = new StringBuilder();
+            sb.Append("Type=").Append(Uri.EscapeDataString(key.DrawingType ?? string.Empty)).Append(";");
+            sb.Append("DrawId=").Append(key.DrawingId.ToString(CultureInfo.InvariantCulture)).Append(";");
+            sb.Append("DrawId2=").Append(key.DrawingId2.ToString(CultureInfo.InvariantCulture)).Append(";");
+            sb.Append("DrawGuid=").Append(Uri.EscapeDataString(key.DrawingGuid ?? string.Empty)).Append(";");
+            sb.Append("ModelId=").Append(key.ModelObjectId.ToString(CultureInfo.InvariantCulture)).Append(";");
+            sb.Append("ModelId2=").Append(key.ModelObjectId2.ToString(CultureInfo.InvariantCulture)).Append(";");
+            sb.Append("ModelGuid=").Append(Uri.EscapeDataString(key.ModelObjectGuid ?? string.Empty)).Append(";");
+            sb.Append("Sheet=").Append(key.SheetNumber.ToString(CultureInfo.InvariantCulture)).Append(";");
+            sb.Append("Mark=").Append(Uri.EscapeDataString(key.Mark ?? string.Empty)).Append(";");
+            sb.Append("Name=").Append(Uri.EscapeDataString(key.Name ?? string.Empty));
+
+            return Convert.ToBase64String(Encoding.UTF8.GetBytes(sb.ToString()));
+        }
+
+        /// <summary>
+        /// Giải mã chuỗi Base64 thành đối tượng DrawingSelectionKey.
+        /// </summary>
+        private static DrawingSelectionKey DecodeDrawingSelectionKey(string base64Payload)
+        {
+            if (string.IsNullOrWhiteSpace(base64Payload))
+                return null;
+
+            string rawText = string.Empty;
+            try
+            {
+                rawText = Encoding.UTF8.GetString(Convert.FromBase64String(base64Payload));
+            }
+            catch
+            {
+                rawText = base64Payload;
+            }
+
+            DrawingSelectionKey key = new DrawingSelectionKey();
+
+            if (!string.IsNullOrEmpty(rawText) && rawText.Contains("=") && rawText.Contains(";"))
+            {
+                string[] pairs = rawText.Split(new char[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
+                foreach (string pair in pairs)
+                {
+                    int eqIndex = pair.IndexOf('=');
+                    if (eqIndex <= 0)
+                        continue;
+
+                    string name = pair.Substring(0, eqIndex).Trim();
+                    string val = Uri.UnescapeDataString(pair.Substring(eqIndex + 1));
+
+                    if (string.Equals(name, "Type", StringComparison.OrdinalIgnoreCase))
+                        key.DrawingType = val;
+                    else if (string.Equals(name, "DrawId", StringComparison.OrdinalIgnoreCase))
+                    {
+                        int id;
+                        if (int.TryParse(val, NumberStyles.Integer, CultureInfo.InvariantCulture, out id))
+                            key.DrawingId = id;
+                    }
+                    else if (string.Equals(name, "DrawId2", StringComparison.OrdinalIgnoreCase))
+                    {
+                        int id2;
+                        if (int.TryParse(val, NumberStyles.Integer, CultureInfo.InvariantCulture, out id2))
+                            key.DrawingId2 = id2;
+                    }
+                    else if (string.Equals(name, "DrawGuid", StringComparison.OrdinalIgnoreCase))
+                        key.DrawingGuid = val;
+                    else if (string.Equals(name, "ModelId", StringComparison.OrdinalIgnoreCase))
+                    {
+                        int mid;
+                        if (int.TryParse(val, NumberStyles.Integer, CultureInfo.InvariantCulture, out mid))
+                            key.ModelObjectId = mid;
+                    }
+                    else if (string.Equals(name, "ModelId2", StringComparison.OrdinalIgnoreCase))
+                    {
+                        int mid2;
+                        if (int.TryParse(val, NumberStyles.Integer, CultureInfo.InvariantCulture, out mid2))
+                            key.ModelObjectId2 = mid2;
+                    }
+                    else if (string.Equals(name, "ModelGuid", StringComparison.OrdinalIgnoreCase))
+                        key.ModelObjectGuid = val;
+                    else if (string.Equals(name, "Sheet", StringComparison.OrdinalIgnoreCase))
+                    {
+                        int sheet;
+                        if (int.TryParse(val, NumberStyles.Integer, CultureInfo.InvariantCulture, out sheet))
+                            key.SheetNumber = sheet;
+                    }
+                    else if (string.Equals(name, "Mark", StringComparison.OrdinalIgnoreCase))
+                        key.Mark = val;
+                    else if (string.Equals(name, "Name", StringComparison.OrdinalIgnoreCase))
+                        key.Name = val;
+                }
+            }
+            else
+            {
+                // Fallback nếu truyền chuỗi Mark thuần túy từ phiên bản cũ
+                key.Mark = rawText;
+            }
+
+            return key;
+        }
+
+        /// <summary>
+        /// Kiểm tra 2 đối tượng Drawing có cùng một thực thể duy nhất trong Tekla Drawing Database hay không.
+        /// </summary>
+        private static bool IsSameDrawingIdentity(Drawing first, Drawing second)
+        {
+            if (first == null || second == null)
+                return false;
+            if (object.ReferenceEquals(first, second))
+                return true;
+
+            // 1. So khớp bằng Database Identifier ID nếu cả hai có ID > 0 (chính xác tuyệt đối)
+            Identifier id1 = GetDatabaseObjectIdentifier(first);
+            Identifier id2 = GetDatabaseObjectIdentifier(second);
+            if (id1 != null && id2 != null && id1.ID > 0 && id2.ID > 0)
+            {
+                return id1.ID == id2.ID;
+            }
+
+            // 2. So khớp bằng ModelObjectId + SheetNumber + DrawingType + Mark
+            Identifier mid1 = GetModelObjectIdentifier(first);
+            Identifier mid2 = GetModelObjectIdentifier(second);
+            if (mid1 != null && mid2 != null && mid1.ID > 0 && mid2.ID > 0)
+            {
+                if (mid1.ID == mid2.ID)
+                {
+                    int s1 = GetDrawingSheetNumber(first);
+                    int s2 = GetDrawingSheetNumber(second);
+                    if (s1 == s2 && string.Equals(first.GetType().Name, second.GetType().Name, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return string.Equals(first.Mark, second.Mark, StringComparison.Ordinal);
+                    }
+                }
+                return false;
+            }
+
+            // 3. So khớp chặt chẽ bằng DrawingType + Mark + Name chính xác
+            return string.Equals(first.GetType().Name, second.GetType().Name, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(first.Mark, second.Mark, StringComparison.Ordinal)
+                && string.Equals(first.Name, second.Name, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// Giải quyết và tìm duy nhất một bản vẽ khớp chính xác với DrawingSelectionKey.
+        /// Quét toàn bộ danh sách bản vẽ từ drawingHandler.GetDrawings(), tuyệt đối không break sớm.
+        /// Chỉ chấp nhận khi số ứng viên tìm thấy chính xác là 1 (candidates.Count == 1).
+        /// Nếu không tìm thấy (0) hoặc mơ hồ danh tính (> 1) thì từ chối in để bảo vệ người dùng:
+        /// "Thà không in còn hơn in nhầm bản vẽ".
+        /// </summary>
+        private static Drawing ResolveDrawingBySelectionKey(
+            DrawingHandler drawingHandler,
+            DrawingSelectionKey key,
+            out string resolveDiag
+        )
+        {
+            resolveDiag = string.Empty;
+            if (drawingHandler == null || key == null)
+            {
+                resolveDiag = "DrawingHandler hoặc SelectionKey là null.";
+                return null;
+            }
+
+            DrawingEnumerator enumerator = drawingHandler.GetDrawings();
+            List<Drawing> candidates = new List<Drawing>();
+
+            while (enumerator.MoveNext())
+            {
+                Drawing current = enumerator.Current;
+                if (current == null)
+                    continue;
+
+                // BƯỚC 1: PRIMARY IDENTITY - Drawing Database Identifier ID (duy nhất trong toàn bộ Drawing DB)
+                if (key.DrawingId > 0)
+                {
+                    Identifier curId = GetDatabaseObjectIdentifier(current);
+                    if (curId != null && curId.ID == key.DrawingId)
+                    {
+                        bool typeMatches = string.IsNullOrEmpty(key.DrawingType) ||
+                            string.Equals(current.GetType().Name, key.DrawingType, StringComparison.OrdinalIgnoreCase);
+                        bool markMatches = string.IsNullOrEmpty(key.Mark) ||
+                            string.Equals(current.Mark, key.Mark, StringComparison.Ordinal);
+
+                        if (typeMatches && markMatches)
+                        {
+                            candidates.Add(current);
+                            continue;
+                        }
+                    }
+                    continue;
+                }
+
+                // BƯỚC 2: SECONDARY IDENTITY - ModelObjectId + SheetNumber
+                if (key.ModelObjectId > 0)
+                {
+                    Identifier curModelId = GetModelObjectIdentifier(current);
+                    if (curModelId != null && curModelId.ID == key.ModelObjectId)
+                    {
+                        int curSheet = GetDrawingSheetNumber(current);
+                        bool typeMatches = string.IsNullOrEmpty(key.DrawingType) ||
+                            string.Equals(current.GetType().Name, key.DrawingType, StringComparison.OrdinalIgnoreCase);
+                        bool markMatches = string.IsNullOrEmpty(key.Mark) ||
+                            string.Equals(current.Mark, key.Mark, StringComparison.Ordinal);
+
+                        if (curSheet == key.SheetNumber && typeMatches && markMatches)
+                        {
+                            candidates.Add(current);
+                            continue;
+                        }
+                    }
+                    continue;
+                }
+
+                // BƯỚC 3: TERTIARY FALLBACK - So sánh chính xác DrawingType + Mark + Name (Ordinal)
+                if (!string.IsNullOrEmpty(key.Mark) && string.Equals(current.Mark, key.Mark, StringComparison.Ordinal))
+                {
+                    bool typeMatches = string.IsNullOrEmpty(key.DrawingType) ||
+                        string.Equals(current.GetType().Name, key.DrawingType, StringComparison.OrdinalIgnoreCase);
+                    bool nameMatches = string.IsNullOrEmpty(key.Name) ||
+                        string.Equals(current.Name, key.Name, StringComparison.Ordinal);
+
+                    if (typeMatches && nameMatches)
+                    {
+                        candidates.Add(current);
+                    }
+                }
+            }
+
+            if (candidates.Count == 1)
+            {
+                resolveDiag = string.Format(
+                    CultureInfo.InvariantCulture,
+                    "Đã xác định duy nhất bản vẽ: Type={0}, Mark={1}, ID={2}",
+                    candidates[0].GetType().Name,
+                    candidates[0].Mark,
+                    key.DrawingId
+                );
+                return candidates[0];
+            }
+
+            if (candidates.Count == 0)
+            {
+                resolveDiag = string.Format(
+                    CultureInfo.InvariantCulture,
+                    "Không tìm thấy bản vẽ nào khớp với khóa định danh: {0}",
+                    key
+                );
+                return null;
+            }
+
+            resolveDiag = string.Format(
+                CultureInfo.InvariantCulture,
+                "LỖI MƠ HỒ DANH TÍNH: Tìm thấy {0} bản vẽ trùng khớp với khóa định danh ({1}). Hủy lệnh in để tránh in nhầm bản vẽ!",
+                candidates.Count,
+                key
+            );
+            return null;
+        }
+
+        /// <summary>
         /// Điểm vào (Worker EntryPoint) cho tiến trình Worker in PDF màu độc lập (--print-color-worker).
         /// Chạy trong tiến trình con riêng biệt để toàn bộ việc nạp WPF/AkitUI và kích hoạt DPI awareness
         /// của Tekla DpmPrinter chỉ diễn ra trong Worker, giúp bảo vệ 100% kích thước giao diện chính (MainForm).
         /// </summary>
-        public static int ExecuteColorPrintWorker(string drawingMarkBase64, string outputFilePathBase64)
+        public static int ExecuteColorPrintWorker(string drawingKeyBase64, string outputFilePathBase64)
         {
             try
             {
-                if (string.IsNullOrWhiteSpace(drawingMarkBase64) || string.IsNullOrWhiteSpace(outputFilePathBase64))
+                if (string.IsNullOrWhiteSpace(drawingKeyBase64) || string.IsNullOrWhiteSpace(outputFilePathBase64))
                     return 1;
 
-                string drawingMark = Encoding.UTF8.GetString(Convert.FromBase64String(drawingMarkBase64));
                 string outputFilePath = Encoding.UTF8.GetString(Convert.FromBase64String(outputFilePathBase64));
+                DrawingSelectionKey key = DecodeDrawingSelectionKey(drawingKeyBase64);
 
                 DrawingHandler drawingHandler = new DrawingHandler();
                 if (!drawingHandler.GetConnectionStatus())
                     return 2;
 
-                Drawing target = null;
-                Drawing activeDrawing = null;
-                try { activeDrawing = drawingHandler.GetActiveDrawing(); } catch { }
-
-                if (activeDrawing != null && MatchDrawingMark(activeDrawing.Mark, drawingMark))
-                {
-                    target = activeDrawing;
-                }
-                else
-                {
-                    DrawingEnumerator enumerator = drawingHandler.GetDrawings();
-                    while (enumerator.MoveNext())
-                    {
-                        Drawing current = enumerator.Current;
-                        if (current != null && MatchDrawingMark(current.Mark, drawingMark))
-                        {
-                            target = current;
-                            break;
-                        }
-                    }
-                }
+                string resolveDiag;
+                Drawing target = ResolveDrawingBySelectionKey(drawingHandler, key, out resolveDiag);
 
                 if (target == null)
+                {
+                    // Không xác định được duy nhất bản vẽ nguồn (count == 0 hoặc count > 1)
                     return 3;
+                }
 
                 bool success = PrintDrawingWithTeklaApiDirect(drawingHandler, target, outputFilePath);
                 if (success && File.Exists(outputFilePath) && new FileInfo(outputFilePath).Length > 0)
@@ -680,22 +1125,9 @@ namespace TTSK_AutoDim_Plates
         }
 
         /// <summary>
-        /// So sánh tên bản vẽ (Mark) linh hoạt, hỗ trợ cả trường hợp có hoặc không có dấu ngoặc vuông '[' và ']'.
-        /// </summary>
-        private static bool MatchDrawingMark(string actualMark, string searchMark)
-        {
-            if (string.Equals(actualMark, searchMark, StringComparison.OrdinalIgnoreCase))
-                return true;
-            if (string.IsNullOrWhiteSpace(actualMark) || string.IsNullOrWhiteSpace(searchMark))
-                return false;
-
-            string cleanActual = actualMark.Trim().Trim('[', ']');
-            string cleanSearch = searchMark.Trim().Trim('[', ']');
-            return string.Equals(cleanActual, cleanSearch, StringComparison.OrdinalIgnoreCase);
-        }
-
-        /// <summary>
         /// Thực thi in màu trực tiếp qua engine DpmPrinter của Tekla Structures.
+        /// Tự động mở bản vẽ ngầm nếu chưa active, và có bước kiểm chứng bắt buộc:
+        /// CHỈ nạp DpmData khi và chỉ khi Active Drawing thực tế đã được xác thực 100% trùng khớp với target drawing.
         /// </summary>
         private static bool PrintDrawingWithTeklaApiDirect(
             DrawingHandler drawingHandler,
@@ -706,15 +1138,17 @@ namespace TTSK_AutoDim_Plates
             if (drawingHandler == null || drawing == null || string.IsNullOrWhiteSpace(outputFilePath))
                 return false;
 
+            bool needCloseAfterPrint = false;
             try
             {
-                // Mở bản vẽ ở chế độ ngầm (silent mode) nếu chưa phải là Active Drawing để Tekla nạp đủ dữ liệu vector màu
+                // Kiểm tra xem bản vẽ đang mở (Active Drawing) có đúng là target drawing hay không
                 Drawing currentActive = null;
                 try { currentActive = drawingHandler.GetActiveDrawing(); } catch { }
 
-                bool needCloseAfterPrint = false;
-                if (currentActive == null || !string.Equals(currentActive.Mark, drawing.Mark, StringComparison.OrdinalIgnoreCase))
+                bool isAlreadyActive = IsSameDrawingIdentity(currentActive, drawing);
+                if (!isAlreadyActive)
                 {
+                    // Mở bản vẽ ở chế độ ngầm (silent mode) để Tekla nạp đủ dữ liệu vector màu
                     bool opened = drawingHandler.SetActiveDrawing(drawing, false);
                     if (opened)
                     {
@@ -722,7 +1156,22 @@ namespace TTSK_AutoDim_Plates
                     }
                 }
 
-                // Nạp DpmData từ Active Drawing của Tekla
+                // BƯỚC XÁC THỰC BẢN VẼ ĐANG ACTIVE: Bảo vệ sinh tử chống in nhầm bản vẽ
+                Drawing confirmedActive = null;
+                try { confirmedActive = drawingHandler.GetActiveDrawing(); } catch { }
+
+                if (confirmedActive == null || !IsSameDrawingIdentity(confirmedActive, drawing))
+                {
+                    // Nếu Active Drawing thực tế không khớp với target drawing, lập tức hủy lệnh in!
+                    // Tuyệt đối không nạp dữ liệu DPM từ một bản vẽ khác đang mở.
+                    if (needCloseAfterPrint)
+                    {
+                        try { drawingHandler.CloseActiveDrawing(false); } catch { }
+                    }
+                    return false;
+                }
+
+                // Nạp DpmData từ Active Drawing đã được xác nhận 100% trùng khớp với target
                 var dpm = new DpmData();
                 bool dpmLoaded = false;
                 try
@@ -770,26 +1219,23 @@ namespace TTSK_AutoDim_Plates
                     var uiHooks = new PrintUiHooks();
                     printer.WritePdf(dpm, paperSizeHandler, dpmOptions, outputFilePath, uiHooks);
 
-                    // Đóng bản vẽ ngầm nếu mở trong lượt in này
-                    if (needCloseAfterPrint)
-                    {
-                        try { drawingHandler.CloseActiveDrawing(false); } catch { }
-                    }
-
                     if (File.Exists(outputFilePath) && new FileInfo(outputFilePath).Length > 0)
                     {
                         return true;
                     }
                 }
-
-                if (needCloseAfterPrint)
-                {
-                    try { drawingHandler.CloseActiveDrawing(false); } catch { }
-                }
             }
             catch
             {
                 // Bỏ qua ngoại lệ để fallback
+            }
+            finally
+            {
+                // Luôn đảm bảo đóng bản vẽ ngầm nếu được mở trong lượt in này
+                if (needCloseAfterPrint)
+                {
+                    try { drawingHandler.CloseActiveDrawing(false); } catch { }
+                }
             }
 
             return false;
@@ -797,11 +1243,11 @@ namespace TTSK_AutoDim_Plates
 
         /// <summary>
         /// Phương thức proxy an toàn thực hiện in màu bản vẽ bám sát Tekla Open API.
-        /// Ưu tiên 1: Chạy tiến trình Worker độc lập ngầm (--print-color-worker) để kích hoạt
-        /// engine DpmPrinter in ra màu sắc nguyên bản của Tekla mà không làm ảnh hưởng hay thu nhỏ
-        /// kích thước giao diện chính (MainForm) do WPF/AkitUI DPI awareness.
-        /// Ưu tiên 2 (Fallback): In trực tiếp in-process qua DpmPrinter.
-        /// Ưu tiên 3 (Fallback gốc): In qua drawingHandler.PrintDrawing tiêu chuẩn.
+        /// Bản vẽ được truyền vào (job.Drawing) là SOURCE OF TRUTH tuyệt đối.
+        /// Ưu tiên 1: Chạy tiến trình Worker độc lập ngầm (--print-color-worker) mang theo
+        /// DrawingSelectionKey để bảo toàn DPI và kích thước UI chính (MainForm) không bị co nhỏ.
+        /// Ưu tiên 2 (Fallback): In trực tiếp in-process qua DpmPrinter với chính đối tượng drawing nguồn.
+        /// Ưu tiên 3 (Fallback gốc): In qua drawingHandler.PrintDrawing tiêu chuẩn với chính đối tượng drawing nguồn.
         /// </summary>
         private static bool PrintDrawingWithTeklaApi(
             DrawingHandler drawingHandler,
@@ -819,12 +1265,13 @@ namespace TTSK_AutoDim_Plates
                 string exePath = Application.ExecutablePath;
                 if (File.Exists(exePath))
                 {
-                    string markBase64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(drawing.Mark ?? string.Empty));
+                    DrawingSelectionKey key = BuildDrawingSelectionKey(drawing);
+                    string keyBase64 = EncodeDrawingSelectionKey(key);
                     string pathBase64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(outputFilePath ?? string.Empty));
 
                     ProcessStartInfo psi = new ProcessStartInfo();
                     psi.FileName = exePath;
-                    psi.Arguments = string.Format("--print-color-worker \"{0}\" \"{1}\"", markBase64, pathBase64);
+                    psi.Arguments = string.Format("--print-color-worker \"{0}\" \"{1}\"", keyBase64, pathBase64);
                     psi.UseShellExecute = false;
                     psi.CreateNoWindow = true;
                     psi.WindowStyle = ProcessWindowStyle.Hidden;
@@ -851,7 +1298,7 @@ namespace TTSK_AutoDim_Plates
                 // Fallback tiếp theo nếu worker gặp sự cố khởi chạy
             }
 
-            // Ưu tiên 2: In trực tiếp in-process qua DpmPrinter
+            // Ưu tiên 2: In trực tiếp in-process qua DpmPrinter với chính đối tượng drawing nguồn
             try
             {
                 bool directSuccess = PrintDrawingWithTeklaApiDirect(drawingHandler, drawing, outputFilePath);
@@ -865,7 +1312,7 @@ namespace TTSK_AutoDim_Plates
                 // Fallback tiếp theo nếu in trực tiếp gặp lỗi
             }
 
-            // Ưu tiên 3 (Fallback an toàn): In thông qua drawingHandler.PrintDrawing của Tekla
+            // Ưu tiên 3 (Fallback an toàn): In thông qua drawingHandler.PrintDrawing tiêu chuẩn của Tekla với chính đối tượng drawing nguồn
             try
             {
                 return drawingHandler.PrintDrawing(drawing, printAttributes, outputFilePath);
