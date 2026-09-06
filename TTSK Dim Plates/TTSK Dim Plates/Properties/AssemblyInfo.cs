@@ -1,16 +1,16 @@
-﻿using System.Reflection;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 // General Information about an assembly is controlled through the following
 // set of attributes. Change these attribute values to modify the information
 // associated with an assembly.
-[assembly: AssemblyTitle("TTSK Dim Plates")]
-[assembly: AssemblyDescription("")]
+[assembly: AssemblyTitle("TTSK Auto Dimension")]
+[assembly: AssemblyDescription("TTSK Auto Dimension tool for Tekla Structures 2025")]
 [assembly: AssemblyConfiguration("")]
-[assembly: AssemblyCompany("")]
-[assembly: AssemblyProduct("TTSK Dim Plates")]
-[assembly: AssemblyCopyright("Copyright ©  2026")]
+[assembly: AssemblyCompany("TTSK BIM Team")]
+[assembly: AssemblyProduct("TTSK Auto Dimension")]
+[assembly: AssemblyCopyright("Copyright © 2026 TTSK")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
 
