@@ -63,6 +63,10 @@ namespace TTSK_AutoDim_Plates
         private TextBox txtManualScaleDenominator;
         private ToolTip manualScaleToolTip;
         private bool _darkMode = false;
+        private RoundedPanel mainHeaderSurface;
+        private RoundedPanel mainListSurface;
+        private Label mainBrandTitle, mainBrandSubtitle, mainVersionLabel;
+        private RoundedPanel mainIdentityTile, mainHeaderActions;
         private ShortcutManager _shortcutManager;
         private string _lastRepeatableShortcutActionId;
         private Keys _modifierShortcutCandidate;
@@ -97,6 +101,11 @@ namespace TTSK_AutoDim_Plates
         private JapaneseDictionaryPanel japaneseDictionaryPanel;
         private Label slideHandleLabel;
         private Label slideTitleLabel;
+        private Panel toolNavigation;
+        private SafeRoundedButton toolHomeButton;
+        private readonly List<SafeRoundedButton> toolNavigationButtons = new List<SafeRoundedButton>();
+        private readonly List<Label> toolDescriptions = new List<Label>();
+        private bool toolPresentationReady;
         private FitViewModeSwitch fitViewModeSwitch;
         private BeamColumnModeSwitch beamColumnModeSwitch;
         private Label fitGridAxisCountLabel;
@@ -151,6 +160,7 @@ namespace TTSK_AutoDim_Plates
 
         private readonly Color Blue = Color.FromArgb(30, 58, 138);
         private readonly Color BrightBlue = Color.FromArgb(37, 99, 235);
+        private Color PrimaryButtonColor { get { return _darkMode ? Color.FromArgb(201, 122, 64) : Blue; } }
         private readonly Color SoftBg = Color.FromArgb(248, 250, 252);
         private readonly Color PanelBorder = Color.FromArgb(220, 226, 235);
 
@@ -504,14 +514,6 @@ namespace TTSK_AutoDim_Plates
             btnRun.Click += btnRun_Click;
             runPanel.Controls.Add(btnRun);
 
-            Label hint = new Label();
-            hint.Text = "Nhấn nút để bắt đầu chạy Auto Dimension";
-            hint.TextAlign = ContentAlignment.MiddleCenter;
-            hint.ForeColor = Color.FromArgb(100, 116, 139);
-            hint.Font = new Font("Segoe UI", 9F);
-            hint.Location = new Point(20, 48);
-            hint.Size = new System.Drawing.Size(904, 18);
-            runPanel.Controls.Add(hint);
 
             Panel status = MakePanel(18, 566, 944, 30);
             Controls.Add(status);
@@ -739,6 +741,70 @@ namespace TTSK_AutoDim_Plates
 
             BuildSlideToolsPanel();
 
+            // Consistent spacing in the existing main view; footer and tool gallery retain their layout.
+            const int contentWidth = MainBaseWidth - 20;
+            header.SetBounds(14, 10, contentWidth, 100);
+            logo.Location = new Point(16, 12);
+            title.Location = new Point(86, 14);
+            sub.Location = new Point(90, 60);
+            themeSwitch.Location = new Point(696, 34);
+            pinTopMostButton.Location = new Point(786, 31);
+            ver.Location = new Point(840, 31);
+            modePanel.SetBounds(14, 118, contentWidth, 72);
+            btnModeActive.Location = new Point(76, 11);
+            btnModeBatch.Location = new Point(520, 11);
+            listPanel.SetBounds(14, 198, contentWidth, 280);
+            listPanel.Controls[0].Location = new Point(16, 16);
+            lblCount.SetBounds(422, 16, 220, 28);
+            btnCheckScale.Location = new Point(654, 14);
+            btnLoad.Location = new Point(790, 14);
+            dgvDrawings.SetBounds(12, 60, contentWidth - 24, 208);
+            runPanel.SetBounds(14, 486, contentWidth, 60);
+            btnRun.SetBounds(12, 10, contentWidth - 24, 40);
+            status.SetBounds(14, 554, contentWidth, 40);
+            lblStatus.Location = new Point(16, 10);
+            lblStatus.TextAlign = ContentAlignment.MiddleLeft;
+            autoSectionSwitch.Left = 482;
+            lblManualScalePrefix.Left = 540;
+            manualScaleInputHost.Left = 566;
+            btnPrint.Left = 629;
+            btnDictionary.Left = 734;
+            btnClear.Left = 839;
+            foreach (Control item in status.Controls)
+                item.Top = (status.Height - item.Height) / 2;
+            mainHeaderSurface = (RoundedPanel)header;
+            mainListSurface = (RoundedPanel)listPanel;
+            mainBrandTitle = title;
+            mainBrandSubtitle = sub;
+            mainVersionLabel = ver;
+            mainIdentityTile = new RoundedPanel();
+            mainIdentityTile.SetBounds(16, 12, 70, 70);
+            mainIdentityTile.BorderRadius = 8;
+            header.Controls.Add(mainIdentityTile);
+            mainIdentityTile.Controls.Add(logo);
+            logo.SetBounds(2, 2, 66, 66);
+            mainHeaderActions = new RoundedPanel();
+            mainHeaderActions.SetBounds(686, 25, 238, 50);
+            mainHeaderActions.BorderRadius = 10;
+            header.Controls.Add(mainHeaderActions);
+            mainHeaderActions.Controls.Add(themeSwitch);
+            mainHeaderActions.Controls.Add(pinTopMostButton);
+            mainHeaderActions.Controls.Add(ver);
+            themeSwitch.Location = new Point(10, 9);
+            pinTopMostButton.Location = new Point(100, 6);
+            ver.Location = new Point(154, 6);
+            ((RoundedPanel)btnModeActive).EnableToolHover();
+            ((RoundedPanel)btnModeBatch).EnableToolHover();
+            btnModeActive.SetBounds(0, 0, (contentWidth - 12) / 2, 72);
+            btnModeBatch.SetBounds((contentWidth + 12) / 2, 0, (contentWidth - 12) / 2, 72);
+            foreach (Panel tab in new[] { btnModeActive, btnModeBatch })
+            {
+                tab.Controls[0].SetBounds(36, 14, tab.Width - 72, 24);
+                tab.Controls[1].SetBounds(36, 38, tab.Width - 72, 22);
+            }
+            mainBrandTitle.Font = new Font("Segoe UI", 22F, FontStyle.Bold);
+            dgvDrawings.CellPainting += PaintDrawingStatusBadge;
+
             UpdateModeUi();
             ApplyTheme();
         }
@@ -750,8 +816,8 @@ namespace TTSK_AutoDim_Plates
         {
             slideHandle = new RoundedPanel();
             ((RoundedPanel)slideHandle).BorderRadius = 14;
-            slideHandle.Location = new Point(MainBaseWidth - 8, 292);
-            slideHandle.Size = new System.Drawing.Size(20, 62);
+            slideHandle.Location = new Point(MainBaseWidth - 6, 292);
+            slideHandle.Size = new System.Drawing.Size(14, 62);
             slideHandle.Cursor = Cursors.Hand;
             slideHandle.Click += delegate
             {
@@ -947,12 +1013,387 @@ namespace TTSK_AutoDim_Plates
             BuildOpenGridDetailPanel();
             BuildMarkOffsetsDetailPanel();
             BuildArrangeViewDetailPanel();
+            InitializeToolPresentation();
 
             slideTimer = new System.Windows.Forms.Timer();
             slideTimer.Interval = 8;
             slideTimer.Tick += SlideTimer_Tick;
 
             LayoutSlidePanels();
+        }
+
+        // Presentation layer only. Existing action controls, values and handlers are retained.
+        private void InitializeToolPresentation()
+        {
+            slideTitleLabel.Font = new Font("Segoe UI", 12F, FontStyle.Bold);
+            Panel[] cards = { slideAutoDimTool, slideArrangeTool, slideLineTool, slideDimTool, slideGridTool };
+            string[] descriptions = { "Chọn kiểu liên kết và chức năng DIM", "Bố trí mặt cắt và khoảng cách view",
+                "Vẽ line theo chiều dài hoặc hai điểm", "Điều chỉnh khoảng cách các tầng DIM", "Mở khung view, giữ trục và chỉnh mark" };
+            System.Action[] actions = { OpenAutoDimensionPanel, OpenArrangeViewPanel,
+                OpenLineDistancePanel, OpenDimSpacingPanel, OpenOpenGridPanel };
+            for (int i = 0; i < cards.Length; i++)
+            {
+                Panel card = cards[i];
+                card.Height = 76;
+                card.Controls[0].SetBounds(8, 12, 40, 46);
+                card.Controls[1].SetBounds(56, 14, 244, 24);
+                card.Controls[1].Font = new Font("Segoe UI", 10F, FontStyle.Bold);
+                Label description = new Label();
+                description.Text = descriptions[i];
+                description.Font = new Font("Segoe UI", 8.5F);
+                description.SetBounds(56, 40, 248, 30);
+                System.Action action = actions[i];
+                description.Click += delegate { action(); };
+                description.Cursor = Cursors.Hand;
+                card.Controls.Add(description);
+                toolDescriptions.Add(description);
+            }
+
+            toolHomeButton = new SafeRoundedButton();
+            toolHomeButton.Text = "‹  Tất cả công cụ";
+            toolHomeButton.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+            toolHomeButton.SetBounds(18, 16, 160, 32);
+            toolHomeButton.Click += delegate { OpenSlideTools(); };
+            slideToolsPanel.Controls.Add(toolHomeButton);
+            toolNavigation = new Panel();
+            toolNavigation.SetBounds(18, 62, SlideToolsWidth - 36, 36);
+            slideToolsPanel.Controls.Add(toolNavigation);
+            string[] names = { "DIM", "VIEW", "LINE", "GAP", "GRID" };
+            for (int i = 0; i < names.Length; i++)
+            {
+                SafeRoundedButton button = new SafeRoundedButton();
+                button.Text = names[i];
+                button.AccessibleName = cards[i].Controls[1].Text;
+                button.Font = new Font("Segoe UI", 8.5F, FontStyle.Bold);
+                button.SetBounds(i * 63, 0, 60, 34);
+                System.Action action = actions[i];
+                button.Click += delegate { action(); };
+                toolNavigation.Controls.Add(button);
+                toolNavigationButtons.Add(button);
+                pinTopMostToolTip.SetToolTip(button, cards[i].Controls[1].Text);
+            }
+
+            // Make the second line tool discoverable without changing its pick callback.
+            foreach (Control control in slideLinePanel.Controls)
+            {
+                if (control is ThemeButton && control.AccessibleName == "Pick two points to draw line")
+                {
+                    control.SetBounds(16, 182, slideLinePanel.Width - 32, 36);
+                    control.Paint -= DrawPickTwoPointsIcon;
+                    control.Text = "Chọn 2 điểm trong bản vẽ";
+                    control.Font = new Font("Segoe UI", 9F);
+                }
+            }
+            slideLinePanel.Height = 236;
+            Label lineHint = new Label();
+            lineHint.Text = "hoặc";
+            lineHint.Font = new Font("Segoe UI", 8F);
+            lineHint.TextAlign = ContentAlignment.MiddleCenter;
+            lineHint.SetBounds(16, 164, slideLinePanel.Width - 32, 18);
+            slideLinePanel.Controls.Add(lineHint);
+            toolDescriptions.Add(lineHint);
+
+            foreach (Panel detail in new[] { slideDimPanel, slideLinePanel, slideGridPanel,
+                slideArrangePanel, slideAutoDimPanel, slideMarkOffsetsPanel })
+            {
+                detail.Controls[0].Font = new Font("Segoe UI", 11F, FontStyle.Bold);
+                foreach (Control control in detail.Controls)
+                {
+                    if (control is NumericUpDown || control is ComboBox)
+                        control.Font = new Font("Segoe UI", 10F);
+                }
+            }
+            pinTopMostToolTip.SetToolTip(nudArrangeGap, "Khoảng cách giữa các view (mm).");
+            pinTopMostToolTip.SetToolTip(nudNeighborGridX, "Độ dịch mark theo X (mm).");
+            pinTopMostToolTip.SetToolTip(nudNeighborGridY, "Độ dịch mark theo Y (mm).");
+            toolPresentationReady = true;
+            InitializeToolFields();
+            StyleAutoDimPageTabs();
+            InitializeToolInteractions();
+        }
+
+        private void InitializeToolInteractions()
+        {
+            foreach (Panel page in autoDimPages)
+                foreach (Control child in page.Controls)
+                {
+                    RoundedPanel tile = child as RoundedPanel;
+                    if (tile != null) tile.EnableToolHover();
+                }
+            foreach (Panel card in new[] { slideAutoDimTool, slideArrangeTool, slideLineTool,
+                slideDimTool, slideGridTool, arrangeSectionHorizontalBox, arrangeSectionVerticalBox })
+                ((RoundedPanel)card).EnableToolHover();
+        }
+
+        private void StyleAutoDimPageTabs()
+        {
+            // Keep opaque gallery pages inside the frame so both outline edges stay visible.
+            foreach (Panel page in autoDimPages)
+            {
+                page.SetBounds(6, page.Top, slideAutoDimPanel.Width - 12, page.Height);
+                foreach (Control tile in page.Controls) tile.Left -= 6;
+            }
+            for (int i = 0; i < autoDimPageButtons.Count; i++)
+            {
+                autoDimPageButtons[i].SetBounds(14 + i * 98, 378, 90, 24);
+                autoDimPageButtons[i].BorderRadius = 8;
+            }
+        }
+
+        private void InitializeToolFields()
+        {
+            // Only bounds, typography and painting change. Reuse the actual input instances.
+            slideDimPanel.Height = 368;
+            slideDimPanel.Controls[1].SetBounds(16, 130, 282, 24);
+            nudDimSpacing.SetBounds(16, 158, 282, 44);
+            slideDimPanel.Controls[3].SetBounds(16, 218, 282, 24);
+            cboDimScope.SetBounds(16, 246, 282, 40);
+            slideDimPanel.Controls[5].SetBounds(16, 308, 282, 40);
+            AddToolDiagram(slideDimPanel, true);
+
+            slideLinePanel.Height = 332;
+            slideLinePanel.Controls[2].SetBounds(16, 128, 282, 24);
+            nudLineDistance.SetBounds(16, 156, 282, 44);
+            slideLinePanel.Controls[4].SetBounds(16, 218, 282, 40);
+            slideLinePanel.Controls[1].SetBounds(16, 278, 282, 38);
+            foreach (Control control in slideLinePanel.Controls)
+                if (control.Text == "hoặc") control.Top = 258;
+            AddToolDiagram(slideLinePanel, false);
+
+            slideArrangePanel.Height = 356;
+            arrangeSectionHorizontalBox.SetBounds(16, 82, 130, 110);
+            arrangeSectionVerticalBox.SetBounds(168, 82, 130, 110);
+            ConfigureArrangeIllustration(arrangeSectionHorizontalBox, true);
+            ConfigureArrangeIllustration(arrangeSectionVerticalBox, false);
+            slideArrangePanel.Controls[5].SetBounds(16, 210, 282, 24);
+            slideArrangePanel.Controls[5].Text = "Khoảng cách giữa view (mm)";
+            nudArrangeGap.SetBounds(16, 240, 282, 44);
+            slideArrangePanel.Controls[7].SetBounds(16, 304, 282, 40);
+
+            slideGridPanel.Height = 238;
+            slideGridPanel.Controls[0].Width = 282;
+            slideGridPanel.Controls[2].Visible = false;
+            slideGridPanel.Controls[2].Font = new Font("Segoe UI", 9F);
+            Label memberLabel = new Label();
+            memberLabel.Text = "Loại cấu kiện";
+            memberLabel.SetBounds(16, 56, 136, 32);
+            memberLabel.Font = new Font("Segoe UI", 9F);
+            slideGridPanel.Controls.Add(memberLabel);
+            beamColumnModeSwitch.SetBounds(162, 56, 136, 32);
+            Label keepAxesLabel = new Label();
+            keepAxesLabel.Text = "Giữ trục";
+            keepAxesLabel.Font = new Font("Segoe UI", 9F);
+            keepAxesLabel.SetBounds(16, 104, 136, 22);
+            slideGridPanel.Controls.Add(keepAxesLabel);
+            fitViewModeSwitch.SetBounds(16, 132, 136, 32);
+            fitGridAxisCountLabel.SetBounds(162, 104, 136, 22);
+            fitGridAxisCountLabel.TextAlign = ContentAlignment.MiddleLeft;
+            fitGridAxisCountLabel.Font = new Font("Segoe UI", 9F);
+            fitGridAxisCountLabel.Text = "Số trục";
+            fitGridAxisCountBox.SetBounds(162, 132, 136, 32);
+            slideGridPanel.Controls[6].SetBounds(16, 184, 136, 40);
+            fitViewButton.SetBounds(162, 184, 136, 40);
+
+            slideMarkOffsetsPanel.Height = 178;
+            slideMarkOffsetsPanel.Controls[0].Left = 16;
+            Panel offsets = (Panel)slideMarkOffsetsPanel.Controls[1];
+            offsets.SetBounds(16, 48, 282, 116);
+            offsets.Controls[0].SetBounds(0, 0, 136, 20);
+            offsets.Controls[0].Text = "X  (mm)";
+            offsets.Controls[1].SetBounds(146, 0, 136, 20);
+            offsets.Controls[1].Text = "Y  (mm)";
+            offsets.Controls[2].Visible = false;
+            nudNeighborGridX.SetBounds(0, 24, 136, 40);
+            nudNeighborGridY.SetBounds(146, 24, 136, 40);
+            offsets.Controls[5].SetBounds(0, 80, 282, 36);
+            foreach (BorderNumericUpDown input in new[] { nudDimSpacing, nudLineDistance,
+                nudArrangeGap, nudNeighborGridX, nudNeighborGridY })
+                input.Font = new Font("Segoe UI", 13F, FontStyle.Bold);
+            cboDimScope.Font = new Font("Segoe UI", 10F);
+        }
+
+        private void AddToolDiagram(Panel parent, bool spacing)
+        {
+            Panel preview = new Panel();
+            preview.SetBounds(16, 52, 282, 62);
+            BorderNumericUpDown source = spacing ? nudDimSpacing : nudLineDistance;
+            source.ValueChanged += delegate { preview.Invalidate(); };
+            preview.Paint += delegate(object sender, PaintEventArgs e)
+            {
+                Color accent = PrimaryButtonColor;
+                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                using (Pen pen = new Pen(accent, 1.5F))
+                using (Pen soft = new Pen(_darkMode ? Color.FromArgb(80, 80, 80) : Color.FromArgb(205, 218, 235), 1F))
+                {
+                    if (spacing)
+                    {
+                        for (int i = 0; i < 3; i++) e.Graphics.DrawLine(i == 1 ? pen : soft, 24, 14 + i * 17, 242, 14 + i * 17);
+                        e.Graphics.DrawLine(pen, 258, 14, 258, 48);
+                        e.Graphics.DrawLine(pen, 254, 18, 262, 10);
+                        e.Graphics.DrawLine(pen, 254, 52, 262, 44);
+                    }
+                    else
+                    {
+                        e.Graphics.DrawLine(pen, 28, 30, 254, 30);
+                        e.Graphics.DrawLine(pen, 28, 19, 28, 41);
+                        e.Graphics.DrawLine(pen, 254, 19, 254, 41);
+                        e.Graphics.DrawEllipse(pen, 24, 26, 8, 8);
+                        e.Graphics.DrawEllipse(pen, 250, 26, 8, 8);
+                    }
+                }
+                string measurement = source.Value.ToString("0.#") + " mm";
+                System.Drawing.Rectangle labelBox = new System.Drawing.Rectangle(86, 19, 110, 24);
+                using (SolidBrush labelBack = new SolidBrush(preview.BackColor))
+                    e.Graphics.FillRectangle(labelBack, labelBox);
+                TextRenderer.DrawText(e.Graphics, measurement, source.Font, labelBox, accent,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            };
+            parent.Controls.Add(preview);
+        }
+
+        private void ConfigureArrangeIllustration(Panel panel, bool horizontal)
+        {
+            Control illustration = panel.Controls[0];
+            illustration.Text = "";
+            illustration.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+            illustration.SetBounds(0, 0, 130, 110);
+            illustration.Paint += delegate(object sender, PaintEventArgs e)
+            {
+                bool selected = horizontal == arrangeSectionHorizontal;
+                Color color = selected ? (_darkMode ? Color.FromArgb(224, 156, 96) : BrightBlue)
+                    : (_darkMode ? Color.FromArgb(160, 170, 184) : Color.FromArgb(110, 121, 137));
+                using (Pen pen = new Pen(color, 1.6F))
+                {
+                    if (horizontal)
+                        for (int i = 0; i < 3; i++) e.Graphics.DrawRectangle(pen, 20 + i * 32, 32, 25, 24);
+                    else
+                        for (int i = 0; i < 4; i++) e.Graphics.DrawRectangle(pen, 38 + (i % 2) * 30, 21 + (i / 2) * 27, 23, 20);
+                    if (selected) { e.Graphics.DrawLine(pen, 106, 12, 110, 16); e.Graphics.DrawLine(pen, 110, 16, 118, 8); }
+                }
+                TextRenderer.DrawText(e.Graphics, horizontal ? "Xếp ngang" : "Xếp dọc",
+                    illustration.Font, new System.Drawing.Rectangle(0, 80, 130, 24), color,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            };
+        }
+
+        private void LayoutToolPresentation()
+        {
+            if (!toolPresentationReady) return;
+            bool detailOpen = slideAutoDimOpen || slideArrangeOpen || slideLineOpen || slideDimOpen || slideGridOpen;
+            slideTitleLabel.Visible = !detailOpen && !slideDictionaryOpen;
+            toolHomeButton.Visible = detailOpen || slideDictionaryOpen;
+            toolNavigation.Visible = detailOpen;
+            Panel[] cards = { slideAutoDimTool, slideArrangeTool, slideLineTool, slideDimTool, slideGridTool };
+            for (int i = 0; i < cards.Length; i++)
+            {
+                cards[i].Visible = !detailOpen && !slideDictionaryOpen;
+                cards[i].Location = new Point(18, 66 + i * 88);
+            }
+            foreach (Panel detail in new[] { slideAutoDimPanel, slideArrangePanel, slideLinePanel, slideDimPanel, slideGridPanel })
+                detail.Location = new Point(18, 112);
+            slideMarkOffsetsPanel.Location = new Point(18, 112 + slideGridPanel.Height + 12);
+            toolHomeButton.BringToFront();
+            toolNavigation.BringToFront();
+            ApplyToolPresentationTheme();
+        }
+
+        private void ApplyToolPresentationTheme()
+        {
+            if (!toolPresentationReady) return;
+            Color surface = _darkMode ? Color.FromArgb(22, 22, 22) : Color.White;
+            Color background = _darkMode ? Color.FromArgb(16, 16, 16) : Color.FromArgb(247, 249, 252);
+            Color ink = _darkMode ? Color.FromArgb(226, 232, 240) : Color.FromArgb(38, 48, 62);
+            Color muted = _darkMode ? Color.FromArgb(160, 170, 184) : Color.FromArgb(110, 121, 137);
+            Color accent = PrimaryButtonColor;
+            slideToolsPanel.BackColor = background;
+            ((RoundedPanel)slideToolsPanel).BorderColor = _darkMode ? Color.FromArgb(139, 104, 77) : Color.FromArgb(153, 176, 207);
+            slideTitleLabel.ForeColor = accent;
+            toolNavigation.BackColor = background;
+            bool[] selected = { slideAutoDimOpen, slideArrangeOpen, slideLineOpen, slideDimOpen, slideGridOpen };
+            for (int i = 0; i < toolNavigationButtons.Count; i++)
+            {
+                SafeRoundedButton button = toolNavigationButtons[i];
+                button.FillColor = selected[i] ? accent : background;
+                button.BorderColor = selected[i] ? accent : background;
+                button.TextColor = selected[i] ? (_darkMode ? Color.FromArgb(24, 20, 16) : Color.White) : muted;
+                button.BorderRadius = 8;
+                button.Invalidate();
+            }
+            toolHomeButton.FillColor = background;
+            toolHomeButton.BorderColor = background;
+            toolHomeButton.TextColor = muted;
+            foreach (Panel panel in new[] { slideAutoDimTool, slideArrangeTool, slideLineTool,
+                slideDimTool, slideGridTool, slideAutoDimPanel, slideArrangePanel, slideLinePanel,
+                slideDimPanel, slideGridPanel, slideMarkOffsetsPanel })
+            {
+                RoundedPanel rounded = panel as RoundedPanel;
+                rounded.BackColor = surface;
+                rounded.BorderColor = _darkMode ? Color.FromArgb(139, 104, 77) : Color.FromArgb(153, 176, 207);
+                rounded.BorderRadius = 10;
+                rounded.ToolShadowDepth = 4;
+                rounded.ToolHoverColor = accent;
+                rounded.ToolShadowColor = _darkMode ? Color.FromArgb(45, 0, 0, 0) : Color.FromArgb(18, 36, 63, 100);
+                rounded.ToolHeaderAccent = Color.Empty;
+                foreach (Control control in panel.Controls)
+                    if (control is Label) control.ForeColor = accent;
+                panel.Invalidate();
+            }
+            foreach (Label description in toolDescriptions) description.ForeColor = muted;
+            foreach (Panel page in autoDimPages)
+                foreach (Control child in page.Controls)
+                {
+                    RoundedPanel tile = child as RoundedPanel;
+                    if (tile == null) continue;
+                    tile.ToolHoverColor = accent;
+                    tile.ToolShadowColor = _darkMode ? Color.FromArgb(50, 0, 0, 0) : Color.FromArgb(18, 36, 63, 100);
+                    tile.Invalidate();
+                }
+            StyleToolActions(slideDimPanel, accent);
+            StyleToolActions(slideLinePanel, accent);
+            StyleToolActions(slideGridPanel, accent);
+            StyleToolActions(slideMarkOffsetsPanel, accent);
+            StyleToolActions(slideArrangePanel, accent);
+            foreach (BorderNumericUpDown input in new[] { nudDimSpacing, nudLineDistance,
+                nudArrangeGap, nudNeighborGridX, nudNeighborGridY })
+            {
+                input.BackColor = _darkMode ? Color.FromArgb(28, 28, 28) : Color.FromArgb(245, 248, 252);
+                input.ForeColor = ink;
+                input.CustomBorderColor = _darkMode ? Color.FromArgb(65, 65, 65) : Color.FromArgb(225, 232, 241);
+                input.ButtonBackColor = input.BackColor;
+                input.ButtonBorderColor = input.CustomBorderColor;
+                input.ArrowColor = accent;
+                input.Invalidate();
+            }
+            ((RoundedPanel)slideMarkOffsetsPanel.Controls[1]).BorderColor = surface;
+            ((RoundedPanel)slideMarkOffsetsPanel.Controls[1]).BackColor = surface;
+            foreach (Control control in slideLinePanel.Controls)
+            {
+                ThemeButton picker = control as ThemeButton;
+                if (picker == null || picker.AccessibleName != "Pick two points to draw line") continue;
+                picker.UseCustomPaint = true;
+                picker.CustomBackColor = surface;
+                picker.CustomBorderColor = _darkMode ? Color.FromArgb(65, 65, 65) : PanelBorder;
+                picker.CustomTextColor = ink;
+                picker.Invalidate();
+            }
+            // Keep all nested switches, selected tiles and result colors under their existing theme logic.
+        }
+
+        private void StyleToolActions(Control root, Color accent)
+        {
+            foreach (Control child in root.Controls)
+            {
+                SafeRoundedButton action = child as SafeRoundedButton;
+                if (action != null)
+                {
+                    action.FillColor = accent;
+                    action.BorderColor = accent;
+                    action.TextColor = _darkMode ? Color.FromArgb(24, 20, 16) : Color.White;
+                    action.BorderRadius = 9;
+                    action.Invalidate();
+                }
+                if (child.HasChildren) StyleToolActions(child, accent);
+            }
         }
 
         private Panel MakeSlideToolButton(string icon, string title, string desc, int x, int y)
@@ -1300,7 +1741,7 @@ namespace TTSK_AutoDim_Plates
 
         private void ApplyAutoDimPageButtonStyles()
         {
-            Color accent = _darkMode ? Color.FromArgb(201, 122, 64) : BrightBlue;
+            Color accent = PrimaryButtonColor;
             Color idleBack = _darkMode ? Color.FromArgb(24, 24, 24) : Color.White;
             Color selectedText = _darkMode ? Color.FromArgb(20, 16, 14) : Color.White;
 
@@ -1366,7 +1807,7 @@ namespace TTSK_AutoDim_Plates
             if (tile == null)
                 return;
 
-            Color accent = _darkMode ? Color.FromArgb(201, 122, 64) : BrightBlue;
+            Color accent = PrimaryButtonColor;
             Color idleBack = _darkMode ? Color.FromArgb(24, 24, 24) : Color.White;
             Color selectedText = _darkMode ? Color.FromArgb(20, 16, 14) : Color.White;
             Color idleText = _darkMode ? Color.FromArgb(232, 224, 214) : Color.FromArgb(15, 23, 42);
@@ -1673,7 +2114,7 @@ namespace TTSK_AutoDim_Plates
 
         private void ApplySlot04ModeUi()
         {
-            Color accent = _darkMode ? Color.FromArgb(224, 156, 96) : BrightBlue;
+            Color accent = PrimaryButtonColor;
 
             if (slot04TargetSwitch != null)
             {
@@ -1722,7 +2163,7 @@ namespace TTSK_AutoDim_Plates
 
         private void ApplySlot05ModeUi()
         {
-            Color accent = _darkMode ? Color.FromArgb(224, 156, 96) : BrightBlue;
+            Color accent = PrimaryButtonColor;
 
             if (slot05ModeSwitch != null)
             {
@@ -2948,9 +3389,7 @@ namespace TTSK_AutoDim_Plates
                 arrangeVerticalOrderSwitch.Visible = true;
                 arrangeVerticalOrderSwitch.Enabled = showVerticalSwitch;
                 arrangeVerticalOrderSwitch.DarkMode = _darkMode;
-                arrangeVerticalOrderSwitch.AccentColor = _darkMode
-                    ? Color.FromArgb(224, 156, 96)
-                    : BrightBlue;
+                arrangeVerticalOrderSwitch.AccentColor = PrimaryButtonColor;
                 arrangeVerticalOrderSwitch.BackPanelColor = _darkMode
                     ? Color.FromArgb(18, 18, 18)
                     : Color.White;
@@ -2970,7 +3409,7 @@ namespace TTSK_AutoDim_Plates
             if (panel == null)
                 return;
 
-            Color accent = _darkMode ? Color.FromArgb(224, 156, 96) : BrightBlue;
+            Color accent = PrimaryButtonColor;
             Color border = selected
                 ? accent
                 : (_darkMode ? Color.FromArgb(73, 56, 43) : PanelBorder);
@@ -3086,9 +3525,7 @@ namespace TTSK_AutoDim_Plates
             try
             {
                 autoSectionSwitch.DarkMode = _darkMode;
-                autoSectionSwitch.AccentColor = _darkMode
-                    ? Color.FromArgb(224, 126, 35)
-                    : Color.FromArgb(37, 99, 235);
+                autoSectionSwitch.AccentColor = PrimaryButtonColor;
                 autoSectionSwitch.Checked = _autoSectionEnabled;
                 autoSectionSwitch.Enabled = !_isBatchRunning;
                 autoSectionSwitch.Invalidate();
@@ -3439,8 +3876,8 @@ namespace TTSK_AutoDim_Plates
 
             if (slideHandle != null)
             {
-                slideHandle.Location = new Point(MainBaseWidth - 8, 292);
-                slideHandle.Size = new System.Drawing.Size(20, 62);
+                slideHandle.Location = new Point(MainBaseWidth - 6, 292);
+                slideHandle.Size = new System.Drawing.Size(14, 62);
                 slideHandle.BringToFront();
             }
 
@@ -3457,6 +3894,7 @@ namespace TTSK_AutoDim_Plates
 
             ApplySlideTheme();
             StartSlideAnimation();
+            LayoutToolPresentation();
         }
 
         private void LayoutDrawingToolOrder()
@@ -3867,7 +4305,7 @@ namespace TTSK_AutoDim_Plates
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
 
             Color background = _darkMode ? Color.FromArgb(24, 24, 24) : Color.White;
-            Color accent = _darkMode ? Color.FromArgb(201, 122, 64) : Blue;
+            Color accent = PrimaryButtonColor;
 
             e.Graphics.Clear(background);
 
@@ -4746,7 +5184,7 @@ namespace TTSK_AutoDim_Plates
             if (slideHandle == null)
                 return;
 
-            Color accent = _darkMode ? Color.FromArgb(201, 122, 64) : Blue;
+            Color accent = PrimaryButtonColor;
             Color accentText = _darkMode ? Color.FromArgb(20, 16, 14) : Color.White;
             Color panelBg = _darkMode ? Color.FromArgb(18, 18, 18) : Color.White;
             Color panelBg2 = _darkMode ? Color.FromArgb(15, 15, 15) : Color.White;
@@ -5160,6 +5598,7 @@ namespace TTSK_AutoDim_Plates
                 }
             }
 
+            StyleModeButton(panel, selected);
             panel.Invalidate();
         }
 
@@ -5222,7 +5661,126 @@ namespace TTSK_AutoDim_Plates
             ApplyDataCenterModeUi();
             RefreshAutoDimSlotImages(slideAutoDimPanel);
             ApplyAutoSectionSwitchUi();
+            ApplyToolPresentationTheme();
+            ApplyMainPresentationTheme();
             Invalidate(true);
+        }
+
+        private void ApplyMainPresentationTheme()
+        {
+            if (mainHeaderSurface == null) return;
+            Color accent = PrimaryButtonColor;
+            mainHeaderSurface.BackColor = _darkMode ? Color.FromArgb(22, 25, 31) : Color.White;
+            mainBrandTitle.ForeColor = _darkMode ? Color.FromArgb(240, 244, 250) : Color.FromArgb(15, 23, 42);
+            mainBrandSubtitle.ForeColor = _darkMode ? Color.FromArgb(160, 176, 198) : Color.FromArgb(75, 85, 99);
+            mainIdentityTile.BackColor = mainHeaderSurface.BackColor;
+            mainIdentityTile.BorderColor = mainHeaderSurface.BackColor;
+            mainHeaderActions.BackColor = mainHeaderSurface.BackColor;
+            mainHeaderActions.BorderColor = mainHeaderActions.BackColor;
+            mainVersionLabel.BackColor = mainHeaderActions.BackColor;
+            mainVersionLabel.ForeColor = accent;
+            mainListSurface.ToolHeaderAccent = Color.Empty;
+            dgvDrawings.ColumnHeadersDefaultCellStyle.ForeColor = _darkMode ? Color.FromArgb(235, 173, 119) : Blue;
+            dgvDrawings.ColumnHeadersDefaultCellStyle.SelectionForeColor = dgvDrawings.ColumnHeadersDefaultCellStyle.ForeColor;
+            dgvDrawings.ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.None;
+            dgvDrawings.GridColor = _darkMode ? Color.FromArgb(42, 49, 60) : Color.FromArgb(226, 232, 242);
+            btnRun.FillColor = PrimaryButtonColor;
+            btnRun.BorderColor = PrimaryButtonColor;
+            btnRun.GradientEndColor = Color.Empty;
+            btnRun.Invalidate();
+            foreach (SafeRoundedButton button in new[] { btnLoad, btnCheckScale, btnPrint, btnDictionary, btnClear })
+            {
+                button.FillColor = _darkMode ? Color.FromArgb(29, 34, 42) : Color.White;
+                button.GradientEndColor = _darkMode ? Color.FromArgb(22, 26, 33) : Color.FromArgb(239, 244, 251);
+                button.BorderColor = _darkMode ? Color.FromArgb(137, 96, 65) : Color.FromArgb(150, 174, 210);
+                button.TextColor = _darkMode ? Color.FromArgb(235, 173, 119) : Blue;
+                button.HoverBorderColor = accent;
+                button.Invalidate();
+            }
+            // Print popup follows the same button palette after the main controls have been styled.
+            ApplyPrintMenuTheme();
+            mainHeaderSurface.Invalidate();
+            mainListSurface.Invalidate();
+            dgvDrawings.Invalidate();
+            ApplyMainSurfaceTheme();
+        }
+
+        private void ApplyMainSurfaceTheme()
+        {
+            Color surface = _darkMode ? Color.FromArgb(22, 25, 31) : Color.White;
+            BackColor = _darkMode ? Color.FromArgb(11, 14, 19) : Color.FromArgb(232, 239, 248);
+            foreach (RoundedPanel panel in new[] { mainHeaderSurface, mainListSurface,
+                (RoundedPanel)btnRun.Parent, (RoundedPanel)lblStatus.Parent })
+            {
+                panel.BackColor = surface;
+                panel.BorderColor = _darkMode ? Color.FromArgb(139, 104, 77) : Color.FromArgb(153, 176, 207);
+                panel.BorderRadius = 14;
+                panel.RaisedEdge = true;
+                panel.ToolShadowColor = _darkMode ? Color.Black : Color.FromArgb(45, 60, 82);
+                panel.Invalidate();
+            }
+            StyleModeButton(btnModeActive, rbActive.Checked);
+            StyleModeButton(btnModeBatch, rbBatch.Checked);
+            RoundedPanel modeHost = (RoundedPanel)btnModeActive.Parent;
+            modeHost.BackColor = BackColor;
+            modeHost.BorderColor = BackColor;
+            modeHost.BorderRadius = 0;
+            modeHost.ToolShadowColor = Color.Empty;
+            modeHost.RaisedEdge = false;
+            modeHost.Invalidate();
+            dgvDrawings.ColumnHeadersDefaultCellStyle.BackColor = _darkMode ? Color.FromArgb(30, 35, 44) : Color.FromArgb(244, 247, 251);
+            dgvDrawings.ColumnHeadersDefaultCellStyle.SelectionBackColor = dgvDrawings.ColumnHeadersDefaultCellStyle.BackColor;
+            dgvDrawings.BorderStyle = BorderStyle.None;
+            ((CleanDataGridView)dgvDrawings).DrawSoftOuterBorder = false;
+            dgvDrawings.CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal;
+            dgvDrawings.Invalidate();
+        }
+
+        private void StyleModeButton(Panel panel, bool selected)
+        {
+            if (mainHeaderSurface == null) return;
+            RoundedPanel tab = (RoundedPanel)panel;
+            Color surface = _darkMode ? Color.FromArgb(22, 25, 31) : Color.White;
+            Color accent = _darkMode ? Color.FromArgb(239, 176, 120) : Blue;
+            tab.BackColor = selected ? (_darkMode ? Color.FromArgb(43, 33, 27) : Color.FromArgb(230, 240, 255)) : surface;
+            tab.BorderColor = selected
+                ? (_darkMode ? Color.FromArgb(195, 137, 88) : Color.FromArgb(95, 142, 211))
+                : (_darkMode ? Color.FromArgb(139, 104, 77) : Color.FromArgb(153, 176, 207));
+            tab.BorderRadius = 14;
+            tab.ThinOutline = false;
+            tab.ToolShadowDepth = 4;
+            tab.ToolShadowColor = _darkMode ? Color.FromArgb(selected ? 65 : 25, 0, 0, 0) : Color.FromArgb(selected ? 28 : 12, 45, 60, 82);
+            tab.ToolHoverColor = _darkMode ? Color.FromArgb(195, 137, 88) : Color.FromArgb(95, 142, 211);
+            SetModeCardTextColor(tab, accent);
+            tab.Invalidate();
+        }
+
+        private void PaintDrawingStatusBadge(object sender, DataGridViewCellPaintingEventArgs e)
+        {
+            if (e.RowIndex < 0 || e.ColumnIndex < 0 || dgvDrawings.Columns[e.ColumnIndex].Name != "STATUS") return;
+            string value = Convert.ToString(e.FormattedValue);
+            if (string.IsNullOrWhiteSpace(value)) return;
+            e.Paint(e.ClipBounds, DataGridViewPaintParts.All & ~DataGridViewPaintParts.ContentForeground);
+            Color ink = e.CellStyle.ForeColor;
+            Color surface = _darkMode ? Color.FromArgb(22, 25, 31) : Color.White;
+            Color tint = Color.FromArgb((ink.R + surface.R * 9) / 10, (ink.G + surface.G * 9) / 10, (ink.B + surface.B * 9) / 10);
+            Font font = e.CellStyle.Font ?? dgvDrawings.Font;
+            int width = Math.Min(e.CellBounds.Width - 14, Math.Max(64, TextRenderer.MeasureText(value, font).Width + 14));
+            System.Drawing.Rectangle badge = new System.Drawing.Rectangle(e.CellBounds.Left + (e.CellBounds.Width - width) / 2,
+                e.CellBounds.Top + 3, width, e.CellBounds.Height - 6);
+            if (badge.Width > 0 && badge.Height > 0)
+            {
+                using (GraphicsPath path = RoundedRect(badge, 4))
+                using (SolidBrush brush = new SolidBrush(tint))
+                using (Pen pen = new Pen(Color.FromArgb(90, ink), 1F))
+                {
+                    e.Graphics.FillPath(brush, path);
+                    e.Graphics.DrawPath(pen, path);
+                }
+                TextRenderer.DrawText(e.Graphics, value, font, badge, ink,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+            }
+            e.Handled = true;
         }
 
         private void UpdatePinTopMostToolTip()
@@ -11242,6 +11800,7 @@ namespace TTSK_AutoDim_Plates
 
         private class SafeRoundedButton : Control
         {
+            public Color GradientEndColor { get; set; }
             private bool _hovered;
             private bool _pressed;
             private bool _keyboardPressed;
@@ -11406,8 +11965,16 @@ namespace TTSK_AutoDim_Plates
 
                 using (GraphicsPath path = CreateButtonPath(rect, !ConnectedTop, !ConnectedBottom))
                 {
-                    using (SolidBrush brush = new SolidBrush(fill))
-                        e.Graphics.FillPath(brush, path);
+                    if (!GradientEndColor.IsEmpty && Enabled)
+                    {
+                        Color end = _pressed || _keyboardPressed ? MixButtonColor(GradientEndColor, Color.Black, 0.14)
+                            : _hovered ? MixButtonColor(GradientEndColor, Color.White, 0.10) : GradientEndColor;
+                        using (LinearGradientBrush brush = new LinearGradientBrush(rect, fill, end, 12F))
+                            e.Graphics.FillPath(brush, path);
+                    }
+                    else
+                        using (SolidBrush brush = new SolidBrush(fill))
+                            e.Graphics.FillPath(brush, path);
 
                     using (Pen pen = new Pen(border, 1.1f))
                         e.Graphics.DrawPath(pen, path);
@@ -13774,6 +14341,38 @@ namespace TTSK_AutoDim_Plates
 
         private class RoundedPanel : Panel
         {
+            public bool RaisedEdge { get; set; }
+            public bool ThinOutline { get; set; }
+            public int ToolShadowDepth { get; set; } = 2;
+            public Color ToolHoverColor { get; set; }
+            public Color ToolShadowColor { get; set; }
+            public Color ToolHeaderAccent { get; set; }
+            private bool toolHoverEnabled;
+            private bool toolHovered;
+
+            public void EnableToolHover()
+            {
+                if (toolHoverEnabled) return;
+                toolHoverEnabled = true;
+                WireToolHover(this);
+            }
+
+            private void WireToolHover(Control control)
+            {
+                control.MouseEnter += RefreshToolHover;
+                control.MouseLeave += RefreshToolHover;
+                control.EnabledChanged += RefreshToolHover;
+                foreach (Control child in control.Controls) WireToolHover(child);
+            }
+
+            private void RefreshToolHover(object sender, EventArgs e)
+            {
+                bool hovered = Enabled && ClientRectangle.Contains(PointToClient(Cursor.Position));
+                if (hovered == toolHovered) return;
+                toolHovered = hovered;
+                Invalidate();
+            }
+
             public int BorderRadius { get; set; }
             public Color BorderColor { get; set; }
 
@@ -13807,6 +14406,38 @@ namespace TTSK_AutoDim_Plates
                 e.Graphics.PixelOffsetMode = PixelOffsetMode.Half;
                 e.Graphics.CompositingQuality = CompositingQuality.HighQuality;
 
+                if (RaisedEdge)
+                {
+                    // Edge-only elevation: keep the surface flat and all child bounds intact.
+                    RectangleF face = new RectangleF(2, 1, Width - 5, Height - 4);
+                    for (int layer = 3; layer >= 1; layer--)
+                    {
+                        RectangleF shadow = face;
+                        shadow.Offset(0, layer * 0.65f);
+                        using (GraphicsPath shadowPath = RoundedRectF(shadow, BorderRadius))
+                        using (Pen shadowPen = new Pen(Color.FromArgb(
+                            (BackColor.GetBrightness() > 0.5f ? 26 : 48) + (3 - layer) * 12,
+                            ToolShadowColor), 2F))
+                            e.Graphics.DrawPath(shadowPen, shadowPath);
+                    }
+                    using (GraphicsPath facePath = RoundedRectF(face, BorderRadius))
+                    using (SolidBrush fill = new SolidBrush(BackColor))
+                    using (LinearGradientBrush edge = new LinearGradientBrush(face,
+                        BorderColor, Color.FromArgb(Math.Max(0, BorderColor.R - 20),
+                        Math.Max(0, BorderColor.G - 20), Math.Max(0, BorderColor.B - 20)), 90F))
+                    using (Pen outline = new Pen(edge, 1.5F))
+                    {
+                        e.Graphics.FillPath(fill, facePath);
+                        e.Graphics.DrawPath(outline, facePath);
+                    }
+                    RectangleF inner = face;
+                    inner.Inflate(-1, -1);
+                    using (GraphicsPath innerPath = RoundedRectF(inner, BorderRadius - 1))
+                    using (Pen highlight = new Pen(Color.FromArgb(BackColor.GetBrightness() > 0.5f ? 210 : 22, Color.White), 1F))
+                        e.Graphics.DrawPath(highlight, innerPath);
+                    return;
+                }
+
                 float inset = 1.0f;
 
                 RectangleF rect = new RectangleF(
@@ -13816,18 +14447,32 @@ namespace TTSK_AutoDim_Plates
                     Height - inset * 2 - 1
                 );
 
+                if (!ToolShadowColor.IsEmpty)
+                {
+                    RectangleF shadow = new RectangleF(rect.X, rect.Y + ToolShadowDepth, rect.Width, rect.Height);
+                    using (GraphicsPath shadowPath = RoundedRectF(shadow, BorderRadius))
+                    using (SolidBrush shadowBrush = new SolidBrush(ToolShadowColor))
+                        e.Graphics.FillPath(shadowBrush, shadowPath);
+                    rect.Height -= ToolShadowDepth;
+                }
                 using (GraphicsPath path = RoundedRectF(rect, BorderRadius))
                 {
                     using (SolidBrush brush = new SolidBrush(BackColor))
-                    {
                         e.Graphics.FillPath(brush, path);
-                    }
 
-                    using (Pen pen = new Pen(BorderColor, 1.4f))
+                    using (Pen pen = new Pen(toolHovered && !ToolHoverColor.IsEmpty ? ToolHoverColor : BorderColor,
+                        ThinOutline ? 1.0f : (toolHovered && !ToolHoverColor.IsEmpty ? 2.0f : 1.4f)))
                     {
                         e.Graphics.DrawPath(pen, path);
                     }
                 }
+                if (!ToolHeaderAccent.IsEmpty)
+                    using (Pen accentPen = new Pen(ToolHeaderAccent, 3F))
+                    {
+                        accentPen.StartCap = LineCap.Round;
+                        accentPen.EndCap = LineCap.Round;
+                        e.Graphics.DrawLine(accentPen, 16, 3, 48, 3);
+                    }
             }
         }
 

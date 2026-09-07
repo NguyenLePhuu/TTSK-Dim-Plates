@@ -981,7 +981,7 @@ namespace TTSK_AutoDim_Plates
 
         /// <summary>
         /// Giải quyết và tìm duy nhất một bản vẽ khớp chính xác với DrawingSelectionKey.
-        /// Quét toàn bộ danh sách bản vẽ từ drawingHandler.GetDrawings(), tuyệt đối không break sớm.
+        /// Chỉ quét tập bản vẽ người dùng đang chọn trong Document Manager, tuyệt đối không break sớm.
         /// Chỉ chấp nhận khi số ứng viên tìm thấy chính xác là 1 (candidates.Count == 1).
         /// Nếu không tìm thấy (0) hoặc mơ hồ danh tính (> 1) thì từ chối in để bảo vệ người dùng:
         /// "Thà không in còn hơn in nhầm bản vẽ".
@@ -999,7 +999,7 @@ namespace TTSK_AutoDim_Plates
                 return null;
             }
 
-            DrawingEnumerator enumerator = drawingHandler.GetDrawings();
+            DrawingEnumerator enumerator = drawingHandler.GetDrawingSelector().GetSelected();
             List<Drawing> candidates = new List<Drawing>();
 
             while (enumerator.MoveNext())
@@ -1080,7 +1080,7 @@ namespace TTSK_AutoDim_Plates
             {
                 resolveDiag = string.Format(
                     CultureInfo.InvariantCulture,
-                    "Không tìm thấy bản vẽ nào khớp với khóa định danh: {0}",
+                    "Không xác định được duy nhất drawing mục tiêu trong tập drawing đã chọn của phiên hiện tại. Số ứng viên: 0. Khóa: {0}",
                     key
                 );
                 return null;
@@ -1088,7 +1088,7 @@ namespace TTSK_AutoDim_Plates
 
             resolveDiag = string.Format(
                 CultureInfo.InvariantCulture,
-                "LỖI MƠ HỒ DANH TÍNH: Tìm thấy {0} bản vẽ trùng khớp với khóa định danh ({1}). Hủy lệnh in để tránh in nhầm bản vẽ!",
+                "Không xác định được duy nhất drawing mục tiêu trong tập drawing đã chọn của phiên hiện tại. Số ứng viên: {0}. Khóa: {1}",
                 candidates.Count,
                 key
             );
@@ -1230,10 +1230,6 @@ namespace TTSK_AutoDim_Plates
                 if (confirmedActive == null || !IsSameDrawingIdentity(confirmedActive, drawing))
                 {
                     // Nếu Active Drawing thực tế không khớp với target drawing, lập tức hủy lệnh in!
-                    if (needCloseAfterPrint)
-                    {
-                        try { drawingHandler.CloseActiveDrawing(false); } catch { }
-                    }
                     errorDiag = "Không thể kích hoạt đúng bản vẽ mục tiêu trong Tekla Structures.";
                     return false;
                 }
@@ -1253,10 +1249,6 @@ namespace TTSK_AutoDim_Plates
 
                 if (!dpmLoaded)
                 {
-                    if (needCloseAfterPrint)
-                    {
-                        try { drawingHandler.CloseActiveDrawing(false); } catch { }
-                    }
                     errorDiag = "Tekla Structures không nạp được dữ liệu vector màu (DpmData) từ bản vẽ.";
                     return false;
                 }
