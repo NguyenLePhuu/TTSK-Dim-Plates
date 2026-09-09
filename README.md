@@ -6,6 +6,8 @@ The application was developed by the **TTSK VN BIM Team** as a C# WinForms integ
 
 ## Quick start: download and run
 
+For Google Drive / OneDrive distribution, use the validated runtime ZIP described in [distribution/README.md](distribution/README.md). It excludes development backups, scripts, debug symbols and personal settings, and includes hashes and local antivirus validation. Cloud acceptance must still be checked separately.
+
 The repository includes a ready-to-run Windows package in the `portable` folder, so you do not need Visual Studio for normal use.
 
 1. Download the repository as a ZIP from [TTSK-Dim-Plates on GitHub](https://github.com/NguyenLePhuu/TTSK-Dim-Plates) and extract it.

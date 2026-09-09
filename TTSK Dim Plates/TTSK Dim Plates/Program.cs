@@ -27,6 +27,9 @@ namespace TTSK_AutoDim_Plates
             AppDomain.CurrentDomain.AssemblyResolve += (sender, resolveArgs) =>
                 ResolveTeklaAssembly(resolveArgs, teklaBinPath);
 
+            if (args != null && args.Length == 2 && args[0] == "--snapshot-png-worker")
+                return Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot12.RenderFolder(args[1], teklaBinPath);
+
             if (
                 args != null
                 && args.Length > 0

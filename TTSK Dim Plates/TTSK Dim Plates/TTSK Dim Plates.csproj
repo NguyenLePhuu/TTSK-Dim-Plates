@@ -197,6 +197,8 @@
     <Compile Include="PHU_Slot08_BraceConnectionAutoDim.cs" />
     <Compile Include="PHU_Slot08_BraceConnectionAutoDim.Type2.cs" />
     <Compile Include="PHU_Slot10_RefConnectionAutoDim.cs" />
+    <Compile Include="PHU_Slot11_NeighborCleanup.cs" />
+    <Compile Include="PHU_Slot12_CopyDrawingSnapshot.cs" />
     <Compile Include="PHU_BeamGridDimensionEngine.cs" />
     <Compile Include="PHU_ColumnProjectRouter.cs" />
     <Compile Include="PHU_ColumnDimensionTierContext.cs" />
