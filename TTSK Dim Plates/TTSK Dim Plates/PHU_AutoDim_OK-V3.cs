@@ -827,6 +827,21 @@ namespace Tekla.Technology.Akit.UserScript
 
                 StraightDimensionSetHandler handler = new StraightDimensionSetHandler();
 
+                // Section detail has one semantic rule regardless of whether the
+                // cut was perpendicular to Front X or to an oblique bevel edge.
+                if (IsSectionView(view))
+                {
+                    List<Point> sectionContour = GetSectionBevelContour(solid);
+                    List<SectionBevelDimPlan> sectionPlans;
+                    if (TryBuildSectionBevelDimPlans(sectionContour, realThickness, out sectionPlans))
+                    {
+                        count += CreateSectionBevelDimPlans(handler, view, sectionContour, sectionPlans);
+                        count += CreateSectionBevelAngleDims(view, sectionPlans);
+                        ResizeViewBoundary(view, min, max);
+                        return count;
+                    }
+                }
+
                 if (thicknessProjectionView)
                 {
                     // Không dựng chân DIM từ MinimumPoint/MaximumPoint: với plate vát,
@@ -1654,6 +1669,160 @@ namespace Tekla.Technology.Akit.UserScript
             catch { }
         }
 
+        private sealed class SectionBevelDimPlan
+        {
+            public List<Point> Feet = new List<Point>();
+            public Vector Normal;
+            public int Tier;
+            public bool IsBevelWidth;
+        }
+
+        private static List<Point> GetSectionBevelContour(Solid solid)
+        {
+            // Section's real cut plane is local Z=0. Projecting the whole solid
+            // could pull a bevel from behind the cut onto the dimension feet.
+            try
+            {
+                Point min = solid.MinimumPoint, max = solid.MaximumPoint;
+                double padding = Math.Max(1.0, Math.Max(max.X - min.X, max.Y - min.Y) * 0.01);
+                return GetLargestIntersectionPolygon(solid.IntersectAllFaces(
+                    new Point(min.X - padding, min.Y - padding, 0),
+                    new Point(max.X + padding, min.Y - padding, 0),
+                    new Point(min.X - padding, max.Y + padding, 0)));
+            }
+            catch { return new List<Point>(); }
+        }
+
+        // Work in (u=plate extent, v=true thickness); transpose only for an upright
+        // section. Every resulting foot is an existing contour vertex.
+        private static bool TryBuildSectionBevelDimPlans(
+            List<Point> contour, double thickness, out List<SectionBevelDimPlan> plans)
+        {
+            plans = new List<SectionBevelDimPlan>();
+            if (contour == null || contour.Count < 4 || thickness <= 0.0
+                || Double.IsNaN(thickness) || Double.IsInfinity(thickness))
+                return false;
+            foreach (Point p in contour)
+                if (p == null || Double.IsNaN(p.X) || Double.IsInfinity(p.X)
+                    || Double.IsNaN(p.Y) || Double.IsInfinity(p.Y))
+                    return false;
+            double minX, maxX, minY, maxY;
+            GetMinMax(contour, out minX, out maxX, out minY, out maxY);
+            double tol = Math.Max(0.01, thickness * 0.001);
+            bool thicknessY = Math.Abs(maxY - minY - thickness) <= tol && maxX - minX > thickness * 1.5;
+            bool thicknessX = Math.Abs(maxX - minX - thickness) <= tol && maxY - minY > thickness * 1.5;
+            if (thicknessX == thicknessY)
+                return false;
+            var local = new List<Point>();
+            foreach (Point p in contour)
+            {
+                if (p == null || Double.IsNaN(p.X) || Double.IsInfinity(p.X)
+                    || Double.IsNaN(p.Y) || Double.IsInfinity(p.Y))
+                    return false;
+                local.Add(thicknessY ? new Point(p) : new Point(p.Y, p.X, 0));
+            }
+            GetMinMax(local, out minX, out maxX, out minY, out maxY);
+            var endFeet = new Dictionary<int, List<Point>>();
+            for (int i = 0; i < local.Count; i++)
+            {
+                Point a = local[i], b = local[(i + 1) % local.Count];
+                double du = Math.Abs(a.X - b.X), dv = Math.Abs(a.Y - b.Y);
+                if (du <= tol || dv <= tol)
+                    continue;
+                // Only a single straight corner bevel, with a body edge and a
+                // remaining land (or the opposite face for a full-depth bevel).
+                int side = Math.Abs(Math.Max(a.X, b.X) - maxX) <= tol ? 1
+                    : Math.Abs(Math.Min(a.X, b.X) - minX) <= tol ? -1 : 0;
+                if (side == 0 || dv > thickness + tol || du >= (maxX - minX) * 0.5)
+                    return false;
+                Point inner = side > 0 ? (a.X < b.X ? a : b) : (a.X > b.X ? a : b);
+                Point outer = object.ReferenceEquals(inner, a) ? b : a;
+                int face = Math.Abs(inner.Y - minY) <= tol ? -1
+                    : Math.Abs(inner.Y - maxY) <= tol ? 1 : 0;
+                if (face == 0)
+                    return false;
+                Point neighborA = local[(i + local.Count - 1) % local.Count];
+                Point neighborB = local[(i + 2) % local.Count];
+                Point innerNeighbor = object.ReferenceEquals(inner, a) ? neighborA : neighborB;
+                Point outerNeighbor = object.ReferenceEquals(outer, a) ? neighborA : neighborB;
+                bool body = Math.Abs(innerNeighbor.Y - inner.Y) <= tol
+                    && side * (inner.X - innerNeighbor.X) > tol;
+                bool land = Math.Abs(outerNeighbor.X - outer.X) <= tol
+                    && Math.Abs(outerNeighbor.Y - outer.Y) > tol;
+                bool fullDepth = Math.Abs(dv - thickness) <= tol
+                    && Math.Abs(outerNeighbor.Y - outer.Y) <= tol;
+                if (!body || (!land && !fullDepth))
+                    return false;
+                var run = new SectionBevelDimPlan { Normal = new Vector(0, face, 0), Tier = 1, IsBevelWidth = true };
+                run.Feet.Add(inner); run.Feet.Add(outer); plans.Add(run);
+                if (!endFeet.ContainsKey(side)) endFeet[side] = new List<Point>();
+                endFeet[side].Add(inner); endFeet[side].Add(outer);
+                if (land) endFeet[side].Add(outerNeighbor);
+            }
+            if (plans.Count == 0)
+                return false;
+            foreach (var pair in endFeet)
+            {
+                pair.Value.Sort((a, b) => a.Y.CompareTo(b.Y));
+                var chain = new SectionBevelDimPlan { Normal = new Vector(pair.Key, 0, 0), Tier = 1 };
+                foreach (Point p in pair.Value)
+                    if (chain.Feet.Count == 0 || Math.Abs(chain.Feet[chain.Feet.Count - 1].Y - p.Y) > tol)
+                        chain.Feet.Add(p);
+                if (Math.Abs(chain.Feet[0].Y - minY) > tol
+                    || Math.Abs(chain.Feet[chain.Feet.Count - 1].Y - maxY) > tol)
+                    return false;
+                plans.Add(chain);
+                if (chain.Feet.Count > 2)
+                {
+                    var total = new SectionBevelDimPlan { Normal = new Vector(pair.Key, 0, 0), Tier = 2 };
+                    total.Feet.Add(chain.Feet[0]); total.Feet.Add(chain.Feet[chain.Feet.Count - 1]);
+                    plans.Add(total);
+                }
+            }
+            if (thicknessX)
+                foreach (var plan in plans)
+                {
+                    plan.Normal = new Vector(plan.Normal.Y, plan.Normal.X, 0);
+                    for (int i = 0; i < plan.Feet.Count; i++)
+                        plan.Feet[i] = new Point(plan.Feet[i].Y, plan.Feet[i].X, 0);
+                }
+            return true;
+        }
+
+        private static int CreateSectionBevelDimPlans(StraightDimensionSetHandler handler,
+            View view, List<Point> contour, List<SectionBevelDimPlan> plans)
+        {
+            var created = new List<StraightDimensionSet>();
+            try
+            {
+                foreach (var plan in plans)
+                {
+                    var points = new PointList();
+                    foreach (Point p in plan.Feet) points.Add(new Point(p));
+                    double edge = Double.NegativeInfinity;
+                    foreach (Point p in contour)
+                        edge = Math.Max(edge, p.X * plan.Normal.X + p.Y * plan.Normal.Y);
+                    Point first = plan.Feet[0];
+                    double distance = edge + GetCleanDimOffsetByTier(plan.Tier)
+                        - first.X * plan.Normal.X - first.Y * plan.Normal.Y;
+                    var dim = handler.CreateDimensionSet(view, points, plan.Normal, distance);
+                    if (dim == null) throw new InvalidOperationException("Cannot create section bevel dimension.");
+                    created.Add(dim);
+                    // Preserve individual depth/land segments even when they are equal.
+                    dim.Attributes.CombinedDimension.Format = DimensionSetBaseAttributes.CombineFormats.Off;
+                    if (!dim.Modify() || !dim.Select()
+                        || dim.Attributes.CombinedDimension.Format != DimensionSetBaseAttributes.CombineFormats.Off)
+                        throw new InvalidOperationException("Cannot verify section chain formatting.");
+                }
+                return created.Count;
+            }
+            catch
+            {
+                foreach (var dim in created) { try { dim.Delete(); } catch { } }
+                throw;
+            }
+        }
+
         private static bool IsSectionThicknessAcrossX(
             bool isSectionView,
             double spanX,
@@ -1745,6 +1914,57 @@ namespace Tekla.Technology.Akit.UserScript
             }
 
             return left != null && right != null;
+        }
+
+        private static bool TryGetSectionBevelWidthAnglePoints(
+            SectionBevelDimPlan plan, double referenceLength,
+            out Point origin, out Point point1, out Point point2)
+        {
+            origin = point1 = point2 = null;
+            if (plan == null || plan.Feet.Count != 2 || plan.Normal == null)
+                return false;
+            Point inner = plan.Feet[0], outer = plan.Feet[1];
+            // Only the bevel-width plan has a diagonal pair. Thickness totals
+            // may also have two feet, so identify the actual bevel plans explicitly.
+            if (!plan.IsBevelWidth)
+                return false;
+            double rayLength = Math.Max(referenceLength, Distance2D(inner, outer));
+            if (Double.IsNaN(rayLength) || Double.IsInfinity(rayLength) || rayLength <= 0)
+                return false;
+            origin = new Point(outer.X, outer.Y, 0);
+            point1 = new Point(origin.X + plan.Normal.X * rayLength,
+                origin.Y + plan.Normal.Y * rayLength, 0);
+            point2 = new Point(inner.X, inner.Y, 0);
+            return true;
+        }
+
+        private static int CreateSectionBevelAngleDims(View view, List<SectionBevelDimPlan> plans)
+        {
+            int count = 0;
+            if (view == null || plans == null)
+                return count;
+            double scale = view.Attributes.Scale;
+            if (Double.IsNaN(scale) || Double.IsInfinity(scale) || scale <= 0)
+                return count;
+            foreach (var plan in plans)
+            {
+                Point origin, point1, point2;
+                // 1.4 paper mm reproduces the approved reference ray at scale 1:5.
+                // This affects presentation only; origin and bevel ray are real feet.
+                if (!TryGetSectionBevelWidthAnglePoints(plan, 1.4 * scale,
+                    out origin, out point1, out point2))
+                    continue;
+                if (HasMatchingThinChamferAngleDimension(view, origin, point1, point2))
+                    continue;
+                var attributes = new AngleDimensionAttributes();
+                attributes.Type = AngleTypes.AngleAtVertex;
+                attributes.TransparentBackground = false;
+                if (attributes.Text != null)
+                    attributes.Text.TextPlacing = DimensionSetBaseAttributes.DimensionTextPlacings.AboveDimensionLine;
+                var dimension = new AngleDimension(view, origin, point1, point2, 0.0, attributes);
+                if (dimension.Insert()) count++;
+            }
+            return count;
         }
 
         private static int CreateSectionThicknessChamferAngleDims(
@@ -1870,6 +2090,14 @@ namespace Tekla.Technology.Akit.UserScript
                     List<Point> contour = BuildConvexHull2D(projected);
                     if (contour == null || contour.Count < 3)
                         continue;
+
+                    List<SectionBevelDimPlan> unifiedPlans;
+                    List<Point> sectionContour = GetSectionBevelContour(solid);
+                    if (TryBuildSectionBevelDimPlans(sectionContour, realThickness, out unifiedPlans))
+                    {
+                        count += CreateSectionBevelAngleDims(view, unifiedPlans);
+                        continue;
+                    }
 
                     double minX;
                     double maxX;

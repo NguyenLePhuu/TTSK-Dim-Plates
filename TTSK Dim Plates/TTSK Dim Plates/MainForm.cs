@@ -1624,93 +1624,26 @@ namespace TTSK_AutoDim_Plates
             );
             page1.Controls.Add(slot5);
 
-            Panel slot6 = MakeAutoDimSlotBox(
-                "⑥",
-                "Nishi Azabu",
-                "Auto dim toàn bộ",
-                innerMargin + boxW + gap,
-                (boxH + gap) * 2,
-                boxW,
-                boxH,
-                delegate
-                {
-                    RunExternalAutoDimSlot(
-                        "Tekla.Technology.Akit.UserScript.PHU_NishiAzabuAutoDim"
-                    );
-                }
-            );
+            Panel slot6 = MakeAutoDimSlotBox("⑥", "Liên kết giằng xéo",
+                "3 thanh L + plate liên kết", innerMargin + boxW + gap, (boxH + gap) * 2,
+                boxW, boxH, delegate { RunVisibleAutoDimSlot(6); });
             page1.Controls.Add(slot6);
-
-            Panel slot7 = MakeAutoDimSlotBox(
-                GetAutoDimCircledNumber(7),
-                "Nishi Azabu 2",
-                "Auto dim topology 2",
-                innerMargin,
-                0,
-                boxW,
-                boxH,
-                delegate
-                {
-                    RunExternalAutoDimSlot(
-                        "Tekla.Technology.Akit.UserScript.PHU_NishiAzabuAutoDimSlot07"
-                    );
-                }
-            );
-            page2.Controls.Add(slot7);
-
-            Panel slot8 = MakeAutoDimSlotBox(
-                GetAutoDimCircledNumber(8),
-                "Liên kết giằng xéo",
-                "3 thanh L + plate liên kết",
-                innerMargin + boxW + gap,
-                0,
-                boxW,
-                boxH,
-                delegate
-                {
-                    RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot08");
-                }
-            );
-            page2.Controls.Add(slot8);
-
-            dataCenterSlotTile = MakeAutoDimSlotBox(
-                GetAutoDimCircledNumber(9),
-                "Data Center",
-                "1 Grid · Gap theo Grid · Center",
-                innerMargin,
-                boxH + gap,
-                boxW,
-                boxH,
-                delegate
-                {
-                    ToggleDataCenterMode();
-                }
-            );
+            dataCenterSlotTile = MakeAutoDimSlotBox("⑦", "Injai Data Center",
+                "Dầm - Cột", innerMargin, 0, boxW, boxH,
+                delegate { RunVisibleAutoDimSlot(7); });
             page2.Controls.Add(dataCenterSlotTile);
             if (dataCenterSlotTile.Controls.Count >= 3)
             {
                 dataCenterSlotTitle = dataCenterSlotTile.Controls[1] as Label;
                 dataCenterSlotDescription = dataCenterSlotTile.Controls[2] as Label;
             }
-
-            Panel slot10 = MakeAutoDimSlotBox(
-                GetAutoDimCircledNumber(10),
-                "Liên kết dầm REF",
-                "Dim theo REF · Edge · Bolt · Plate",
-                innerMargin + boxW + gap,
-                boxH + gap,
-                boxW,
-                boxH,
-                delegate
-                {
-                    RunExternalAutoDimSlot(
-                        "Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot10"
-                    );
-                }
-            );
-            page2.Controls.Add(slot10);
-
-            AddAutoDimPlaceholderSlots(page2, 11, 12, innerMargin, gap, boxW, boxH);
+            Panel slot8 = MakeAutoDimSlotBox("⑧", "Snapshot Batch",
+                "Xuất PNG → Desktop", innerMargin + boxW + gap, 0, boxW, boxH,
+                delegate { RunVisibleAutoDimSlot(8); });
+            page2.Controls.Add(slot8);
+            page2.Controls.Add(MakeAutoDimSlotBox("⑨", "Ẩn neighbor", "Giữ liên kết trực tiếp",
+                innerMargin, boxH + gap, boxW, boxH, delegate { RunVisibleAutoDimSlot(9); }));
+            AddAutoDimPlaceholderSlots(page2, 10, 12, innerMargin, gap, boxW, boxH);
             AddAutoDimPlaceholderSlots(page3, 13, 17, innerMargin, gap, boxW, boxH);
 
             Panel slot18 = MakeAutoDimSlotBox(
@@ -1791,20 +1724,19 @@ namespace TTSK_AutoDim_Plates
                 int position = (slotNumber - 1) % 6;
                 int column = position % 2;
                 int row = position / 2;
-                string targetTypeName =
-                    "Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot" + slotNumber.ToString("00");
+                int visibleSlotNumber = slotNumber;
 
                 Panel slot = MakeAutoDimSlotBox(
                     GetAutoDimCircledNumber(slotNumber),
                     "Slot " + slotNumber.ToString("00"),
-                    slotNumber == 11 ? "Ẩn neighbor không liên kết" : slotNumber == 12 ? "Snapshot → ảnh PNG Desktop" : "Chờ gắn file CS",
+                    "Chờ gắn file CS",
                     innerMargin + (column * (boxW + gap)),
                     row * (boxH + gap),
                     boxW,
                     boxH,
                     delegate
                     {
-                        RunExternalAutoDimSlot(targetTypeName);
+                        RunVisibleAutoDimSlot(visibleSlotNumber);
                     }
                 );
                 page.Controls.Add(slot);
@@ -1930,13 +1862,13 @@ namespace TTSK_AutoDim_Plates
             {
                 dataCenterSlotDescription.Text = _dataCenterModeEnabled
                     ? rbActive != null && rbActive.Checked
-                        ? "ON · ACTIVE · DIM + REF Line"
-                        : "ON · BATCH · Data Center"
-                    : "1 Grid · Gap theo Grid · Center";
+                          ? "Dầm - Cột · ON · ACTIVE"
+                          : "Dầm - Cột · ON · BATCH"
+                      : "Dầm - Cột";
             }
 
             if (dataCenterSlotTitle != null)
-                dataCenterSlotTitle.Text = "Data Center";
+                dataCenterSlotTitle.Text = "Injai Data Center";
 
             tile.Invalidate(true);
         }
@@ -2295,8 +2227,29 @@ namespace TTSK_AutoDim_Plates
             RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_SelectedMainPartAutoDim");
         }
 
+        private void RunVisibleAutoDimSlot(int slot)
+        {
+            if (_snapshotExportRunning || _isBatchRunning || _fitAndCleanupRunning) return;
+            switch(slot)
+            {
+                case 6: RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot08"); return;
+                case 7: ToggleDataCenterMode(); return;
+                case 8: RunSnapshotExport(); return;
+                case 9: RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot11"); return;
+                case 10: case 11: case 12:
+                    SetAutoDimResult("Slot " + slot.ToString("00") + ": Chờ gắn file CS"); return;
+                default: RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot" + slot.ToString("00")); return;
+            }
+        }
+
         private void RunExternalAutoDimSlot(string typeFullName)
         {
+            if (_snapshotExportRunning || _fitAndCleanupRunning) return;
+            if (typeFullName == "Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot12")
+            {
+                RunSnapshotExport();
+                return;
+            }
             try
             {
                 Type t = FindTypeInLoadedAssemblies(typeFullName);
@@ -2884,72 +2837,13 @@ namespace TTSK_AutoDim_Plates
                 return;
             }
 
-            if (
-                string.Equals(
-                    actionId,
-                    ShortcutManager.ActionSlot06,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
+            int visibleSlot;
+            if (actionId.Length == 6 && actionId.StartsWith("Slot", StringComparison.OrdinalIgnoreCase)
+                && int.TryParse(actionId.Substring(4), out visibleSlot) && visibleSlot >= 6 && visibleSlot <= 17)
             {
-                RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_NishiAzabuAutoDim");
+                RunVisibleAutoDimSlot(visibleSlot);
                 return;
             }
-
-            if (
-                string.Equals(
-                    actionId,
-                    ShortcutManager.ActionSlot07,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-            {
-                RunExternalAutoDimSlot(
-                    "Tekla.Technology.Akit.UserScript.PHU_NishiAzabuAutoDimSlot07"
-                );
-                return;
-            }
-
-            if (
-                string.Equals(
-                    actionId,
-                    ShortcutManager.ActionSlot08,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-            {
-                RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot08");
-                return;
-            }
-
-            if (
-                string.Equals(
-                    actionId,
-                    ShortcutManager.ActionSlot09,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-            {
-                ToggleDataCenterMode();
-                return;
-            }
-
-            int extendedSlotNumber;
-            if (
-                actionId.Length == 6
-                && actionId.StartsWith("Slot", StringComparison.OrdinalIgnoreCase)
-                && int.TryParse(actionId.Substring(4), out extendedSlotNumber)
-                && extendedSlotNumber >= 10
-                && extendedSlotNumber <= 17
-            )
-            {
-                RunExternalAutoDimSlot(
-                    "Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot"
-                        + extendedSlotNumber.ToString("00")
-                );
-                return;
-            }
-
             if (
                 string.Equals(
                     actionId,
@@ -4556,7 +4450,49 @@ namespace TTSK_AutoDim_Plates
             return false;
         }
 
+        private void RunNeighborCleanupAfterFit()
+        {
+            string fitStatus = lblStatus.Text;
+            try
+            {
+                var handler = new DrawingHandler();
+                var active = handler.GetActiveDrawing();
+                if (_fitSourceDrawing == null || active == null || !active.IsSameDatabaseObject(_fitSourceDrawing))
+                    throw new InvalidOperationException("Bản vẽ đã đổi sau Fit; bỏ qua ẩn neighbor.");
+                if (!(active is Tekla.Structures.Drawing.AssemblyDrawing)) return;
+                Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot11.Run();
+                string message = Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot11.LastRunMessage;
+                bool success = Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot11.LastRunSucceeded;
+                if (gridResultLabel != null) gridResultLabel.Text += "\n" + message;
+                bool fitWarning = fitStatus.IndexOf("⚠", StringComparison.Ordinal) >= 0;
+                SetMainStatus(fitStatus.TrimStart('✓', '⚠', ' ') + " | " + message,
+                    success && !fitWarning ? MainStatusKind.Success : MainStatusKind.Warning);
+            }
+            catch (Exception ex)
+            {
+                SetMainStatus(fitStatus + " | Ẩn neighbor lỗi: " + ex.Message, MainStatusKind.Warning);
+            }
+        }
+
+        private bool _fitAndCleanupRunning;
+        private bool _fitReadyForCleanup;
+        private Drawing _fitSourceDrawing;
         private void RunFitView()
+        {
+            if (_fitAndCleanupRunning || _snapshotExportRunning || _isBatchRunning) return;
+            _fitAndCleanupRunning = true;
+            _fitReadyForCleanup = false;
+            try
+            {
+                _fitSourceDrawing = new DrawingHandler().GetActiveDrawing();
+                RunFitViewCore();
+                if (_fitReadyForCleanup) RunNeighborCleanupAfterFit();
+            }
+            catch (Exception ex) { SetMainStatus("Fit view: " + ex.Message, MainStatusKind.Error); }
+            finally { _fitReadyForCleanup = false; _fitSourceDrawing = null; _fitAndCleanupRunning = false; }
+        }
+
+        private void RunFitViewCore()
         {
             if (fitKeepGridAxes)
             {
@@ -4648,6 +4584,7 @@ namespace TTSK_AutoDim_Plates
                     result != null && result.FailedCount > 0
                         ? Color.Firebrick
                         : Color.FromArgb(22, 163, 74);
+                _fitReadyForCleanup = true;
             }
             catch (Exception ex)
             {
@@ -4754,6 +4691,9 @@ namespace TTSK_AutoDim_Plates
                 }
 
                 PHU_OpenGridView.FitGridOriginArrangeResult arrangeResult = null;
+                // Geometry and final neighbor attributes have completed. Grid/layout warnings
+                // below must not suppress the cleanup handoff in the common Fit wrapper.
+                _fitReadyForCleanup = true;
                 bool canArrangeTopFront =
                     result != null
                     && result.FailedCount == 0
@@ -4789,6 +4729,7 @@ namespace TTSK_AutoDim_Plates
                 if (result == null || result.FailedCount > 0)
                 {
                     PHU_OpenGridView.RestoreFitKeepGridRestrictionBoxes();
+                    _fitReadyForCleanup = false;
                     lblStatus.Text = "✗  Fit có trục lỗi, view đã được restore";
                     lblStatus.ForeColor = Color.Firebrick;
                     return;
@@ -4854,6 +4795,7 @@ namespace TTSK_AutoDim_Plates
             catch (Exception ex)
             {
                 PHU_OpenGridView.RestoreFitKeepGridRestrictionBoxes();
+                _fitReadyForCleanup = false;
 
                 if (gridResultLabel != null)
                 {
@@ -6228,6 +6170,54 @@ namespace TTSK_AutoDim_Plates
             b.TextColor = Color.FromArgb(15, 23, 42);
             b.BorderRadius = 6;
             b.Invalidate();
+        }
+
+        private bool _snapshotExportRunning;
+
+        private async void RunSnapshotExport()
+        {
+            if (_snapshotExportRunning || _isBatchRunning || _fitAndCleanupRunning) return;
+            _snapshotExportRunning = true;
+            var disabled = new System.Collections.Generic.Dictionary<Control,bool>();
+            try
+            {
+                var handler = new DrawingHandler();
+                var selected = handler.GetDrawingSelector().GetSelected();
+                var drawings = new List<Drawing>();
+                while(selected.MoveNext())drawings.Add(selected.Current);
+                if(drawings.Count==0)throw new InvalidOperationException("Hãy chọn bản vẽ trong Document manager.");
+                if(drawings.Count>1)
+                {
+                    rbBatch.Checked=true;
+                    rbActive.Checked=false;
+                    UpdateModeUi();
+                    btnLoad_Click(btnLoad,EventArgs.Empty);
+                    if(_selectedDrawings.Count==0 || dgvDrawings.Rows.Count<_selectedDrawings.Count)
+                        throw new InvalidOperationException("Load Selected chưa hoàn tất; chưa xuất snapshot.");
+                    drawings=new List<Drawing>(_selectedDrawings);
+                }
+                var sources=Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot12.FindSources(drawings);
+                // Snapshot API reads finish on the UI thread; only file/worker processing runs in background.
+                foreach(Control control in Controls)
+                {
+                    disabled[control]=control.Enabled;
+                    control.Enabled=false;
+                }
+                SetMainStatus("Snapshot: đang xuất "+sources.Count+" bản vẽ vào một thư mục...",MainStatusKind.Information);
+                string folder=await System.Threading.Tasks.Task.Run(() =>
+                    Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot12.ExportSources(sources));
+                SetMainStatus("Snapshot: đã xuất "+sources.Count+" ảnh PNG → "+folder,MainStatusKind.Success);
+                SetAutoDimResult("Snapshot: "+sources.Count+" PNG → "+folder);
+            }
+            catch(Exception ex)
+            {
+                SetMainStatus("Snapshot: "+ex.GetBaseException().Message,MainStatusKind.Error);
+            }
+            finally
+            {
+                foreach(var entry in disabled)if(!entry.Key.IsDisposed)entry.Key.Enabled=entry.Value;
+                _snapshotExportRunning=false;
+            }
         }
 
         private void btnLoad_Click(object sender, EventArgs e)
@@ -8488,14 +8478,13 @@ namespace TTSK_AutoDim_Plates
 
                 if (platePrecheck == null)
                 {
-                    execution.SectionStatus = AutoSectionStatus.PreflightFailed;
+                    autoSectionWorkerRequired = false;
+                    execution.SectionStatus = AutoSectionStatus.NotApplicable;
                     execution.SectionMessage =
-                        "Plate Auto Section precheck khong tra ket qua.";
-                    execution.CanSaveDrawing = false;
-                    return execution;
+                        "Plate Auto Section precheck khong tra ket qua; tiep tuc Dim Plate.";
                 }
 
-                if (
+                else if (
                     platePrecheck.Decision
                         == Tekla.Technology.Akit.UserScript.PlateAutoSectionDecision.NoSection
                     || platePrecheck.Decision
@@ -8557,8 +8546,17 @@ namespace TTSK_AutoDim_Plates
                 {
                     execution.SectionStatus = AutoSectionStatus.PreflightFailed;
                     execution.SectionMessage = sectionAttributeResolutionBeforeLoad.Error;
-                    execution.CanSaveDrawing = false;
-                    return execution;
+                    if (partType == AutoDimPartType.Plate)
+                    {
+                        autoSectionWorkerRequired = false;
+                        execution.SectionStatus = AutoSectionStatus.NotApplicable;
+                        execution.SectionMessage += " | Tiep tuc Dim Plate.";
+                    }
+                    else
+                    {
+                        execution.CanSaveDrawing = false;
+                        return execution;
+                    }
                 }
             }
 
@@ -8619,7 +8617,7 @@ namespace TTSK_AutoDim_Plates
                         createdAutoSectionWorkerResult = workerResult;
                 }
 
-                if (!execution.CanSaveDrawing)
+                if (!execution.CanSaveDrawing && partType != AutoDimPartType.Plate)
                     return execution;
             }
 
@@ -9721,6 +9719,16 @@ namespace TTSK_AutoDim_Plates
 
             execution.SectionMessage = workerResult.Message ?? "";
             execution.IsPlateSection = workerResult.IsPlateSection;
+
+            if (workerResult.IsPlateSection && workerResult.IsSafeToContinue
+                && (workerResult.Status == Tekla.Technology.Akit.UserScript.AutoSectionWorkerStatus.PreflightFailed
+                    || workerResult.Status == Tekla.Technology.Akit.UserScript.AutoSectionWorkerStatus.CreateFailed
+                    || workerResult.Status == Tekla.Technology.Akit.UserScript.AutoSectionWorkerStatus.RolledBack))
+            {
+                execution.SectionStatus = AutoSectionStatus.NotApplicable;
+                execution.SectionMessage += " | Tiep tuc Dim Plate.";
+                return;
+            }
 
             switch (workerResult.Status)
             {

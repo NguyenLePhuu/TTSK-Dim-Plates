@@ -547,8 +547,8 @@ namespace TTSK_AutoDim_Plates
             list.Add(
                 new ShortcutActionDefinition(
                     ActionSlot06,
-                    "Slot06 (Function 6)",
-                    "AutoDim function 6",
+                    "Slot06 (Liên kết giằng xéo)",
+                    "Auto dim 3 thanh L + plate liên kết",
                     "6",
                     Keys.D6
                 )
@@ -556,8 +556,8 @@ namespace TTSK_AutoDim_Plates
             list.Add(
                 new ShortcutActionDefinition(
                     ActionSlot07,
-                    "Slot07 (Nishi Azabu 2)",
-                    "AutoDim Nishi topology 2",
+                    "Slot07 (Injai Data Center Dầm - Cột)",
+                    "Chế độ Injai Data Center Dầm - Cột",
                     "7",
                     Keys.D7
                 )
@@ -565,8 +565,8 @@ namespace TTSK_AutoDim_Plates
             list.Add(
                 new ShortcutActionDefinition(
                     ActionSlot08,
-                    "Slot08 (Liên kết giằng xéo)",
-                    "Auto dim 3 thanh L + plate liên kết",
+                    "Slot08 (Snapshot Batch)",
+                    "Xuất PNG snapshot bản vẽ đang chọn",
                     "8",
                     Keys.D8
                 )
@@ -574,8 +574,8 @@ namespace TTSK_AutoDim_Plates
             list.Add(
                 new ShortcutActionDefinition(
                     ActionSlot09,
-                    "Slot09 (Function 9)",
-                    "AutoDim function 9",
+                    "Slot09 (Ẩn neighbor)",
+                    "Giữ neighbor liên kết trực tiếp",
                     "9",
                     Keys.D9
                 )
@@ -583,8 +583,8 @@ namespace TTSK_AutoDim_Plates
             list.Add(
                 new ShortcutActionDefinition(
                     ActionSlot10,
-                    "Slot10 (Liên kết dầm REF)",
-                    "Dim theo REF · Edge · Bolt · Plate",
+                    "Slot10 (Function 10)",
+                    "Chờ gắn file CS",
                     "10",
                     Keys.None
                 )

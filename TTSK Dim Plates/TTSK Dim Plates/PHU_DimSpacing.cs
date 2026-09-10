@@ -12,10 +12,11 @@ namespace TTSK_AutoDim_Plates
     // - Do NOT create new dimension sets.
     // - Do NOT delete old dimension sets.
     // - Do NOT split/cut existing chains.
-    // - Do NOT touch StraightDimension child objects.
-    // - Tier 1 is locked absolutely; only tier 2..n Distance may change.
+    // - Only change Distance on existing StraightDimension children. Never rebuild a set:
+    //   set.Modify() can discard per-segment plate side marks not exposed by the API.
+    // - Tier 1 starts one input spacing outside the existing dimension-foot bounds.
     // - One common arrange flow for H/V/S multi-set groups.
-    // - Single combined chains are skipped because there is no separate tier object to arrange safely.
+    // - Single and multi-set groups use the same segment-preserving writer.
     // - Views are isolated by runtime view identity; Front/Top/Bottom never share tiers.
     // - Grouping/sorting uses visual side = OffsetDirection * Sign(Distance).
     // - V20: one spacing solver for ALL sides/views using the same visual-line geometry.
@@ -34,6 +35,8 @@ namespace TTSK_AutoDim_Plates
         // Nó vẫn được chỉnh khoảng cách theo input, nhưng lấy chính chân DIM của nó làm gốc.
         private const bool HANDLE_INTERNAL_DIMS_SEPARATELY = true;
         private const double INTERNAL_DIM_EDGE_TOL = 1.0;
+        private const double SHARED_TIER_PAPER_TOLERANCE = 1.0;
+        private const double SHARED_TIER_PAPER_CLEARANCE = 2.0;
 
         private class ViewAnchorInfo
         {
@@ -56,10 +59,12 @@ namespace TTSK_AutoDim_Plates
             public int SkippedCount;
             public double Spacing;
             public string Scope;
+            public bool IsPreview;
+            public string FailureDetail;
 
             public string ToDisplayText(bool apply)
             {
-                return "APPLY\r\n"
+                return (IsPreview ? "PREVIEW\r\n" : "APPLY\r\n")
                     + "Scope: "
                     + Scope
                     + "\r\n"
@@ -79,7 +84,8 @@ namespace TTSK_AutoDim_Plates
                     + SkippedCount
                     + "\r\n"
                     + "Failed: "
-                    + FailedCount;
+                    + FailedCount
+                    + (string.IsNullOrEmpty(FailureDetail) ? "" : "\r\n" + FailureDetail);
             }
         }
 
@@ -91,6 +97,7 @@ namespace TTSK_AutoDim_Plates
             public double OriginalDistance;
             public double OriginalVisualLineLevel;
             public int OriginalTierIndex;
+            public int LayoutTierIndex;
             public int CollectionIndex;
             public string StableId;
             public double AbsDistance;
@@ -112,6 +119,19 @@ namespace TTSK_AutoDim_Plates
             public double NewDistance;
             public int OriginalTierIndex;
             public string OriginalStableId;
+            public List<ChildDistanceSnapshot> Children;
+        }
+
+        private class ChildDistanceSnapshot
+        {
+            public StraightDimension Child;
+            public Point Start;
+            public Point End;
+            public Vector Direction;
+            public double Distance;
+            public double TargetDistance;
+            public StraightDimension.StraightDimensionAttributes Attributes;
+            public object SetAttributes;
         }
 
         public static Result Run(double spacing, string scope)
@@ -123,9 +143,10 @@ namespace TTSK_AutoDim_Plates
         {
             Result result = new Result();
             result.Spacing = spacing;
+            result.IsPreview = !apply;
             result.Scope = string.IsNullOrWhiteSpace(scope) ? "Toàn bộ bản vẽ" : scope;
 
-            if (spacing <= 0.0)
+            if (!IsFinite(spacing) || spacing <= 0.0)
                 throw new Exception("Khoảng cách dim phải lớn hơn 0.");
 
             DrawingHandler dh = new DrawingHandler();
@@ -196,7 +217,8 @@ namespace TTSK_AutoDim_Plates
 
             try
             {
-                drawing.CommitChanges();
+                if (apply)
+                    drawing.CommitChanges();
             }
             catch { }
             return result;
@@ -223,7 +245,7 @@ namespace TTSK_AutoDim_Plates
             // - Existing layout/order is already correct.
             // - Use existing DimensionPoints only to read the current tier order.
             // - Do NOT create/delete/split any chain.
-            // - Do NOT move points or child StraightDimension objects.
+            // - Keep child endpoints and direction; only their Distance may change.
             // - User spacing is now the absolute tier distance:
             //      tier1 = spacing, tier2 = spacing*2, tier3 = spacing*3...
             //   Example: input 150 => first tier becomes 150, not keep old 123.
@@ -248,19 +270,16 @@ namespace TTSK_AutoDim_Plates
                 return;
             }
 
-            // DIM SPACING ORDER RULE:
-            //   1) Read the existing visual order from the displayed dimension line.
-            //   2) Keep tier 1 exactly at its captured line level.
-            //   3) Place tier 2..n at one user spacing step farther outward per tier.
-            //   4) Use one visual-line solver for every side and view.
-            // Tier 1 is the captured, existing line. Only the gaps outwards from it change.
-            double targetBaseVisualLevel = list[0].OriginalVisualLineLevel;
-            if (!IsFinite(targetBaseVisualLevel))
+            // Existing line levels determine order, not the new first-tier distance.
+            double targetBaseVisualLevel;
+            if (!TryGetAnchorFirstTierVisualLevel(list, groupAxis, spacing, out targetBaseVisualLevel))
             {
                 if (result != null)
                     result.SkippedCount += list.Count;
                 return;
             }
+
+            AssignSharedLayoutTiers(list, groupAxis, spacing);
 
             // TEST PORT PLATE - BẢN 2:
             // Anchor A/B/C/D không chỉ áp cho tier 1 nữa.
@@ -268,7 +287,7 @@ namespace TTSK_AutoDim_Plates
             //   tier1 = anchor + spacing
             //   tier2 = tier1 + spacing
             //   tier3 = tier2 + spacing...
-            // Nếu fail ở group hoặc từng item thì fallback về solver cũ.
+            // Nếu không giải được toàn bộ group thì bỏ qua trước khi ghi.
             List<DimDistanceChange> changes = new List<DimDistanceChange>();
             for (int i = 0; i < list.Count; i++)
             {
@@ -276,7 +295,7 @@ namespace TTSK_AutoDim_Plates
                 bool solved = TrySolveDistanceForTargetVisualLevel(
                     list[i],
                     groupAxis,
-                    targetBaseVisualLevel + spacing * i,
+                    targetBaseVisualLevel + spacing * list[i].LayoutTierIndex,
                     out newDistance
                 );
 
@@ -676,10 +695,30 @@ namespace TTSK_AutoDim_Plates
                 )
                     return false;
 
-                if (info == null || !info.IsValid)
-                    return false;
-
                 visualAxis.Normalize();
+
+                // A sloped group or a view with only collinear feet has no usable
+                // A/B/C/D rectangle. Use the actual feet projected on its normal.
+                if (info == null || !info.IsValid
+                    || Math.Max(Math.Abs(visualAxis.X), Math.Abs(visualAxis.Y)) < 0.999999)
+                {
+                    double outer = Double.NegativeInfinity;
+                    foreach (DimSetItem item in list)
+                    {
+                        List<Point> points = GetDimensionPoints(item.DimSet);
+                        if (points == null || points.Count < 2)
+                            return false;
+                        foreach (Point point in points)
+                        {
+                            double projection = point.X * visualAxis.X + point.Y * visualAxis.Y;
+                            if (!IsFinite(projection))
+                                return false;
+                            outer = Math.Max(outer, projection);
+                        }
+                    }
+                    targetVisualLevel = outer + spacing;
+                    return IsFinite(targetVisualLevel);
+                }
 
                 // Cùng ý tưởng PA9 plate:
                 // Top    = Y cao nhất + spacing
@@ -868,27 +907,221 @@ namespace TTSK_AutoDim_Plates
             return true;
         }
 
-        private static void TryApplyDistance(DimSetItem item, double newDistance, Result result)
+        // Preserve the captured order. Only consecutive, already aligned, disjoint
+        // sets may share a tier; never pack a distant original tier into an inner one.
+        private static void AssignSharedLayoutTiers(
+            List<DimSetItem> list, SimpleVector axis, double spacing)
         {
-            try
+            int tier = 0;
+            int tierStart = 0;
+            for (int i = 0; i < list.Count; i++)
             {
-                bool ok = SetDistanceValue(item.DimSet, newDistance);
-                if (ok)
+                bool shares = i > 0;
+                for (int j = tierStart; shares && j < i; j++)
+                    shares = CanShareOriginalTier(list[j], list[i], axis, spacing);
+                if (i > 0 && !shares)
                 {
-                    InvokeNoArg(item.DimSet, "Modify");
-                    result.ChangedCount++;
+                    tier++;
+                    tierStart = i;
                 }
-                else
-                {
-                    result.FailedCount++;
-                }
-            }
-            catch
-            {
-                result.FailedCount++;
+                list[i].LayoutTierIndex = tier;
             }
         }
 
+        private static bool CanShareOriginalTier(
+            DimSetItem a, DimSetItem b, SimpleVector axis, double spacing)
+        {
+            if (a == null || b == null || a.IsInternal || b.IsInternal
+                || a.View == null || !Object.ReferenceEquals(a.View, b.View)
+                || a.GroupKey != b.GroupKey || a.SideKey != b.SideKey
+                || a.KindKey != b.KindKey || (a.KindKey != "H" && a.KindKey != "V")
+                || !IsFinite(spacing) || spacing <= 0.0)
+                return false;
+
+            double scale;
+            try { scale = a.View.Attributes.Scale; }
+            catch { return false; }
+            if (!IsFinite(scale) || scale <= 0.0)
+                return false;
+
+            // Complete-link comparison prevents a sequence of small offsets from
+            // merging several intentionally distinct levels into one tier.
+            double tolerance = Math.Min(SHARED_TIER_PAPER_TOLERANCE * scale, spacing * 0.20);
+            double delta = Math.Abs(a.OriginalVisualLineLevel - b.OriginalVisualLineLevel);
+            if (!IsFinite(delta) || delta > tolerance)
+                return false;
+
+            axis.Normalize();
+            SimpleVector av = a.VisualOffset;
+            SimpleVector bv = b.VisualOffset;
+            av.Normalize();
+            bv.Normalize();
+            // Rounded angle groups can contain slightly different directions.
+            // Sharing is restricted to parallel, orthogonal dimension lines.
+            if (Math.Max(Math.Abs(axis.X), Math.Abs(axis.Y)) < 0.999999
+                || av.X * axis.X + av.Y * axis.Y < 0.999999
+                || bv.X * axis.X + bv.Y * axis.Y < 0.999999)
+                return false;
+
+            double aMin, aMax, bMin, bMax;
+            if (!TryGetMeasuredSpan(a, axis, out aMin, out aMax)
+                || !TryGetMeasuredSpan(b, axis, out bMin, out bMax))
+                return false;
+            double gap = Math.Max(bMin - aMax, aMin - bMax);
+            return gap > SHARED_TIER_PAPER_CLEARANCE * scale;
+        }
+
+        private static bool TryGetMeasuredSpan(
+            DimSetItem item, SimpleVector normal, out double min, out double max)
+        {
+            min = Double.PositiveInfinity;
+            max = Double.NegativeInfinity;
+            List<Point> points = GetDimensionPoints(item.DimSet);
+            if (points == null || points.Count < 2)
+                return false;
+            foreach (Point point in points)
+            {
+                double projection = -normal.Y * point.X + normal.X * point.Y;
+                if (!IsFinite(projection))
+                    return false;
+                min = Math.Min(min, projection);
+                max = Math.Max(max, projection);
+            }
+            return max - min > 0.01;
+        }
+
+        private static void TryApplyDistance(DimSetItem item, double newDistance, Result result)
+        {
+            StraightDimensionSet set = item == null ? null : item.DimSet as StraightDimensionSet;
+            if (set == null || !IsFinite(newDistance))
+            {
+                result.FailedCount++;
+                return;
+            }
+            item.OriginalTierIndex = 0;
+            item.LayoutTierIndex = 0;
+            var changes = new List<DimDistanceChange> {
+                new DimDistanceChange {
+                    Item = item, OriginalDistance = item.OriginalDistance,
+                    NewDistance = newDistance, OriginalTierIndex = 0,
+                    OriginalStableId = item.StableId
+                }
+            };
+            TryApplyGroupAtomically(changes, item.VisualOffset, result.Spacing, result, set.GetDrawing());
+        }
+
+        // Snapshot every child before writing any member of the group. Child distances
+        // use their own start points; add the parent's signed displacement, not its
+        // absolute Distance (the two API anchors need not be the same).
+        private static bool TryCaptureChildDistances(DimDistanceChange change)
+        {
+            StraightDimensionSet set = change.Item.DimSet as StraightDimensionSet;
+            if (set == null)
+                return false;
+            var snapshots = new List<ChildDistanceSnapshot>();
+            SimpleVector parentNormal = change.Item.Offset;
+            parentNormal.Normalize();
+            double displacement = change.NewDistance - change.OriginalDistance;
+            DrawingObjectEnumerator children = set.GetObjects();
+            while (children.MoveNext())
+            {
+                StraightDimension child = children.Current as StraightDimension;
+                if (child == null || child.StartPoint == null || child.EndPoint == null
+                    || child.UpDirection == null || !IsFinite(child.Distance)
+                    || !SamePoint(child.StartPoint, child.StartPoint)
+                    || !SamePoint(child.EndPoint, child.EndPoint)
+                    || !SamePoint(child.UpDirection, child.UpDirection))
+                    return false;
+                var normal = new SimpleVector(child.UpDirection.X, child.UpDirection.Y);
+                normal.Normalize();
+                double dot = normal.X * parentNormal.X + normal.Y * parentNormal.Y;
+                if (!IsFinite(dot) || Math.Abs(dot) < 0.999999)
+                    return false;
+                double target = child.Distance + displacement / dot;
+                if (!IsFinite(target))
+                    return false;
+                snapshots.Add(new ChildDistanceSnapshot {
+                    Child = child,
+                    Start = new Point(child.StartPoint), End = new Point(child.EndPoint),
+                    Direction = new Vector(child.UpDirection),
+                    Distance = child.Distance, TargetDistance = target,
+                    Attributes = child.Attributes,
+                    SetAttributes = GetPropertyOrFieldValue(child, "DimensionSetAttributes")
+                });
+            }
+            if (snapshots.Count == 0)
+                return false;
+            change.Children = snapshots;
+            return true;
+        }
+
+        private static bool WriteChildDistances(DimDistanceChange change, bool restore)
+        {
+            if (change.Children == null || change.Children.Count == 0)
+                return false;
+            bool success = true;
+            foreach (ChildDistanceSnapshot snapshot in change.Children)
+            {
+                try
+                {
+                    double target = restore ? snapshot.Distance : snapshot.TargetDistance;
+                    if (restore && !snapshot.Child.Select())
+                    {
+                        success = false;
+                        continue;
+                    }
+                    if (Math.Abs(snapshot.Child.Distance - target) <= 0.000001)
+                        continue;
+                    if (!SetDistanceValue(snapshot.Child, target) || !snapshot.Child.Modify())
+                        success = false;
+                }
+                catch { success = false; }
+                if (!success && !restore)
+                    return false;
+            }
+            return success;
+        }
+
+        private static bool SamePoint(Point a, Point b)
+        {
+            return a != null && b != null && IsFinite(a.X) && IsFinite(a.Y) && IsFinite(a.Z)
+                && Math.Abs(a.X - b.X) <= 0.000001
+                && Math.Abs(a.Y - b.Y) <= 0.000001
+                && Math.Abs(a.Z - b.Z) <= 0.000001;
+        }
+
+        private static bool VerifyChildDistances(DimDistanceChange change, bool restore)
+        {
+            StraightDimensionSet set = change.Item.DimSet as StraightDimensionSet;
+            if (set == null || !set.Select())
+                return false;
+            var current = new List<StraightDimension>();
+            var enumerator = set.GetObjects();
+            while (enumerator.MoveNext())
+            {
+                var child = enumerator.Current as StraightDimension;
+                if (child == null)
+                    return false;
+                current.Add(child);
+            }
+            if (current.Count != change.Children.Count)
+                return false;
+            foreach (ChildDistanceSnapshot snapshot in change.Children)
+            {
+                StraightDimension actual = current.Find(c => c.IsSameDatabaseObject(snapshot.Child));
+                if (actual == null || !SamePoint(actual.StartPoint, snapshot.Start)
+                    || !SamePoint(actual.EndPoint, snapshot.End)
+                    || !SamePoint(actual.UpDirection, snapshot.Direction)
+                    || !snapshot.Attributes.IsEqual(actual.Attributes)
+                    || !IsFinite(actual.Distance)
+                    || Math.Abs(actual.Distance - (restore ? snapshot.Distance : snapshot.TargetDistance)) > 0.01)
+                    return false;
+                var attributes = snapshot.SetAttributes as AttributesBase;
+                if (attributes == null || !attributes.IsEqual(GetPropertyOrFieldValue(actual, "DimensionSetAttributes")))
+                    return false;
+            }
+            return true;
+        }
         private static bool TryApplyGroupAtomically(
             List<DimDistanceChange> changes,
             SimpleVector groupAxis,
@@ -904,6 +1137,7 @@ namespace TTSK_AutoDim_Plates
                 return false;
             }
 
+            bool writesStarted = false;
             try
             {
                 foreach (DimDistanceChange change in changes)
@@ -916,18 +1150,26 @@ namespace TTSK_AutoDim_Plates
                         || !IsFinite(change.NewDistance)
                     )
                         throw new Exception("Invalid dimension change.");
+                    if (!TryCaptureChildDistances(change))
+                        throw new Exception("Cannot snapshot existing dimension segments.");
+                    if (Math.Abs(change.OriginalDistance) > 0.0001
+                        && Math.Abs(change.NewDistance) > 0.0001
+                        && Math.Sign(change.OriginalDistance) != Math.Sign(change.NewDistance))
+                        throw new Exception("Dimension would change visual side.");
                 }
 
-                // Set every value first. No Modify is allowed until the whole group is valid.
-                foreach (DimDistanceChange change in changes)
+                if (result != null && result.IsPreview)
                 {
-                    if (!SetDistanceValue(change.Item.DimSet, change.NewDistance))
-                        throw new Exception("Cannot set dimension distance.");
+                    result.ChangedCount += changes.Count;
+                    return true;
                 }
 
+                // Never call set.Modify(): it rewrites segment attributes and can
+                // remove native plate side marks. Move each existing segment only.
+                writesStarted = true;
                 foreach (DimDistanceChange change in changes)
                 {
-                    if (!TryInvokeNoArgSuccessful(change.Item.DimSet, "Modify"))
+                    if (!WriteChildDistances(change, false))
                         throw new Exception("Dimension Modify failed.");
                 }
 
@@ -967,7 +1209,8 @@ namespace TTSK_AutoDim_Plates
             }
             catch
             {
-                RestoreGroupDistances(changes, drawing);
+                if (writesStarted && !RestoreGroupDistances(changes, drawing) && result != null)
+                    result.FailureDetail = "Không xác minh được phục hồi khoảng cách DIM. Hãy kiểm tra bản vẽ trước khi chạy lại.";
                 if (result != null)
                     result.FailedCount++;
                 return false;
@@ -988,6 +1231,8 @@ namespace TTSK_AutoDim_Plates
             {
                 DimDistanceChange change = changes[i];
                 if (change == null || change.Item == null || change.Item.DimSet == null)
+                    return false;
+                if (change.Children != null && !VerifyChildDistances(change, false))
                     return false;
 
                 if (
@@ -1051,7 +1296,10 @@ namespace TTSK_AutoDim_Plates
                 if (!Double.IsNaN(previousLevel))
                 {
                     double delta = currentLevel - previousLevel;
-                    if (!IsFinite(delta) || delta <= 0.0 || Math.Abs(delta - spacing) > 0.5)
+                    int tierStep = change.Item.LayoutTierIndex - changes[i - 1].Item.LayoutTierIndex;
+                    if (tierStep < 0 || tierStep > 1
+                        || (tierStep == 1 && delta <= 0.0)
+                        || !IsFinite(delta) || Math.Abs(delta - spacing * tierStep) > 0.5)
                         return false;
                 }
 
@@ -1061,42 +1309,30 @@ namespace TTSK_AutoDim_Plates
             return true;
         }
 
-        private static void RestoreGroupDistances(List<DimDistanceChange> changes, Drawing drawing)
+        private static bool RestoreGroupDistances(List<DimDistanceChange> changes, Drawing drawing)
         {
             if (changes == null)
-                return;
+                return false;
 
-            bool anySet = false;
+            bool anyWritten = false;
+            bool restored = true;
             foreach (DimDistanceChange change in changes)
             {
-                if (change == null || change.Item == null || change.Item.DimSet == null)
+                if (change == null || change.Children == null)
                     continue;
-
-                try
-                {
-                    if (SetDistanceValue(change.Item.DimSet, change.OriginalDistance))
-                        anySet = true;
-                }
-                catch { }
+                restored &= WriteChildDistances(change, true);
+                anyWritten = true;
             }
+            if (anyWritten)
+                restored &= TryCommitDrawing(drawing);
 
-            if (anySet)
+            foreach (DimDistanceChange change in changes)
             {
-                foreach (DimDistanceChange change in changes)
-                {
-                    if (change == null || change.Item == null || change.Item.DimSet == null)
-                        continue;
-
-                    try
-                    {
-                        TryInvokeNoArgSuccessful(change.Item.DimSet, "Modify");
-                    }
-                    catch { }
-                }
-
-                TryCommitDrawing(drawing);
+                if (change == null || change.Children == null)
+                    continue;
+                try { restored &= VerifyChildDistances(change, true); }
+                catch { restored = false; }
             }
-
             foreach (DimDistanceChange change in changes)
             {
                 if (change == null || change.Item == null)
@@ -1106,6 +1342,7 @@ namespace TTSK_AutoDim_Plates
                 change.Item.AbsDistance = Math.Abs(change.OriginalDistance);
                 change.Item.Sign = change.OriginalDistance < 0.0 ? -1.0 : 1.0;
             }
+            return restored;
         }
 
         private static bool TryGetVisualOffsetForDistance(
@@ -1589,9 +1826,7 @@ namespace TTSK_AutoDim_Plates
         {
             List<DimSetItem> items = new List<DimSetItem>();
 
-            Type straightSetType = Type.GetType(
-                "Tekla.Structures.Drawing.StraightDimensionSet, Tekla.Structures.Drawing"
-            );
+            Type straightSetType = typeof(StraightDimensionSet);
             if (straightSetType == null)
                 return items;
 

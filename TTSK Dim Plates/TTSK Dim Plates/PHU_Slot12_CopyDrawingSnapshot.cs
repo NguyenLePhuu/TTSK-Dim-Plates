@@ -30,10 +30,19 @@ namespace Tekla.Technology.Akit.UserScript
 
         public sealed class Source
         {
-            public string Mark, File, Guid;
+            public string Mark, File, Guid, DrawnBy;
         }
 
         public static List<Source> FindSelected()
+        {
+            var handler=new D.DrawingHandler();
+            var selection=handler.GetDrawingSelector().GetSelected();
+            var drawings=new List<D.Drawing>();
+            while(selection.MoveNext())drawings.Add(selection.Current);
+            return FindSources(drawings);
+        }
+
+        public static List<Source> FindSources(IList<D.Drawing> drawings)
         {
             var model = new M.Model();
             var handler = new D.DrawingHandler();
@@ -41,17 +50,18 @@ namespace Tekla.Technology.Akit.UserScript
                 throw new InvalidOperationException("Khong ket noi Tekla.");
             string folder = Path.GetFullPath(Path.Combine(model.GetInfo().ModelPath, "drawings", "Snapshots"));
             var result = new List<Source>();
-            var drawings = handler.GetDrawingSelector().GetSelected();
             var util = typeof(D.Drawing).Assembly.GetType("Tekla.Structures.Drawing.Internal.DgUtil", true);
             var getFile = util.GetMethod("GetDgFileNameByDrawingGuid", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
             if (getFile == null) throw new NotSupportedException("Tekla version khong cung cap tra ten snapshot.");
-            while (drawings.MoveNext())
+            var seen=new HashSet<System.Guid>();
+            foreach (D.Drawing drawing in drawings)
             {
-                D.Drawing drawing = drawings.Current;
+                if(drawing==null)throw new InvalidOperationException("Danh sach load co drawing rong.");
                 var property = drawing.GetType().GetProperty("Identifier", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
                 var identifier = property == null ? null : property.GetValue(drawing, null) as Tekla.Structures.Identifier;
                 if (identifier == null || identifier.GUID == System.Guid.Empty)
                     throw new InvalidOperationException("Khong doc duoc GUID ban ve " + drawing.Mark);
+                if(!seen.Add(identifier.GUID))continue;
                 string dg = Convert.ToString(getFile.Invoke(null, new object[] { identifier.GUID }));
                 if (String.IsNullOrWhiteSpace(dg)) throw new InvalidOperationException("Khong tra duoc file DG " + drawing.Mark);
                 string file = Path.GetFullPath(Path.Combine(folder, Path.GetFileName(dg) + ".DPM"));
@@ -62,7 +72,8 @@ namespace Tekla.Technology.Akit.UserScript
                 using (var stream = System.IO.File.OpenRead(file))
                     if (stream.ReadByte() != 'D' || stream.ReadByte() != 'P' || stream.ReadByte() != 'M')
                         throw new InvalidDataException("File khong co header DPM: " + file);
-                result.Add(new Source { Mark = drawing.Mark, File = file, Guid = identifier.GUID.ToString() });
+                result.Add(new Source { Mark = drawing.Mark, File = file, Guid = identifier.GUID.ToString(),
+                    DrawnBy = TTSK_AutoDim_Plates.DrawingPdfPrinter.GetDrawingDrawnBy(drawing) });
             }
             if (result.Count == 0) throw new InvalidOperationException("Hay chon ban ve trong Document manager.");
             return result;
@@ -70,21 +81,42 @@ namespace Tekla.Technology.Akit.UserScript
 
         public static string CopySelected()
         {
-            var sources = FindSelected(); // Preflight all selected drawings before creating any output.
+            return ExportSources(FindSelected());
+        }
+
+        public static string ResolveFolderName(IList<Source> sources)
+        {
+            foreach(var source in sources)
+            {
+                string value=(source.DrawnBy??String.Empty).Trim();
+                if(value.Length==0||value=="-"||String.Equals(value,"UNKNOWN",StringComparison.OrdinalIgnoreCase))continue;
+                foreach(char c in Path.GetInvalidFileNameChars())value=value.Replace(c,'_');
+                value=value.Trim().TrimEnd('.');
+                if(value.Length>0)return "Snapshot_"+value;
+            }
+            return "Snapshot_UNKNOWN";
+        }
+
+        public static string ExportSources(IList<Source> sources)
+        {
+            if(sources==null||sources.Count==0)throw new InvalidOperationException("Danh sach snapshot rong.");
             string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
             if (String.IsNullOrWhiteSpace(desktop)) throw new InvalidOperationException("Khong tim thay Desktop.");
-            string folder = Path.Combine(desktop, "TeklaSnapshots_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + "_" + System.Guid.NewGuid().ToString("N").Substring(0,6));
+            string folder = Path.Combine(desktop, ResolveFolderName(sources));
             Directory.CreateDirectory(folder);
             string job = Path.Combine(Path.GetTempPath(),"TTSK_SnapshotJobs",System.Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(job);
             var request = new List<string>();
             var outputs = new List<string>();
             int index=0;
+            var reserved=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach(var source in sources)
             {
                 string mark=source.Mark.Trim('[',']');
                 foreach(char c in Path.GetInvalidFileNameChars())mark=mark.Replace(c,'_');
-                string png=Path.Combine(folder,(++index).ToString("00")+"_"+mark+".png");
+                string stem=(++index).ToString("00")+"_"+mark;
+                string png=Path.Combine(folder,stem+".png");int suffix=1;
+                while(File.Exists(png)||!reserved.Add(png))png=Path.Combine(folder,stem+"_"+(suffix++)+".png");
                 request.Add(source.File); request.Add(png); outputs.Add(png);
             }
             string manifest=Path.Combine(job,"request.txt");
@@ -99,7 +131,8 @@ namespace Tekla.Technology.Akit.UserScript
             using (var worker = System.Diagnostics.Process.Start(start))
             {
                 if (worker == null) throw new IOException("Khong khoi dong duoc PNG worker.");
-                if (!worker.WaitForExit(180000))
+                int timeout=(int)Math.Min(Int32.MaxValue,180000L*Math.Max(1,sources.Count));
+                if (!worker.WaitForExit(timeout))
                 {
                     worker.Kill();
                     throw new TimeoutException("PNG worker qua thoi gian: " + folder);
