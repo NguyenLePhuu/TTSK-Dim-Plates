@@ -72,6 +72,14 @@ copy /y "%OUT_DIR%\TTSK Dim Plates.exe" "%PORTABLE_DIR%\TTSK Dim Plates.exe" >nu
 if exist "%OUT_DIR%\TTSK Dim Plates.pdb" (
     copy /y "%OUT_DIR%\TTSK Dim Plates.pdb" "%PORTABLE_DIR%\TTSK Dim Plates.pdb" >nul
 )
+if exist "%PROJ_DIR%\Resources" (
+    if not exist "%PORTABLE_DIR%\Resources" mkdir "%PORTABLE_DIR%\Resources"
+    xcopy /y /e /i "%PROJ_DIR%\Resources\*.png" "%PORTABLE_DIR%\Resources\" >nul
+)
+if exist "%PROJ_DIR%\Data" (
+    if not exist "%PORTABLE_DIR%\Data" mkdir "%PORTABLE_DIR%\Data"
+    xcopy /y /e /i "%PROJ_DIR%\Data\*.*" "%PORTABLE_DIR%\Data\" >nul
+)
 
 echo        Da cap nhat xong ban portable moi nhat.
 echo.
