@@ -269,6 +269,14 @@ namespace TTSK_AutoDim_Plates
             }
         }
 
+        // Read-back check for consumers that require verified line formatting.
+        // Existing insertion callers retain their behavior.
+        public static bool VerifyLineDistanceAttributes(Tekla.Structures.Drawing.Line line)
+        {
+            return line != null && line.Select() && Math.Abs(line.Bulge) < 0.0001
+                && line.Attributes.IsEqual(BuildLineDistanceAttributes());
+        }
+
         private static Tekla.Structures.Drawing.Line.LineAttributes BuildLineDistanceAttributes()
         {
             Tekla.Structures.Drawing.Line.LineAttributes attributes =

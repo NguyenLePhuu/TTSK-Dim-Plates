@@ -1386,17 +1386,10 @@ namespace Tekla.Technology.Akit.UserScript
             double usablePaperLength =
                 paperLength - GetScaleMarginBySheetSizeUnknown(sheetWidth, sheetHeight);
             if (usablePaperLength <= 1.0)
-                return 30.0;
+                return TTSK_AutoDim_Plates.ManualDrawingScaleOverride.ChooseAutoScale(double.PositiveInfinity);
 
             double requiredScale = (beamLength + AUTO_SCALE_RESERVE) / usablePaperLength;
-            double[] allowedScales = new double[] { 5.0, 10.0, 15.0, 20.0, 30.0 };
-            foreach (double scale in allowedScales)
-            {
-                if (scale >= requiredScale)
-                    return scale;
-            }
-
-            return 30.0;
+            return TTSK_AutoDim_Plates.ManualDrawingScaleOverride.ChooseAutoScale(requiredScale);
         }
 
         private static double GetScaleMarginBySheetSizeUnknown(double width, double height)

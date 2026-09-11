@@ -35,7 +35,7 @@ namespace Tekla.Technology.Akit.UserScript
         public bool HasPartialSectionLayout = false;
     }
 
-    public class ShapeScript
+    public partial class ShapeScript
     {
         private const double TOL = 1.0;
         private const double VIEW_PADDING = 20.0;
@@ -339,7 +339,7 @@ namespace Tekla.Technology.Akit.UserScript
 
                 InitializeHShapeHoleCatalog(model, part, resolvedTopView, frontViewByType);
 
-                CheckTopBottomHolesAndMark(model, part, resolvedTopView);
+                CheckTopBottomHolesAndMark(model, part, resolvedTopView, isAssemblyDrawing);
 
                 result.HoleResult = TopBottomHoleCheckResult;
                 bool useContourDifferenceForAutoSection = isSinglePartDrawing;
@@ -591,6 +591,9 @@ namespace Tekla.Technology.Akit.UserScript
             View frontView = frontViewByType;
 
             // BƯỚC 1: Xóa DIM cũ trước giống code plate chuẩn.
+            if (isSinglePartDrawing)
+                PreflightRecessedFlangeDrawing(model, part, dimensionFrontView, dimensionTopView,
+                    FindManualBottomCandidateViews(dimViews, topView, frontView, smallestExactView));
             // Chỉ xóa DIM cũ, không đụng thuật toán tạo DIM shape phía dưới.
             DeleteAllDimensions(drawing);
             CommitAndWait(drawing, 250);
@@ -929,7 +932,7 @@ namespace Tekla.Technology.Akit.UserScript
                 // DIM đã dùng catalog semantic. Hole check là luồng nền độc lập,
                 // nên trả catalog về đúng Top/Front vật lý như file nguyên bản.
                 InitializeHShapeHoleCatalog(model, part, topViewByType, frontViewByType);
-                CheckTopBottomHolesAndMark(model, part, topView);
+                CheckTopBottomHolesAndMark(model, part, topView, drawing is AssemblyDrawing);
                 CommitAndWait(drawing, 250);
             }
 
@@ -966,6 +969,8 @@ namespace Tekla.Technology.Akit.UserScript
 
         private struct ChamferInfluence
         {
+            // Per-call geometry only; never survives into another drawing.
+            public List<RecessedFlangeBevel> RecessedBevels;
             public bool Left;
             public bool Right;
             public bool Top;
@@ -2234,7 +2239,7 @@ namespace Tekla.Technology.Akit.UserScript
             return result;
         }
 
-        private static void CheckTopBottomHolesAndMark(Model model, ModelPart part, View topView)
+        private static void CheckTopBottomHolesAndMark(Model model, ModelPart part, View topView, bool allowCrossFaceSymmetry)
         {
             TopBottomHoleCheckResult = -1;
 
@@ -2315,6 +2320,7 @@ namespace Tekla.Technology.Akit.UserScript
                         bottomHoles,
                         minX,
                         maxX,
+                        allowCrossFaceSymmetry,
                         out holesDifferent
                     )
                 )
@@ -2753,6 +2759,7 @@ namespace Tekla.Technology.Akit.UserScript
             List<HoleCheckInfo> bottomHoles,
             double minX,
             double maxX,
+            bool allowCrossFaceSymmetry,
             out bool holesDifferent
         )
         {
@@ -2781,7 +2788,9 @@ namespace Tekla.Technology.Akit.UserScript
                     }
                 }
 
-                MatchCrossFaceSymmetricSingleHoles(topHoles, bottomHoles, minX, maxX);
+                // Only assembly drawings may suppress sections for opposite-face symmetric holes.
+                if (allowCrossFaceSymmetry)
+                    MatchCrossFaceSymmetricSingleHoles(topHoles, bottomHoles, minX, maxX);
 
                 foreach (HoleCheckInfo top in topHoles)
                 {
@@ -3279,7 +3288,12 @@ namespace Tekla.Technology.Akit.UserScript
                 // TOP VIEW: không DIM rãnh/notch để tránh bắt nhầm rãnh mặt Front chiếu lên Top.
                 // Chamfer ngoài vẫn giữ nguyên vì đã chạy ở CreateTopViewChamferDims phía trên.
                 TopBottomFrontNotchChain topFrontNotchChain = null;
-                if (frontNotchInfluence.Top)
+                if (frontNotchInfluence.RecessedBevels != null)
+                {
+                    topFrontNotchChain = BuildRecessedFlangeFaceChain(
+                        frontNotchInfluence.RecessedBevels, view, solid, true);
+                }
+                else if (frontNotchInfluence.Top)
                 {
                     TryDetectTopBottomFrontNotchChain(
                         part,
@@ -3527,6 +3541,7 @@ namespace Tekla.Technology.Akit.UserScript
                     leftTotalVerticalOffset
                 );
             }
+            catch (RecessedFlangeException) { throw; }
             catch { }
             finally
             {
@@ -3663,7 +3678,12 @@ namespace Tekla.Technology.Akit.UserScript
                 ChamferInfluence notchInfluence = new ChamferInfluence();
                 int notchCount = 0;
                 TopBottomFrontNotchChain bottomFrontNotchChain = null;
-                if (frontNotchInfluence.Bottom)
+                if (frontNotchInfluence.RecessedBevels != null)
+                {
+                    bottomFrontNotchChain = BuildRecessedFlangeFaceChain(
+                        frontNotchInfluence.RecessedBevels, view, solid, false);
+                }
+                else if (frontNotchInfluence.Bottom)
                 {
                     TryDetectTopBottomFrontNotchChain(
                         part,
@@ -3879,6 +3899,7 @@ namespace Tekla.Technology.Akit.UserScript
                     leftTotalVerticalOffset
                 );
             }
+            catch (RecessedFlangeException) { throw; }
             catch { }
             finally
             {
@@ -6934,6 +6955,13 @@ namespace Tekla.Technology.Akit.UserScript
             if (model == null || part == null || view == null)
                 return influence;
 
+            if (new DrawingHandler().GetActiveDrawing() is SinglePartDrawing)
+            {
+                List<RecessedFlangeBevel> bevels = ReadRecessedFlangeBevels(model, part, view);
+                if (bevels.Count > 0)
+                    return RecessedFlangeInfluence(bevels);
+            }
+
             TransformationPlane oldPlane = model
                 .GetWorkPlaneHandler()
                 .GetCurrentTransformationPlane();
@@ -9585,6 +9613,8 @@ namespace Tekla.Technology.Akit.UserScript
                         groups,
                         minX,
                         maxX,
+                        minY,
+                        maxY,
                         isLeftSide
                     );
 
@@ -11004,6 +11034,8 @@ namespace Tekla.Technology.Akit.UserScript
             List<TopBottomHoleGroup> groups,
             double minX,
             double maxX,
+            double minY,
+            double maxY,
             bool isLeftSide
         )
         {
@@ -11014,6 +11046,19 @@ namespace Tekla.Technology.Akit.UserScript
             try
             {
                 bool defaultTop = !isLeftSide;
+
+                // Hole and face bounds use the same target-view coordinates.
+                // Prefer the actual half of the face when a B/C section has no partner.
+                // The established diagonal rule remains the centerline fallback.
+                if (group != null && maxY - minY > TOL)
+                {
+                    double centerY = (minY + maxY) / 2.0;
+                    double sideTolerance = Math.Max(TOL, 0.01);
+                    if (group.MaxY < centerY - sideTolerance)
+                        return false;
+                    if (group.MinY > centerY + sideTolerance)
+                        return true;
+                }
 
                 if (group == null || groups == null)
                     return defaultTop;
@@ -14506,20 +14551,12 @@ namespace Tekla.Technology.Akit.UserScript
             double usablePaperLength = paperLength - margin;
 
             if (usablePaperLength <= 1.0)
-                return 30.0;
+                return TTSK_AutoDim_Plates.ManualDrawingScaleOverride.ChooseAutoScale(double.PositiveInfinity);
 
             double requiredModelLength = beamLength + AUTO_SCALE_DIM_RESERVE;
             double requiredScale = requiredModelLength / usablePaperLength;
 
-            double[] allowedScales = new double[] { 5.0, 10.0, 15.0, 20.0, 30.0 };
-
-            foreach (double scale in allowedScales)
-            {
-                if (scale >= requiredScale)
-                    return scale;
-            }
-
-            return 30.0;
+            return TTSK_AutoDim_Plates.ManualDrawingScaleOverride.ChooseAutoScale(requiredScale);
         }
 
         private static double GetScaleMarginBySheetSize(double width, double height)
@@ -16698,8 +16735,12 @@ namespace Tekla.Technology.Akit.UserScript
                 // - Left/Right tách riêng, không đẩy tầng chéo hướng.
                 ChamferInfluence frontChamferInfluence = new ChamferInfluence();
                 int frontChamferCount = 0;
+                List<RecessedFlangeBevel> recessedBevels = isAssemblyDrawing
+                    || !(new DrawingHandler().GetActiveDrawing() is SinglePartDrawing)
+                    ? new List<RecessedFlangeBevel>()
+                    : ReadRecessedFlangeBevels(model, part, view);
 
-                if (ENABLE_TOP_VIEW_CHAMFER_DIM)
+                if (ENABLE_TOP_VIEW_CHAMFER_DIM && recessedBevels.Count == 0)
                 {
                     frontChamferCount = CreateTopViewChamferDims(
                         handler,
@@ -16736,7 +16777,13 @@ namespace Tekla.Technology.Akit.UserScript
                 Point topRightNotchOuter = null;
                 Point bottomRightNotchOuter = null;
 
-                if (isVerticalHMember)
+                if (recessedBevels.Count > 0)
+                {
+                    frontNotchInfluence = RecessedFlangeInfluence(recessedBevels);
+                    frontNotchCount = CreateRecessedFlangeBevelDetails(
+                        handler, view, recessedBevels, offsetAnchors);
+                }
+                else if (isVerticalHMember)
                 {
                     // ASSEMBLY H/I dọc: resolver riêng cho rãnh trái/phải trên/dưới.
                     // Không gọi hoặc thay đổi rule rãnh H/I ngang legacy.
@@ -17025,6 +17072,7 @@ namespace Tekla.Technology.Akit.UserScript
                     );
                 }
             }
+            catch (RecessedFlangeException) { throw; }
             catch { }
             finally
             {

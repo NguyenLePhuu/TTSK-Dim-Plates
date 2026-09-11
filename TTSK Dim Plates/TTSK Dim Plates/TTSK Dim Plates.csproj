@@ -217,6 +217,7 @@
     <Compile Include="PHU_Slot02_NeighborReferencePlateDim.cs" />
     <Compile Include="PHU_Slot01_SelectedMainPartAutoDim.cs" />
     <Compile Include="PHU_Shape.cs" />
+    <Compile Include="PHU_Shape_RecessedFlangeBevel.cs" />
     <Compile Include="PHU_Section.cs" />
     <Compile Include="PHU_SectionViewAttributeResolver.cs" />
     <Compile Include="PHU_Shape_C.cs" />

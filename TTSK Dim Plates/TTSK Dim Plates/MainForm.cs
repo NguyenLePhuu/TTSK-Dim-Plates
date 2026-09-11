@@ -21,6 +21,7 @@ namespace TTSK_AutoDim_Plates
         private readonly List<Drawing> _selectedDrawings = new List<Drawing>();
 
         private bool _isBatchRunning = false;
+        private bool _pdfCommandRunning;
         private bool _stopRequested = false;
         private int _resumeIndex = 0;
         private bool _gridVisibilityMacroRunning = false;
@@ -46,9 +47,10 @@ namespace TTSK_AutoDim_Plates
         private SafeRoundedButton btnClear;
         private SafeRoundedButton btnDictionary;
         private SafeRoundedButton btnPrint;
-        private Panel printMergeDropDownHost;
+        private RoundedPanel printMergeDropDownHost;
         private SafeRoundedButton btnMergeDropDown;
         private SafeRoundedButton btnMergeFileDropDown;
+        private SafeRoundedButton btnSnapshotDropDown;
         private System.Windows.Forms.Timer printMenuCloseTimer;
         private Label lblCount;
         private Label lblStatus;
@@ -185,6 +187,71 @@ namespace TTSK_AutoDim_Plates
             _shortcutManager = new ShortcutManager(Application.StartupPath);
             _shortcutManager.Load();
             BuildUi();
+        }
+
+        // Cooperative waits retain Tekla calls and ThreadStatic contexts on their original thread.
+        private sealed class BusyWaitInputFilter : IMessageFilter
+        {
+            public bool PreFilterMessage(ref Message message)
+            {
+                Control control = Control.FromChildHandle(message.HWnd);
+                MainForm form = control == null ? null : control.FindForm() as MainForm;
+                if (form == null) return false;
+                if (message.Msg == 0x0010
+                    || (message.Msg == 0x0112 && ((long)message.WParam & 0xFFF0) == 0xF060))
+                    return true;
+                bool input = (message.Msg >= 0x0100 && message.Msg <= 0x0109)
+                    || (message.Msg >= 0x0201 && message.Msg <= 0x0209);
+                if (!input) return false;
+                // Preserve the established Batch STOP request; it does not interrupt a drawing.
+                if (form._isBatchRunning && control == form.btnRun) return false;
+                return true;
+            }
+        }
+
+        private static void WaitForUiDelay(int milliseconds)
+        {
+            if (!Application.MessageLoop)
+            {
+                System.Threading.Thread.Sleep(milliseconds);
+                return;
+            }
+            var filter = new BusyWaitInputFilter();
+            Application.AddMessageFilter(filter);
+            try
+            {
+                var elapsed = System.Diagnostics.Stopwatch.StartNew();
+                while (elapsed.ElapsedMilliseconds < milliseconds)
+                {
+                    Application.DoEvents();
+                    int remaining = milliseconds - (int)elapsed.ElapsedMilliseconds;
+                    if (remaining > 0) System.Threading.Thread.Sleep(Math.Min(15, remaining));
+                }
+            }
+            finally { Application.RemoveMessageFilter(filter); }
+        }
+
+        private static bool WaitForUiWorker(System.Diagnostics.Process worker, int milliseconds)
+        {
+            if (!Application.MessageLoop) return worker.WaitForExit(milliseconds);
+            var elapsed = System.Diagnostics.Stopwatch.StartNew();
+            while (!worker.WaitForExit(0))
+            {
+                int remaining = milliseconds - (int)elapsed.ElapsedMilliseconds;
+                if (remaining <= 0) return worker.HasExited;
+                WaitForUiDelay(Math.Min(25, remaining));
+            }
+            return true;
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            if (_pdfCommandRunning && e.CloseReason == CloseReason.UserClosing)
+            {
+                e.Cancel = true;
+                return;
+            }
+            base.OnFormClosing(e);
         }
 
         protected override void OnHandleCreated(EventArgs e)
@@ -580,7 +647,7 @@ namespace TTSK_AutoDim_Plates
             txtManualScaleDenominator.BorderStyle = BorderStyle.None;
             txtManualScaleDenominator.Location = new Point(5, 4);
             txtManualScaleDenominator.Size = new System.Drawing.Size(42, 17);
-            txtManualScaleDenominator.MaxLength = 2;
+            txtManualScaleDenominator.MaxLength = 3;
             manualScaleInputHost.Controls.Add(txtManualScaleDenominator);
 
             manualScaleToolTip = new ToolTip();
@@ -591,6 +658,7 @@ namespace TTSK_AutoDim_Plates
             string manualScaleTip =
                 "Để trống: dùng Auto Scale hiện tại.\r\n"
                 + "Nhập mẫu số, ví dụ 20 tương ứng tỷ lệ 1:20.\r\n"
+                + "Nhập số âm (-5, -10, -15, -20, -30) để loại tỷ lệ đó khỏi Auto Scale.\r\n"
                 + "Chỉ giữ trong phiên hiện tại; mở lại TTSK sẽ trở về Auto Scale.\r\n"
                 + "Áp dụng cho Active Drawing hoặc toàn bộ Batch khi chạy CREATE DRAWING.";
             manualScaleToolTip.SetToolTip(lblManualScalePrefix, manualScaleTip);
@@ -621,7 +689,7 @@ namespace TTSK_AutoDim_Plates
             };
             status.Controls.Add(btnPrint);
 
-            printMergeDropDownHost = new Panel();
+            printMergeDropDownHost = new RoundedPanel();
             printMergeDropDownHost.Size = new System.Drawing.Size(
                 btnPrint.Width,
                 btnPrint.Height * 2
@@ -674,6 +742,41 @@ namespace TTSK_AutoDim_Plates
             };
             printMergeDropDownHost.Controls.Add(btnMergeFileDropDown);
 
+            btnSnapshotDropDown = new SafeRoundedButton();
+            btnSnapshotDropDown.Text = "Snapshot";
+            btnSnapshotDropDown.Click += delegate
+            {
+                HidePrintMenu();
+                RunSnapshotExport();
+            };
+            btnSnapshotDropDown.MouseEnter += delegate { CancelPrintMenuClose(); };
+            btnSnapshotDropDown.MouseLeave += delegate { SchedulePrintMenuClose(); };
+            printMergeDropDownHost.Controls.Add(btnSnapshotDropDown);
+
+            btnPrint.KeyDown += delegate(object sender, KeyEventArgs e)
+            {
+                if (e.KeyCode == Keys.Down || e.KeyCode == Keys.Up)
+                {
+                    ShowPrintMenu();
+                    btnMergeDropDown.Focus();
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                }
+            };
+            foreach (Control item in printMergeDropDownHost.Controls)
+            {
+                item.KeyDown += delegate(object sender, KeyEventArgs e)
+                {
+                    if (e.KeyCode == Keys.Escape)
+                    {
+                        HidePrintMenu();
+                        btnPrint.Focus();
+                        e.Handled = true;
+                        e.SuppressKeyPress = true;
+                    }
+                };
+            }
+
             printMenuCloseTimer = new System.Windows.Forms.Timer();
             printMenuCloseTimer.Interval = 180;
             printMenuCloseTimer.Tick += delegate
@@ -684,6 +787,7 @@ namespace TTSK_AutoDim_Plates
                 if (
                     !IsCursorInsideControl(btnPrint)
                     && !IsCursorInsideControl(printMergeDropDownHost)
+                    && !printMergeDropDownHost.ContainsFocus
                 )
                 {
                     HidePrintMenu();
@@ -1637,8 +1741,8 @@ namespace TTSK_AutoDim_Plates
                 dataCenterSlotTitle = dataCenterSlotTile.Controls[1] as Label;
                 dataCenterSlotDescription = dataCenterSlotTile.Controls[2] as Label;
             }
-            Panel slot8 = MakeAutoDimSlotBox("⑧", "Snapshot Batch",
-                "Xuất PNG → Desktop", innerMargin + boxW + gap, 0, boxW, boxH,
+            Panel slot8 = MakeAutoDimSlotBox("⑧", "Slot 08",
+                "Chờ gắn file CS", innerMargin + boxW + gap, 0, boxW, boxH,
                 delegate { RunVisibleAutoDimSlot(8); });
             page2.Controls.Add(slot8);
             page2.Controls.Add(MakeAutoDimSlotBox("⑨", "Ẩn neighbor", "Giữ liên kết trực tiếp",
@@ -2234,9 +2338,8 @@ namespace TTSK_AutoDim_Plates
             {
                 case 6: RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot08"); return;
                 case 7: ToggleDataCenterMode(); return;
-                case 8: RunSnapshotExport(); return;
                 case 9: RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot11"); return;
-                case 10: case 11: case 12:
+                case 8: case 10: case 11: case 12:
                     SetAutoDimResult("Slot " + slot.ToString("00") + ": Chờ gắn file CS"); return;
                 default: RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot" + slot.ToString("00")); return;
             }
@@ -2359,6 +2462,7 @@ namespace TTSK_AutoDim_Plates
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
+            if (_pdfCommandRunning) return true;
             if (_shortcutManager != null)
             {
                 Keys normalized = ShortcutManager.NormalizeShortcut(keyData);
@@ -4886,7 +4990,7 @@ namespace TTSK_AutoDim_Plates
 
                 while (elapsedMilliseconds < timeoutMilliseconds)
                 {
-                    Thread.Sleep(pollMilliseconds);
+                    WaitForUiDelay(pollMilliseconds);
                     elapsedMilliseconds += pollMilliseconds;
                     Application.DoEvents();
 
@@ -6300,11 +6404,13 @@ namespace TTSK_AutoDim_Plates
             CancelPrintMenuClose();
             ApplyPrintMenuTheme();
 
-            Point screenLocation = btnPrint.PointToScreen(new Point(0, btnPrint.Height));
-
-            printMergeDropDownHost.Location = PointToClient(screenLocation);
+            Point anchor = PointToClient(btnPrint.PointToScreen(Point.Empty));
+            printMergeDropDownHost.Location = new Point(
+                Math.Max(0, Math.Min(anchor.X, ClientSize.Width - printMergeDropDownHost.Width)),
+                Math.Max(0, anchor.Y - printMergeDropDownHost.Height)
+            );
             printMergeDropDownHost.Visible = true;
-            SetPrintMenuConnectedEdges(true);
+            ResetPrintMenuButtonEdges();
             printMergeDropDownHost.BringToFront();
         }
 
@@ -6315,7 +6421,7 @@ namespace TTSK_AutoDim_Plates
             if (printMergeDropDownHost != null)
                 printMergeDropDownHost.Visible = false;
 
-            SetPrintMenuConnectedEdges(false);
+            ResetPrintMenuButtonEdges();
         }
 
         private void SchedulePrintMenuClose()
@@ -6357,79 +6463,52 @@ namespace TTSK_AutoDim_Plates
 
         private void ApplyPrintMenuTheme()
         {
-            if (
-                btnPrint == null
-                || printMergeDropDownHost == null
-                || btnMergeDropDown == null
-                || btnMergeFileDropDown == null
-            )
-            {
+            if (btnPrint == null || printMergeDropDownHost == null
+                || btnMergeDropDown == null || btnMergeFileDropDown == null
+                || btnSnapshotDropDown == null)
                 return;
+
+            const int padding = 8;
+            const int rowHeight = 34;
+            const int rowGap = 6;
+            printMergeDropDownHost.Size = new System.Drawing.Size(148, padding * 2 + rowHeight * 3 + rowGap * 2);
+            printMergeDropDownHost.BackColor = _darkMode
+                ? Color.FromArgb(32, 32, 32) : Color.FromArgb(248, 250, 253);
+            printMergeDropDownHost.BorderColor = _darkMode
+                ? Color.FromArgb(82, 73, 65) : Color.FromArgb(181, 194, 216);
+            printMergeDropDownHost.BorderRadius = 12;
+            ApplyRoundedControlRegion(printMergeDropDownHost, 12);
+
+            SafeRoundedButton[] items = { btnMergeDropDown, btnMergeFileDropDown, btnSnapshotDropDown };
+            for (int i = 0; i < items.Length; i++)
+            {
+                SafeRoundedButton item = items[i];
+                item.Location = new Point(padding, padding + i * (rowHeight + rowGap));
+                item.Size = new System.Drawing.Size(printMergeDropDownHost.Width - padding * 2, rowHeight);
+                item.Font = btnPrint.Font;
+                item.TabStop = true;
+                item.TabIndex = i;
+                item.FillColor = _darkMode ? Color.FromArgb(40, 38, 36) : Color.White;
+                item.BorderColor = _darkMode ? Color.FromArgb(65, 60, 55) : Color.FromArgb(221, 228, 239);
+                item.HoverBorderColor = _darkMode ? Color.FromArgb(201, 122, 64) : BrightBlue;
+                item.TextColor = btnPrint.TextColor;
+                item.BorderRadius = 9;
+                item.ConnectedTop = false;
+                item.ConnectedBottom = false;
+                item.FlushOuterEdge = false;
+                item.Invalidate();
             }
-
-            printMergeDropDownHost.Size = new System.Drawing.Size(
-                btnPrint.Width,
-                btnPrint.Height * 2
-            );
-
-            btnMergeDropDown.Location = new Point(0, 0);
-            btnMergeFileDropDown.Location = new Point(0, btnPrint.Height);
-
-            CopyPrintButtonProperties(btnMergeDropDown);
-            CopyPrintButtonProperties(btnMergeFileDropDown);
-
-            // The three commands form one continuous vertical button group.
-            printMergeDropDownHost.BackColor = btnPrint.FillColor;
-            btnMergeDropDown.BackColor = btnPrint.FillColor;
-            btnMergeFileDropDown.BackColor = btnPrint.FillColor;
-
-            btnMergeDropDown.ConnectedTop = true;
-            btnMergeDropDown.ConnectedBottom = true;
-            btnMergeFileDropDown.ConnectedTop = true;
-            btnMergeFileDropDown.ConnectedBottom = false;
-            SetPrintMenuConnectedEdges(printMergeDropDownHost.Visible);
-
-            btnMergeDropDown.Invalidate();
-            btnMergeFileDropDown.Invalidate();
+            ResetPrintMenuButtonEdges();
             printMergeDropDownHost.Invalidate();
         }
 
-        private void CopyPrintButtonProperties(SafeRoundedButton target)
+        private void ResetPrintMenuButtonEdges()
         {
-            if (btnPrint == null || target == null)
-                return;
-
-            target.Size = btnPrint.Size;
-            target.Font = btnPrint.Font;
-            target.FillColor = btnPrint.FillColor;
-            target.BorderColor = btnPrint.BorderColor;
-            target.HoverBorderColor = btnPrint.HoverBorderColor;
-            target.TextColor = btnPrint.TextColor;
-            target.BorderRadius = btnPrint.BorderRadius;
-            target.Cursor = btnPrint.Cursor;
-            target.RightToLeft = btnPrint.RightToLeft;
-        }
-
-        private void SetPrintMenuConnectedEdges(bool menuVisible)
-        {
-            if (btnPrint == null || btnMergeDropDown == null || btnMergeFileDropDown == null)
-            {
-                return;
-            }
-
+            if (btnPrint == null) return;
             btnPrint.ConnectedTop = false;
-            btnPrint.ConnectedBottom = menuVisible;
-            btnPrint.FlushOuterEdge = menuVisible;
-            btnMergeDropDown.ConnectedTop = true;
-            btnMergeDropDown.ConnectedBottom = true;
-            btnMergeDropDown.FlushOuterEdge = true;
-            btnMergeFileDropDown.ConnectedTop = true;
-            btnMergeFileDropDown.ConnectedBottom = false;
-            btnMergeFileDropDown.FlushOuterEdge = true;
-
+            btnPrint.ConnectedBottom = false;
+            btnPrint.FlushOuterEdge = false;
             btnPrint.Invalidate();
-            btnMergeDropDown.Invalidate();
-            btnMergeFileDropDown.Invalidate();
         }
 
         private static void ApplyRoundedControlRegion(Control control, float radius)
@@ -6573,8 +6652,59 @@ namespace TTSK_AutoDim_Plates
             }
         }
 
-        private void RunPdfCommand(bool mergeAndDeleteChildren)
+        private void UpdatePdfProgress(DrawingPdfProgress progress, IList<int> rowIndices)
         {
+            if (progress == null || IsDisposed || Disposing) return;
+            if (InvokeRequired)
+            {
+                Invoke(new Action(() => UpdatePdfProgress(progress, rowIndices)));
+                return;
+            }
+            int percent = progress.Total > 0 ? progress.Completed * 100 / progress.Total : 0;
+            lblCount.Text = string.Format("PDF: {0}/{1} ({2}%)",
+                progress.Completed, progress.Total, percent);
+            string phase;
+            Color activeColor = _darkMode ? Color.FromArgb(224, 156, 96) : BrightBlue;
+            if (progress.Stage == DrawingPdfProgressStage.Merging)
+                phase = "Đang gộp " + progress.Succeeded + " PDF";
+            else if (progress.Stage == DrawingPdfProgressStage.CleaningUp)
+                phase = "Đã gộp • Đang dọn PDF con";
+            else
+            {
+                bool completed = progress.Stage == DrawingPdfProgressStage.ItemCompleted;
+                bool verifying = progress.Stage == DrawingPdfProgressStage.Verifying;
+                string status = completed
+                    ? (progress.ItemSucceeded ? "PDF OK" : "PRINT FAIL")
+                    : (verifying ? "VERIFYING" : "PRINTING");
+                string result = completed ? (progress.ItemSucceeded ? "SAVED" : "ERROR") : "IN PROGRESS";
+                Color color = completed
+                    ? (progress.ItemSucceeded ? Color.FromArgb(22, 163, 74) : Color.FromArgb(220, 38, 38))
+                    : activeColor;
+                if (progress.Index >= 0 && progress.Index < rowIndices.Count)
+                {
+                    int rowIndex = rowIndices[progress.Index];
+                    SetGridStatusAndResult(rowIndex, status, color, result, color, false);
+                    if (rowIndex >= 0 && rowIndex < dgvDrawings.Rows.Count)
+                        dgvDrawings.Rows[rowIndex].Cells["RESULT"].ToolTipText = progress.Message ?? string.Empty;
+                }
+                phase = (completed ? (progress.ItemSucceeded ? "Đã lưu " : "Lỗi ")
+                    : (verifying ? "Kiểm tra " : "Đang in ")) + progress.Mark;
+            }
+            SetMainStatus(string.Format("PDF {0}/{1} | OK {2} • Lỗi {3} | {4}",
+                progress.Completed, progress.Total, progress.Succeeded, progress.Failed, phase),
+                progress.Failed > 0 ? MainStatusKind.Warning : MainStatusKind.Information);
+            if (progress.Failed == 0 && _darkMode) lblStatus.ForeColor = activeColor;
+            // Paint without dispatching user input or another drawing command.
+            lblCount.Refresh();
+            lblStatus.Refresh();
+            dgvDrawings.Refresh();
+        }
+
+        private async void RunPdfCommand(bool mergeAndDeleteChildren)
+        {
+            if (_pdfCommandRunning || _isBatchRunning || _snapshotExportRunning || _fitAndCleanupRunning) return;
+            _pdfCommandRunning = true;
+            var busyControls = new Dictionary<Control, bool>();
             string commandName = mergeAndDeleteChildren ? "Merge" : "Print";
 
             try
@@ -6642,6 +6772,7 @@ namespace TTSK_AutoDim_Plates
                 }
 
                 List<DrawingPdfPrintJob> printJobs = new List<DrawingPdfPrintJob>();
+                List<int> printRowIndices = new List<int>();
 
                 for (int i = 0; i < _selectedDrawings.Count; i++)
                 {
@@ -6649,6 +6780,7 @@ namespace TTSK_AutoDim_Plates
                     if (drawing == null)
                         continue;
 
+                    printRowIndices.Add(i);
                     printJobs.Add(
                         new DrawingPdfPrintJob
                         {
@@ -6661,9 +6793,9 @@ namespace TTSK_AutoDim_Plates
 
                     SetGridStatusAndResult(
                         i,
-                        mergeAndDeleteChildren ? "MERGING" : "PRINTING",
+                        "QUEUED",
                         Color.FromArgb(59, 130, 246),
-                        "WAITING",
+                        "PENDING",
                         Color.FromArgb(59, 130, 246)
                     );
                 }
@@ -6696,9 +6828,17 @@ namespace TTSK_AutoDim_Plates
 
                 Application.DoEvents();
 
-                DrawingPdfPrintResult result = mergeAndDeleteChildren
-                    ? DrawingPdfPrinter.PrintAndMergePdfs(printJobs, this)
-                    : DrawingPdfPrinter.PrintToSeparatePdfs(printJobs, this);
+                lblCount.Text = "PDF: 0/" + printJobs.Count + " (0%)";
+                lblCount.Refresh();
+                Action<DrawingPdfProgress> onProgress = progress => UpdatePdfProgress(progress, printRowIndices);
+                foreach (Control control in Controls)
+                {
+                    busyControls[control] = control.Enabled;
+                    control.Enabled = false;
+                }
+                DrawingPdfPrintResult result = await DrawingPdfPrinter.PrintPdfsAsync(
+                    printJobs, this, mergeAndDeleteChildren, onProgress);
+                lblCount.Text = "PDF OK: " + result.SuccessfulDrawingCount + "/" + printJobs.Count;
 
                 if (result.Cancelled)
                 {
@@ -6740,7 +6880,7 @@ namespace TTSK_AutoDim_Plates
                             }
 
                             SetGridStatusAndResult(
-                                item.Index,
+                                printRowIndices[item.Index],
                                 statusText,
                                 Color.FromArgb(22, 163, 74),
                                 resultText,
@@ -6750,7 +6890,7 @@ namespace TTSK_AutoDim_Plates
                         else
                         {
                             SetGridStatusAndResult(
-                                item.Index,
+                                printRowIndices[item.Index],
                                 "PRINT FAIL",
                                 Color.FromArgb(220, 38, 38),
                                 "ERROR",
@@ -6887,6 +7027,9 @@ namespace TTSK_AutoDim_Plates
             }
             finally
             {
+                foreach (var entry in busyControls)
+                    if (!entry.Key.IsDisposed) entry.Key.Enabled = entry.Value;
+                _pdfCommandRunning = false;
                 if (btnPrint != null)
                     btnPrint.Enabled = true;
 
@@ -7003,7 +7146,8 @@ namespace TTSK_AutoDim_Plates
             string statusText,
             Color statusColor,
             string resultText,
-            Color resultColor
+            Color resultColor,
+            bool processPendingEvents = true
         )
         {
             if (dgvDrawings == null)
@@ -7037,7 +7181,7 @@ namespace TTSK_AutoDim_Plates
             }
             catch { }
 
-            Application.DoEvents();
+            if (processPendingEvents) Application.DoEvents();
         }
 
         private void dgvDrawings_CellDoubleClick(object sender, DataGridViewCellEventArgs e)
@@ -7388,12 +7532,12 @@ namespace TTSK_AutoDim_Plates
                 if (dh.IsAnyDrawingOpen())
                 {
                     CloseActiveDrawingSafe(dh);
-                    Thread.Sleep(80);
+                    WaitForUiDelay(80);
                 }
 
                 SetActiveDrawingSafe(dh, dr);
                 openedForCheck = true;
-                Thread.Sleep(80);
+                WaitForUiDelay(80);
 
                 Drawing activeDrawing = dh.GetActiveDrawing();
                 if (activeDrawing == null)
@@ -7433,7 +7577,7 @@ namespace TTSK_AutoDim_Plates
                     try
                     {
                         CloseActiveDrawingSafe(dh);
-                        Thread.Sleep(80);
+                        WaitForUiDelay(80);
                     }
                     catch { }
                 }
@@ -7486,7 +7630,7 @@ namespace TTSK_AutoDim_Plates
                     // Quan trọng:
                     // Tự select view giống thao tác tay để Tekla nạp đúng Drawing View Properties.
                     SelectDrawingObjectSafe(dh, view);
-                    Thread.Sleep(80);
+                    WaitForUiDelay(80);
 
                     string scale = GetScaleFromSelectedView(view);
 
@@ -8190,7 +8334,7 @@ namespace TTSK_AutoDim_Plates
             {
                 MessageBox.Show(
                     this,
-                    "Tỷ lệ không hợp lệ. Hãy nhập Tỉ lệ theo tiêu chuẩn",
+                    "Nhập 5, 10, 15, 20, 30 để cố định tỷ lệ; nhập số âm tương ứng để loại khỏi Auto Scale.",
                     "TTSK AutoDim",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning
@@ -9102,7 +9246,7 @@ namespace TTSK_AutoDim_Plates
                         message = "Khong khoi dong duoc Hole Mark worker.";
                         return false;
                     }
-                    if (!worker.WaitForExit(60000))
+                    if (!WaitForUiWorker(worker, 60000))
                     {
                         try { worker.Kill(); }
                         catch { }
@@ -10551,7 +10695,7 @@ namespace TTSK_AutoDim_Plates
                     if (!TryRunAllPartsDeletedMarker(activeMark, out markerError))
                         throw new Exception(markerError);
 
-                    Thread.Sleep(100);
+                    WaitForUiDelay(100);
 
                     bool savedDeleted = SaveActiveDrawingSafe(dh);
                     if (!savedDeleted)
@@ -10812,13 +10956,13 @@ namespace TTSK_AutoDim_Plates
                             Application.DoEvents();
 
                             SetActiveDrawingSafe(dh, dr);
-                            Thread.Sleep(100);
+                            WaitForUiDelay(100);
 
                             string markerError;
                             if (!TryRunAllPartsDeletedMarker(name, out markerError))
                                 throw new Exception(markerError);
 
-                            Thread.Sleep(100);
+                            WaitForUiDelay(100);
 
                             bool savedDeleted = SaveActiveDrawingSafe(dh);
                             if (!savedDeleted)
@@ -10826,9 +10970,9 @@ namespace TTSK_AutoDim_Plates
                                     "Không save được drawing sau khi tạo dấu X All Parts Deleted."
                                 );
 
-                            Thread.Sleep(100);
+                            WaitForUiDelay(100);
                             CloseActiveDrawingSafe(dh);
-                            Thread.Sleep(100);
+                            WaitForUiDelay(100);
 
                             ok++;
                             SetGridStatusAndResult(
@@ -10900,7 +11044,7 @@ namespace TTSK_AutoDim_Plates
                         Application.DoEvents();
 
                         SetActiveDrawingSafe(dh, dr);
-                        Thread.Sleep(100);
+                        WaitForUiDelay(100);
 
                         AutoDimExecutionResult execution;
                         using (ManualDrawingScaleOverride.BeginRun(batchManualScale))
@@ -10974,7 +11118,7 @@ namespace TTSK_AutoDim_Plates
 
                         int holeResult = GetTopBottomHoleCheckResult();
 
-                        Thread.Sleep(100);
+                        WaitForUiDelay(100);
 
                         try
                         {
@@ -10986,7 +11130,7 @@ namespace TTSK_AutoDim_Plates
                         }
                         catch { }
 
-                        Thread.Sleep(100);
+                        WaitForUiDelay(100);
 
                         bool saved = SaveActiveDrawingSafe(dh);
 
@@ -11018,10 +11162,10 @@ namespace TTSK_AutoDim_Plates
                             continue;
                         }
 
-                        Thread.Sleep(100);
+                        WaitForUiDelay(100);
 
                         CloseActiveDrawingSafe(dh);
-                        Thread.Sleep(100);
+                        WaitForUiDelay(100);
 
                         if (_batchDataCenterModeSnapshot == true)
                             ok++;

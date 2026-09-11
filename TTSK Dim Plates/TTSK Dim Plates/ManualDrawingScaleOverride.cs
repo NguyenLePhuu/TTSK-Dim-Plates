@@ -6,6 +6,22 @@ namespace TTSK_AutoDim_Plates
     public static class ManualDrawingScaleOverride
     {
         private static double? _manualScaleOverride;
+        private static double? _excludedScale;
+
+        // The fallback must also respect exclusions, including an excluded 1:30.
+        public static double ChooseAutoScale(double requiredScale)
+        {
+            double lastAllowed = 0.0;
+            foreach (double candidate in new double[] { 5.0, 10.0, 15.0, 20.0, 30.0 })
+            {
+                if (_excludedScale.HasValue && Math.Abs(candidate - _excludedScale.Value) < 0.0001)
+                    continue;
+                lastAllowed = candidate;
+                if (candidate >= requiredScale)
+                    return candidate;
+            }
+            return lastAllowed;
+        }
 
         public static double? ManualScaleOverride
         {
@@ -42,10 +58,10 @@ namespace TTSK_AutoDim_Plates
             if (
                 !int.TryParse(
                     value,
-                    NumberStyles.None,
+                    NumberStyles.AllowLeadingSign,
                     CultureInfo.InvariantCulture,
                     out denominator
-                ) || !IsAllowedScale(denominator)
+                ) || !IsAllowedScale(Math.Abs((double)denominator))
             )
             {
                 scale = null;
@@ -62,10 +78,13 @@ namespace TTSK_AutoDim_Plates
 
             if (scale.HasValue)
             {
-                if (!IsAllowedScale(scale.Value))
+                if (!IsAllowedScale(Math.Abs(scale.Value)))
                     throw new ArgumentOutOfRangeException("scale");
 
-                _manualScaleOverride = scale.Value;
+                if (scale.Value < 0.0)
+                    _excludedScale = -scale.Value;
+                else
+                    _manualScaleOverride = scale.Value;
             }
 
             return new RunScope();
@@ -74,6 +93,7 @@ namespace TTSK_AutoDim_Plates
         public static void Clear()
         {
             _manualScaleOverride = null;
+            _excludedScale = null;
         }
 
         private static bool IsAllowedScale(double scale)

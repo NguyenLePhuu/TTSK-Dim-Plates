@@ -170,15 +170,11 @@ namespace Tekla.Technology.Akit.UserScript
         // Chỉ xử lý mark tên thanh. Không đụng mark lỗ.
         private const bool AUTO_MOVE_PART_MARK_NAME = true;
 
-        // Khoảng hở từ mép trên thanh đến đáy khung mark tên.
+        // Khoảng hở từ mép dưới thanh đến đỉnh khung mark tên.
         private const double PART_MARK_GAP_FROM_PLATE = 15.0;
 
         // Nếu có nhiều part mark thì lệch nhẹ để tránh chồng nhau.
         private const double PART_MARK_STAGGER = 18.0;
-
-        // Nếu chiều rộng miếng nhỏ hơn giá trị này thì mark tên đặt phía dưới.
-        // Mục tiêu: tránh mark tên nằm phía trên làm chật/đè DIM với các miếng hẹp.
-        private const double PART_MARK_BELOW_IF_WIDTH_LESS_THAN = 180.0;
 
         // AUTO HOLE MARK AESTHETIC LEADER + COLLISION AVOIDANCE.
         // Tất cả khoảng hở dưới đây là paper-space; khi chạy sẽ nhân với view scale.
@@ -7808,13 +7804,12 @@ namespace Tekla.Technology.Akit.UserScript
                     }
                     catch { }
 
-                    MovePartMarkBoxToCenterTop(
+                    MovePartMarkBoxToCenterBottom(
                         preparedMarks[i],
                         i,
                         minX,
                         maxX,
-                        minY,
-                        maxY
+                        minY
                     );
                 }
             }
@@ -7852,13 +7847,12 @@ namespace Tekla.Technology.Akit.UserScript
             }
         }
 
-        private static void MovePartMarkBoxToCenterTop(
+        private static void MovePartMarkBoxToCenterBottom(
             MarkBase mark,
             int index,
             double minX,
             double maxX,
-            double minY,
-            double maxY
+            double minY
         )
         {
             if (mark == null)
@@ -7867,21 +7861,12 @@ namespace Tekla.Technology.Akit.UserScript
             try
             {
                 double centerX = (minX + maxX) / 2.0;
-                double plateWidth = Math.Abs(maxX - minX);
-
-                // GIỮ NGUYÊN LOGIC MARK CŨ CHO MIẾNG RỘNG.
-                // Chỉ đổi vị trí mark xuống dưới khi chiều rộng miếng < 180.
-                bool placeBelow =
-                    plateWidth > 0.0 && plateWidth < PART_MARK_BELOW_IF_WIDTH_LESS_THAN;
-
-                // Nếu mark phía trên: đáy khung mark cách mép trên 15mm như logic cũ.
-                // Nếu mark phía dưới: đỉnh khung mark cách mép dưới 15mm.
-                double targetAnchorY = placeBelow
-                    ? minY - PART_MARK_GAP_FROM_PLATE - index * PART_MARK_STAGGER
-                    : maxY + PART_MARK_GAP_FROM_PLATE + index * PART_MARK_STAGGER;
+                // Đỉnh khung mark luôn cách mép dưới thanh 15mm.
+                double targetAnchorY =
+                    minY - PART_MARK_GAP_FROM_PLATE - index * PART_MARK_STAGGER;
 
                 // Lấy khung bao thật của mark. InsertionPoint của Mark là tâm khung,
-                // vì vậy phải cộng/trừ nửa chiều cao để khoảng hở được đo từ mép box.
+                // vì vậy phải trừ nửa chiều cao để khoảng hở được đo từ mép box.
                 Point boxMin;
                 Point boxMax;
                 if (!TryGetObjectBox(mark, out boxMin, out boxMax))
@@ -7889,9 +7874,7 @@ namespace Tekla.Technology.Akit.UserScript
 
                 double halfBoxHeight = Math.Abs(boxMax.Y - boxMin.Y) * 0.5;
 
-                double targetCenterY = placeBelow
-                    ? targetAnchorY - halfBoxHeight
-                    : targetAnchorY + halfBoxHeight;
+                double targetCenterY = targetAnchorY - halfBoxHeight;
                 Point currentCenter = new Point(
                     (boxMin.X + boxMax.X) * 0.5,
                     (boxMin.Y + boxMax.Y) * 0.5,
@@ -11312,15 +11295,7 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static double ChooseAllowedViewScale(double requiredScale)
         {
-            double[] allowedScales = new double[] { 5.0, 10.0, 15.0, 20.0, 30.0 };
-
-            foreach (double scale in allowedScales)
-            {
-                if (scale >= requiredScale)
-                    return scale;
-            }
-
-            return 30.0;
+            return TTSK_AutoDim_Plates.ManualDrawingScaleOverride.ChooseAutoScale(requiredScale);
         }
 
         private static bool TryGetDrawingSheetSize(

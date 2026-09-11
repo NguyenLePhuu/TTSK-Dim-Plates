@@ -19,6 +19,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Text;
 using System.Windows.Forms;
 using PdfSharp.Pdf;
@@ -73,7 +74,7 @@ namespace TTSK_AutoDim_Plates
             IWin32Window owner
         )
         {
-            return ExecutePdfWorkflow(jobs, owner, false);
+            return ExecutePdfWorkflow(jobs, owner, false, null, false).GetAwaiter().GetResult();
         }
 
         public static DrawingPdfPrintResult PrintAndMergePdfs(
@@ -81,13 +82,48 @@ namespace TTSK_AutoDim_Plates
             IWin32Window owner
         )
         {
-            return ExecutePdfWorkflow(jobs, owner, true);
+            return ExecutePdfWorkflow(jobs, owner, true, null, false).GetAwaiter().GetResult();
         }
 
-        private static DrawingPdfPrintResult ExecutePdfWorkflow(
+        public static DrawingPdfPrintResult PrintToSeparatePdfs(
+            IList<DrawingPdfPrintJob> jobs, IWin32Window owner, Action<DrawingPdfProgress> progress)
+        {
+            return ExecutePdfWorkflow(jobs, owner, false, progress, false).GetAwaiter().GetResult();
+        }
+
+        public static DrawingPdfPrintResult PrintAndMergePdfs(
+            IList<DrawingPdfPrintJob> jobs, IWin32Window owner, Action<DrawingPdfProgress> progress)
+        {
+            return ExecutePdfWorkflow(jobs, owner, true, progress, false).GetAwaiter().GetResult();
+        }
+
+        private static void ReportPdfProgress(Action<DrawingPdfProgress> progress,
+            DrawingPdfPrintResult result, DrawingPdfProgressStage stage, DrawingPdfItemResult item)
+        {
+            if (progress == null) return;
+            try
+            {
+                progress(new DrawingPdfProgress(stage, result.RequestedDrawingCount,
+                    result.SuccessfulDrawingCount, result.FailedDrawingCount,
+                    item == null ? -1 : item.Index, item == null ? string.Empty : item.Mark,
+                    item != null && item.Success, item == null ? string.Empty : item.Message));
+            }
+            catch { } // A presentation failure must not change PDF processing.
+        }
+
+        public static Task<DrawingPdfPrintResult> PrintPdfsAsync(
+            IList<DrawingPdfPrintJob> jobs, IWin32Window owner, bool merge,
+            Action<DrawingPdfProgress> progress)
+        {
+            return ExecutePdfWorkflow(jobs, owner, merge, progress, true);
+        }
+
+        private static async Task<DrawingPdfPrintResult> ExecutePdfWorkflow(
             IList<DrawingPdfPrintJob> jobs,
             IWin32Window owner,
-            bool mergeAndDeleteChildren
+            bool mergeAndDeleteChildren,
+            Action<DrawingPdfProgress> progress,
+            bool responsive
         )
         {
             DrawingPdfPrintResult result = new DrawingPdfPrintResult();
@@ -168,7 +204,9 @@ namespace TTSK_AutoDim_Plates
                     itemResult.Revision = NormalizeDisplayText(job.Revision, string.Empty);
                     itemResult.DrawnBy = NormalizeDisplayText(
                         job.DrawnBy,
-                        GetDrawingDrawnBy(job.Drawing)
+                        string.IsNullOrWhiteSpace(job.DrawnBy) || job.DrawnBy.Trim() == "-"
+                            ? GetDrawingDrawnBy(job.Drawing)
+                            : string.Empty
                     );
                     itemResult.DrawingName = string.IsNullOrWhiteSpace(job.DrawingName)
                         ? (job.Drawing != null ? job.Drawing.Name : string.Empty)
@@ -187,11 +225,13 @@ namespace TTSK_AutoDim_Plates
 
                     itemResult.OutputFilePath = outputFilePath;
                     result.ItemResults.Add(itemResult);
+                    ReportPdfProgress(progress, result, DrawingPdfProgressStage.Printing, itemResult);
 
                     try
                     {
                         Application.DoEvents();
 
+                        Stopwatch printTimer = Stopwatch.StartNew();
                         DPMPrinterAttributes printAttributes = CreatePdfPrintAttributes(
                             outputFilePath,
                             job.Drawing
@@ -199,16 +239,15 @@ namespace TTSK_AutoDim_Plates
 
                         // Thực thi in PDF chuẩn Tekla API với đầy đủ màu sắc (Full Color)
                         bool printSucceeded = false;
+                        bool workerCompleted = false;
                         string printErrorMessage = null;
                         try
                         {
-                            printSucceeded = PrintDrawingWithTeklaApi(
-                                drawingHandler,
-                                job.Drawing,
-                                printAttributes,
-                                outputFilePath,
-                                out printErrorMessage
-                            );
+                            PdfPrintAttempt attempt = await PrintDrawingWithTeklaApiAsync(
+                                drawingHandler, job.Drawing, printAttributes, outputFilePath, responsive);
+                            printSucceeded = attempt.Success;
+                            printErrorMessage = attempt.Error;
+                            workerCompleted = attempt.WorkerCompleted;
                         }
                         catch (Exception printEx)
                         {
@@ -218,10 +257,15 @@ namespace TTSK_AutoDim_Plates
 
                         itemResult.TeklaPrintReturnedSuccess = printSucceeded;
 
-                        bool outputCreated = WaitForCompletedPdf(
-                            outputFilePath,
-                            OutputWaitTimeoutMilliseconds
-                        );
+                        ReportPdfProgress(progress, result, DrawingPdfProgressStage.Verifying, itemResult);
+                        long pipelineMilliseconds = printTimer.ElapsedMilliseconds;
+                        printTimer.Restart();
+                        bool outputCreated = responsive
+                            ? await System.Threading.Tasks.Task.Run(() => VerifyPdfAfterPrint(
+                                outputFilePath, OutputWaitTimeoutMilliseconds, workerCompleted))
+                            : VerifyPdfAfterPrint(outputFilePath, OutputWaitTimeoutMilliseconds, workerCompleted);
+                        WritePdfTiming(outputFilePath, pipelineMilliseconds,
+                            printTimer.ElapsedMilliseconds, workerCompleted);
 
                         itemResult.OutputFileVerified = outputCreated;
 
@@ -258,7 +302,13 @@ namespace TTSK_AutoDim_Plates
                     }
 
                     Application.DoEvents();
-                    Thread.Sleep(DelayBetweenDrawingsMilliseconds);
+                    ReportPdfProgress(progress, result, DrawingPdfProgressStage.ItemCompleted, itemResult);
+                    // Keep the existing spacing between drawings, not after the last one.
+                    if (index + 1 < validJobs.Count)
+                    {
+                        if (responsive) await System.Threading.Tasks.Task.Delay(DelayBetweenDrawingsMilliseconds);
+                        else Thread.Sleep(DelayBetweenDrawingsMilliseconds);
+                    }
                 }
 
                 result.DrawingCount = result.SuccessfulDrawingCount;
@@ -276,7 +326,10 @@ namespace TTSK_AutoDim_Plates
 
                 if (mergeAndDeleteChildren)
                 {
-                    RunMergeAndCleanup(successfulItems, outputDirectory, result);
+                    if (responsive)
+                        await System.Threading.Tasks.Task.Run(() => RunMergeAndCleanup(successfulItems, outputDirectory, result, progress));
+                    else
+                        RunMergeAndCleanup(successfulItems, outputDirectory, result, progress);
                 }
 
                 bool allIndividualPdfsSucceeded =
@@ -323,7 +376,8 @@ namespace TTSK_AutoDim_Plates
         private static void RunMergeAndCleanup(
             IList<DrawingPdfItemResult> successfulItems,
             string outputDirectory,
-            DrawingPdfPrintResult result
+            DrawingPdfPrintResult result,
+            Action<DrawingPdfProgress> progress
         )
         {
             if (successfulItems == null || successfulItems.Count == 0)
@@ -350,6 +404,7 @@ namespace TTSK_AutoDim_Plates
                     ".pdf"
                 );
 
+                ReportPdfProgress(progress, result, DrawingPdfProgressStage.Merging, null);
                 MergePdfFiles(currentRunPdfFiles, mergedFilePath);
 
                 bool mergedFileVerified = WaitForCompletedPdf(
@@ -367,6 +422,7 @@ namespace TTSK_AutoDim_Plates
                 result.MergeMessage =
                     "Đã gộp " + currentRunPdfFiles.Count + " PDF con thành một PDF nhiều trang.";
 
+                ReportPdfProgress(progress, result, DrawingPdfProgressStage.CleaningUp, null);
                 DeleteCurrentRunChildFiles(successfulItems, result);
             }
             catch (Exception mergeException)
@@ -1320,8 +1376,8 @@ namespace TTSK_AutoDim_Plates
             string outputFilePath
         )
         {
-            string unusedError;
-            return PrintDrawingWithTeklaApi(drawingHandler, drawing, printAttributes, outputFilePath, out unusedError);
+            return PrintDrawingWithTeklaApiAsync(drawingHandler, drawing, printAttributes,
+                outputFilePath, false).GetAwaiter().GetResult().Success;
         }
 
         /// <summary>
@@ -1331,19 +1387,33 @@ namespace TTSK_AutoDim_Plates
         /// Ưu tiên 2 (Fallback): In trực tiếp in-process qua DpmPrinter với chính đối tượng drawing nguồn.
         /// Ưu tiên 3 (Fallback gốc): In qua drawingHandler.PrintDrawing tiêu chuẩn với chính đối tượng drawing nguồn.
         /// </summary>
-        private static bool PrintDrawingWithTeklaApi(
+        private sealed class PdfPrintAttempt
+        {
+            public PdfPrintAttempt(bool success, string error, bool workerCompleted)
+            {
+                Success = success;
+                Error = error;
+                WorkerCompleted = workerCompleted;
+            }
+            public bool Success;
+            public string Error;
+            public bool WorkerCompleted;
+        }
+
+        private static async Task<PdfPrintAttempt> PrintDrawingWithTeklaApiAsync(
             DrawingHandler drawingHandler,
             Drawing drawing,
             DPMPrinterAttributes printAttributes,
             string outputFilePath,
-            out string errorReason
+            bool responsive
         )
         {
-            errorReason = null;
+            bool workerCompleted = false;
+            string errorReason = null;
             if (drawingHandler == null || drawing == null || string.IsNullOrWhiteSpace(outputFilePath))
             {
                 errorReason = "Tham số drawing hoặc đường dẫn đầu ra không hợp lệ.";
-                return false;
+                return new PdfPrintAttempt(false, errorReason, workerCompleted);
             }
 
             // Ưu tiên 1: Chạy Worker Sub-process độc lập để bảo toàn DPI và kích thước UI của MainForm
@@ -1368,7 +1438,9 @@ namespace TTSK_AutoDim_Plates
                     {
                         if (worker != null)
                         {
-                            bool exited = worker.WaitForExit(60000);
+                            bool exited = responsive
+                                ? await System.Threading.Tasks.Task.Run(() => worker.WaitForExit(60000))
+                                : worker.WaitForExit(60000);
                             if (!exited)
                             {
                                 try { worker.Kill(); } catch { }
@@ -1388,8 +1460,9 @@ namespace TTSK_AutoDim_Plates
 
                                 if (worker.ExitCode == 0 && File.Exists(outputFilePath) && new FileInfo(outputFilePath).Length > 0)
                                 {
+                                    workerCompleted = true;
                                     errorReason = null;
-                                    return true;
+                                    return new PdfPrintAttempt(true, errorReason, workerCompleted);
                                 }
 
                                 if (string.IsNullOrWhiteSpace(errorReason))
@@ -1414,7 +1487,7 @@ namespace TTSK_AutoDim_Plates
                 if (directSuccess && File.Exists(outputFilePath) && new FileInfo(outputFilePath).Length > 0)
                 {
                     errorReason = null;
-                    return true;
+                    return new PdfPrintAttempt(true, errorReason, workerCompleted);
                 }
 
                 if (!string.IsNullOrWhiteSpace(directError))
@@ -1434,19 +1507,19 @@ namespace TTSK_AutoDim_Plates
                 if (legacySuccess)
                 {
                     errorReason = null;
-                    return true;
+                    return new PdfPrintAttempt(true, errorReason, workerCompleted);
                 }
 
                 if (string.IsNullOrWhiteSpace(errorReason))
                 {
                     errorReason = "Lệnh in tiêu chuẩn của Tekla trả về thất bại.";
                 }
-                return false;
+                return new PdfPrintAttempt(false, errorReason, workerCompleted);
             }
             catch (Exception ex)
             {
                 errorReason = "Lỗi khi gọi drawingHandler.PrintDrawing: " + GetDeepestExceptionMessage(ex);
-                return false;
+                return new PdfPrintAttempt(false, errorReason, workerCompleted);
             }
         }
 
@@ -1554,6 +1627,48 @@ namespace TTSK_AutoDim_Plates
             }
 
             return candidate;
+        }
+
+        // Only an exited, successful isolated worker supplies completion proof.
+        // Direct/legacy fallback and every uncertain file retain the original polling.
+        private static bool VerifyPdfAfterPrint(
+            string filePath, int timeoutMilliseconds, bool workerCompleted)
+        {
+            if (workerCompleted && !string.IsNullOrWhiteSpace(filePath))
+            {
+                try
+                {
+                    using (FileStream file = new FileStream(
+                        filePath, FileMode.Open, FileAccess.Read, FileShare.None))
+                    {
+                        if (file.Length > 0)
+                            return true;
+                    }
+                }
+                catch { }
+            }
+            return WaitForCompletedPdf(filePath, timeoutMilliseconds);
+        }
+
+        private static void WritePdfTiming(
+            string outputFilePath, long pipelineMilliseconds,
+            long verificationMilliseconds, bool workerCompleted)
+        {
+            try
+            {
+                string folder = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "TTSK_Dim_Plates", "logs");
+                Directory.CreateDirectory(folder);
+                string logPath = Path.Combine(folder,
+                    "pdf-timing-" + DateTime.Now.ToString("yyyyMMdd") + ".log");
+                string line = string.Format(CultureInfo.InvariantCulture,
+                    "{0:O} | pipeline_ms={1} | verify_ms={2} | worker_completed={3} | {4}",
+                    DateTime.Now, pipelineMilliseconds, verificationMilliseconds,
+                    workerCompleted, Path.GetFileName(outputFilePath));
+                File.AppendAllText(logPath, line + Environment.NewLine, Encoding.UTF8);
+            }
+            catch { } // Timing diagnostics must never affect printing.
         }
 
         private static bool WaitForCompletedPdf(string filePath, int timeoutMilliseconds)
@@ -2330,6 +2445,41 @@ namespace TTSK_AutoDim_Plates
         public string CleanupDetails { get; set; }
         public string Message { get; set; }
         public List<string> SourceFiles { get; private set; }
+    }
+
+    public enum DrawingPdfProgressStage
+    {
+        Printing,
+        Verifying,
+        ItemCompleted,
+        Merging,
+        CleaningUp
+    }
+
+    public sealed class DrawingPdfProgress
+    {
+        public DrawingPdfProgress(DrawingPdfProgressStage stage, int total, int succeeded,
+            int failed, int index, string mark, bool itemSucceeded, string message)
+        {
+            Stage = stage;
+            Total = total;
+            Succeeded = succeeded;
+            Failed = failed;
+            Index = index;
+            Mark = mark;
+            ItemSucceeded = itemSucceeded;
+            Message = message;
+        }
+
+        public DrawingPdfProgressStage Stage { get; private set; }
+        public int Total { get; private set; }
+        public int Succeeded { get; private set; }
+        public int Failed { get; private set; }
+        public int Completed { get { return Succeeded + Failed; } }
+        public int Index { get; private set; }
+        public string Mark { get; private set; }
+        public bool ItemSucceeded { get; private set; }
+        public string Message { get; private set; }
     }
 
     public sealed class DrawingPdfPrintJob
