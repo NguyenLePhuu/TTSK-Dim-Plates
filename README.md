@@ -17,6 +17,21 @@ The repository includes a ready-to-run Windows package in the `portable` folder,
 5. (Optional) Run `Tao_Phim_Tat_Desktop.bat` to create a working shortcut with the official logo on your Desktop.
 6. (For Developers) Double-click `Cap_Nhat_Portable.bat` in the root folder anytime you edit code to automatically compile the latest Release x64 build and update the `portable` package without opening Visual Studio.
 
+## Update from another computer
+
+`Cap_Nhat_Portable.bat` does not depend on OneDrive or a fixed user folder. It finds the repository from the BAT file's own location, so it can run from any local folder on another Windows computer.
+
+For a development machine that must build and push to GitHub:
+
+1. Install Tekla Structures 2025 SP7, Git for Windows, and Visual Studio or Build Tools with the .NET desktop workload and .NET Framework 4.8 Developer Pack.
+2. Clone the repository instead of downloading it as a ZIP: `git clone https://github.com/NguyenLePhuu/TTSK-Dim-Plates.git`.
+3. Sign in to GitHub in Git Credential Manager when Git asks for it, using an account with write access to this repository.
+4. Open the cloned folder and run `Cap_Nhat_Portable.bat`.
+
+The script builds in an isolated temporary folder, refreshes every runtime file in `portable`, verifies SHA-256 for each copied file, then commits, pushes, and compares the local commit with `origin/main`. It reports success only after those checks pass. If Tekla is installed outside the standard location, run `Cap_Nhat_Portable.bat -TeklaBinPath "D:\Tekla\2025.0\bin"`.
+
+A downloaded ZIP or a copied `portable` folder can run the application, but cannot push source changes because it has no Git history or GitHub credentials.
+
 The portable package includes this application's executable, NuGet dependencies, dictionary data, and artwork. It intentionally does not redistribute Tekla Structures product binaries; the application loads those assemblies from the local Tekla installation. If Tekla is installed in a non-standard location, set `TeklaBinPath` to its `bin` folder before starting the application.
 
 > The application cannot dimension drawings without a running, licensed Tekla Structures session and a suitable model/drawing.

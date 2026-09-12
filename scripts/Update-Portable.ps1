@@ -1,5 +1,9 @@
 [CmdletBinding()]
-param([switch]$NoPause, [switch]$BuildOnly)
+param(
+    [switch]$NoPause,
+    [switch]$BuildOnly,
+    [string]$TeklaBinPath
+)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $repo = Split-Path -Parent $PSScriptRoot
@@ -96,6 +100,10 @@ try {
         $msbuild = & $vswhere -latest -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\amd64\MSBuild.exe' | Select-Object -First 1
         if (!$msbuild) { $msbuild = & $vswhere -latest -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1 }
     }
+    if (!$msbuild) {
+        $msbuildCommand = Get-Command msbuild.exe -ErrorAction SilentlyContinue
+        if ($msbuildCommand) { $msbuild = $msbuildCommand.Source }
+    }
     if (!$msbuild) { throw 'Khong tim thay MSBuild. Can Visual Studio voi .NET Desktop Development.' }
     $project = Join-Path $repo 'TTSK Dim Plates\TTSK Dim Plates\TTSK Dim Plates.csproj'
     $stage = Join-Path $run 'build'
@@ -104,7 +112,9 @@ try {
     # MSBuild receives Windows command-line arguments. A single trailing slash
     # before a closing quote escapes that quote, so use a double trailing slash.
     $outDirArgument = '/p:OutDir="' + $stage + '\\"'
-    & $msbuild $project /t:Rebuild /p:Configuration=Release /p:Platform=x64 $outDirArgument /nologo /v:q /clp:ErrorsOnly
+    $buildArguments = @($project, '/t:Rebuild', '/p:Configuration=Release', '/p:Platform=x64', $outDirArgument, '/nologo', '/v:q', '/clp:ErrorsOnly')
+    if ($TeklaBinPath) { $buildArguments += ('/p:TeklaBinPath="' + $TeklaBinPath.TrimEnd('\\') + '"') }
+    & $msbuild @buildArguments
     if ($LASTEXITCODE -ne 0) { throw 'Build loi. Portable cu chua bi thay doi.' }
     # Only actual project runtime files; no local settings or Tekla product DLLs.
     [xml]$definition = Get-Content -LiteralPath $project -Raw
