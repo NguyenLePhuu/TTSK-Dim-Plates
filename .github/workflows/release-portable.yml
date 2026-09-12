@@ -1,0 +1,50 @@
+name: Release Portable
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'portable/**'
+      - '!portable/README.txt'
+      - '!portable/**/*.cfg'
+      - '!portable/**/*.bat'
+      - '!portable/**/*.cmd'
+      - '!portable/**/*.ps1'
+      - '!portable/**/*.lnk'
+      - '!portable/**/*.pdb'
+      - '!portable/**/*.log'
+      - '!portable/logs/**'
+      - '!portable/**/backup/**'
+  workflow_dispatch:
+concurrency:
+  group: ttsk-portable-release
+  cancel-in-progress: false
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: windows-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Validate version and package committed runtime (no Tekla build)
+        shell: pwsh
+        env:
+          RELEASE_RUN: ${{ github.run_number }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $prefix = (Get-Content -LiteralPath release-version-prefix.txt -Raw).Trim()
+          if ($prefix -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') { throw 'Invalid version prefix.' }
+          $version = "$prefix.$env:RELEASE_RUN"
+          $null = [version]$version
+          "RELEASE_VERSION=$version" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          & ./scripts/Build-GitHubReleasePackage.ps1 -Version $version -Tag "v$version" -CommitSha $env:GITHUB_SHA -OutDir '.codex-artifacts/release-package'
+      - name: Verify existing release or publish verified draft
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          & ./scripts/Publish-GitHubPortableRelease.ps1 -Version $env:RELEASE_VERSION -CommitSha $env:GITHUB_SHA -PackageDirectory '.codex-artifacts/release-package'

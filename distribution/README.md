@@ -22,3 +22,13 @@ Nếu cloud vẫn chặn, lưu tên cảnh báo, SHA-256, liên kết file và t
 - Chữ ký và reputation: https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation
 
 Nếu PowerShell bị chặn bởi chính sách của tổ chức, dùng quy trình ký/phê duyệt script của tổ chức; không đổi chính sách hệ thống.
+
+## Phân biệt kênh Cloud Package và GitHub Release
+
+- **Kênh GitHub Release (Tự động cập nhật cho người dùng cuối):**
+  - Đóng gói và phát hành tự động qua GitHub Actions từ nhánh `main`.
+  - Tệp asset chính: `TTSK-Dim-Plates-Portable.zip` và `TTSK-Dim-Plates-Portable.zip.sha256`.
+  - Kiểm tra tính toàn vẹn bằng SHA-256 đối chiếu từng file runtime theo manifest. Client tự động nhận diện và cập nhật in-app mà không cần quyền Admin hay PowerShell.
+- **Kênh Cloud Package (Chia sẻ Google Drive / OneDrive):**
+  - Sử dụng `Build-CloudPackage.ps1` để quét Defender và kiểm tra chữ ký Authenticode trước khi tải lên các dịch vụ lưu trữ đám mây của doanh nghiệp.
+  - Phục vụ môi trường kiểm soát nghiêm ngặt theo chính sách riêng của tổ chức.

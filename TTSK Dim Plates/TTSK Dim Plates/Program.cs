@@ -1,7 +1,7 @@
 using System;
 using System.IO;
-using System.Reflection;
 using System.Windows.Forms;
+using TTSK_AutoDim_Plates.Updater;
 
 namespace TTSK_AutoDim_Plates
 {
@@ -10,119 +10,43 @@ namespace TTSK_AutoDim_Plates
         [STAThread]
         private static int Main(string[] args)
         {
-            string teklaBinPath = FindTeklaBinPath();
-            if (string.IsNullOrEmpty(teklaBinPath))
+            // 1. Kiểm tra chế độ Worker Cập nhật / Phục hồi độc lập trước khi tải bất kỳ thư viện Tekla nào
+            if (args != null && args.Length > 0 &&
+                (string.Equals(args[0], UpdateWorker.ModeApplyUpdate, StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(args[0], UpdateWorker.ModeRecovery, StringComparison.OrdinalIgnoreCase)))
             {
-                MessageBox.Show(
-                    "Không tìm thấy Tekla Structures 2025.\r\n\r\n"
-                        + "Hãy cài Tekla Structures 2025 SP7 hoặc đặt biến môi trường "
-                        + "TeklaBinPath trỏ tới thư mục bin của Tekla.",
-                    "TTSK Dim Plates",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Error
-                );
-                return 1;
+                return UpdateWorker.Run(args);
             }
 
-            AppDomain.CurrentDomain.AssemblyResolve += (sender, resolveArgs) =>
-                ResolveTeklaAssembly(resolveArgs, teklaBinPath);
-
-            if (args != null && args.Length == 2 && args[0] == "--snapshot-png-worker")
-                return Tekla.Technology.Akit.UserScript.PHU_CopyDrawingSnapshot_Temp.RenderFolder(args[1], teklaBinPath);
-
-            if (
-                args != null
-                && args.Length > 0
-                && String.Equals(
-                    args[0],
-                    "--hole-mark-post-dim-worker",
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-            {
-                return Tekla
-                    .Technology
-                    .Akit
-                    .UserScript
-                    .PHU_HoleMarkPostDimensionService
-                    .RunWorker(args);
-            }
-
-            // Chế độ Worker cách ly tiến trình để in màu qua Tekla DpmPrinter mà không làm thay đổi DPI của UI chính
-            if (
-                args != null
-                && args.Length >= 3
-                && String.Equals(
-                    args[0],
-                    "--print-color-worker",
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-            {
-                return DrawingPdfPrinter.ExecuteColorPrintWorker(args[1], args[2]);
-            }
-
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new MainForm());
-            return 0;
-        }
-
-        private static string FindTeklaBinPath()
-        {
-            string configuredPath = Environment.GetEnvironmentVariable("TeklaBinPath");
-            string[] candidates =
-            {
-                configuredPath,
-                @"C:\Program Files\Tekla Structures\2025.0\bin",
-                @"C:\TeklaStructures\2025.0\bin"
-            };
-
-            foreach (string candidate in candidates)
-            {
-                if (string.IsNullOrWhiteSpace(candidate))
-                {
-                    continue;
-                }
-
-                if (
-                    File.Exists(Path.Combine(candidate, "Tekla.Structures.dll"))
-                    && File.Exists(Path.Combine(candidate, "Tekla.Structures.Drawing.dll"))
-                    && File.Exists(Path.Combine(candidate, "Tekla.Structures.Model.dll"))
-                )
-                {
-                    return candidate;
-                }
-            }
-
-            return null;
-        }
-
-        private static Assembly ResolveTeklaAssembly(ResolveEventArgs args, string teklaBinPath)
-        {
-            string assemblyName = new AssemblyName(args.Name).Name;
-            if (string.IsNullOrEmpty(assemblyName))
-            {
-                return null;
-            }
-
-            string assemblyPath = Path.Combine(teklaBinPath, assemblyName + ".dll");
-            if (!File.Exists(assemblyPath))
-            {
-                return null;
-            }
+            string appDir = AppDomain.CurrentDomain.BaseDirectory;
 
             try
             {
-                return Assembly.LoadFrom(assemblyPath);
+                // Serialize admission with worker READY. Keep a process lease until normal/worker exit.
+                using (var admission = new UpdateLock(appDir))
+                {
+                    if (!admission.TryAcquireUpdateLock(0)) return 1;
+                    string journalPath = UpdateJournal.GetJournalPath(appDir);
+                    if (File.Exists(journalPath))
+                    {
+                        var journal = UpdateJournal.LoadFromFile(journalPath);
+                        if (journal == null) throw new InvalidDataException("Recovery journal is invalid.");
+                        if (journal.State == UpdateTransactionState.Committed || journal.State == UpdateTransactionState.RolledBack)
+                            UpdateJournal.DeleteJournal(journalPath);
+                        else return UpdateWorker.StartRecoveryFromStaging(appDir);
+                    }
+                    using (var lease = UpdateWorker.RegisterInstance(appDir))
+                    {
+                        admission.Release();
+                        return ProgramTeklaStartup.Run(args);
+                    }
+                }
             }
-            catch (FileLoadException)
+            catch (Exception ex)
             {
-                return null;
-            }
-            catch (BadImageFormatException)
-            {
-                return null;
+                UpdateSecurity.Log(appDir, "Startup gate: " + ex);
+                MessageBox.Show("Không thể mở TTSK an toàn: " + ex.Message, "TTSK Dim Plates");
+                return 1;
             }
         }
     }

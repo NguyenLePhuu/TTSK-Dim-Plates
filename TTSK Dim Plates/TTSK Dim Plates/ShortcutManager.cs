@@ -574,7 +574,7 @@ namespace TTSK_AutoDim_Plates
             list.Add(
                 new ShortcutActionDefinition(
                     ActionSlot09,
-                    "Slot09 (Chờ gắn file CS)",
+                    "Slot09 (Kiểm tra chân DIM)",
                     "Chờ gắn file CS",
                     "9",
                     Keys.D9

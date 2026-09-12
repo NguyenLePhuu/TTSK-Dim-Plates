@@ -11,7 +11,7 @@ using Tekla.Structures.Model;
 
 namespace TTSK_AutoDim_Plates
 {
-    public class MainForm : Form
+    public partial class MainForm : Form
     {
         private const string GridVisibilityMacroFileName = "Phu_Macro_GridVisibility.cs";
         private const string GridVisibilityCommandFileName = "TTSK_GridVisibility.command";
@@ -187,6 +187,7 @@ namespace TTSK_AutoDim_Plates
             _shortcutManager = new ShortcutManager(Application.StartupPath);
             _shortcutManager.Load();
             BuildUi();
+            InitializeUpdater();
         }
 
         // Cooperative waits retain Tekla calls and ThreadStatic contexts on their original thread.
@@ -363,7 +364,7 @@ namespace TTSK_AutoDim_Plates
             header.Controls.Add(sub);
 
             Label ver = new Label();
-            ver.Text = "v1.0.0";
+            ver.Text = TTSK_AutoDim_Plates.Updater.UpdateManager.ResolveCurrentVersion(Application.StartupPath).ToDisplayString();
             ver.TextAlign = ContentAlignment.MiddleCenter;
             ver.Font = new Font("Segoe UI", 11F, FontStyle.Bold);
             ver.ForeColor = BrightBlue;
@@ -1744,7 +1745,7 @@ namespace TTSK_AutoDim_Plates
                 "Giữ liên kết trực tiếp", innerMargin + boxW + gap, 0, boxW, boxH,
                 delegate { RunVisibleAutoDimSlot(8); });
             page2.Controls.Add(slot8);
-            page2.Controls.Add(MakeAutoDimSlotBox("⑨", "Slot 09", "Chờ gắn file CS",
+            page2.Controls.Add(MakeAutoDimSlotBox("⑨", "Kiểm tra chân DIM", "Main / lỗ / REF / neighbor",
                 innerMargin, boxH + gap, boxW, boxH, delegate { RunVisibleAutoDimSlot(9); }));
             AddAutoDimPlaceholderSlots(page2, 10, 12, innerMargin, gap, boxW, boxH);
             AddAutoDimPlaceholderSlots(page3, 13, 17, innerMargin, gap, boxW, boxH);
@@ -2341,7 +2342,8 @@ namespace TTSK_AutoDim_Plates
                 case 6: RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot06"); return;
                 case 7: ToggleDataCenterMode(); return;
                 case 8: RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot08"); return;
-                case 9: case 10: case 11: case 12:
+                case 9: RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot09"); return;
+                case 10: case 11: case 12:
                     SetAutoDimResult("Slot " + slot.ToString("00") + ": Chờ gắn file CS"); return;
                 default: RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot" + slot.ToString("00")); return;
             }
@@ -5839,6 +5841,7 @@ namespace TTSK_AutoDim_Plates
             mainHeaderActions.BorderColor = mainHeaderActions.BackColor;
             mainVersionLabel.BackColor = mainHeaderActions.BackColor;
             mainVersionLabel.ForeColor = accent;
+            UpdateVersionLabelTheme();
             mainListSurface.ToolHeaderAccent = Color.Empty;
             dgvDrawings.ColumnHeadersDefaultCellStyle.ForeColor = _darkMode ? Color.FromArgb(235, 173, 119) : Blue;
             dgvDrawings.ColumnHeadersDefaultCellStyle.SelectionForeColor = dgvDrawings.ColumnHeadersDefaultCellStyle.ForeColor;

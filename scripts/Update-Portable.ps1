@@ -176,7 +176,11 @@ try {
         $head = Invoke-Git @('rev-parse', 'HEAD')
         $remote = Invoke-Git @('ls-remote', '--exit-code', 'origin', "refs/heads/$branch") 3
         if (($remote -split '\s+')[0] -ne $head) { throw 'Commit tren GitHub khong khop HEAD. Chua xac minh duoc dong bo.' }
-        Write-Host "[THANH CONG] Portable da xac minh SHA256; GitHub $branch = $head"
+        if ($branch -eq 'main') {
+            Write-Host "[THANH CONG] Portable da xac minh SHA256; GitHub main = $head. GitHub Actions se tu dong dong goi va phat hanh Release chinh thuc neu co thay doi runtime."
+        } else {
+            Write-Host "[THANH CONG] Portable da xac minh SHA256; GitHub $branch = $head. Da push branch $branch, chua phat hanh Release (chi phat hanh tu branch main)."
+        }
     }
     $exitCode = 0
 } catch {
