@@ -31,12 +31,24 @@ function Invoke-Git([string[]]$Arguments, [int]$Attempts = 1) {
     throw "Git $($Arguments[0]) that bai (exit $code). Kiem tra mang/quyen GitHub va thong bao ben tren; chay lai BAT de thu lai."
 }
 
+function Get-FileSha256([string]$Path) {
+    # Works on Windows PowerShell 2.0+; Get-FileHash is unavailable on older hosts.
+    $hash = New-Object System.Security.Cryptography.SHA256Managed
+    $stream = [IO.File]::Open($Path, 'Open', 'Read', 'Read')
+    try {
+        return ([BitConverter]::ToString($hash.ComputeHash($stream))).Replace('-', '')
+    } finally {
+        $stream.Dispose()
+        $hash.Dispose()
+    }
+}
+
 function Copy-Verified([string]$Source, [string]$Destination) {
     for ($attempt = 1; $attempt -le 3; $attempt++) {
         try {
             New-Item -ItemType Directory -Path (Split-Path -Parent $Destination) -Force | Out-Null
             Copy-Item -LiteralPath $Source -Destination $Destination -Force
-            if ((Get-FileHash -LiteralPath $Source).Hash -ne (Get-FileHash -LiteralPath $Destination).Hash) { throw "SHA256 khong khop: $Destination" }
+            if ((Get-FileSha256 $Source) -ne (Get-FileSha256 $Destination)) { throw "SHA256 khong khop: $Destination" }
             return
         } catch {
             if ($attempt -eq 3) { throw }
@@ -89,7 +101,7 @@ try {
     # MSBuild receives Windows command-line arguments. A single trailing slash
     # before a closing quote escapes that quote, so use a double trailing slash.
     $outDirArgument = '/p:OutDir="' + $stage + '\\"'
-    & $msbuild $project /t:Rebuild /p:Configuration=Release /p:Platform=x64 $outDirArgument /nologo /v:minimal
+    & $msbuild $project /t:Rebuild /p:Configuration=Release /p:Platform=x64 $outDirArgument /nologo /v:q /clp:ErrorsOnly
     if ($LASTEXITCODE -ne 0) { throw 'Build loi. Portable cu chua bi thay doi.' }
     # Only actual project runtime files; no local settings or Tekla product DLLs.
     [xml]$definition = Get-Content -LiteralPath $project -Raw
@@ -125,7 +137,7 @@ try {
             Copy-Verified (Join-Path $stage $relative) (Join-Path $portable $relative)
         }
         foreach ($relative in $files) {
-            if ((Get-FileHash -LiteralPath (Join-Path $stage $relative)).Hash -ne (Get-FileHash -LiteralPath (Join-Path $portable $relative)).Hash) { throw "Portable da thay doi trong luc copy: $relative" }
+            if ((Get-FileSha256 (Join-Path $stage $relative)) -ne (Get-FileSha256 (Join-Path $portable $relative))) { throw "Portable da thay doi trong luc copy: $relative" }
         }
     } catch {
         $copyError = $_.Exception.Message

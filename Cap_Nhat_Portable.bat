@@ -5,5 +5,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\Update-Por
 set "UPDATE_EXIT=%ERRORLEVEL%"
 echo.
 if not "%UPDATE_EXIT%"=="0" echo [THAT BAI] Chua dong bo GitHub. Xem log o tren.
-if /I not "%~1"=="-NoPause" pause
+set "NO_PAUSE="
+for %%A in (%*) do if /I "%%~A"=="-NoPause" set "NO_PAUSE=1"
+if not defined NO_PAUSE pause
 exit /b %UPDATE_EXIT%
