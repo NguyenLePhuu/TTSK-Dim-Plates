@@ -16,12 +16,16 @@ $exitCode = 1
 function Invoke-Git([string[]]$Arguments, [int]$Attempts = 1) {
     for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
         # Avoid OneDrive locks during automatic GC. Never delete Git locks/objects.
+        $stderrPath = Join-Path $run ('git-' + $attempt + '-' + [guid]::NewGuid().ToString('N') + '.stderr')
         $ErrorActionPreference = 'Continue'
-        $output = & git -c gc.auto=0 -c maintenance.auto=false -c core.safecrlf=false @Arguments 2>&1
+        $stdout = & git -c gc.auto=0 -c maintenance.auto=false -c core.safecrlf=false @Arguments 2> $stderrPath
         $code = $LASTEXITCODE
         $ErrorActionPreference = 'Stop'
-        if ($code -eq 0) { return ($output | Out-String).Trim() }
-        Write-Host ($output | Out-String)
+        $stderr = if (Test-Path -LiteralPath $stderrPath) { Get-Content -LiteralPath $stderrPath -Raw } else { '' }
+        Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue
+        $output = (($stdout | Out-String) + $stderr).Trim()
+        if ($code -eq 0) { return $output }
+        Write-Host $output
         if ($attempt -lt $Attempts) { Start-Sleep -Seconds 2 }
     }
     throw "Git $($Arguments[0]) that bai (exit $code). Kiem tra mang/quyen GitHub va thong bao ben tren; chay lai BAT de thu lai."
