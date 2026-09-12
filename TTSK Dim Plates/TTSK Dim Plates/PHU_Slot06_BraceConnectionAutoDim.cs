@@ -16,9 +16,9 @@ using TSM = Tekla.Structures.Model;
 namespace Tekla.Technology.Akit.UserScript
 {
     /// <summary>
-    /// Slot 08 - lien ket giang xeo: ba thanh L va mot plate lien ket o nut giua.
+    /// Slot 06 - lien ket giang xeo: ba thanh L va mot plate lien ket o nut giua.
     /// </summary>
-    public class PHU_AutoDimSlot08
+    public class PHU_AutoDimSlot06
     {
         public static bool LastRunSucceeded { get; private set; }
         public static string LastRunMessage { get; private set; }
@@ -27,7 +27,7 @@ namespace Tekla.Technology.Akit.UserScript
         {
             LastRunSucceeded = false;
             LastRunMessage = String.Empty;
-            string message = PHU_Slot08DiagonalBraceDimensionEngine.Run();
+            string message = PHU_Slot06DiagonalBraceDimensionEngine.Run();
             if (!String.IsNullOrWhiteSpace(message))
             {
                 LastRunSucceeded = true;
@@ -38,11 +38,11 @@ namespace Tekla.Technology.Akit.UserScript
         /// <summary>Read-only audit. No Tekla drawing object is mutated.</summary>
         public static string AuditPlan()
         {
-            return PHU_Slot08DiagonalBraceDimensionEngine.AuditPlan();
+            return PHU_Slot06DiagonalBraceDimensionEngine.AuditPlan();
         }
     }
 
-    internal static partial class PHU_Slot08DiagonalBraceDimensionEngine
+    internal static partial class PHU_Slot06DiagonalBraceDimensionEngine
     {
         private const int ExpectedPlanCount = 31;
         private const int PlanViewPlanCount = 30;
@@ -277,8 +277,8 @@ namespace Tekla.Technology.Akit.UserScript
 
         private sealed class ReplacementSnapshot
         {
-            public readonly List<TSD.StraightDimensionSet> Matched =
-                new List<TSD.StraightDimensionSet>();
+            public readonly List<TSD.DrawingObject> Matched =
+                new List<TSD.DrawingObject>();
             public int ExistingCount;
             public int ProtectedCount;
         }
@@ -286,12 +286,26 @@ namespace Tekla.Technology.Akit.UserScript
         internal static string Run()
         {
             List<TSD.StraightDimensionSet> created = new List<TSD.StraightDimensionSet>();
+            int deleted = 0;
             try
             {
                 Context context = AnalyzeDrawing();
                 List<DimPlan> plans = BuildPlans(context);
                 ValidatePlans(context, plans);
                 ReplacementSnapshot replacement = SnapshotReplaceableDimensions(context, plans);
+
+                // Geometry and both variant plans have passed preflight.
+                // User-requested order: remove ALL old DIM, then create new DIM.
+                for (int i = 0; i < replacement.Matched.Count; i++)
+                {
+                    if (replacement.Matched[i] == null || !replacement.Matched[i].Delete())
+                        throw new InvalidOperationException("Khong xoa duoc DIM cu; dung truoc khi tao DIM moi.");
+                    deleted++;
+                }
+                if (deleted != replacement.Matched.Count)
+                    throw new InvalidOperationException(
+                        "Khong xoa duoc day du dimension Slot 06 cu; dung truoc CommitChanges."
+                    );
 
                 TSD.StraightDimensionSetHandler handler = new TSD.StraightDimensionSetHandler();
                 for (int i = 0; i < plans.Count; i++)
@@ -336,25 +350,12 @@ namespace Tekla.Technology.Akit.UserScript
                         "So dimension tao duoc khong khop plan da preflight."
                     );
 
-                int deleted = 0;
-                for (int i = 0; i < replacement.Matched.Count; i++)
-                {
-                    if (replacement.Matched[i] != null && replacement.Matched[i].Delete())
-                        deleted++;
-                }
-                if (deleted != replacement.Matched.Count)
-                    throw new InvalidOperationException(
-                        "Khong xoa duoc day du dimension Slot 08 cu; dung truoc CommitChanges."
-                    );
-
                 context.Drawing.CommitChanges();
-                return "Slot 08: tao "
+                return "Slot 06: tao "
                     + created.Count
                     + " dim lien ket giang xeo, thay "
                     + deleted
-                    + " dim cu, bao toan "
-                    + replacement.ProtectedCount
-                    + " dim khong thuoc Slot 08";
+                    + " dim cu tren toan bo ban ve";
             }
             catch (Exception ex)
             {
@@ -368,7 +369,9 @@ namespace Tekla.Technology.Akit.UserScript
                     catch { }
                 }
 
-                ShowWarning("Slot 08 - lien ket giang xeo da dung an toan.\r\n\r\n" + ex.Message);
+                ShowWarning("Slot 06 - lien ket giang xeo da dung.\r\n"
+                    + "Da xoa " + deleted + " DIM cu; chua commit. "
+                    + "Neu da xoa DIM, can Undo/kiem tra ban ve truoc khi luu.\r\n\r\n" + ex.Message);
                 return null;
             }
         }
@@ -383,7 +386,7 @@ namespace Tekla.Technology.Akit.UserScript
                 ReplacementSnapshot replacement = SnapshotReplaceableDimensions(context, plans);
 
                 StringBuilder text = new StringBuilder();
-                text.AppendLine("SLOT 08 DIAGONAL BRACE PLAN AUDIT - READ ONLY");
+                text.AppendLine("SLOT 06 DIAGONAL BRACE PLAN AUDIT - READ ONLY");
                 text.AppendLine("No dimension was created, modified, deleted or committed.");
                 if (context.Variant == TopologyVariant.Type2)
                 {
@@ -418,9 +421,9 @@ namespace Tekla.Technology.Akit.UserScript
                     .AppendLine();
                 text.Append("PlanCount=")
                     .Append(plans.Count)
-                    .Append(" ExistingStraightSets=")
+                    .Append(" ExistingDimensions=")
                     .Append(replacement.ExistingCount)
-                    .Append(" MatchedReplaceable=")
+                    .Append(" DeleteBeforeCreate=")
                     .Append(replacement.Matched.Count)
                     .Append(" Protected=")
                     .Append(replacement.ProtectedCount)
@@ -485,7 +488,7 @@ namespace Tekla.Technology.Akit.UserScript
             }
             catch (Exception ex)
             {
-                return "SLOT 08 DIAGONAL BRACE PLAN AUDIT FAILED\r\n" + ex;
+                return "SLOT 06 DIAGONAL BRACE PLAN AUDIT FAILED\r\n" + ex;
             }
         }
 
@@ -547,7 +550,7 @@ namespace Tekla.Technology.Akit.UserScript
             }
             if (supported.Count + supportedType2.Count != 1)
                 throw new InvalidOperationException(
-                    "Khong xac dinh duy nhat topology Slot 08. Type1="
+                    "Khong xac dinh duy nhat topology Slot 06. Type1="
                         + supported.Count
                         + ", Type2="
                         + supportedType2.Count
@@ -572,7 +575,7 @@ namespace Tekla.Technology.Akit.UserScript
                     {
                         if (context.SectionView != null)
                             throw new InvalidOperationException(
-                                "Co nhieu hon mot view tiet dien phu hop Slot 08."
+                                "Co nhieu hon mot view tiet dien phu hop Slot 06."
                             );
                         context.SectionView = candidate;
                     }
@@ -918,7 +921,7 @@ namespace Tekla.Technology.Akit.UserScript
             if (context.Variant == TopologyVariant.Type2)
                 return BuildType2Plans(context);
             if (context.Variant != TopologyVariant.Type1)
-                throw new InvalidOperationException("Topology Slot 08 chua duoc phan loai.");
+                throw new InvalidOperationException("Topology Slot 06 chua duoc phan loai.");
             List<DimPlan> plans = new List<DimPlan>();
             BuildPlanViewPlans(context, plans);
             BuildSectionViewPlan(context, plans);
@@ -1630,7 +1633,7 @@ namespace Tekla.Technology.Akit.UserScript
                 return;
             }
             if (context.Variant != TopologyVariant.Type1)
-                throw new InvalidOperationException("Topology Slot 08 chua duoc phan loai.");
+                throw new InvalidOperationException("Topology Slot 06 chua duoc phan loai.");
             ValidateType1Plans(context, plans);
         }
 
@@ -1638,7 +1641,7 @@ namespace Tekla.Technology.Akit.UserScript
         {
             if (plans == null || plans.Count != ExpectedPlanCount)
                 throw new InvalidOperationException(
-                    "Slot 08 phai co dung "
+                    "Slot 06 phai co dung "
                         + ExpectedPlanCount
                         + " dimension plans; thuc te="
                         + (plans == null ? 0 : plans.Count)
@@ -1657,7 +1660,7 @@ namespace Tekla.Technology.Akit.UserScript
                     || plan.MeasurementAxis == null
                     || plan.PlacementNormal == null
                 )
-                    throw new InvalidOperationException("Plan Slot 08 bi null.");
+                    throw new InvalidOperationException("Plan Slot 06 bi null.");
                 if (plan.Points.Count < 2)
                     throw new InvalidOperationException(plan.Name + " co it hon hai chan dim.");
                 if (!IsFinite(plan.Distance) || plan.Distance <= PointTolerance)
@@ -1702,73 +1705,62 @@ namespace Tekla.Technology.Akit.UserScript
                 );
         }
 
+        // Slot06 is an explicit full-DIM replacement command for either topology.
+        // Snapshot only: AuditPlan calls this method without mutating the drawing.
         private static ReplacementSnapshot SnapshotReplaceableDimensions(
             Context context,
             List<DimPlan> plans
         )
         {
             ReplacementSnapshot result = new ReplacementSnapshot();
-            HashSet<int> used = new HashSet<int>();
-            List<TSD.StraightDimensionSet> all = new List<TSD.StraightDimensionSet>();
-            for (int v = 0; v < context.Views.Count; v++)
+            TSD.ContainerView sheet = context.Drawing.GetSheet();
+            SnapshotDimensionsInView(sheet, result);
+            TSD.DrawingObjectEnumerator views = sheet.GetAllViews();
+            while (views.MoveNext())
             {
-                ViewData view = context.Views[v];
-                if (
-                    !Object.ReferenceEquals(view, context.PlanView)
-                    && !Object.ReferenceEquals(view, context.SectionView)
-                )
-                    continue;
-                TSD.DrawingObjectEnumerator dimensions = view.View.GetAllObjects(
-                    typeof(TSD.StraightDimensionSet)
-                );
-                while (dimensions != null && dimensions.MoveNext())
-                {
-                    TSD.StraightDimensionSet set = dimensions.Current as TSD.StraightDimensionSet;
-                    if (set != null)
-                        all.Add(set);
-                }
+                TSD.View view = views.Current as TSD.View;
+                if (view != null)
+                    SnapshotDimensionsInView(view, result);
             }
-            result.ExistingCount = all.Count;
-
-            for (int p = 0; p < plans.Count; p++)
-            {
-                DimPlan plan = plans[p];
-                for (int i = 0; i < all.Count; i++)
-                {
-                    TSD.StraightDimensionSet set = all[i];
-                    int key = RuntimeHelpers.GetHashCode(set);
-                    if (used.Contains(key) || !DimensionBelongsToView(set, plan.View.View))
-                        continue;
-                    List<P2> existing = ReadDimensionPoints(set);
-                    if (
-                        !PointChainsMatch(existing, plan.Points, MatchTolerance)
-                        || !DimensionDirectionMatches(set, plan.PlacementNormal)
-                    )
-                        continue;
-                    result.Matched.Add(set);
-                    used.Add(key);
-                    break;
-                }
-            }
-
-            result.ProtectedCount = all.Count - result.Matched.Count;
-            int expected = ExpectedPlanCountFor(context);
-            if (result.Matched.Count > 0 && result.Matched.Count != expected)
-            {
-                if (
-                    TrySnapshotType1BoundaryDirectionMigration(context, plans, all, result)
-                    || TrySnapshotType2FootMigration(context, plans, all, result)
-                )
-                    return result;
-                throw new InvalidOperationException(
-                    "Preflight chi match "
-                        + result.Matched.Count
-                        + "/"
-                        + expected
-                        + " dim Slot 08 cu. Tu choi xoa mot phan de bao ve dim thu cong."
-                );
-            }
+            result.ExistingCount = result.Matched.Count;
             return result;
+        }
+
+        private static void SnapshotDimensionsInView(
+            TSD.ViewBase view,
+            ReplacementSnapshot result
+        )
+        {
+            // Typed enumeration avoids deserializing unrelated drawing objects.
+            Type[] types = {
+                typeof(TSD.StraightDimensionSet),
+                typeof(TSD.CurvedDimensionSetRadial),
+                typeof(TSD.CurvedDimensionSetOrthogonal),
+                typeof(TSD.AngleDimension),
+                typeof(TSD.RadiusDimension),
+                typeof(TSD.StraightDimension),
+                typeof(TSD.CurvedDimensionRadial),
+                typeof(TSD.CurvedDimensionOrthogonal)
+            };
+            foreach (Type type in types)
+            {
+                TSD.DrawingObjectEnumerator objects = view.GetAllObjects(type);
+                while (objects.MoveNext())
+                {
+                    TSD.DrawingObject dimension = objects.Current as TSD.DrawingObject;
+                    if (dimension == null) continue;
+                    // Normalize child dimensions to their owning set, so a set is
+                    // deleted once even when also enumerated from the sheet/view.
+                    TSD.DimensionBase child = dimension as TSD.DimensionBase;
+                    if (child != null)
+                    {
+                        TSD.DimensionSetBase owner = child.GetDimensionSet();
+                        if (owner != null) dimension = owner;
+                    }
+                    if (!result.Matched.Exists(previous => previous.IsSameDatabaseObject(dimension)))
+                        result.Matched.Add(dimension);
+                }
+            }
         }
 
         private static bool TrySnapshotType1BoundaryDirectionMigration(
@@ -2381,7 +2373,7 @@ namespace Tekla.Technology.Akit.UserScript
             {
                 MessageBox.Show(
                     message,
-                    "Slot 08 - Lien ket giang xeo",
+                    "Slot 06 - Lien ket giang xeo",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning
                 );

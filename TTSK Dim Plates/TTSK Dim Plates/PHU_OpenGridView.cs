@@ -1206,14 +1206,14 @@ public static class PHU_OpenGridView
     private static bool IsSemanticTopView(View view)
     {
         return Tekla.Technology.Akit.UserScript
-                .PHU_Slot09_DataCenterBeamType2Context.IsTopView(view)
+                .PHU_Slot07_DataCenterBeamType2Context.IsTopView(view)
             || ViewTypeMatches(view, "TopView", "Top");
     }
 
     private static bool IsSemanticFrontView(View view)
     {
         return Tekla.Technology.Akit.UserScript
-                .PHU_Slot09_DataCenterBeamType2Context.IsFrontView(view)
+                .PHU_Slot07_DataCenterBeamType2Context.IsFrontView(view)
             || ViewTypeMatches(view, "FrontView", "Front");
     }
 

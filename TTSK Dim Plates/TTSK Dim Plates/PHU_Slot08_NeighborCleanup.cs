@@ -8,7 +8,7 @@ using D = Tekla.Structures.Drawing;
 
 namespace Tekla.Technology.Akit.UserScript
 {
-    public static class PHU_AutoDimSlot11
+    public static class PHU_AutoDimSlot08
     {
         public static bool LastRunSucceeded { get; private set; }
         public static string LastRunMessage { get; private set; }
@@ -327,7 +327,7 @@ namespace UserMacros
                 throw new InvalidOperationException("Khong ket noi Tekla.");
             var p = new Plan { Drawing = handler.GetActiveDrawing() };
             if (!(p.Drawing is D.AssemblyDrawing))
-                throw new InvalidOperationException("Slot 11 hien ho tro Assembly Drawing.");
+                throw new InvalidOperationException("Slot 08 hien ho tro Assembly Drawing.");
             M.Part main = PHU_MainPartResolver.Resolve(model, p.Drawing);
             if (main == null) throw new InvalidOperationException("Khong tim thay main part.");
             p.MainId = main.Identifier.ID;

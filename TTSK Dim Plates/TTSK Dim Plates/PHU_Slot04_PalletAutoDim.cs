@@ -1151,7 +1151,7 @@ namespace Tekla.Technology.Akit.UserScript
                 // the independent global top-plate chain.  The scope is
                 // geometry-proven and inactive for every Type-1 drawing.
                 if (
-                    PHU_Slot09_DataCenterBeamType2Context
+                    PHU_Slot07_DataCenterBeamType2Context
                         .ShouldExcludeFrontSlot04Target(
                             candidate.Box.MinX,
                             candidate.Box.MaxX
@@ -1934,7 +1934,7 @@ namespace Tekla.Technology.Akit.UserScript
                     ? new Point(first.Y, first.X, first.Z)
                     : new Point(first.X, first.Y, first.Z);
                 if (
-                    !PHU_Slot09_DataCenterContext.TryResolveFrontSlot04Placement(
+                    !PHU_Slot07_DataCenterContext.TryResolveFrontSlot04Placement(
                         view,
                         actualFirst,
                         out actualDirectionOverride,

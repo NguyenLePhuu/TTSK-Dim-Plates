@@ -25,7 +25,7 @@ namespace Tekla.Technology.Akit.UserScript
     /// any geometric proof is missing the established Slot09 Type-1 path is
     /// untouched.
     /// </summary>
-    public static class PHU_Slot09_DataCenterBeamType2Context
+    public static class PHU_Slot07_DataCenterBeamType2Context
     {
         private const double GeometryTolerance = 0.75;
         private const double DirectionCosineTolerance = 0.985;

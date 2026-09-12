@@ -728,8 +728,8 @@ namespace Tekla.Technology.Akit.UserScript
             // This guard sits at the mutation boundary so a future caller
             // cannot move FRONT even if it forgets the Shape-level policy.
             if (
-                PHU_Slot09_DataCenterBeamType2Context.PreservePreparedDrawingLayout
-                || PHU_Slot09_DataCenterContext.PreservePreparedDrawingLayout
+                PHU_Slot07_DataCenterBeamType2Context.PreservePreparedDrawingLayout
+                || PHU_Slot07_DataCenterContext.PreservePreparedDrawingLayout
             )
             {
                 LastRunMessage +=
@@ -1483,9 +1483,9 @@ namespace Tekla.Technology.Akit.UserScript
                     return;
 
                 double tierStep = takeover.NextHorizontalTierOffset - takeover.HorizontalTierOffset;
-                bool reserveSlot04Tier = PHU_Slot09_DataCenterContext.ReserveFrontSlot04Tier;
+                bool reserveSlot04Tier = PHU_Slot07_DataCenterContext.ReserveFrontSlot04Tier;
                 bool reserveBeamType2TransverseTier =
-                    PHU_Slot09_DataCenterBeamType2Context.IsFrontView(view.View);
+                    PHU_Slot07_DataCenterBeamType2Context.IsFrontView(view.View);
 
                 // Slot09 FRONT common tier order:
                 // Type1: existing edge-hole tiers -> Slot04 plates -> G1 -> G2.
@@ -1497,7 +1497,7 @@ namespace Tekla.Technology.Akit.UserScript
                 int reservedTierCount = 0;
                 if (reserveBeamType2TransverseTier)
                 {
-                    PHU_Slot09_DataCenterBeamType2Context
+                    PHU_Slot07_DataCenterBeamType2Context
                         .RegisterFrontTransverseDimensionTier(
                             view.View,
                             takeover.HorizontalTier
@@ -1511,7 +1511,7 @@ namespace Tekla.Technology.Akit.UserScript
                         Dot(view.RefLeft, view.UpDirection)
                         + takeover.HorizontalLineNormal
                         + reservedTierCount * tierStep;
-                    PHU_Slot09_DataCenterContext.RegisterFrontSlot04Tier(
+                    PHU_Slot07_DataCenterContext.RegisterFrontSlot04Tier(
                         view.View,
                         absoluteSlot04Line,
                         view.UpDirection.X,

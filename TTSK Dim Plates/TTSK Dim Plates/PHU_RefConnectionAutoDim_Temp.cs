@@ -19,7 +19,7 @@ namespace Tekla.Technology.Akit.UserScript
     /// No coordinate is treated as a semantic anchor merely because it coincides
     /// with the assembly MainPart centre line.
     /// </summary>
-    public class PHU_AutoDimSlot10
+    public class PHU_RefConnectionAutoDim_Temp
     {
         public static bool LastRunSucceeded { get; private set; }
         public static string LastRunMessage { get; private set; }
@@ -28,7 +28,7 @@ namespace Tekla.Technology.Akit.UserScript
         {
             LastRunSucceeded = false;
             LastRunMessage = String.Empty;
-            string message = PHU_Slot10RefConnectionDimensionEngine.Run();
+            string message = PHU_RefConnectionDimensionEngine_Temp.Run();
             if (!String.IsNullOrWhiteSpace(message))
             {
                 LastRunSucceeded = true;
@@ -39,17 +39,17 @@ namespace Tekla.Technology.Akit.UserScript
         /// <summary>Read-only. Does not create, modify, delete or commit.</summary>
         public static string AuditPlan()
         {
-            return PHU_Slot10RefConnectionDimensionEngine.AuditPlan();
+            return PHU_RefConnectionDimensionEngine_Temp.AuditPlan();
         }
 
         /// <summary>Read-only one-side topology regression.</summary>
         public static string AuditSideRegression()
         {
-            return PHU_Slot10RefConnectionDimensionEngine.AuditSideRegression();
+            return PHU_RefConnectionDimensionEngine_Temp.AuditSideRegression();
         }
     }
 
-    internal static class PHU_Slot10RefConnectionDimensionEngine
+    internal static class PHU_RefConnectionDimensionEngine_Temp
     {
         private const double PointTolerance = 0.75;
         private const double RefNodeTolerance = 2.0;

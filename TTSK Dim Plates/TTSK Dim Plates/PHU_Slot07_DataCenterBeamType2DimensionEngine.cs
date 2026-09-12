@@ -21,7 +21,7 @@ namespace Tekla.Technology.Akit.UserScript
     /// true-section relations; the partial Type-1 extension owns only optional
     /// true Section-A plate/hole dimensions.
     /// </summary>
-    public static partial class PHU_Slot09_DataCenterBeamType2DimensionEngine
+    public static partial class PHU_Slot07_DataCenterBeamType2DimensionEngine
     {
         private const double GeometryTolerance = 0.75;
         private const double MatchTolerance = 2.0;
@@ -263,7 +263,7 @@ namespace Tekla.Technology.Akit.UserScript
         public static bool ExecuteAfterShape()
         {
             ResetResult();
-            if (!_enabled || !PHU_Slot09_DataCenterBeamType2Context.IsActive)
+            if (!_enabled || !PHU_Slot07_DataCenterBeamType2Context.IsActive)
             {
                 LastRunSucceeded = true;
                 LastRunMessage = "Data Center Beam Type2 DIM skipped: route is inactive.";
@@ -764,7 +764,7 @@ namespace Tekla.Technology.Akit.UserScript
         {
             analysis = null;
             message = String.Empty;
-            if (!PHU_Slot09_DataCenterBeamType2Context.IsActive)
+            if (!PHU_Slot07_DataCenterBeamType2Context.IsActive)
             {
                 message = "Type2 geometry scope is inactive.";
                 return false;
@@ -800,12 +800,12 @@ namespace Tekla.Technology.Akit.UserScript
             result.Top = ReadView(
                 model,
                 mainPart,
-                PHU_Slot09_DataCenterBeamType2Context.TopView,
+                PHU_Slot07_DataCenterBeamType2Context.TopView,
                 currentToGlobal);
             result.Front = ReadView(
                 model,
                 mainPart,
-                PHU_Slot09_DataCenterBeamType2Context.FrontView,
+                PHU_Slot07_DataCenterBeamType2Context.FrontView,
                 currentToGlobal);
             if (result.Top == null || result.Front == null)
             {
@@ -814,7 +814,7 @@ namespace Tekla.Technology.Akit.UserScript
             }
 
             IList<TSD.View> sectionViews =
-                PHU_Slot09_DataCenterBeamType2Context.SectionViews;
+                PHU_Slot07_DataCenterBeamType2Context.SectionViews;
             for (int i = 0; i < sectionViews.Count; i++)
             {
                 ViewData section = ReadView(
@@ -1130,7 +1130,7 @@ namespace Tekla.Technology.Akit.UserScript
                 return;
             int transverseTier = 1;
             int registeredTransverseTier;
-            if (PHU_Slot09_DataCenterBeamType2Context
+            if (PHU_Slot07_DataCenterBeamType2Context
                     .TryGetFrontTransverseDimensionTier(
                         view.View,
                         out registeredTransverseTier))
@@ -1705,7 +1705,7 @@ namespace Tekla.Technology.Akit.UserScript
             station = Double.NaN;
             double routed;
             if (view == null
-                || !PHU_Slot09_DataCenterBeamType2Context.TryGetFrontTransverseStation(
+                || !PHU_Slot07_DataCenterBeamType2Context.TryGetFrontTransverseStation(
                     out routed))
                 return false;
             double minimum = MinimumProjection(view.Main.Vertices, view.MainAxis);
@@ -2319,7 +2319,7 @@ namespace Tekla.Technology.Akit.UserScript
                 return result;
 
             double transverseStation;
-            if (!PHU_Slot09_DataCenterBeamType2Context.TryGetFrontTransverseStation(
+            if (!PHU_Slot07_DataCenterBeamType2Context.TryGetFrontTransverseStation(
                     out transverseStation))
                 return result;
 

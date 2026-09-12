@@ -448,7 +448,7 @@ namespace Tekla.Technology.Akit.UserScript
             }
 
             const double finalGreenBoxGap = 15.0;
-            double finalTopFrontGreenBoxGap = PHU_Slot09_DataCenterContext.ResolveTopFrontGap(
+            double finalTopFrontGreenBoxGap = PHU_Slot07_DataCenterContext.ResolveTopFrontGap(
                 frontView,
                 finalGreenBoxGap
             );
@@ -508,7 +508,7 @@ namespace Tekla.Technology.Akit.UserScript
             if (beamGridDimensionsCreated)
                 PHU_BeamGridDimensionEngine.AlignPreparedTopFrontByGrid();
 
-            PHU_Slot09_DataCenterContext.RegisterFinalTopFrontArrangement(
+            PHU_Slot07_DataCenterContext.RegisterFinalTopFrontArrangement(
                 topView,
                 frontView,
                 finalTopFrontGreenBoxGap

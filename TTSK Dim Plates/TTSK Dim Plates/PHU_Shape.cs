@@ -263,10 +263,10 @@ namespace Tekla.Technology.Akit.UserScript
                 // Tekla exposes as SectionView.  The scoped router has already
                 // proven this role from MainPart REF/solid/Grid topology; no
                 // sheet-position or name fallback is allowed here.
-                if (PHU_Slot09_DataCenterBeamType2Context.IsActive)
+                if (PHU_Slot07_DataCenterBeamType2Context.IsActive)
                 {
-                    topViewByType = PHU_Slot09_DataCenterBeamType2Context.TopView;
-                    frontViewByType = PHU_Slot09_DataCenterBeamType2Context.FrontView;
+                    topViewByType = PHU_Slot07_DataCenterBeamType2Context.TopView;
+                    frontViewByType = PHU_Slot07_DataCenterBeamType2Context.FrontView;
                 }
 
                 ClassifySectionViewsForH(
@@ -473,15 +473,15 @@ namespace Tekla.Technology.Akit.UserScript
             View backViewByType = FindViewByViewTypeForH(views, "BackView", "Back");
             View bottomViewByType = FindViewByViewTypeForH(views, "BottomView", "Bottom");
 
-            if (PHU_Slot09_DataCenterBeamType2Context.IsActive)
+            if (PHU_Slot07_DataCenterBeamType2Context.IsActive)
             {
-                topViewByType = PHU_Slot09_DataCenterBeamType2Context.TopView;
-                frontViewByType = PHU_Slot09_DataCenterBeamType2Context.FrontView;
+                topViewByType = PHU_Slot07_DataCenterBeamType2Context.TopView;
+                frontViewByType = PHU_Slot07_DataCenterBeamType2Context.FrontView;
             }
             bool preservePreparedDataCenterLayout =
-                PHU_Slot09_DataCenterBeamType2Context
+                PHU_Slot07_DataCenterBeamType2Context
                     .PreservePreparedDrawingLayout
-                || PHU_Slot09_DataCenterContext
+                || PHU_Slot07_DataCenterContext
                     .PreservePreparedDrawingLayout;
 
             List<View> specialTopSections = new List<View>();
@@ -539,7 +539,7 @@ namespace Tekla.Technology.Akit.UserScript
             View dimensionTopView = topViewByType;
             View dimensionFrontView = frontViewByType;
             bool dimensionRolesSwapped = false;
-            if (!PHU_Slot09_DataCenterBeamType2Context.IsActive)
+            if (!PHU_Slot07_DataCenterBeamType2Context.IsActive)
             {
                 dimensionRolesSwapped = ResolveHShapeSemanticDimensionViews(
                     model,
@@ -839,7 +839,7 @@ namespace Tekla.Technology.Akit.UserScript
             }
 
             const double finalGreenBoxGap = 15.0;
-            double finalTopFrontGreenBoxGap = PHU_Slot09_DataCenterContext.ResolveTopFrontGap(
+            double finalTopFrontGreenBoxGap = PHU_Slot07_DataCenterContext.ResolveTopFrontGap(
                 frontView,
                 finalGreenBoxGap
             );
@@ -947,7 +947,7 @@ namespace Tekla.Technology.Akit.UserScript
 
             if (!preservePreparedDataCenterLayout)
             {
-                PHU_Slot09_DataCenterContext.RegisterFinalTopFrontArrangement(
+                PHU_Slot07_DataCenterContext.RegisterFinalTopFrontArrangement(
                     topView,
                     frontView,
                     hShapeLongitudinalVertical ? finalGreenBoxGap : finalTopFrontGreenBoxGap
@@ -13926,7 +13926,7 @@ namespace Tekla.Technology.Akit.UserScript
                         // Tekla wrapper instance.  The scoped context compares
                         // stable drawing identifiers, while every other route
                         // keeps the established object-identity check.
-                        PHU_Slot09_DataCenterBeamType2Context.IsFrontView(view)
+                        PHU_Slot07_DataCenterBeamType2Context.IsFrontView(view)
                         || IsSameViewForH(view, frontView)
                         ||
                         IsSameViewForH(view, topViewByType)

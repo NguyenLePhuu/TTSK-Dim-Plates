@@ -13,7 +13,7 @@ namespace Tekla.Technology.Akit.UserScript
     /// MainForm controls or persistent user settings and is always released by
     /// IDisposable/finally.
     /// </summary>
-    public static class PHU_Slot09_DataCenterContext
+    public static class PHU_Slot07_DataCenterContext
     {
         private const double BELOW_GRID_TOP_FRONT_GAP = 50.0;
 

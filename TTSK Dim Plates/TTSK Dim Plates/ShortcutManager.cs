@@ -565,8 +565,8 @@ namespace TTSK_AutoDim_Plates
             list.Add(
                 new ShortcutActionDefinition(
                     ActionSlot08,
-                    "Slot08 (Snapshot Batch)",
-                    "Xuất PNG snapshot bản vẽ đang chọn",
+                    "Slot08 (Ẩn neighbor)",
+                    "Giữ neighbor liên kết trực tiếp",
                     "8",
                     Keys.D8
                 )
@@ -574,8 +574,8 @@ namespace TTSK_AutoDim_Plates
             list.Add(
                 new ShortcutActionDefinition(
                     ActionSlot09,
-                    "Slot09 (Ẩn neighbor)",
-                    "Giữ neighbor liên kết trực tiếp",
+                    "Slot09 (Chờ gắn file CS)",
+                    "Chờ gắn file CS",
                     "9",
                     Keys.D9
                 )

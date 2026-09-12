@@ -7,7 +7,7 @@ using TSD = Tekla.Structures.Drawing;
 
 namespace Tekla.Technology.Akit.UserScript
 {
-    internal static partial class PHU_Slot08DiagonalBraceDimensionEngine
+    internal static partial class PHU_Slot06DiagonalBraceDimensionEngine
     {
         private const int Type2ExpectedPlanCount = 27;
         private const int Type2PlanViewPlanCount = 26;
@@ -825,7 +825,7 @@ namespace Tekla.Technology.Akit.UserScript
         {
             if (plans == null || plans.Count != Type2ExpectedPlanCount)
                 throw new InvalidOperationException(
-                    "Slot 08 Type2 phai co dung "
+                    "Slot 06 Type2 phai co dung "
                         + Type2ExpectedPlanCount
                         + " dimension plans; thuc te="
                         + (plans == null ? 0 : plans.Count)
@@ -844,7 +844,7 @@ namespace Tekla.Technology.Akit.UserScript
                     || plan.MeasurementAxis == null
                     || plan.PlacementNormal == null
                 )
-                    throw new InvalidOperationException("Plan Slot 08 Type2 bi null.");
+                    throw new InvalidOperationException("Plan Slot 06 Type2 bi null.");
                 if (plan.Points.Count < 2)
                     throw new InvalidOperationException(plan.Name + " co it hon hai chan dim.");
                 if (!IsFinite(plan.Distance) || plan.Distance <= PointTolerance)

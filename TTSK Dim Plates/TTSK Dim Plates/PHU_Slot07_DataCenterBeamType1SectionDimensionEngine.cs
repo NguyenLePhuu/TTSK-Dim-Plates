@@ -16,7 +16,7 @@ namespace Tekla.Technology.Akit.UserScript
     /// It dimensions an optional true cross-section after Shape H has finished
     /// the prepared main views. No section is created or arranged here.
     /// </summary>
-    public static partial class PHU_Slot09_DataCenterBeamType2DimensionEngine
+    public static partial class PHU_Slot07_DataCenterBeamType2DimensionEngine
     {
         private static bool _type1SectionEnabled;
 
@@ -43,8 +43,8 @@ namespace Tekla.Technology.Akit.UserScript
         {
             message = String.Empty;
             if (!_type1SectionEnabled
-                || !PHU_Slot09_DataCenterContext.IsActive
-                || PHU_Slot09_DataCenterBeamType2Context.IsActive)
+                || !PHU_Slot07_DataCenterContext.IsActive
+                || PHU_Slot07_DataCenterBeamType2Context.IsActive)
                 return true;
             try
             {
@@ -85,8 +85,8 @@ namespace Tekla.Technology.Akit.UserScript
         {
             ResetType1SectionResult();
             if (!_type1SectionEnabled
-                || !PHU_Slot09_DataCenterContext.IsActive
-                || PHU_Slot09_DataCenterBeamType2Context.IsActive)
+                || !PHU_Slot07_DataCenterContext.IsActive
+                || PHU_Slot07_DataCenterBeamType2Context.IsActive)
             {
                 LastType1SectionSucceeded = true;
                 LastType1SectionMessage =
@@ -370,12 +370,12 @@ namespace Tekla.Technology.Akit.UserScript
         {
             analysis = null;
             message = String.Empty;
-            if (!PHU_Slot09_DataCenterContext.IsActive)
+            if (!PHU_Slot07_DataCenterContext.IsActive)
             {
                 message = "Slot09 Data Center geometry scope is inactive.";
                 return false;
             }
-            if (PHU_Slot09_DataCenterBeamType2Context.IsActive)
+            if (PHU_Slot07_DataCenterBeamType2Context.IsActive)
             {
                 message = "Type2 owns its own section plan; Type1 route is excluded.";
                 return false;

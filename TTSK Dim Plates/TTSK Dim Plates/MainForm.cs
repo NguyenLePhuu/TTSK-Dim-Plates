@@ -1728,8 +1728,7 @@ namespace TTSK_AutoDim_Plates
             );
             page1.Controls.Add(slot5);
 
-            Panel slot6 = MakeAutoDimSlotBox("⑥", "Liên kết giằng xéo",
-                "3 thanh L + plate liên kết", innerMargin + boxW + gap, (boxH + gap) * 2,
+            Panel slot6 = MakeAutoDimImageSlotBox("Slot06_light.png", innerMargin + boxW + gap, (boxH + gap) * 2,
                 boxW, boxH, delegate { RunVisibleAutoDimSlot(6); });
             page1.Controls.Add(slot6);
             dataCenterSlotTile = MakeAutoDimSlotBox("⑦", "Injai Data Center",
@@ -1741,11 +1740,11 @@ namespace TTSK_AutoDim_Plates
                 dataCenterSlotTitle = dataCenterSlotTile.Controls[1] as Label;
                 dataCenterSlotDescription = dataCenterSlotTile.Controls[2] as Label;
             }
-            Panel slot8 = MakeAutoDimSlotBox("⑧", "Slot 08",
-                "Chờ gắn file CS", innerMargin + boxW + gap, 0, boxW, boxH,
+            Panel slot8 = MakeAutoDimSlotBox("⑧", "Ẩn neighbor",
+                "Giữ liên kết trực tiếp", innerMargin + boxW + gap, 0, boxW, boxH,
                 delegate { RunVisibleAutoDimSlot(8); });
             page2.Controls.Add(slot8);
-            page2.Controls.Add(MakeAutoDimSlotBox("⑨", "Ẩn neighbor", "Giữ liên kết trực tiếp",
+            page2.Controls.Add(MakeAutoDimSlotBox("⑨", "Slot 09", "Chờ gắn file CS",
                 innerMargin, boxH + gap, boxW, boxH, delegate { RunVisibleAutoDimSlot(9); }));
             AddAutoDimPlaceholderSlots(page2, 10, 12, innerMargin, gap, boxW, boxH);
             AddAutoDimPlaceholderSlots(page3, 13, 17, innerMargin, gap, boxW, boxH);
@@ -1760,7 +1759,7 @@ namespace TTSK_AutoDim_Plates
                 boxH,
                 delegate
                 {
-                    RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot06");
+                    RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot18");
                 }
             );
             page3.Controls.Add(slot18);
@@ -1948,10 +1947,10 @@ namespace TTSK_AutoDim_Plates
 
             Color accent = PrimaryButtonColor;
             Color idleBack = _darkMode ? Color.FromArgb(24, 24, 24) : Color.White;
-            Color selectedText = _darkMode ? Color.FromArgb(20, 16, 14) : Color.White;
-            Color idleText = _darkMode ? Color.FromArgb(232, 224, 214) : Color.FromArgb(15, 23, 42);
+            Color selectedBack = _darkMode ? Color.FromArgb(43, 33, 27) : Color.FromArgb(230, 240, 255);
+            Color muted = _darkMode ? Color.FromArgb(148, 163, 184) : Color.FromArgb(100, 116, 139);
 
-            tile.BackColor = _dataCenterModeEnabled ? accent : idleBack;
+            tile.BackColor = _dataCenterModeEnabled ? selectedBack : idleBack;
             tile.BorderColor = accent;
             tile.Cursor = _isBatchRunning ? Cursors.No : Cursors.Hand;
 
@@ -1959,7 +1958,7 @@ namespace TTSK_AutoDim_Plates
             {
                 Label label = control as Label;
                 if (label != null)
-                    label.ForeColor = _dataCenterModeEnabled ? selectedText : idleText;
+                    label.ForeColor = label.Font != null && label.Font.Bold ? accent : muted;
             }
 
             if (dataCenterSlotDescription != null)
@@ -2168,6 +2167,9 @@ namespace TTSK_AutoDim_Plates
             )
                 return _darkMode ? "Slot01_dark.png" : "Slot01_light.png";
 
+            if (string.Equals(imageFileName, "Slot06_light.png", StringComparison.OrdinalIgnoreCase))
+                return _darkMode ? "Slot06_dark.png" : "Slot06_light.png";
+
             if (string.Equals(imageFileName, "Slot02.png", StringComparison.OrdinalIgnoreCase))
                 return _darkMode ? "Slot02_dark.png" : "Slot02.png";
 
@@ -2336,10 +2338,10 @@ namespace TTSK_AutoDim_Plates
             if (_snapshotExportRunning || _isBatchRunning || _fitAndCleanupRunning) return;
             switch(slot)
             {
-                case 6: RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot08"); return;
+                case 6: RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot06"); return;
                 case 7: ToggleDataCenterMode(); return;
-                case 9: RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot11"); return;
-                case 8: case 10: case 11: case 12:
+                case 8: RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot08"); return;
+                case 9: case 10: case 11: case 12:
                     SetAutoDimResult("Slot " + slot.ToString("00") + ": Chờ gắn file CS"); return;
                 default: RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot" + slot.ToString("00")); return;
             }
@@ -2348,7 +2350,7 @@ namespace TTSK_AutoDim_Plates
         private void RunExternalAutoDimSlot(string typeFullName)
         {
             if (_snapshotExportRunning || _fitAndCleanupRunning) return;
-            if (typeFullName == "Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot12")
+            if (typeFullName == "Tekla.Technology.Akit.UserScript.PHU_CopyDrawingSnapshot_Temp")
             {
                 RunSnapshotExport();
                 return;
@@ -2957,7 +2959,7 @@ namespace TTSK_AutoDim_Plates
             )
             {
                 // Slot 18 currently exposes the DIM spacing audit entry point.
-                RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot06");
+                RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot18");
                 return;
             }
         }
@@ -4564,9 +4566,9 @@ namespace TTSK_AutoDim_Plates
                 if (_fitSourceDrawing == null || active == null || !active.IsSameDatabaseObject(_fitSourceDrawing))
                     throw new InvalidOperationException("Bản vẽ đã đổi sau Fit; bỏ qua ẩn neighbor.");
                 if (!(active is Tekla.Structures.Drawing.AssemblyDrawing)) return;
-                Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot11.Run();
-                string message = Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot11.LastRunMessage;
-                bool success = Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot11.LastRunSucceeded;
+                Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot08.Run();
+                string message = Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot08.LastRunMessage;
+                bool success = Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot08.LastRunSucceeded;
                 if (gridResultLabel != null) gridResultLabel.Text += "\n" + message;
                 bool fitWarning = fitStatus.IndexOf("⚠", StringComparison.Ordinal) >= 0;
                 SetMainStatus(fitStatus.TrimStart('✓', '⚠', ' ') + " | " + message,
@@ -5908,7 +5910,7 @@ namespace TTSK_AutoDim_Plates
             tab.RaisedEdge = true;
             tab.ThinOutline = false;
             tab.ToolShadowDepth = 4;
-            tab.ToolShadowColor = _darkMode ? Color.FromArgb(selected ? 65 : 25, 0, 0, 0) : Color.FromArgb(selected ? 28 : 12, 45, 60, 82);
+            tab.ToolShadowColor = _darkMode ? Color.Black : Color.FromArgb(45, 60, 82);
             tab.ToolHoverColor = _darkMode ? Color.FromArgb(195, 137, 88) : Color.FromArgb(95, 142, 211);
             SetModeCardTextColor(tab, accent);
             tab.Invalidate();
@@ -6300,7 +6302,7 @@ namespace TTSK_AutoDim_Plates
                         throw new InvalidOperationException("Load Selected chưa hoàn tất; chưa xuất snapshot.");
                     drawings=new List<Drawing>(_selectedDrawings);
                 }
-                var sources=Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot12.FindSources(drawings);
+                var sources=Tekla.Technology.Akit.UserScript.PHU_CopyDrawingSnapshot_Temp.FindSources(drawings);
                 // Snapshot API reads finish on the UI thread; only file/worker processing runs in background.
                 foreach(Control control in Controls)
                 {
@@ -6309,7 +6311,7 @@ namespace TTSK_AutoDim_Plates
                 }
                 SetMainStatus("Snapshot: đang xuất "+sources.Count+" bản vẽ vào một thư mục...",MainStatusKind.Information);
                 string folder=await System.Threading.Tasks.Task.Run(() =>
-                    Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot12.ExportSources(sources));
+                    Tekla.Technology.Akit.UserScript.PHU_CopyDrawingSnapshot_Temp.ExportSources(sources));
                 SetMainStatus("Snapshot: đã xuất "+sources.Count+" ảnh PNG → "+folder,MainStatusKind.Success);
                 SetAutoDimResult("Snapshot: "+sources.Count+" PNG → "+folder);
             }
@@ -8539,7 +8541,7 @@ namespace TTSK_AutoDim_Plates
             Tekla.Technology.Akit.UserScript.PHU_InzaiColumnNeighborDimensionEngine.Reset();
             Tekla.Technology.Akit.UserScript.PHU_InzaiColumnSpliceDimensionEngine.Reset();
             Tekla.Technology.Akit.UserScript.PHU_InzaiColumnSectionDimensionEngine.Reset();
-            Tekla.Technology.Akit.UserScript.PHU_Slot09_DataCenterBeamType2DimensionEngine.Reset();
+            Tekla.Technology.Akit.UserScript.PHU_Slot07_DataCenterBeamType2DimensionEngine.Reset();
             Tekla.Technology.Akit.UserScript.PHU_ColumnDimensionTierContext.Reset();
             Tekla.Technology.Akit.UserScript.PHU_VerticalShapeViewLayoutContext.Reset();
             AutoDimPartType partType = DetectActiveDrawingAutoDimPartType();
@@ -8828,25 +8830,25 @@ namespace TTSK_AutoDim_Plates
             );
             bool runDataCenterBeamType2Dimensions =
                 Tekla.Technology.Akit.UserScript
-                    .PHU_Slot09_DataCenterBeamType2Context.IsActive;
+                    .PHU_Slot07_DataCenterBeamType2Context.IsActive;
             bool runDataCenterBeamType1SectionDimensions =
                 Tekla.Technology.Akit.UserScript
-                    .PHU_Slot09_DataCenterContext.IsActive
+                    .PHU_Slot07_DataCenterContext.IsActive
                 && !runDataCenterBeamType2Dimensions
                 && partType == AutoDimPartType.ShapeIH;
             Tekla.Technology.Akit.UserScript
-                .PHU_Slot09_DataCenterBeamType2DimensionEngine.Configure(
+                .PHU_Slot07_DataCenterBeamType2DimensionEngine.Configure(
                     runDataCenterBeamType2Dimensions
                 );
             Tekla.Technology.Akit.UserScript
-                .PHU_Slot09_DataCenterBeamType2DimensionEngine.ConfigureType1Sections(
+                .PHU_Slot07_DataCenterBeamType2DimensionEngine.ConfigureType1Sections(
                     runDataCenterBeamType1SectionDimensions
                 );
             if (runDataCenterBeamType1SectionDimensions)
             {
                 string type1SectionPreflightMessage;
                 bool type1SectionPreflightSucceeded = Tekla.Technology.Akit.UserScript
-                    .PHU_Slot09_DataCenterBeamType2DimensionEngine
+                    .PHU_Slot07_DataCenterBeamType2DimensionEngine
                     .PreflightType1Sections(out type1SectionPreflightMessage);
                 if (!type1SectionPreflightSucceeded)
                 {
@@ -8995,10 +8997,10 @@ namespace TTSK_AutoDim_Plates
                 if (runDataCenterBeamType1SectionDimensions)
                 {
                     bool type1SectionDimSucceeded = Tekla.Technology.Akit.UserScript
-                        .PHU_Slot09_DataCenterBeamType2DimensionEngine
+                        .PHU_Slot07_DataCenterBeamType2DimensionEngine
                         .ExecuteType1SectionsAfterShape();
                     string type1SectionDimMessage = Tekla.Technology.Akit.UserScript
-                        .PHU_Slot09_DataCenterBeamType2DimensionEngine
+                        .PHU_Slot07_DataCenterBeamType2DimensionEngine
                         .LastType1SectionMessage;
                     execution.SectionMessage = String.IsNullOrWhiteSpace(
                             execution.SectionMessage)
@@ -9018,10 +9020,10 @@ namespace TTSK_AutoDim_Plates
                 if (runDataCenterBeamType2Dimensions)
                 {
                     bool type2DimSucceeded = Tekla.Technology.Akit.UserScript
-                        .PHU_Slot09_DataCenterBeamType2DimensionEngine
+                        .PHU_Slot07_DataCenterBeamType2DimensionEngine
                         .ExecuteAfterShape();
                     string type2DimMessage = Tekla.Technology.Akit.UserScript
-                        .PHU_Slot09_DataCenterBeamType2DimensionEngine
+                        .PHU_Slot07_DataCenterBeamType2DimensionEngine
                         .LastRunMessage;
                     execution.SectionMessage = String.IsNullOrWhiteSpace(
                             execution.SectionMessage)
@@ -9165,7 +9167,7 @@ namespace TTSK_AutoDim_Plates
                 Tekla.Technology.Akit.UserScript.PHU_InzaiColumnNeighborDimensionEngine.Reset();
                 Tekla.Technology.Akit.UserScript.PHU_InzaiColumnSpliceDimensionEngine.Reset();
                 Tekla.Technology.Akit.UserScript.PHU_InzaiColumnSectionDimensionEngine.Reset();
-                Tekla.Technology.Akit.UserScript.PHU_Slot09_DataCenterBeamType2DimensionEngine.Reset();
+                Tekla.Technology.Akit.UserScript.PHU_Slot07_DataCenterBeamType2DimensionEngine.Reset();
                 Tekla.Technology.Akit.UserScript.PHU_ColumnDimensionTierContext.Reset();
                 Tekla.Technology.Akit.UserScript.PHU_VerticalShapeViewLayoutContext.Reset();
             }
@@ -9319,14 +9321,14 @@ namespace TTSK_AutoDim_Plates
 
                 string beamType2Message;
                 beamType2Scope = Tekla.Technology.Akit.UserScript
-                    .PHU_Slot09_DataCenterBeamType2Context
+                    .PHU_Slot07_DataCenterBeamType2Context
                     .TryBeginCurrentDrawing(out beamType2Active, out beamType2Message);
                 preservePreparedDataCenterLayout =
                     activeQuickDimensionOnly
                     || (
                         beamType2Active
                         && Tekla.Technology.Akit.UserScript
-                            .PHU_Slot09_DataCenterBeamType2Context
+                            .PHU_Slot07_DataCenterBeamType2Context
                             .PreservePreparedDrawingLayout
                     );
 
@@ -9389,7 +9391,7 @@ namespace TTSK_AutoDim_Plates
 
                 AutoDimExecutionResult dimExecution;
                 using (
-                    Tekla.Technology.Akit.UserScript.PHU_Slot09_DataCenterContext.Begin(
+                    Tekla.Technology.Akit.UserScript.PHU_Slot07_DataCenterContext.Begin(
                         hasSlot04PlateTargets,
                         preservePreparedDataCenterLayout
                     )
@@ -9406,7 +9408,7 @@ namespace TTSK_AutoDim_Plates
                 if (!preservePreparedDataCenterLayout)
                 {
                     finalArrangeSucceeded = Tekla.Technology.Akit.UserScript
-                        .PHU_Slot09_DataCenterContext
+                        .PHU_Slot07_DataCenterContext
                         .VerifyRegisteredTopFrontArrangement(
                             out finalArrangeMessage
                         );
@@ -9688,7 +9690,7 @@ namespace TTSK_AutoDim_Plates
 
                 string selectionMessage;
                 if (
-                    !Tekla.Technology.Akit.UserScript.PHU_Slot09_DataCenterContext.TrySelectSingleTopViewForNeighborGrid(
+                    !Tekla.Technology.Akit.UserScript.PHU_Slot07_DataCenterContext.TrySelectSingleTopViewForNeighborGrid(
                         out selectionMessage
                     )
                 )
@@ -9711,7 +9713,7 @@ namespace TTSK_AutoDim_Plates
 
                 string verificationMessage;
                 if (
-                    !Tekla.Technology.Akit.UserScript.PHU_Slot09_DataCenterContext.VerifySingleTopViewSelectionForNeighborGrid(
+                    !Tekla.Technology.Akit.UserScript.PHU_Slot07_DataCenterContext.VerifySingleTopViewSelectionForNeighborGrid(
                         out verificationMessage
                     )
                 )
@@ -9766,7 +9768,7 @@ namespace TTSK_AutoDim_Plates
 
         private bool IsGridDimensionModeEnabledForAutoDim()
         {
-            if (Tekla.Technology.Akit.UserScript.PHU_Slot09_DataCenterContext.IsActive)
+            if (Tekla.Technology.Akit.UserScript.PHU_Slot07_DataCenterContext.IsActive)
                 return true;
 
             return _isBatchRunning && _batchGridDimEnabledSnapshot.HasValue
@@ -9776,7 +9778,7 @@ namespace TTSK_AutoDim_Plates
 
         private bool IsBeamModeForAutoDimGrid()
         {
-            if (Tekla.Technology.Akit.UserScript.PHU_Slot09_DataCenterContext.IsActive)
+            if (Tekla.Technology.Akit.UserScript.PHU_Slot07_DataCenterContext.IsActive)
                 return true;
 
             bool columnMode =
@@ -9788,7 +9790,7 @@ namespace TTSK_AutoDim_Plates
 
         private int GetGridDimensionAxisCountForAutoDim()
         {
-            if (Tekla.Technology.Akit.UserScript.PHU_Slot09_DataCenterContext.IsActive)
+            if (Tekla.Technology.Akit.UserScript.PHU_Slot07_DataCenterContext.IsActive)
                 return DATA_CENTER_GRID_AXIS_COUNT;
 
             bool columnMode =
@@ -14694,18 +14696,20 @@ namespace TTSK_AutoDim_Plates
                     }
                     using (GraphicsPath facePath = RoundedRectF(face, BorderRadius))
                     using (SolidBrush fill = new SolidBrush(BackColor))
-                    using (LinearGradientBrush edge = new LinearGradientBrush(face,
-                        edgeColor, Color.FromArgb(Math.Max(0, edgeColor.R - 20),
-                        Math.Max(0, edgeColor.G - 20), Math.Max(0, edgeColor.B - 20)), 90F))
-                    using (Pen outline = new Pen(edge, 1.5F))
+                    // Keep the outline identical to the expanded tools panel.
+                    // Depth comes from the outside shadow and an inset surface bevel.
+                    using (Pen outline = new Pen(edgeColor, 1.4F))
                     {
                         e.Graphics.FillPath(fill, facePath);
                         e.Graphics.DrawPath(outline, facePath);
                     }
                     RectangleF inner = face;
-                    inner.Inflate(-1, -1);
+                    inner.Inflate(-2.5f, -2.5f);
                     using (GraphicsPath innerPath = RoundedRectF(inner, BorderRadius - 1))
-                    using (Pen highlight = new Pen(Color.FromArgb(BackColor.GetBrightness() > 0.5f ? 210 : 22, Color.White), 1F))
+                    using (LinearGradientBrush bevel = new LinearGradientBrush(inner,
+                        Color.FromArgb(BackColor.GetBrightness() > 0.5f ? 110 : 12, Color.White),
+                        Color.FromArgb(BackColor.GetBrightness() > 0.5f ? 12 : 36, Color.Black), 90F))
+                    using (Pen highlight = new Pen(bevel, 1F))
                         e.Graphics.DrawPath(highlight, innerPath);
                     if (SurfacePaint != null) SurfacePaint(this, e);
                     return;

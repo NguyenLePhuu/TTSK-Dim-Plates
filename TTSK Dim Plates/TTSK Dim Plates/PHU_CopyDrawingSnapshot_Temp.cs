@@ -10,7 +10,7 @@ using M = Tekla.Structures.Model;
 namespace Tekla.Technology.Akit.UserScript
 {
     // Copies an existing snapshot only. Never opens, updates, prints, saves or creates a drawing.
-    public static class PHU_AutoDimSlot12
+    public static class PHU_CopyDrawingSnapshot_Temp
     {
         public static bool LastRunSucceeded { get; private set; }
         public static string LastRunMessage { get; private set; }
@@ -222,7 +222,7 @@ namespace Tekla.Technology.Akit.UserScript
         }
         private static string PrepareWorker()
         {
-            string own=typeof(PHU_AutoDimSlot12).Assembly.Location;
+            string own=typeof(PHU_CopyDrawingSnapshot_Temp).Assembly.Location;
             string folder=Path.Combine(Path.GetTempPath(),"TTSK_SnapshotWorker",Hash(own));
             Directory.CreateDirectory(folder);
             string exe=Path.Combine(folder,"SnapshotWorker.exe");

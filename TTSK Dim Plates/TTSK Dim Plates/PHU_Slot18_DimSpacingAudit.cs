@@ -17,9 +17,9 @@ using View = Tekla.Structures.Drawing.View;
 
 namespace Tekla.Technology.Akit.UserScript
 {
-    // Slot 06: DIM SPACING live audit.
+    // Slot 18: DIM SPACING live audit.
     // READ ONLY: this file never calls Modify, CommitChanges, Delete, Insert or LoadAttributes.
-    public class PHU_AutoDimSlot06
+    public class PHU_AutoDimSlot18
     {
         public static void Run()
         {
@@ -142,7 +142,7 @@ namespace Tekla.Technology.Akit.UserScript
                 {
                     ShowLog(
                         "DIM SPACING LIVE AUDIT - READ ONLY\r\n\r\n"
-                            + "Khong co ban ve Tekla active. Mo Drawing Editor roi chay lai Slot 06."
+                            + "Khong co ban ve Tekla active. Mo Drawing Editor roi chay lai Slot 18."
                     );
                     return;
                 }
@@ -348,7 +348,7 @@ namespace Tekla.Technology.Akit.UserScript
         {
             StringBuilder text = new StringBuilder();
             text.AppendLine("DIM SPACING LIVE AUDIT - READ ONLY");
-            text.AppendLine("No Modify / CommitChanges / Delete / Insert is called by Slot 06.");
+            text.AppendLine("No Modify / CommitChanges / Delete / Insert is called by Slot 18.");
             text.AppendLine(
                 "Audit spacing for the internal-DIM check: " + AuditSpacing.ToString("0.0") + " mm."
             );

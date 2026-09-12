@@ -6,7 +6,7 @@ namespace Tekla.Technology.Akit.UserScript
     /// Nishi Azabu topology 2.  The implementation has its own plan builders;
     /// slot 06 continues to use the original topology 1 entry point.
     /// </summary>
-    public class PHU_NishiAzabuAutoDimSlot07
+    public class PHU_NishiAzabuTopology2AutoDim_Temp
     {
         public static bool LastRunSucceeded { get; private set; }
         public static string LastRunMessage { get; private set; }

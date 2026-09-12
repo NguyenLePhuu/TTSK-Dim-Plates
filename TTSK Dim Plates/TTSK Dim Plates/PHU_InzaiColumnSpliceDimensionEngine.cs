@@ -71,8 +71,8 @@ namespace Tekla.Technology.Akit.UserScript
                     return true;
                 }
 
-                PHU_Slot10RefConnectionDimensionEngine.InzaiFlowResult result =
-                    PHU_Slot10RefConnectionDimensionEngine.RunInzaiColumnFlow();
+                PHU_RefConnectionDimensionEngine_Temp.InzaiFlowResult result =
+                    PHU_RefConnectionDimensionEngine_Temp.RunInzaiColumnFlow();
                 LastRunApplicable = result != null && result.Applicable;
                 LastCreatedCount = result == null ? 0 : result.CreatedCount;
                 LastReusedCount = result == null ? 0 : result.ReplacedCount;
@@ -114,7 +114,7 @@ namespace Tekla.Technology.Akit.UserScript
                         StringComparison.Ordinal)
                 )
                     return "INZAI SPLICE AUDIT not routed. " + routeMessage;
-                return PHU_Slot10RefConnectionDimensionEngine.AuditInzaiColumnPlan();
+                return PHU_RefConnectionDimensionEngine_Temp.AuditInzaiColumnPlan();
             }
             catch (Exception ex)
             {
@@ -125,7 +125,7 @@ namespace Tekla.Technology.Akit.UserScript
         /// <summary>Pure geometry; no Tekla drawing/model mutation.</summary>
         public static string AuditGeometryRegression()
         {
-            return PHU_Slot10RefConnectionDimensionEngine.AuditInzaiGeometryRegression();
+            return PHU_RefConnectionDimensionEngine_Temp.AuditInzaiGeometryRegression();
         }
 
         private static void ResetResult()
