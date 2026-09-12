@@ -17,7 +17,10 @@ function Invoke-Git([string[]]$Arguments, [int]$Attempts = 1) {
     for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
         # Avoid OneDrive locks during automatic GC. Never delete Git locks/objects.
         $stderrPath = Join-Path $run ('git-' + $attempt + '-' + [guid]::NewGuid().ToString('N') + '.stderr')
-        $ErrorActionPreference = 'Continue'
+        # Windows PowerShell 5 wraps Git's ordinary stderr progress as a
+        # NativeCommandError even when Git exits with code 0. We evaluate the
+        # exit code below, so suppress only that wrapper for this one process.
+        $ErrorActionPreference = 'SilentlyContinue'
         $stdout = & git -c gc.auto=0 -c maintenance.auto=false -c core.safecrlf=false @Arguments 2> $stderrPath
         $code = $LASTEXITCODE
         $ErrorActionPreference = 'Stop'
