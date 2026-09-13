@@ -167,8 +167,8 @@ namespace TTSK_AutoDim_Plates
         {
             if (_downloadUpdateButton != null)
             {
-                _downloadUpdateButton.BackColor = mainFooter.BackColor;
-                _downloadUpdateButton.ForeColor = _darkMode ? Color.FromArgb(235, 157, 83) : Color.FromArgb(35, 115, 190);
+                _downloadUpdateButton.DarkMode = _darkMode;
+                _downloadUpdateButton.ForeColor = _darkMode ? PrimaryButtonColor : Color.FromArgb(24, 75, 164);
                 _downloadUpdateButton.Invalidate();
             }
             if (mainVersionLabel == null || mainHeaderActions == null) return;
@@ -177,11 +177,11 @@ namespace TTSK_AutoDim_Plates
             if (_pendingUpdateRelease != null)
             {
                 // Khi có cập nhật mới, làm nổi bật màu nhãn phiên bản
-                mainVersionLabel.ForeColor = _darkMode ? Color.FromArgb(245, 158, 11) : Color.FromArgb(217, 119, 6);
+                mainVersionLabel.ForeColor = _darkMode ? PrimaryButtonColor : Color.FromArgb(24, 75, 164);
             }
             else
             {
-                mainVersionLabel.ForeColor = PrimaryButtonColor;
+                mainVersionLabel.ForeColor = _darkMode ? PrimaryButtonColor : Color.FromArgb(65, 85, 112);
             }
         }
 
@@ -268,25 +268,50 @@ namespace TTSK_AutoDim_Plates
         private sealed class DownloadUpdateButton : Button
         {
             public bool Available { get; set; }
+            public bool DarkMode { get; set; }
             private bool _hover;
+            private bool _pressed;
             public DownloadUpdateButton()
             {
                 SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
                 FlatStyle = FlatStyle.Flat; FlatAppearance.BorderSize = 0; Cursor = Cursors.Hand;
             }
             protected override void OnMouseEnter(EventArgs e) { _hover = true; Invalidate(); base.OnMouseEnter(e); }
-            protected override void OnMouseLeave(EventArgs e) { _hover = false; Invalidate(); base.OnMouseLeave(e); }
+            protected override void OnMouseLeave(EventArgs e) { _hover = false; _pressed = false; Invalidate(); base.OnMouseLeave(e); }
+            protected override void OnMouseDown(MouseEventArgs e) { _pressed = e.Button == MouseButtons.Left; Invalidate(); base.OnMouseDown(e); }
+            protected override void OnMouseUp(MouseEventArgs e) { _pressed = false; Invalidate(); base.OnMouseUp(e); }
+            protected override void OnKeyDown(KeyEventArgs e) { if (e.KeyCode == Keys.Space) { _pressed = true; Invalidate(); } base.OnKeyDown(e); }
+            protected override void OnKeyUp(KeyEventArgs e) { _pressed = false; Invalidate(); base.OnKeyUp(e); }
             protected override void OnPaint(PaintEventArgs e)
             {
-                e.Graphics.Clear(BackColor);
+                // Always use the live parent surface: the footer changes color after the theme hook.
+                e.Graphics.Clear(Parent == null ? BackColor : Parent.BackColor);
                 e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
                 float scale = Math.Min(Width / 32f, Height / 30f);
                 e.Graphics.ScaleTransform(scale, scale);
-                Color ink = Available ? ForeColor : Color.FromArgb(130, 145, 154);
-                using (var brush = new SolidBrush(Color.FromArgb(_hover ? 65 : Available ? 35 : 12, ink)))
-                    e.Graphics.FillEllipse(brush, 1, 1, 28, 28);
-                using (var pen = new Pen(ink, 1.8f) { StartCap = System.Drawing.Drawing2D.LineCap.Round, EndCap = System.Drawing.Drawing2D.LineCap.Round })
+                Color ink = Available ? (DarkMode ? Color.FromArgb(201, 122, 64) : Color.White) :
+                    (DarkMode ? Color.FromArgb(201, 122, 64) : Color.FromArgb(61, 88, 123));
+                if (Available || _hover)
                 {
+                    Color fill = DarkMode ? Color.FromArgb(37, 30, 25) : Color.FromArgb(28, 80, 170);
+                    if (_hover) fill = DarkMode ? Color.FromArgb(57, 40, 28) : Color.FromArgb(38, 104, 206);
+                    if (_pressed) fill = DarkMode ? Color.FromArgb(27, 23, 20) : Color.FromArgb(19, 58, 130);
+                    using (var shape = new System.Drawing.Drawing2D.GraphicsPath())
+                    {
+                        shape.AddArc(1, 1, 10, 10, 180, 90); shape.AddArc(20, 1, 10, 10, 270, 90);
+                        shape.AddArc(20, 19, 10, 10, 0, 90); shape.AddArc(1, 19, 10, 10, 90, 90); shape.CloseFigure();
+                        using (var brush = new System.Drawing.Drawing2D.LinearGradientBrush(new Rectangle(1, 1, 29, 28),
+                            ControlPaint.Light(fill, _hover ? .14F : .07F), fill, 90F)) e.Graphics.FillPath(brush, shape);
+                        using (var border = new Pen(DarkMode ? Color.FromArgb(_hover ? 201 : 109, _hover ? 122 : 73, _hover ? 64 : 47) : Color.FromArgb(66, 116, 200), 1F))
+                            e.Graphics.DrawPath(border, shape);
+                        using (var shine = new Pen(Color.FromArgb(DarkMode ? 55 : 65, Color.White), 1F))
+                            e.Graphics.DrawLine(shine, 8, 2, 21, 2);
+                    }
+                    if (!Available && !DarkMode) ink = Color.White;
+                }
+                using (var pen = new Pen(ink, 2f) { StartCap = System.Drawing.Drawing2D.LineCap.Round, EndCap = System.Drawing.Drawing2D.LineCap.Round })
+                {
+                    if (_pressed) e.Graphics.TranslateTransform(0, 1);
                     if (Available)
                     {
                         e.Graphics.DrawLine(pen, 15, 7, 15, 18);
@@ -294,8 +319,14 @@ namespace TTSK_AutoDim_Plates
                         e.Graphics.DrawLines(pen, new[] {new PointF(8, 19), new PointF(8, 23), new PointF(22, 23), new PointF(22, 19)});
                     }
                     else { e.Graphics.DrawArc(pen, 9, 8, 13, 13, 40, 285); e.Graphics.DrawLines(pen, new[] {new PointF(22, 7),new PointF(22, 12),new PointF(17, 12)}); }
+                    if (_pressed) e.Graphics.TranslateTransform(0, -1);
                 }
-                if (Available) using (var brush = new SolidBrush(Color.FromArgb(67, 201, 130))) e.Graphics.FillEllipse(brush, 24, 2, 6, 6);
+                if (Available)
+                {
+                    using (var rim = new SolidBrush(Parent == null ? BackColor : Parent.BackColor)) e.Graphics.FillEllipse(rim, 23, 0, 8, 8);
+                    using (var brush = new SolidBrush(DarkMode ? Color.FromArgb(233, 159, 95) : Color.FromArgb(0, 153, 104))) e.Graphics.FillEllipse(brush, 24, 1, 6, 6);
+                    using (var dot = new SolidBrush(Color.FromArgb(245, 248, 252))) e.Graphics.FillEllipse(dot, 25.5F, 2.5F, 2F, 2F);
+                }
                 e.Graphics.ResetTransform();
                 if (Focused) ControlPaint.DrawFocusRectangle(e.Graphics, new Rectangle(2, 2, Width-4, Height-4));
             }

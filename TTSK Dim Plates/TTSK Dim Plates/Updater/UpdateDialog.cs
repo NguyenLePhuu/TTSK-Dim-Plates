@@ -31,9 +31,70 @@ namespace TTSK_AutoDim_Plates.Updater
         private bool _isDownloading;
         private bool _isApplying;
         public bool StartAutomatically { get; set; }
+        private bool _customDarkFrame;
+
+        // Theme the native non-client area as well as the WinForms content.
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            ApplyNativeWindowTheme();
+        }
+
+        private void ApplyNativeWindowTheme()
+        {
+            try
+            {
+                int dark = _darkMode ? 1 : 0;
+                // Windows 10 1809 used attribute 19; newer Windows uses 20.
+                if (DwmSetWindowAttribute(Handle, 20, ref dark, sizeof(int)) != 0)
+                    DwmSetWindowAttribute(Handle, 19, ref dark, sizeof(int));
+
+                // Windows 11: explicitly color border, caption and caption text.
+                // Older Windows safely returns an unsupported-attribute HRESULT.
+                int border = _darkMode ? ColorTranslator.ToWin32(Color.FromArgb(18, 22, 29)) : -1;
+                int caption = _darkMode ? ColorTranslator.ToWin32(Color.FromArgb(24, 28, 36)) : -1;
+                int text = _darkMode ? ColorTranslator.ToWin32(Color.FromArgb(240, 244, 250)) : -1;
+                int borderResult = DwmSetWindowAttribute(Handle, 34, ref border, sizeof(int));
+                DwmSetWindowAttribute(Handle, 35, ref caption, sizeof(int));
+                DwmSetWindowAttribute(Handle, 36, ref text, sizeof(int));
+                if (_darkMode && borderResult != 0 && !_customDarkFrame) InstallDarkFrame();
+            }
+            catch (DllNotFoundException) { }
+            catch (EntryPointNotFoundException) { }
+        }
+
+        [System.Runtime.InteropServices.DllImport("dwmapi.dll", PreserveSig = true)]
+        private static extern int DwmSetWindowAttribute(IntPtr window, int attribute, ref int value, int size);
+
+        private void InstallDarkFrame()
+        {
+            _customDarkFrame = true;
+            // Older Windows cannot color native borders. Use a dark draggable caption instead.
+            foreach (Control control in Controls) control.Top += 36;
+            ClientSize = new Size(ClientSize.Width, ClientSize.Height + 36);
+            FormBorderStyle = FormBorderStyle.None;
+            var caption = new Panel { BackColor = Color.FromArgb(12, 15, 20), Dock = DockStyle.Top, Height = 36 };
+            var title = new Label { Text = "TTSK  •  Cập nhật phần mềm", ForeColor = Color.FromArgb(190, 200, 213),
+                Location = new Point(14, 9), AutoSize = true };
+            var close = new Button { Text = "×", Dock = DockStyle.Right, Width = 42, FlatStyle = FlatStyle.Flat,
+                ForeColor = Color.White, BackColor = caption.BackColor, TabStop = false };
+            close.FlatAppearance.BorderSize = 0;
+            close.FlatAppearance.MouseOverBackColor = Color.FromArgb(170, 40, 45);
+            close.Click += (s, e) => Close();
+            MouseEventHandler drag = (s, e) => { if (e.Button == MouseButtons.Left) { ReleaseCapture(); SendMessage(Handle, 0xA1, (IntPtr)2, IntPtr.Zero); } };
+            caption.MouseDown += drag; title.MouseDown += drag;
+            caption.Controls.Add(title); caption.Controls.Add(close); Controls.Add(caption); caption.BringToFront();
+            Paint += (s, e) => { using (var pen = new Pen(Color.Black)) e.Graphics.DrawRectangle(pen, 0, 0, ClientSize.Width-1, ClientSize.Height-1); };
+        }
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool ReleaseCapture();
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
+
         protected override async void OnShown(EventArgs e)
         {
             base.OnShown(e);
+            ApplyNativeWindowTheme();
             if (StartAutomatically) await StartDownloadAndApplyAsync();
         }
 
@@ -53,6 +114,8 @@ namespace TTSK_AutoDim_Plates.Updater
             _applyHandler = applyHandler;
 
             InitializeUi();
+            // Keep a consistent truly dark frame independently of Windows accent/theme settings.
+            if (_darkMode && !_customDarkFrame) InstallDarkFrame();
         }
 
         private void InitializeUi()
@@ -63,7 +126,7 @@ namespace TTSK_AutoDim_Plates.Updater
             MaximizeBox = false;
             MinimizeBox = false;
             ShowInTaskbar = false;
-            ClientSize = new Size(540, 420);
+            ClientSize = new Size(600, 510);
             Font = new Font("Segoe UI", 9F, FontStyle.Regular);
 
             Color bgColor = _darkMode ? Color.FromArgb(24, 28, 36) : Color.FromArgb(248, 250, 252);
@@ -78,13 +141,17 @@ namespace TTSK_AutoDim_Plates.Updater
             // Header Title
             lblHeaderTitle = new Label
             {
-                Text = "Đã có phiên bản cập nhật mới!",
-                Font = new Font("Segoe UI", 12F, FontStyle.Bold),
+                Text = "Sẵn sàng cho bản mới",
+                Font = new Font("Segoe UI", 23F, FontStyle.Bold),
                 ForeColor = accentColor,
-                Location = new Point(20, 16),
+                Location = new Point(28, 42),
                 AutoSize = true
             };
             Controls.Add(lblHeaderTitle);
+            Controls.Add(new Label { Text = "TTSK  /  SOFTWARE UPDATE", ForeColor = accentColor,
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold), Location = new Point(30, 20), AutoSize = true });
+            Controls.Add(new Label { Text = "Một lần bấm. Phần còn lại để TTSK lo.", ForeColor = fgColor,
+                Font = new Font("Segoe UI", 10F), Location = new Point(30, 91), AutoSize = true });
 
             // Version info
             string curVerStr = _currentVersion != null ? _currentVersion.ToDisplayString() : "v1.0.0";
@@ -93,21 +160,23 @@ namespace TTSK_AutoDim_Plates.Updater
 
             lblVersionInfo = new Label
             {
-                Text = string.Format("Phiên bản hiện tại:  {0}    ➔    Phiên bản mới:  {1}{2}", curVerStr, newVerStr, sizeStr),
-                Font = new Font("Segoe UI", 9.5F, FontStyle.Regular),
+                Text = string.Format("{0}     →     {1}    {2}", curVerStr, newVerStr, sizeStr),
+                Font = new Font("Segoe UI", 16F, FontStyle.Bold),
                 ForeColor = fgColor,
-                Location = new Point(22, 48),
-                AutoSize = true
+                Location = new Point(28, 133),
+                Size = new Size(544, 62),
+                BackColor = boxBgColor,
+                TextAlign = ContentAlignment.MiddleCenter
             };
             Controls.Add(lblVersionInfo);
 
             // Changelog Box
             Label lblNotesTitle = new Label
             {
-                Text = "Nội dung thay đổi (Release Notes):",
+                Text = "Có gì trong lần cập nhật này?",
                 Font = new Font("Segoe UI", 9F, FontStyle.Bold),
                 ForeColor = fgColor,
-                Location = new Point(22, 78),
+                Location = new Point(28, 217),
                 AutoSize = true
             };
             Controls.Add(lblNotesTitle);
@@ -119,17 +188,23 @@ namespace TTSK_AutoDim_Plates.Updater
                 ScrollBars = ScrollBars.Vertical,
                 BackColor = boxBgColor,
                 ForeColor = fgColor,
-                Location = new Point(22, 102),
-                Size = new Size(494, 190),
-                Text = string.IsNullOrWhiteSpace(_releaseInfo?.Body) ? "Bản phát hành cập nhật và cải tiến tính năng." : _releaseInfo.Body.Trim()
+                Location = new Point(42, 260),
+                Size = new Size(516, 105),
+                BorderStyle = BorderStyle.None,
+                Font = new Font("Segoe UI", 10F),
+                TabStop = false,
+                Text = FormatReleaseNotes(_releaseInfo?.Body)
             };
-            Controls.Add(txtChangelog);
+            var notesSurface = new Panel { BackColor = boxBgColor, Location = new Point(28, 246), Size = new Size(544, 134) };
+            Controls.Add(notesSurface);
+            txtChangelog.Location = new Point(14, 14);
+            notesSurface.Controls.Add(txtChangelog);
 
             // Progress bar
             progressBar = new ProgressBar
             {
-                Location = new Point(22, 304),
-                Size = new Size(494, 18),
+                Location = new Point(28, 395),
+                Size = new Size(544, 5),
                 Style = ProgressBarStyle.Blocks,
                 Visible = false
             };
@@ -138,24 +213,24 @@ namespace TTSK_AutoDim_Plates.Updater
             // Status message
             lblStatus = new Label
             {
-                Text = "Sẵn sàng cập nhật.",
+                Text = "✓  Giữ nguyên cấu hình cá nhân của bạn",
                 Font = new Font("Segoe UI", 8.5F),
                 ForeColor = _darkMode ? Color.FromArgb(160, 176, 198) : Color.FromArgb(100, 116, 139),
-                Location = new Point(22, 328),
-                Size = new Size(494, 20)
+                Location = new Point(28, 410),
+                Size = new Size(544, 22)
             };
             Controls.Add(lblStatus);
 
             // Buttons
             btnUpdate = new Button
             {
-                Text = "Tải & Cập nhật",
+                Text = "↓   Cập nhật ngay",
                 Font = new Font("Segoe UI", 9.5F, FontStyle.Bold),
                 BackColor = accentColor,
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
-                Location = new Point(22, 360),
-                Size = new Size(150, 36),
+                Location = new Point(350, 448),
+                Size = new Size(222, 42),
                 Cursor = Cursors.Hand
             };
             btnUpdate.FlatAppearance.BorderSize = 0;
@@ -164,16 +239,16 @@ namespace TTSK_AutoDim_Plates.Updater
 
             btnOpenReleasePage = new Button
             {
-                Text = "Mở trang Release",
+                Text = "Chi tiết bản phát hành ↗",
                 Font = new Font("Segoe UI", 9F),
                 BackColor = boxBgColor,
                 ForeColor = fgColor,
                 FlatStyle = FlatStyle.Flat,
-                Location = new Point(184, 360),
-                Size = new Size(140, 36),
+                Location = new Point(28, 448),
+                Size = new Size(184, 42),
                 Cursor = Cursors.Hand
             };
-            btnOpenReleasePage.FlatAppearance.BorderColor = boxBorderColor;
+            btnOpenReleasePage.FlatAppearance.BorderSize = 0;
             btnOpenReleasePage.Click += (s, e) =>
             {
                 string url = "https://github.com/NguyenLePhuu/TTSK-Dim-Plates/releases/latest";
@@ -192,13 +267,15 @@ namespace TTSK_AutoDim_Plates.Updater
                 BackColor = boxBgColor,
                 ForeColor = fgColor,
                 FlatStyle = FlatStyle.Flat,
-                Location = new Point(396, 360),
-                Size = new Size(120, 36),
+                Location = new Point(228, 448),
+                Size = new Size(106, 42),
                 Cursor = Cursors.Hand
             };
-            btnLater.FlatAppearance.BorderColor = boxBorderColor;
+            btnLater.FlatAppearance.BorderSize = 0;
             btnLater.Click += (s, e) => Close();
             Controls.Add(btnLater);
+            ActiveControl = btnUpdate;
+            AcceptButton = btnUpdate;
 
             FormClosing += (s, e) =>
             {
@@ -208,6 +285,18 @@ namespace TTSK_AutoDim_Plates.Updater
                     _cts.Cancel();
                 }
             };
+        }
+
+        public static string FormatReleaseNotes(string body)
+        {
+            string value = body ?? "";
+            value = System.Text.RegularExpressions.Regex.Replace(value, @"<!--[\s\S]*?-->", "");
+            value = System.Text.RegularExpressions.Regex.Replace(value, @"(?im)^.*Full Changelog.*$", "");
+            value = System.Text.RegularExpressions.Regex.Replace(value, @"\[([^\]]+)\]\([^\)]+\)", "$1");
+            value = System.Text.RegularExpressions.Regex.Replace(value, @"(?m)^\s{0,3}#{1,6}\s+", "");
+            value = value.Replace("**", "").Replace("`", "");
+            value = System.Text.RegularExpressions.Regex.Replace(value, @"(?m)^\s*[-*]\s+", "•  ").Trim();
+            return value.Length == 0 ? "Chưa có ghi chú chi tiết cho phiên bản này.\r\n\r\nXem thêm thông tin trên trang bản phát hành." : value.Substring(0, Math.Min(12000, value.Length));
         }
 
         private async Task StartDownloadAndApplyAsync()
