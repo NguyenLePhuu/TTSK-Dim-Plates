@@ -2,6 +2,8 @@
 param(
     [switch]$NoPause,
     [switch]$BuildOnly,
+    [switch]$Publish,
+    [string]$ReleaseNotes,
     [string]$TeklaBinPath
 )
 $ErrorActionPreference = 'Stop'
@@ -65,6 +67,22 @@ function Copy-Verified([string]$Source, [string]$Destination) {
 }
 
 try {
+    if ($BuildOnly -and $Publish) { throw 'Khong dung BuildOnly cung Publish.' }
+    if (!$BuildOnly -and !$Publish) {
+        do { $choice = Read-Host 'Ban co muon day len GitHub va phat hanh khong? (Yes/No)' }
+        while ($choice -notmatch '^(?i:yes|no|y|n)$')
+        $BuildOnly = $choice -match '^(?i:no|n)$'
+    }
+    if (!$BuildOnly -and [string]::IsNullOrWhiteSpace($ReleaseNotes)) {
+        Write-Host 'Nhap noi dung ban phat hanh / nhung gi duoc cap nhat. Nhap END tren dong rieng de ket thuc.'
+        $noteLines = New-Object 'System.Collections.Generic.List[string]'
+        do {
+            $line = Read-Host
+            if ($line -cne 'END') { $noteLines.Add($line) }
+        } while ($line -cne 'END')
+        $ReleaseNotes = ($noteLines -join "`r`n").Trim()
+        if ([string]::IsNullOrWhiteSpace($ReleaseNotes)) { throw 'Chua nhap noi dung phat hanh. Khong push.' }
+    }
     try { $lock = [IO.File]::Open((Join-Path $work 'update.lock'), 'OpenOrCreate', 'ReadWrite', 'None') }
     catch { throw 'Mot tien trinh cap nhat khac dang chay. Hay cho no ket thuc.' }
     Start-Transcript -LiteralPath $log | Out-Null
@@ -169,6 +187,9 @@ try {
     } else {
         if ($syncError) { throw "Portable da cap nhat, nhung GitHub CHUA dong bo: $syncError" }
         Write-Host "[4/4] Commit va push nhanh $branch len origin..."
+        # Notes belong to the same commit as the verified portable, never to a previous release.
+        $request = [ordered]@{ requestId = [guid]::NewGuid().ToString('N'); notes = $ReleaseNotes; createdUtc = [DateTime]::UtcNow.ToString('o') }
+        [IO.File]::WriteAllText((Join-Path $repo 'release-request.json'), ($request | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
         Invoke-Git @('add', '--all') | Write-Host
         if (Invoke-Git @('diff', '--cached', '--name-only')) { Invoke-Git @('commit', '-m', ('Cap nhat source va portable ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))) | Write-Host }
         # Retry an earlier unpushed commit even with a clean worktree.

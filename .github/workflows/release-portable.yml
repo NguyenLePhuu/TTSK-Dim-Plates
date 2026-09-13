@@ -5,6 +5,7 @@ on:
       - main
     paths:
       - 'portable/**'
+      - 'release-request.json'
       - '!portable/README.txt'
       - '!portable/**/*.cfg'
       - '!portable/**/*.bat'
@@ -38,7 +39,11 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $prefix = (Get-Content -LiteralPath release-version-prefix.txt -Raw).Trim()
           if ($prefix -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') { throw 'Invalid version prefix.' }
-          $version = "$prefix.$env:RELEASE_RUN"
+          $offsetText = (Get-Content -LiteralPath release-run-offset.txt -Raw).Trim()
+          if ($offsetText -notmatch '^(0|[1-9][0-9]*)$') { throw 'Invalid release run offset.' }
+          $patch = [long]$env:RELEASE_RUN - [long]$offsetText
+          if ($patch -lt 1) { throw 'This run predates the version reset; start a new run.' }
+          $version = "$prefix.$patch"
           $null = [version]$version
           "RELEASE_VERSION=$version" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
           & ./scripts/Build-GitHubReleasePackage.ps1 -Version $version -Tag "v$version" -CommitSha $env:GITHUB_SHA -OutDir '.codex-artifacts/release-package'

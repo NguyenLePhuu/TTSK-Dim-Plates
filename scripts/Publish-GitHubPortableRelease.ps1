@@ -65,8 +65,12 @@ if ($existing.Count -eq 1) {
     $refs = @(Invoke-Gh @('api', "repos/$repo/git/matching-refs/tags/$tag") | ConvertFrom-Json)
     if (@($refs | Where-Object { $_.ref -ceq "refs/tags/$tag" }).Count -gt 0) { Assert-TagCommit }
     $notes = Join-Path $PackageDirectory 'release-notes.txt'
-    [IO.File]::WriteAllText($notes, $marker, [Text.UTF8Encoding]::new($false))
-    Invoke-Gh @('release','create',$tag,'--repo',$repo,'--target',$CommitSha,'--title',"TTSK Dim Plates $tag",'--notes-file',$notes,'--generate-notes','--draft') | Out-Null
+    $requestPath = Join-Path $PSScriptRoot '..\release-request.json'
+    if (!(Test-Path -LiteralPath $requestPath)) { throw 'Missing release-request.json. Run Update-Portable and choose Yes with release notes.' }
+    $request = Get-Content -LiteralPath $requestPath -Raw | ConvertFrom-Json
+    if ([string]::IsNullOrWhiteSpace($request.notes)) { throw 'Release notes must not be empty.' }
+    [IO.File]::WriteAllText($notes, ($marker + "`n`n" + $request.notes), [Text.UTF8Encoding]::new($false))
+    Invoke-Gh @('release','create',$tag,'--repo',$repo,'--target',$CommitSha,'--title',"TTSK Dim Plates $tag",'--notes-file',$notes,'--draft') | Out-Null
     # A draft may have no Git tag yet; lookup-by-tag can return 404 until publication.
     $drafts = @()
     for ($attempt = 0; $attempt -lt 6; $attempt++) {
