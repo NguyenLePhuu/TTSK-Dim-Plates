@@ -207,6 +207,19 @@ namespace TTSK_AutoDim_Plates.Updater
         /// </summary>
         public async Task<string> DownloadAndPrepareStagingAsync(GitHubReleaseInfo release, IProgress<UpdateDownloadProgress> progress, CancellationToken ct)
         {
+            // Dialogs and persisted state may outlive a deleted/replaced release.
+            // Resolve GitHub Latest again at the actual download boundary; never fall back to cached URLs.
+            var latest = await CheckForUpdatesAsync(true, ct).ConfigureAwait(false);
+            if (latest == null) throw new InvalidDataException("Bạn đã dùng bản mới nhất hiện có trên GitHub. Không cần tải lại.");
+            if (release == null) throw new InvalidDataException("No selected release.");
+            release.TagName = latest.TagName;
+            release.Version = latest.Version;
+            release.Body = latest.Body;
+            release.HtmlUrl = latest.HtmlUrl;
+            release.ZipDownloadUrl = latest.ZipDownloadUrl;
+            release.ZipSizeBytes = latest.ZipSizeBytes;
+            release.Sha256DownloadUrl = latest.Sha256DownloadUrl;
+            release.Sha256SizeBytes = latest.Sha256SizeBytes;
             if (release == null || release.Version == null || release.TagName != "v" + release.Version || release.Version <= CurrentVersion)
                 throw new InvalidDataException("Invalid selected release.");
             GitHubReleaseService.ValidateExactAssetUrl(release.ZipDownloadUrl, release.TagName, GitHubReleaseService.ExpectedZipAssetName);

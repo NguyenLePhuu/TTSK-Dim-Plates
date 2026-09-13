@@ -326,6 +326,12 @@ namespace TTSK_AutoDim_Plates.Updater
             var progress = new Progress<UpdateDownloadProgress>(report =>
             {
                 if (IsDisposed) return;
+                if (_releaseInfo.Version != null)
+                {
+                    string size = _releaseInfo.ZipSizeBytes > 0 ? string.Format(" (~{0:F1} MB)", _releaseInfo.ZipSizeBytes / (1024.0 * 1024.0)) : "";
+                    lblVersionInfo.Text = string.Format("{0}     →     {1}    {2}", _currentVersion.ToDisplayString(), _releaseInfo.Version.ToDisplayString(), size);
+                    txtChangelog.Text = FormatReleaseNotes(_releaseInfo.Body);
+                }
                 progressBar.Value = Math.Max(0, Math.Min(100, report.ProgressPercentage));
                 lblStatus.Text = report.StatusMessage ?? "Đang tải dữ liệu...";
             });

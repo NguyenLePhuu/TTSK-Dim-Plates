@@ -68,7 +68,12 @@ if ($existing.Count -eq 1) {
     [IO.File]::WriteAllText($notes, $marker, [Text.UTF8Encoding]::new($false))
     Invoke-Gh @('release','create',$tag,'--repo',$repo,'--target',$CommitSha,'--title',"TTSK Dim Plates $tag",'--notes-file',$notes,'--generate-notes','--draft') | Out-Null
     # A draft may have no Git tag yet; lookup-by-tag can return 404 until publication.
-    $drafts = @(Invoke-Gh @('api', "repos/$repo/releases?per_page=100", '--paginate', '--jq', '.[] | @json') | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.tag_name -ceq $tag })
+    $drafts = @()
+    for ($attempt = 0; $attempt -lt 6; $attempt++) {
+        $drafts = @(Invoke-Gh @('api', "repos/$repo/releases?per_page=100&refresh=$([guid]::NewGuid().ToString('N'))", '-H', 'Cache-Control: no-cache', '--paginate', '--jq', '.[] | @json') | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.tag_name -ceq $tag })
+        if ($drafts.Count -eq 1) { break }
+        Start-Sleep -Seconds 2
+    }
     if ($drafts.Count -ne 1 -or !$drafts[0].draft -or $drafts[0].target_commitish -ne $CommitSha -or !$drafts[0].body.Contains($marker)) { throw 'Created draft could not be verified by release listing.' }
     $release = $drafts[0]
 }

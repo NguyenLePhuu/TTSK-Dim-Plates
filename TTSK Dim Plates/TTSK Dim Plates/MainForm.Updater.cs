@@ -61,8 +61,7 @@ namespace TTSK_AutoDim_Plates
             _downloadUpdateButton.Click += async (s, e) =>
             {
                 if (_updateDialogOpen || _updateCheckRunning) return;
-                if (_pendingUpdateRelease != null) ShowUpdateDialog(_pendingUpdateRelease, true);
-                else await CheckForUpdatesManualAsync();
+                await CheckForUpdatesManualAsync(true);
             };
             _versionToolTip.SetToolTip(_downloadUpdateButton, "Kiểm tra cập nhật phần mềm");
             UpdateVersionLabelTheme();
@@ -188,7 +187,7 @@ namespace TTSK_AutoDim_Plates
         /// <summary>
         /// Kiểm tra cập nhật thủ công khi người dùng click vào nhãn phiên bản.
         /// </summary>
-        private async Task CheckForUpdatesManualAsync()
+        private async Task CheckForUpdatesManualAsync(bool startImmediately = false)
         {
             if (mainVersionLabel == null || _updateCheckRunning || _updaterHandoffClosing) return;
             _updateCheckRunning = true;
@@ -205,7 +204,7 @@ namespace TTSK_AutoDim_Plates
                 {
                     _pendingUpdateRelease = release;
                     UpdateVersionLabelIndicator();
-                    ShowUpdateDialog(release);
+                    ShowUpdateDialog(release, startImmediately);
                 }
                 else
                 {
