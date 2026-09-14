@@ -470,6 +470,7 @@ namespace TTSK_AutoDim_Plates
             btnCheckScale.Size = new System.Drawing.Size(124, 32);
             btnCheckScale.Click += btnCheckScale_Click;
             listPanel.Controls.Add(btnCheckScale);
+            InitializeCheckMenu();
 
             btnLoad = new SafeRoundedButton();
             btnLoad.Text = "📁  Load Selected";
@@ -1745,7 +1746,7 @@ namespace TTSK_AutoDim_Plates
                 "Giữ liên kết trực tiếp", innerMargin + boxW + gap, 0, boxW, boxH,
                 delegate { RunVisibleAutoDimSlot(8); });
             page2.Controls.Add(slot8);
-            page2.Controls.Add(MakeAutoDimSlotBox("⑨", "Kiểm tra chân DIM", "Main / lỗ / REF / neighbor",
+            page2.Controls.Add(MakeAutoDimSlotBox("⑨", "Slot 09", "Chờ gắn file CS",
                 innerMargin, boxH + gap, boxW, boxH, delegate { RunVisibleAutoDimSlot(9); }));
             AddAutoDimPlaceholderSlots(page2, 10, 12, innerMargin, gap, boxW, boxH);
             AddAutoDimPlaceholderSlots(page3, 13, 17, innerMargin, gap, boxW, boxH);
@@ -2342,8 +2343,7 @@ namespace TTSK_AutoDim_Plates
                 case 6: RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot06"); return;
                 case 7: ToggleDataCenterMode(); return;
                 case 8: RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot08"); return;
-                case 9: RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot09"); return;
-                case 10: case 11: case 12:
+                case 9: case 10: case 11: case 12:
                     SetAutoDimResult("Slot " + slot.ToString("00") + ": Chờ gắn file CS"); return;
                 default: RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot" + slot.ToString("00")); return;
             }
@@ -2736,6 +2736,13 @@ namespace TTSK_AutoDim_Plates
 
         private void RunShortcutAction(string actionId)
         {
+            if (string.Equals(actionId, ShortcutManager.ActionCheckDim, StringComparison.OrdinalIgnoreCase))
+            {
+                _lastRepeatableShortcutActionId = null;
+                RunDimensionCheck();
+                return;
+            }
+
             if (string.IsNullOrEmpty(actionId))
                 return;
 
@@ -5813,6 +5820,7 @@ namespace TTSK_AutoDim_Plates
                 pinTopMostButton.DarkMode = _darkMode;
 
             ApplyPrintMenuTheme();
+            ApplyCheckMenuTheme();
             ApplyWindowTitleBarTheme();
             UpdateModeUi();
             ApplySlideTheme();
@@ -5862,6 +5870,7 @@ namespace TTSK_AutoDim_Plates
             }
             // Print popup follows the same button palette after the main controls have been styled.
             ApplyPrintMenuTheme();
+            ApplyCheckMenuTheme();
             mainHeaderSurface.Invalidate();
             mainListSurface.Invalidate();
             dgvDrawings.Invalidate();
@@ -6395,6 +6404,7 @@ namespace TTSK_AutoDim_Plates
 
         private void ShowPrintMenu()
         {
+            HideCheckMenu();
             if (
                 btnPrint == null
                 || printMergeDropDownHost == null
@@ -6408,6 +6418,7 @@ namespace TTSK_AutoDim_Plates
 
             CancelPrintMenuClose();
             ApplyPrintMenuTheme();
+            ApplyCheckMenuTheme();
 
             Point anchor = PointToClient(btnPrint.PointToScreen(Point.Empty));
             printMergeDropDownHost.Location = new Point(
@@ -12608,6 +12619,7 @@ namespace TTSK_AutoDim_Plates
             public ThemeButton()
             {
                 DoubleBuffered = true;
+                SetStyle(ControlStyles.ResizeRedraw, true);
                 CustomBackColor = Color.FromArgb(28, 28, 28);
                 CustomBorderColor = Color.FromArgb(201, 122, 64);
                 CustomTextColor = Color.FromArgb(224, 156, 96);
@@ -12676,6 +12688,14 @@ namespace TTSK_AutoDim_Plates
                     return;
                 }
 
+                // Clear the entire invalidated area, including the rounded corners.
+                // Native Button background painting can leave fragments of its border
+                // outside our custom path after resizing or changing hover state.
+                using (SolidBrush background = new SolidBrush(Parent != null ? Parent.BackColor : BackColor))
+                    pevent.Graphics.FillRectangle(background, ClientRectangle);
+
+                if (Width <= 3 || Height <= 3) return;
+
                 pevent.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
                 pevent.Graphics.PixelOffsetMode = PixelOffsetMode.Half;
                 pevent.Graphics.CompositingQuality = CompositingQuality.HighQuality;
@@ -12703,7 +12723,7 @@ namespace TTSK_AutoDim_Plates
                     borderWidth = 1.4f;
                 }
 
-                RectangleF rect = new RectangleF(0.8f, 0.8f, Width - 1.6f, Height - 1.6f);
+                RectangleF rect = new RectangleF(1.25f, 1.25f, Width - 2.5f, Height - 2.5f);
 
                 using (GraphicsPath path = RoundedRectF(rect, 4.5f))
                 {

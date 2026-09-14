@@ -10,6 +10,7 @@ namespace TTSK_AutoDim_Plates
     {
         public const string ActionCreateDrawing = "CreateDrawing";
         public const string ActionBatchCreate = "BatchCreate";
+        public const string ActionCheckDim = "CheckDim";
         public const string ActionCheckScale = "CheckScale";
         public const string ActionLineDistance = "LineDistance";
         public const string ActionRepeatLast = "RepeatLast";
@@ -429,6 +430,11 @@ namespace TTSK_AutoDim_Plates
             );
             list.Add(
                 new ShortcutActionDefinition(
+                    ActionCheckDim, "CheckDim", "Kiểm tra chân DIM trên bản vẽ đang mở", "C", Keys.C
+                )
+            );
+            list.Add(
+                new ShortcutActionDefinition(
                     ActionCheckScale,
                     "Check Scale",
                     "Batch load selected + check scale",
@@ -574,7 +580,7 @@ namespace TTSK_AutoDim_Plates
             list.Add(
                 new ShortcutActionDefinition(
                     ActionSlot09,
-                    "Slot09 (Kiểm tra chân DIM)",
+                    "Slot09 (Chờ gắn file CS)",
                     "Chờ gắn file CS",
                     "9",
                     Keys.D9

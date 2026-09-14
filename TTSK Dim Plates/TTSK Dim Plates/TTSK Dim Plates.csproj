@@ -173,6 +173,7 @@
     <Compile Include="Class1.cs" />
     <Compile Include="JapaneseDictionary.cs" />
     <Compile Include="ManualDrawingScaleOverride.cs" />
+    <Compile Include="MainForm.CheckMenu.cs" />
     <Compile Include="MainForm.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -201,7 +202,8 @@
     <Compile Include="PHU_Slot06_BraceConnectionAutoDim.Type2.cs" />
     <Compile Include="PHU_RefConnectionAutoDim_Temp.cs" />
     <Compile Include="PHU_Slot08_NeighborCleanup.cs" />
-    <Compile Include="PHU_Slot09_DimensionCheck.cs" />
+    <Compile Include="PHU_DimensionCheck.cs" />
+    <Compile Include="PHU_Slot09_ReportForm.cs" />
     <Compile Include="PHU_CopyDrawingSnapshot_Temp.cs" />
     <Compile Include="PHU_BeamGridDimensionEngine.cs" />
     <Compile Include="PHU_ColumnProjectRouter.cs" />

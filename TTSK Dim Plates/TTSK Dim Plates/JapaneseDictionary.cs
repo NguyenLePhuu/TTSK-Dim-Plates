@@ -32,6 +32,12 @@ namespace TTSK_AutoDim_Plates
     {
         private const string VietnameseHeader = "Việt";
         private const string JapaneseHeader = "Nhật";
+        internal const string DictionaryFontName = "MS UI Gothic";
+
+        private readonly Font _bodyFont = new Font(DictionaryFontName, 9F);
+        private readonly Font _headerFont = new Font(DictionaryFontName, 8.5F, FontStyle.Bold);
+        private readonly Font _copyFont = new Font(DictionaryFontName, 8F, FontStyle.Bold);
+        private readonly Font _emptyFont = new Font(DictionaryFontName, 9F, FontStyle.Italic);
 
         private readonly string _dataFilePath;
         private readonly DictionaryGrid _grid;
@@ -52,6 +58,7 @@ namespace TTSK_AutoDim_Plates
             BackColor = Color.White;
 
             _grid = new DictionaryGrid();
+            _grid.Font = _bodyFont;
             _grid.AllowUserToAddRows = false;
             _grid.AllowUserToDeleteRows = false;
             _grid.AllowUserToResizeColumns = false;
@@ -119,10 +126,11 @@ namespace TTSK_AutoDim_Plates
             _emptyLabel = new Label();
             _emptyLabel.Text = "Chưa có từ vựng.";
             _emptyLabel.TextAlign = ContentAlignment.MiddleCenter;
-            _emptyLabel.Font = new Font("Segoe UI", 9F, FontStyle.Italic);
+            _emptyLabel.Font = _emptyFont;
             _emptyLabel.Visible = false;
             Controls.Add(_emptyLabel);
 
+            Font = _bodyFont;
             ApplyTheme(false);
         }
 
@@ -235,7 +243,7 @@ namespace TTSK_AutoDim_Plates
             _grid.ColumnHeadersDefaultCellStyle.ForeColor = accent;
             _grid.ColumnHeadersDefaultCellStyle.SelectionBackColor = headerBack;
             _grid.ColumnHeadersDefaultCellStyle.SelectionForeColor = accent;
-            _grid.ColumnHeadersDefaultCellStyle.Font = new Font("Segoe UI", 8.5F, FontStyle.Bold);
+            _grid.ColumnHeadersDefaultCellStyle.Font = _headerFont;
             _grid.ColumnHeadersDefaultCellStyle.Alignment =
                 DataGridViewContentAlignment.MiddleCenter;
 
@@ -243,7 +251,7 @@ namespace TTSK_AutoDim_Plates
             _grid.DefaultCellStyle.ForeColor = text;
             _grid.DefaultCellStyle.SelectionBackColor = rowBack;
             _grid.DefaultCellStyle.SelectionForeColor = text;
-            _grid.DefaultCellStyle.Font = new Font("Segoe UI", 9F);
+            _grid.DefaultCellStyle.Font = _bodyFont;
             _grid.DefaultCellStyle.WrapMode = DataGridViewTriState.True;
 
             _grid.AlternatingRowsDefaultCellStyle.BackColor = alternateBack;
@@ -258,7 +266,7 @@ namespace TTSK_AutoDim_Plates
                 copyColumn.DefaultCellStyle.ForeColor = accent;
                 copyColumn.DefaultCellStyle.SelectionBackColor = rowBack;
                 copyColumn.DefaultCellStyle.SelectionForeColor = accent;
-                copyColumn.DefaultCellStyle.Font = new Font("Segoe UI", 8F, FontStyle.Bold);
+                copyColumn.DefaultCellStyle.Font = _copyFont;
             }
 
             foreach (DataGridViewRow row in _grid.Rows)
@@ -269,7 +277,7 @@ namespace TTSK_AutoDim_Plates
                 copyCell.Style.ForeColor = accent;
                 copyCell.Style.SelectionBackColor = rowBackground;
                 copyCell.Style.SelectionForeColor = accent;
-                copyCell.Style.Font = new Font("Segoe UI", 8F, FontStyle.Bold);
+                copyCell.Style.Font = _copyFont;
                 copyCell.Style.Padding = new Padding(4, 12, 4, 12);
             }
 
@@ -317,7 +325,7 @@ namespace TTSK_AutoDim_Plates
                         continue;
                     }
 
-                    entries.Add(new JapaneseDictionaryEntry(vietnamese, japanese));
+                    entries.Add(new JapaneseDictionaryEntry(vietnamese, NormalizeJapaneseForDrawing(japanese)));
                 }
             }
         }
@@ -326,6 +334,12 @@ namespace TTSK_AutoDim_Plates
         {
             return string.Equals(vietnamese, VietnameseHeader, StringComparison.OrdinalIgnoreCase)
                 && string.Equals(japanese, JapaneseHeader, StringComparison.OrdinalIgnoreCase);
+        }
+
+        internal static string NormalizeJapaneseForDrawing(string text)
+        {
+            // MS UI Gothic lacks U+2300. Display and copy the approved U+03C6 notation.
+            return text.Replace('\u2300', '\u03c6');
         }
 
         private void Grid_CellContentClick(object sender, DataGridViewCellEventArgs e)
@@ -341,7 +355,7 @@ namespace TTSK_AutoDim_Plates
 
             try
             {
-                Clipboard.SetText(japanese);
+                Clipboard.SetText(japanese, TextDataFormat.UnicodeText);
                 RaiseStatus("Đã copy: " + japanese, JapaneseDictionaryStatusKind.Success);
             }
             catch (Exception ex)
@@ -436,6 +450,18 @@ namespace TTSK_AutoDim_Plates
             EventHandler<JapaneseDictionaryStatusEventArgs> handler = StatusChanged;
             if (handler != null)
                 handler(this, new JapaneseDictionaryStatusEventArgs(message, kind));
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            base.Dispose(disposing);
+            if (disposing)
+            {
+                _bodyFont.Dispose();
+                _headerFont.Dispose();
+                _copyFont.Dispose();
+                _emptyFont.Dispose();
+            }
         }
 
         private sealed class JapaneseDictionaryEntry

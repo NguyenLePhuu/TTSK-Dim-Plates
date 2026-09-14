@@ -266,7 +266,137 @@ namespace Tekla.Technology.Akit.UserScript
             List<DimPlan> plans = new List<DimPlan>();
             BuildType2PlanViewPlans(context, plans);
             BuildType2SectionViewPlan(context, plans);
+            SpaceType2InnerChain(plans, "T2-P-11", "T2-P-12", "T2-P-13");
+            SpaceType2InnerChain(plans, "T2-P-16", "T2-P-17", "T2-P-18");
             return plans;
+        }
+
+        private static void SpaceType2InnerChain(List<DimPlan> plans, string innerName,
+            string middleName, string outerName)
+        {
+            DimPlan inner = plans.Find(p => p.Name == innerName);
+            DimPlan middle = plans.Find(p => p.Name == middleName);
+            DimPlan outer = plans.Find(p => p.Name == outerName);
+            P2 n = inner.PlacementNormal;
+            double middleLevel = Dot(middle.Points[0], n) + middle.Distance;
+            double outerLevel = Dot(outer.Points[0], n) + outer.Distance;
+            double gap = outerLevel - middleLevel;
+            double distance = middleLevel - gap - Dot(inner.Points[0], n);
+            if (gap <= PointTolerance || distance <= PointTolerance
+                || Double.IsNaN(distance) || Double.IsInfinity(distance))
+                throw new InvalidOperationException("Khoang cach tang dim Type2 khong hop le.");
+            inner.DistanceOverride = distance;
+        }
+
+        private sealed class BraceAnglePlan
+        {
+            public string Name;
+            public ViewData View;
+            public P2 Origin, Point1, Point2;
+            public double Degrees;
+        }
+
+        private static List<BraceAnglePlan> BuildBraceAnglePlans(Context context)
+        {
+            List<BraceAnglePlan> result = new List<BraceAnglePlan>();
+            if (context.Variant == TopologyVariant.Type1)
+            {
+                Topology type1 = context.Topology;
+                result.Add(BuildType2BraceAngle(context.PlanView, type1.Main,
+                    type1.MainAxis, "T1-A-01"));
+                bool startIsUpper = type1.B.Y > type1.C.Y;
+                PartData upper = startIsUpper ? type1.CrossStart : type1.CrossEnd;
+                PartData lower = startIsUpper ? type1.CrossEnd : type1.CrossStart;
+                P2 upperRef = startIsUpper ? type1.B : type1.C;
+                result.Add(BuildType2BraceAngle(context.PlanView, lower,
+                    type1.CrossAxis, "T1-A-02"));
+                // Upper split brace: approved angle is measured from the downward
+                // vertical at the OUTER terminal's lower flange vertex, not from X.
+                TerminalFeature terminal = ResolveTerminal(upper, upperRef, type1.CrossNormal);
+                P2 origin = terminal.Low.Y <= terminal.High.Y ? terminal.Low : terminal.High;
+                result.Add(BuildBraceAngleAtVertex(context.PlanView, upper,
+                    type1.CrossAxis, "T1-A-03", origin, true));
+                return result;
+            }
+            if (context.Variant != TopologyVariant.Type2) return result;
+            Type2Topology t = context.Type2Topology;
+            result.Add(BuildType2BraceAngle(context.PlanView, t.Main, t.MainAxis, "T2-A-01"));
+            result.Add(BuildType2BraceAngle(context.PlanView, t.Cross, t.CrossAxis, "T2-A-02"));
+            return result;
+        }
+
+        private static BraceAnglePlan BuildType2BraceAngle(ViewData view, PartData part,
+            P2 referenceAxis, string name)
+        {
+            // Approved Type2 sample: lowest exact flange vertex, longitudinal
+            // solid edge rising inward, and the horizontal ray toward that edge.
+            P2 origin = null;
+            foreach (P2 vertex in part.Vertices)
+                if (origin == null || vertex.Y < origin.Y
+                    || (vertex.Y == origin.Y && vertex.X < origin.X)) origin = vertex;
+            return BuildBraceAngleAtVertex(view, part, referenceAxis, name, origin, false);
+        }
+
+        private static BraceAnglePlan BuildBraceAngleAtVertex(ViewData view, PartData part,
+            P2 referenceAxis, string name, P2 origin, bool verticalBaseline)
+        {
+            P2 direction = null;
+            if (origin == null)
+                throw new InvalidOperationException(name + " khong co dinh solid.");
+            double longest = 0.0;
+            foreach (Segment2 edge in part.Segments)
+            {
+                P2 other = Distance(edge.A, origin) <= PointTolerance ? edge.B
+                    : Distance(edge.B, origin) <= PointTolerance ? edge.A : null;
+                if (other == null) continue;
+                P2 delta = Subtract(other, origin);
+                P2 axis = Normalize(delta);
+                double length = Distance(other, origin);
+                if (axis != null && Math.Abs(Dot(axis, referenceAxis)) > 0.999
+                    && length > longest) { direction = axis; longest = length; }
+            }
+            if (direction == null || (verticalBaseline ? direction.Y >= -1e-6 : direction.Y <= 1e-6)
+                || Math.Abs(direction.X) <= 1e-6 || view.Scale <= 0.0)
+                throw new InvalidOperationException(name + " khong xac dinh duoc mep doc de dim goc.");
+            return new BraceAnglePlan {
+                Name = name, View = view, Origin = origin,
+                // Ray lengths are presentation only (5/6 mm on paper).
+                Point1 = Add(origin, Scale(direction, 5.0 * view.Scale)),
+                Point2 = Add(origin, verticalBaseline ? new P2(0.0, -6.0 * view.Scale)
+                    : new P2(Math.Sign(direction.X) * 6.0 * view.Scale, 0.0)),
+                Degrees = (verticalBaseline
+                    ? Math.Atan2(Math.Abs(direction.X), -direction.Y)
+                    : Math.Atan2(direction.Y, Math.Abs(direction.X))) * 180.0 / Math.PI
+            };
+        }
+
+        private static TSD.AngleDimensionAttributes CreateBraceAngleAttributes()
+        {
+            // Captured from approved Type1 and Type2 angle samples, independent of
+            // whether a previous run's dimensions still exist in the drawing.
+            TSD.AngleDimensionAttributes a = new TSD.AngleDimensionAttributes();
+            a.Type = TSD.AngleTypes.TriangleWithDegrees;
+            a.TriangleBase = 1000;
+            a.Color = TSD.DrawingColors.Black;
+            a.TransparentBackground = false;
+            a.Arrowhead.ArrowPosition = TSD.ArrowheadPositions.Both;
+            a.Arrowhead.Head = (TSD.ArrowheadTypes)11;
+            a.Arrowhead.Height = 1; a.Arrowhead.Width = 1;
+            a.Format.Precision = TSD.DimensionSetBaseAttributes.DimensionValuePrecisions.OnePerThousand;
+            a.Format.Format = TSD.DimensionSetBaseAttributes.DimensionValueFormats.OneOptionalDecimal;
+            a.Format.Unit = TSD.DimensionSetBaseAttributes.DimensionValueUnits.Automatic;
+            a.Format.UseDigitGrouping = false;
+            a.Placing.Placing = TSD.DimensionSetBaseAttributes.Placings.Fixed;
+            a.Placing.Direction.Positive = true; a.Placing.Direction.Negative = false;
+            a.Placing.Distance.SearchMargin = 5;
+            a.Placing.Distance.MinimalDistance = 10;
+            a.Placing.Distance.MaximalDistance = 0;
+            a.Text.Font.Name = "MS UI Gothic"; a.Text.Font.Height = 3;
+            a.Text.Font.Color = TSD.DrawingColors.Black;
+            a.Text.Font.Bold = false; a.Text.Font.Italic = false;
+            a.Text.Frame = TSD.DimensionSetBaseAttributes.FrameTypes.None;
+            a.Text.TextPlacing = TSD.DimensionSetBaseAttributes.DimensionTextPlacings.AboveDimensionLine;
+            return a;
         }
 
         private static void BuildType2PlanViewPlans(Context context, List<DimPlan> plans)

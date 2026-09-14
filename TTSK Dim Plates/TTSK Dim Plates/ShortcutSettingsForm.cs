@@ -813,6 +813,8 @@ namespace TTSK_AutoDim_Plates
                 )
             )
                 return Color.FromArgb(244, 114, 112);
+            if (string.Equals(actionId, ShortcutManager.ActionCheckDim, StringComparison.OrdinalIgnoreCase))
+                return Color.FromArgb(201, 122, 64);
             if (
                 string.Equals(
                     actionId,

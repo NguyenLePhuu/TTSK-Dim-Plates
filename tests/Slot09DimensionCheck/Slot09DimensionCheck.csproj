@@ -9,7 +9,9 @@
   <ItemGroup>
     <PackageReference Include="TSAppConfigPatcherTask" Version="2.1.3" />
     <Compile Include="Program.cs" />
-    <Compile Include="../../TTSK Dim Plates/TTSK Dim Plates/PHU_Slot09_DimensionCheck.cs" />
+    <Compile Include="HardeningTests.cs" />
+    <Compile Include="../../TTSK Dim Plates/TTSK Dim Plates/PHU_DimensionCheck.cs" />
+    <Compile Include="../../TTSK Dim Plates/TTSK Dim Plates/PHU_Slot09_ReportForm.cs" />
     <Compile Include="../../TTSK Dim Plates/TTSK Dim Plates/PHU_Slot08_NeighborCleanup.cs" />
     <Compile Include="../../TTSK Dim Plates/TTSK Dim Plates/PHU_MainPartResolver.cs" />
     <Reference Include="System.Windows.Forms" />

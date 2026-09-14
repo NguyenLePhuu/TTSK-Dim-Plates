@@ -268,10 +268,11 @@ namespace Tekla.Technology.Akit.UserScript
             public P2 PlacementNormal;
             public TierBand Tier;
             public bool DisableCombine = true;
+            public double? DistanceOverride;
 
             public double Distance
             {
-                get { return PaperDistance(Tier) * View.Scale; }
+                get { return DistanceOverride ?? PaperDistance(Tier) * View.Scale; }
             }
         }
 
@@ -286,12 +287,14 @@ namespace Tekla.Technology.Akit.UserScript
         internal static string Run()
         {
             List<TSD.StraightDimensionSet> created = new List<TSD.StraightDimensionSet>();
+            List<TSD.AngleDimension> createdAngles = new List<TSD.AngleDimension>();
             int deleted = 0;
             try
             {
                 Context context = AnalyzeDrawing();
                 List<DimPlan> plans = BuildPlans(context);
                 ValidatePlans(context, plans);
+                List<BraceAnglePlan> angles = BuildBraceAnglePlans(context);
                 ReplacementSnapshot replacement = SnapshotReplaceableDimensions(context, plans);
 
                 // Geometry and both variant plans have passed preflight.
@@ -350,15 +353,33 @@ namespace Tekla.Technology.Akit.UserScript
                         "So dimension tao duoc khong khop plan da preflight."
                     );
 
+                foreach (BraceAnglePlan angle in angles)
+                {
+                    TSD.AngleDimension dimension = new TSD.AngleDimension(
+                        angle.View.View, angle.Origin.ToPoint(), angle.Point1.ToPoint(),
+                        angle.Point2.ToPoint(), 0.0, CreateBraceAngleAttributes());
+                    if (!dimension.Insert())
+                        throw new InvalidOperationException("Khong tao duoc " + angle.Name);
+                    createdAngles.Add(dimension);
+                    if (!dimension.Select()
+                        || dimension.Attributes.Type != TSD.AngleTypes.TriangleWithDegrees
+                        || dimension.Attributes.TriangleBase != 1000
+                        || Math.Abs(dimension.GetAngle() - angle.Degrees) > 0.001)
+                        throw new InvalidOperationException("Dim goc read-back sai: " + angle.Name);
+                }
                 context.Drawing.CommitChanges();
                 return "Slot 06: tao "
                     + created.Count
-                    + " dim lien ket giang xeo, thay "
+                    + " dim thang, " + createdAngles.Count + " dim goc, thay "
                     + deleted
                     + " dim cu tren toan bo ban ve";
             }
             catch (Exception ex)
             {
+                foreach (TSD.AngleDimension angle in createdAngles)
+                {
+                    try { angle.Delete(); } catch { }
+                }
                 for (int i = 0; i < created.Count; i++)
                 {
                     try
@@ -472,7 +493,7 @@ namespace Tekla.Technology.Akit.UserScript
                         .Append(" tier=")
                         .Append(plan.Tier)
                         .Append(" paperMm=")
-                        .Append(Format(PaperDistance(plan.Tier)))
+                        .Append(Format(plan.Distance / plan.View.Scale))
                         .Append(" distance=")
                         .Append(Format(plan.Distance))
                         .Append(" points=");
@@ -484,6 +505,11 @@ namespace Tekla.Technology.Akit.UserScript
                     }
                     text.AppendLine();
                 }
+                foreach (BraceAnglePlan angle in BuildBraceAnglePlans(context))
+                    text.AppendLine(angle.Name + " origin=" + FormatPoint(angle.Origin)
+                        + " p1=" + FormatPoint(angle.Point1) + " p2=" + FormatPoint(angle.Point2)
+                        + " degrees=" + Format(angle.Degrees)
+                        + " type=TriangleWithDegrees base=1000 distance=0");
                 return text.ToString();
             }
             catch (Exception ex)
@@ -1555,32 +1581,21 @@ namespace Tekla.Technology.Akit.UserScript
             params P2[] points
         )
         {
-            double minX = Double.PositiveInfinity;
-            double maxX = Double.NegativeInfinity;
-            double minY = Double.PositiveInfinity;
-            double maxY = Double.NegativeInfinity;
-            for (int i = 0; points != null && i < points.Length; i++)
-            {
-                P2 point = points[i];
-                if (point == null)
-                    continue;
-                minX = Math.Min(minX, point.X);
-                maxX = Math.Max(maxX, point.X);
-                minY = Math.Min(minY, point.Y);
-                maxY = Math.Max(maxY, point.Y);
-            }
-
-            bool measureX = maxX - minX >= maxY - minY;
-            P2 measurementAxis = measureX ? new P2(1.0, 0.0) : new P2(0.0, 1.0);
+            // Every boundary caller supplies the two REF endpoints first/last.
+            // Inner edge feet must not change the axis chosen by that REF pair.
+            // Tier names are topology labels, not guaranteed view-space sides.
+            if (points == null || points.Length < 2 || points[0] == null
+                || points[points.Length - 1] == null)
+                throw new InvalidOperationException(name + " thieu cap REF bien.");
+            P2 delta = Subtract(points[points.Length - 1], points[0]);
+            bool measureX = Math.Abs(delta.X) >= Math.Abs(delta.Y);
             P2 normal = Normalize(outsideNormal);
             if (normal == null)
                 throw new InvalidOperationException(name + " khong co huong dat dim bien.");
-
-            P2 placementNormal;
-            if (measureX)
-                placementNormal = new P2(0.0, normal.Y >= 0.0 ? 1.0 : -1.0);
-            else
-                placementNormal = new P2(normal.X >= 0.0 ? 1.0 : -1.0, 0.0);
+            P2 measurementAxis = measureX ? new P2(1.0, 0.0) : new P2(0.0, 1.0);
+            P2 placementNormal = measureX
+                ? new P2(0.0, normal.Y >= 0.0 ? 1.0 : -1.0)
+                : new P2(normal.X >= 0.0 ? 1.0 : -1.0, 0.0);
 
             AddPlan(plans, view, name, semantic, measurementAxis, placementNormal, tier, points);
         }
@@ -1752,7 +1767,11 @@ namespace Tekla.Technology.Akit.UserScript
                     // Normalize child dimensions to their owning set, so a set is
                     // deleted once even when also enumerated from the sheet/view.
                     TSD.DimensionBase child = dimension as TSD.DimensionBase;
-                    if (child != null)
+                    // Angle/Radius dimensions are standalone: GetDimensionSet()
+                    // throws for them. Only normalize actual set child types.
+                    if (child is TSD.StraightDimension
+                        || child is TSD.CurvedDimensionRadial
+                        || child is TSD.CurvedDimensionOrthogonal)
                     {
                         TSD.DimensionSetBase owner = child.GetDimensionSet();
                         if (owner != null) dimension = owner;
