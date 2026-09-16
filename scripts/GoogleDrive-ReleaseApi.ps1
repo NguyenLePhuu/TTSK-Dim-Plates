@@ -52,15 +52,15 @@ function Assert-DriveId([string]$Id) {
 
 function Get-DriveMediaUrl([string]$Id, [string]$ApiKey) {
     Assert-DriveId $Id
-    if ([string]::IsNullOrWhiteSpace($ApiKey)) { throw 'Thieu GoogleDriveApiKey trong App.config.' }
-    return "https://www.googleapis.com/drive/v3/files/${Id}?alt=media&key=$([Uri]::EscapeDataString($ApiKey))"
+    return "https://drive.usercontent.google.com/download?id=${Id}&export=download"
 }
 
 function Invoke-DriveApi {
     param([string]$Uri, [string]$Method = 'GET', [string]$Body, [string]$InFile,
           [string]$OutFile, [string]$ContentType = 'application/json', [switch]$Public, [switch]$Raw)
     $parsed = [Uri]$Uri
-    if ($parsed.Scheme -ne 'https' -or $parsed.Host -ne 'www.googleapis.com' -or !$parsed.IsDefaultPort -or $parsed.UserInfo) { throw 'Unsafe Drive API endpoint.' }
+    $publicDownload = $Public -and $Method -eq 'GET' -and $parsed.Host -eq 'drive.usercontent.google.com' -and $parsed.AbsolutePath -eq '/download' -and $parsed.Query -cmatch '\A\?id=[A-Za-z0-9_-]+&export=download\z'
+    if ($parsed.Scheme -ne 'https' -or (!$publicDownload -and $parsed.Host -ne 'www.googleapis.com') -or !$parsed.IsDefaultPort -or $parsed.UserInfo -or $parsed.Fragment) { throw 'Unsafe Drive API endpoint.' }
     $arguments = @{ Uri = $Uri; Method = $Method; ErrorAction = 'Stop'; TimeoutSec = 300; MaximumRedirection = 0; Headers = @{ 'Cache-Control' = 'no-cache' } }
     if (!$Public) {
         $arguments.Headers.Authorization = 'Bearer ' + (Get-DriveAccessToken)
@@ -69,11 +69,17 @@ function Invoke-DriveApi {
     if ($InFile) { $arguments.InFile = $InFile; $arguments.ContentType = $ContentType }
     if ($OutFile) { $arguments.OutFile = $OutFile }
     try {
+        if ($publicDownload) {
+            $response = Invoke-WebRequest @arguments -UseBasicParsing
+            if ($OutFile) { return }
+            if ($response.Content -is [byte[]]) { return [Text.Encoding]::UTF8.GetString($response.Content) }
+            return [string]$response.Content
+        }
         if ($Raw) { return Invoke-WebRequest @arguments -UseBasicParsing }
         return Invoke-RestMethod @arguments
     } catch {
         # Do not include the request URI (API key) or authentication headers in transcript.
-        throw 'Google Drive API that bai. Kiem tra Internet, Drive API, OAuth token con han, API key va quyen chia se/ghi (Google Workspace co the cam chia se cong khai).'
+        throw 'Google Drive that bai. Kiem tra Internet, quyen chia se cong khai, gioi han tai file va dang nhap publisher.'
     }
 }
 

@@ -253,7 +253,7 @@ namespace TTSK_AutoDim_Plates.Updater
             {
                 string url = "https://github.com/NguyenLePhuu/TTSK-Dim-Plates/releases/latest";
                 if (_releaseInfo?.Source == "GoogleDrive" && UpdateSources.IsDriveMediaUrl(_releaseInfo.ZipDownloadUrl))
-                    url = "https://drive.google.com/file/d/" + new Uri(_releaseInfo.ZipDownloadUrl).Segments[4] + "/view";
+                    url = "https://drive.google.com/file/d/" + new Uri(_releaseInfo.ZipDownloadUrl).Query.Substring(4).Split('&')[0] + "/view";
                 try
                 {
                     Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });

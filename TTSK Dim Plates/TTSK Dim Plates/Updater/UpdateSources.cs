@@ -31,23 +31,24 @@ namespace TTSK_AutoDim_Plates.Updater
             return xml.SelectSingleNode("/configuration/appSettings/add[@key='" + name + "']/@value")?.Value ?? "";
         }
 
-        public static string DriveMediaUrl(string id, string apiKey)
+        public static string DriveMediaUrl(string id, string apiKey = null)
         {
-            if (id == null || !Regex.IsMatch(id, @"\A[A-Za-z0-9_-]+\z") || string.IsNullOrWhiteSpace(apiKey))
-                throw new InvalidDataException("Google Drive: thiếu File ID hoặc API key.");
-            return "https://www.googleapis.com/drive/v3/files/" + id + "?alt=media&key=" + Uri.EscapeDataString(apiKey);
+            if (id == null || !Regex.IsMatch(id, @"\A[A-Za-z0-9_-]+\z"))
+                throw new InvalidDataException("Google Drive: invalid File ID.");
+            // Public downloads never contain publisher credentials or an API key.
+            return "https://drive.usercontent.google.com/download?id=" + id + "&export=download";
         }
 
         public static bool IsDriveMediaUrl(string url)
         {
             Uri uri;
             return Uri.TryCreate(url, UriKind.Absolute, out uri) && uri.Scheme == "https" &&
-                uri.Host == "www.googleapis.com" && uri.IsDefaultPort && uri.UserInfo == "" && uri.Fragment == "" &&
-                Regex.IsMatch(uri.AbsolutePath, @"\A/drive/v3/files/[A-Za-z0-9_-]+\z") &&
-                Regex.IsMatch(uri.Query, @"\A\?alt=media&key=[A-Za-z0-9_%.-]+\z");
+                uri.Host == "drive.usercontent.google.com" && uri.IsDefaultPort && uri.UserInfo == "" && uri.Fragment == "" &&
+                uri.AbsolutePath == "/download" &&
+                Regex.IsMatch(uri.Query, @"\A\?id=[A-Za-z0-9_-]+&export=download\z");
         }
 
-        public static GitHubReleaseInfo ParseDriveManifest(string json, string apiKey)
+        public static GitHubReleaseInfo ParseDriveManifest(string json, string apiKey = null)
         {
             var manifest = new JavaScriptSerializer().Deserialize<DriveReleaseManifest>(json);
             UpdateVersion version;
@@ -70,10 +71,9 @@ namespace TTSK_AutoDim_Plates.Updater
 
         public static async Task<GitHubReleaseInfo> GetDriveReleaseAsync(CancellationToken ct)
         {
-            string id = ReadSetting("GoogleDriveManifestId"), key = ReadSetting("GoogleDriveApiKey");
-            // Bỏ qua im lặng nếu thiếu manifest ID hoặc API key — chức năng Drive chưa được cấu hình
-            if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(key)) return null;
-            string url = DriveMediaUrl(id, key);
+            string id = ReadSetting("GoogleDriveManifestId");
+            if (string.IsNullOrWhiteSpace(id)) return null;
+            string url = DriveMediaUrl(id);
             ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
             using (var client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }))
             {
@@ -88,7 +88,7 @@ namespace TTSK_AutoDim_Plates.Updater
                     if (fields != null && fields.ContainsKey("initialized") && fields["initialized"] is bool &&
                         !(bool)fields["initialized"] && fields.ContainsKey("product") &&
                         Convert.ToString(fields["product"]) == ReleaseMetadata.ExpectedProduct) return null;
-                    return ParseDriveManifest(json, key);
+                    return ParseDriveManifest(json);
                 }
             }
         }

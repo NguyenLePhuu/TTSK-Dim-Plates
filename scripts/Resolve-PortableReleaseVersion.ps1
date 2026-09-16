@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param([string]$MinimumVersion, [string]$CommitSha, [string]$RequestedVersion,
       [switch]$Reserve, [string]$ReservationPath)
 $ErrorActionPreference = 'Stop'
@@ -29,7 +29,7 @@ try {
         try { $reservationLock = [IO.File]::Open(($ReservationPath + '.lock'), 'OpenOrCreate', 'ReadWrite', 'None') }
         catch { throw 'Mot tien trinh khac dang cap so phien ban. Thu lai sau.' }
     }
-    $prefix = (Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\release-version-prefix.txt') -Raw).Trim()
+    $prefix = (Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\update\release-version-prefix.txt') -Raw).Trim()
     if ($prefix -notmatch '\A(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\z') { throw 'Invalid version prefix.' }
     $highest = ConvertTo-ReleaseVersion "$prefix.0"
     $github = Read-GitHubVersionData 'releases/latest'
@@ -44,7 +44,7 @@ try {
     }
     $settings = Get-DriveUpdateSettings
     $drive = $null
-    if ($settings['GoogleDriveManifestId'] -or $settings['GoogleDriveApiKey']) {
+    if ($settings['GoogleDriveManifestId']) {
         # An unreadable configured source must not be treated as version zero by a publisher.
         $drive = Read-DriveManifest $settings['GoogleDriveManifestId'] $settings['GoogleDriveApiKey']
         if ($drive -and [version]$drive.version -gt $highest) { $highest = [version]$drive.version }
@@ -57,7 +57,8 @@ try {
         return $requested.ToString(3)
     }
     # Include requests queued on GitHub, not just releases that Actions finished publishing.
-    $remoteRequest = Read-GitHubVersionData 'contents/release-request.json?ref=main'
+    $remoteRequest = Read-GitHubVersionData 'contents/update/release-request.json?ref=main'
+    if (!$remoteRequest) { $remoteRequest = Read-GitHubVersionData 'contents/release-request.json?ref=main' }
     if ($remoteRequest) {
         if ($remoteRequest.encoding -ne 'base64') { throw 'Invalid remote release request encoding.' }
         $request = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($remoteRequest.content)) | ConvertFrom-Json
@@ -67,7 +68,7 @@ try {
         }
     }
     # Also cover a local push/upload which failed, or Actions which has not started yet.
-    foreach ($path in @($ReservationPath, (Join-Path $PSScriptRoot '..\release-request.json'))) {
+    foreach ($path in @($ReservationPath, (Join-Path $PSScriptRoot '..\update\release-request.json'))) {
         if (!(Test-Path -LiteralPath $path)) { continue }
         $saved = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
         if ($saved.PSObject.Properties['version']) {

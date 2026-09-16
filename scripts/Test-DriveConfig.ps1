@@ -33,14 +33,7 @@ if ([string]::IsNullOrWhiteSpace($manifestId)) {
     Write-Host "  [OK] GoogleDriveManifestId = $manifestId" -ForegroundColor Green
 }
 
-if ([string]::IsNullOrWhiteSpace($apiKey)) {
-    Write-Host '  [LOI] GoogleDriveApiKey trong! Chay Cai_Dat_Google_Drive.bat truoc.' -ForegroundColor Red
-    $ok = $false
-} else {
-    # Chỉ hiện 8 ký tự đầu
-    $masked = $apiKey.Substring(0, [Math]::Min(8, $apiKey.Length)) + '...'
-    Write-Host "  [OK] GoogleDriveApiKey = $masked" -ForegroundColor Green
-}
+Write-Host '  [OK] Tai cong khai khong dung API key / tai khoan nguoi dung.' -ForegroundColor Green
 
 if (!$ok) {
     Write-Host ''
@@ -61,7 +54,7 @@ try {
     }
 } catch {
     Write-Host "  [LOI] Khong doc duoc manifest: $($_.Exception.Message)" -ForegroundColor Red
-    Write-Host '  Kiem tra: Thu muc Drive da chia se cong khai? API key dung? Google Drive API da bat?' -ForegroundColor Yellow
+    Write-Host '  Kiem tra: Chi muc con ton tai? Thu muc da chia se cong khai? Drive co gioi han tai?' -ForegroundColor Yellow
     exit 1
 }
 

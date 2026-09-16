@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param([Parameter(Mandatory=$true)][string]$FolderId,
-      [Parameter(Mandatory=$true)][string]$ApiKey,
+      [string]$ApiKey,
       [string]$ManifestId)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'GoogleDrive-ReleaseApi.ps1')
@@ -18,7 +18,9 @@ try {
     $null = Read-DriveManifest $id $ApiKey
     $path = Join-Path $PSScriptRoot '..\TTSK Dim Plates\TTSK Dim Plates\App.config'
     [xml]$xml = Get-Content -LiteralPath $path -Raw
-    foreach ($pair in @(@('GoogleDriveManifestId',$id), @('GoogleDriveApiKey',$ApiKey), @('GoogleDriveFolderId',$FolderId))) {
+    $oldKey = $xml.SelectSingleNode("/configuration/appSettings/add[@key='GoogleDriveApiKey']")
+    if ($oldKey) { $null = $oldKey.ParentNode.RemoveChild($oldKey) }
+    foreach ($pair in @(@('GoogleDriveManifestId',$id), @('GoogleDriveFolderId',$FolderId))) {
         $node = $xml.SelectSingleNode("/configuration/appSettings/add[@key='$($pair[0])']")
         if (!$node) { $node = $xml.CreateElement('add'); $node.SetAttribute('key', $pair[0]); $null = $xml.configuration.appSettings.AppendChild($node) }
         $node.SetAttribute('value', $pair[1])

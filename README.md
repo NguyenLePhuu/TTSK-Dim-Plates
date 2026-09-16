@@ -16,38 +16,38 @@ The recommended distribution for end users is the official **GitHub Release pack
 4. Run `TTSK Dim Plates.exe` to start the application.
 5. (Optional) Create a Windows shortcut to the extracted EXE. Developers using a repository checkout can also use `Tao_Phim_Tat_Desktop.bat`; this script is not included in the Release ZIP.
 6. **Automatic Updates:** When a new official release is published, the version indicator (e.g. `v1.0.0 ↑`) appears on the top bar. Click it to view release notes and update automatically without losing personal configurations (`theme.cfg`, `shortcut.cfg`, `auto_section.cfg`).
-7. (For Developers) Double-click `Cap_Nhat_Portable.bat` in the root folder anytime you edit code to automatically compile the latest Release x64 build and update the `portable` package without opening Visual Studio.
+7. (For Developers) Double-click `update/Cap_Nhat_Portable.bat` in the update folder anytime you edit code to automatically compile the latest Release x64 build and update the `portable` package without opening Visual Studio.
 
 ## Auto Update and Release Workflow
 
 - **End-User In-App Updates:** Each time the application opens, it checks the latest public GitHub Release in the background after the UI appears. A highlighted download arrow with a green dot appears at the bottom right when a new release is available. One click starts download, verification, update and restart; a progress dialog allows cancellation during download. Clicking the version label performs a manual check. Busy drawing operations block applying an update. A separate worker verifies the package, waits for a clean application exit, backs up managed files, replaces them individually, verifies the result and restarts. A durable journal supports rollback/recovery; the whole directory is not an atomic filesystem transaction.
 - **Bootstrap from Legacy Versions:** Existing portable installations that do not have the updater service must be updated manually once by copying the new files over the existing directory (keeping existing `.cfg` files). After this bootstrap, subsequent updates are fully automatic.
 - **Developer Release Flow:**
-  `Developer edits code → Cap_Nhat_Portable.bat → Rebuilds Release x64 → Verifies SHA-256 → Commits and pushes to current branch`.
+  `Developer edits code → update/Cap_Nhat_Portable.bat → Rebuilds Release x64 → Verifies SHA-256 → Commits and pushes to current branch`.
   When runtime files are pushed to `main`, GitHub Actions packages the committed runtime bytes, generates hashes, verifies uploaded assets in a draft and publishes a stable Release (`v<prefix>.<run_number - fixed reset offset>`). The runner does not build the Tekla project or sign the EXE. SHA-256 checks integrity; it is not publisher code signing. Pushes to feature branches and README-only changes do not publish releases.
 
-Edit `release-version-prefix.txt` only for a new major/minor line (for example `1.1`). Patch numbers come from the workflow run number minus the fixed reset offset and can have gaps. Close pushes may replace a pending workflow run; this is not a FIFO queue promising a release for every push. Use `workflow_dispatch` on `main` for bootstrap/retry when no runtime path changed. A rerun verifies existing public assets without overwriting them; an older version cannot replace Latest. Draft conflicts fail instead of being deleted.
+Edit `update/release-version-prefix.txt` only for a new major/minor line (for example `1.1`). Patch numbers are reserved across both sources and queued requests; failed publishing can leave gaps. Close pushes may replace a pending workflow run; this is not a FIFO queue promising a release for every push. Use `workflow_dispatch` on `main` for bootstrap/retry when no runtime path changed. A rerun verifies existing public assets without overwriting them; an older version cannot replace Latest. Draft conflicts fail instead of being deleted.
 
 The updater preserves `theme.cfg`, `shortcut.cfg`, `auto_section.cfg`, logs, unknown local files and .NET user settings including `ManualScaleDenominator`. The existing application may migrate legacy shortcut settings when it starts; the updater does not rewrite them. `TTSK Dim Plates.exe.config`, the dictionary and declared artwork are managed runtime files.
 
 Updater state, logs, journals and backups live under `%LocalAppData%\TTSK Dim Plates\Updater\<installation-hash>`. Downloads use a unique session under `%TEMP%\TTSK-Dim-Plates-Update`. Completed downloads older than seven days are cleaned up, and the latest backup is retained. Pending recovery data is kept. If recovery cannot validate a backup, the app refuses to continue on an inconsistent installation. Keep the journal and backup; if the target EXE cannot start, run the verified staged `TTSK Dim Plates.exe --recovery-update --target "<installation-folder>"` with all target instances closed. If staging is unavailable, restore the recorded backup with the app closed or use a verified Release manually while preserving user files.
 
-Double-click `Cap_Nhat_Portable.bat` to choose **Yes/No**. **No** rebuilds and verifies portable locally without Git fetch/commit/push. **Yes** asks for release notes (multiple lines; type `END` on its own line to finish), then builds, verifies, commits and pushes the current branch. Empty notes cancel publishing. Notes are saved in `release-request.json` in the same commit and become the GitHub Release description; only main publishes a release. Explicit local validation: `Cap_Nhat_Portable.bat -BuildOnly -NoPause`. Noninteractive publishing: `Cap_Nhat_Portable.bat -Publish -ReleaseNotes "Description of changes" -NoPause`. Review the worktree first: publishing stages all repository changes. Local updater tests: `powershell.exe -NoProfile -File scripts\Test-Updater.ps1`.
+Double-click `update/Cap_Nhat_Portable.bat` to choose **Yes/No**. **No** rebuilds and verifies portable locally without Git fetch/commit/push. **Yes** asks for release notes (multiple lines; type `END` on its own line to finish), then builds, verifies, commits and pushes the current branch. Empty notes cancel publishing. Notes are saved in `update/release-request.json` in the same commit and become the GitHub Release description; only main publishes a release. Explicit local validation: `update/Cap_Nhat_Portable.bat -BuildOnly -NoPause`. Noninteractive publishing: `update/Cap_Nhat_Portable.bat -Publish -ReleaseNotes "Description of changes" -NoPause`. Review the worktree first: publishing stages all repository changes. Local updater tests: `powershell.exe -NoProfile -File scripts\Test-Updater.ps1`.
 
-Version reset: `release-run-offset.txt` is a fixed offset of 4. The automatic numbering rule still uses `github.run_number`: run 5 becomes v1.0.1, run 6 becomes v1.0.2, and so on. Do not increment or edit the offset for normal releases. Reruns retain the same version. The reset does not change installed clients' no-downgrade protection: an installation already on v1.0.4 will not auto-install v1.0.1. Such test installations need a manual bootstrap or must wait until the new version exceeds their current version.
+Release numbering: both destinations reserve the next version above published and queued versions. GitHub Actions uses update/release-request.json. The run offset is only for legacy requests.
 
 ## Update from another computer
 
-`Cap_Nhat_Portable.bat` does not depend on OneDrive or a fixed user folder. It finds the repository from the BAT file's own location, so it can run from any local folder on another Windows computer.
+`update/Cap_Nhat_Portable.bat` does not depend on OneDrive or a fixed user folder. It finds the repository from the BAT file's own location, so it can run from any local folder on another Windows computer.
 
 For a development machine that must build and push to GitHub:
 
 1. Install Tekla Structures 2025 SP7, Git for Windows, and Visual Studio or Build Tools with the .NET desktop workload and .NET Framework 4.8 Developer Pack.
 2. Clone the repository: `git clone https://github.com/NguyenLePhuu/TTSK-Dim-Plates.git`.
 3. Sign in to GitHub in Git Credential Manager when Git asks for it, using an account with write access to this repository.
-4. Open the cloned folder and run `Cap_Nhat_Portable.bat`.
+4. Open the cloned folder and run `update/Cap_Nhat_Portable.bat`.
 
-The script builds in an isolated temporary folder, refreshes every runtime file in `portable`, verifies SHA-256 for each copied file, then commits, pushes, and compares the local commit with the remote branch (`origin/$branch`). It reports success only after those checks pass. If Tekla is installed outside the standard location, run `Cap_Nhat_Portable.bat -TeklaBinPath "D:\Tekla\2025.0\bin"`.
+The script builds in an isolated temporary folder, refreshes every runtime file in `portable`, verifies SHA-256 for each copied file, then commits, pushes, and compares the local commit with the remote branch (`origin/$branch`). It reports success only after those checks pass. If Tekla is installed outside the standard location, run `update/Cap_Nhat_Portable.bat -TeklaBinPath "D:\Tekla\2025.0\bin"`.
 
 A downloaded ZIP or a copied `portable` folder can run the application, but cannot push source changes because it has no Git history or GitHub credentials.
 

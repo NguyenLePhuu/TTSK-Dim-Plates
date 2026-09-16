@@ -7,6 +7,10 @@
     $github.Version = $drive.Version
     Assert-Equal 'GitHub' ([TTSK_AutoDim_Plates.Updater.UpdateSources]::SelectNewest($github,$drive).Source) 'Equal versions prefer GitHub'
     Assert-True ([TTSK_AutoDim_Plates.Updater.UpdateSources]::IsDriveMediaUrl($drive.ZipDownloadUrl)) 'Generated media URL accepted'
+    Assert-True (!$drive.ZipDownloadUrl.Contains('public_key') -and !$drive.ZipDownloadUrl.Contains('key=')) 'No API key in client URL'
+    foreach ($url in @('https://drive.usercontent.google.com.evil.test/download?id=abc&export=download','http://drive.usercontent.google.com/download?id=abc&export=download','https://user@drive.usercontent.google.com/download?id=abc&export=download','https://drive.usercontent.google.com:444/download?id=abc&export=download','https://drive.usercontent.google.com/download?id=abc&export=download&key=secret','https://drive.usercontent.google.com/download?id=abc&export=download#fragment')) {
+        Assert-True (![TTSK_AutoDim_Plates.Updater.UpdateSources]::IsDriveMediaUrl($url)) 'Reject unsafe public download URL'
+    }
     foreach ($url in @('http://www.googleapis.com/drive/v3/files/abc?alt=media&key=x', 'https://www.googleapis.com.evil.test/drive/v3/files/abc?alt=media&key=x', 'https://www.googleapis.com:444/drive/v3/files/abc?alt=media&key=x', 'https://user@www.googleapis.com/drive/v3/files/abc?alt=media&key=x', 'https://www.googleapis.com/drive/v3/files/abc?alt=media&key=x&other=y', 'https://www.googleapis.com/drive/v3/files/abc?alt=media&key=x#fragment')) {
         Assert-True (![TTSK_AutoDim_Plates.Updater.UpdateSources]::IsDriveMediaUrl($url)) "Reject $url"
     }
@@ -74,16 +78,20 @@ Run-Test 'Drive publisher (no network)' 'Public download verified before index c
     $sandbox = Join-Path $testRunDir 'drive-publisher'
     $scriptDir = Join-Path $sandbox 'scripts'
     $configDir = Join-Path $sandbox 'TTSK Dim Plates\TTSK Dim Plates'
-    New-Item -ItemType Directory -Path $scriptDir,$configDir | Out-Null
+    New-Item -ItemType Directory -Path $scriptDir,$configDir,(Join-Path $sandbox 'update') | Out-Null
     foreach ($name in @('GoogleDrive-ReleaseApi.ps1','Publish-GoogleDrivePortableRelease.ps1','Resolve-PortableReleaseVersion.ps1')) {
         Copy-Item -LiteralPath (Join-Path $repoRoot "scripts\$name") -Destination $scriptDir
     }
     [IO.File]::WriteAllText((Join-Path $configDir 'App.config'), '<configuration><appSettings><add key="GoogleDriveFolderId" value="folder"/><add key="GoogleDriveManifestId" value="index"/><add key="GoogleDriveApiKey" value="fake_key"/></appSettings></configuration>')
-    [IO.File]::WriteAllText((Join-Path $sandbox 'release-version-prefix.txt'), '1.0')
+    [IO.File]::WriteAllText((Join-Path $sandbox 'update/release-version-prefix.txt'), '1.0')
     $oldToken = $env:TTSK_GOOGLE_DRIVE_ACCESS_TOKEN
     $env:TTSK_GOOGLE_DRIVE_ACCESS_TOKEN = 'fake_test_token'
     function Invoke-WebRequest {
-        param($Uri,$Method,$Body,$Headers,$TimeoutSec,$MaximumRedirection,$ContentType,$ErrorAction,[switch]$UseBasicParsing)
+        param($Uri,$Method,$Body,$Headers,$TimeoutSec,$MaximumRedirection,$ContentType,$ErrorAction,$OutFile,[switch]$UseBasicParsing)
+        if ($Uri -like 'https://drive.usercontent.google.com/*') {
+            $value = Invoke-RestMethod -Uri $Uri -Method $Method -Headers $Headers -OutFile $OutFile
+            return @{ Content = ($value | ConvertTo-Json -Compress) }
+        }
         if ($Method -eq 'PATCH') { $id='index' } else { $global:driveMockCounter++; $id='asset_' + $global:driveMockCounter }
         return @{Headers=@{Location="https://www.googleapis.com/upload/drive/v3/files/${id}?session=test"}}
     }
@@ -93,6 +101,7 @@ Run-Test 'Drive publisher (no network)' 'Public download verified before index c
         if ($Uri -like 'https://api.github.com/*') { return @{tag_name='v1.0.9';body=''} }
         if ($Method -eq 'GET') { Assert-True (!$Headers.ContainsKey('Authorization')) 'Public Drive reads must not require user login' }
         $id=([Uri]$Uri).Segments[-1]
+        if ($Uri -match '[?]id=([^&]+)') { $id=$Matches[1] }
         if ($Method -eq 'PUT') {
             if ($id -eq 'index') { $global:driveIndexWrites++; $global:driveIndex = Get-Content -LiteralPath $InFile -Raw | ConvertFrom-Json }
             else { $global:driveAssets[$id]=$InFile }

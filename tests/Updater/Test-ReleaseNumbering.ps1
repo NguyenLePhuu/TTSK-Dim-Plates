@@ -1,17 +1,22 @@
-Run-Test 'Release numbering' 'Alternate GitHub/Drive with queued Actions, failures and local reservations' {
+﻿Run-Test 'Release numbering' 'Alternate GitHub/Drive with queued Actions, failures and local reservations' {
     $sandbox = Join-Path $testRunDir 'version-numbering'
     $scriptDir = Join-Path $sandbox 'scripts'
     $configDir = Join-Path $sandbox 'TTSK Dim Plates\TTSK Dim Plates'
-    New-Item -ItemType Directory -Path $scriptDir,$configDir | Out-Null
+    New-Item -ItemType Directory -Path $scriptDir,$configDir,(Join-Path $sandbox 'update') | Out-Null
     foreach ($name in @('GoogleDrive-ReleaseApi.ps1','Resolve-PortableReleaseVersion.ps1')) {
         Copy-Item -LiteralPath (Join-Path $repoRoot "scripts\$name") -Destination $scriptDir
     }
     [IO.File]::WriteAllText((Join-Path $configDir 'App.config'), '<configuration><appSettings><add key="GoogleDriveManifestId" value="index"/><add key="GoogleDriveApiKey" value="fake_key"/></appSettings></configuration>')
-    [IO.File]::WriteAllText((Join-Path $sandbox 'release-version-prefix.txt'), '1.0')
+    [IO.File]::WriteAllText((Join-Path $sandbox 'update/release-version-prefix.txt'), '1.0')
     $resolver = Join-Path $scriptDir 'Resolve-PortableReleaseVersion.ps1'
     $ledger = Join-Path $sandbox 'version-reservation.json'
     $global:numberGithub='1.0.9'; $global:numberDrive='1.0.10'; $global:numberQueued=$null
     $global:numberBody=''; $global:numberOffline=$false; $global:numberDriveOffline=$false
+    function Invoke-WebRequest {
+        param($Uri,$Method,$Headers,$TimeoutSec,$MaximumRedirection,$ErrorAction,[switch]$UseBasicParsing)
+        $value = Invoke-RestMethod -Uri $Uri -Method $Method -Headers $Headers
+        return @{Content=($value | ConvertTo-Json -Compress)}
+    }
     function Invoke-RestMethod {
         param($Uri,$Method,$Headers,$TimeoutSec,$MaximumRedirection,$ErrorAction)
         if ($global:numberOffline) { throw 'Simulated network failure' }

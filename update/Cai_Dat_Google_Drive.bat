@@ -40,7 +40,7 @@ if not defined CLIENT_JSON (
 
 echo Dang bat dau dang nhap Google...
 echo.
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\Connect-GoogleDrivePublisher.ps1" -ClientJson "!CLIENT_JSON!"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0..\scripts\Connect-GoogleDrivePublisher.ps1" -ClientJson "!CLIENT_JSON!"
 if not "%ERRORLEVEL%"=="0" (
     echo.
     echo [LOI] Dang nhap Google that bai.
@@ -52,10 +52,10 @@ echo.
 echo [OK] Dang nhap Google thanh cong!
 echo.
 echo Dang khoi tao chi muc Google Drive...
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\Initialize-GoogleDriveUpdates.ps1" -FolderId "1sTL3OSwqUFrCuXqr0fhjzsiQZQtxQqsh" -ApiKey "AIzaSyAR-NPgIMIHKn8cCzwleUW6qH36aN-ZuHQ"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0..\scripts\Initialize-GoogleDriveUpdates.ps1" -FolderId "1sTL3OSwqUFrCuXqr0fhjzsiQZQtxQqsh"
 if not "%ERRORLEVEL%"=="0" (
     echo.
-    echo [CANH BAO] Thu muc Drive hoac API key can kiem tra lai.
+    echo [CANH BAO] Kiem tra chi muc va quyen doc cong khai cua thu muc Drive.
     pause
     exit /b 1
 )

@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param([Parameter(Mandatory=$true)][string]$Version,
       [Parameter(Mandatory=$true)][string]$CommitSha,
       [Parameter(Mandatory=$true)][string]$PackageDirectory)
@@ -65,7 +65,7 @@ if ($existing.Count -eq 1) {
     $refs = @(Invoke-Gh @('api', "repos/$repo/git/matching-refs/tags/$tag") | ConvertFrom-Json)
     if (@($refs | Where-Object { $_.ref -ceq "refs/tags/$tag" }).Count -gt 0) { Assert-TagCommit }
     $notes = Join-Path $PackageDirectory 'release-notes.txt'
-    $requestPath = Join-Path $PSScriptRoot '..\release-request.json'
+    $requestPath = Join-Path $PSScriptRoot '..\update\release-request.json'
     if (!(Test-Path -LiteralPath $requestPath)) { throw 'Missing release-request.json. Run Update-Portable and choose Yes with release notes.' }
     $request = Get-Content -LiteralPath $requestPath -Raw | ConvertFrom-Json
     if ([string]::IsNullOrWhiteSpace($request.notes)) { throw 'Release notes must not be empty.' }

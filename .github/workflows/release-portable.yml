@@ -1,11 +1,11 @@
-name: Release Portable
+﻿name: Release Portable
 on:
   push:
     branches:
       - main
     paths:
       - 'portable/**'
-      - 'release-request.json'
+      - 'update/release-request.json'
       - '!portable/README.txt'
       - '!portable/**/*.cfg'
       - '!portable/**/*.bat'
@@ -38,14 +38,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $request = Get-Content -LiteralPath release-request.json -Raw | ConvertFrom-Json
+          $request = Get-Content -LiteralPath update/release-request.json -Raw | ConvertFrom-Json
           if ($request.PSObject.Properties['version']) {
             $version = & ./scripts/Resolve-PortableReleaseVersion.ps1 -RequestedVersion $request.version -CommitSha $env:GITHUB_SHA
           } else {
             # Compatibility with requests created before version reservation was introduced.
-            $prefix = (Get-Content -LiteralPath release-version-prefix.txt -Raw).Trim()
+            $prefix = (Get-Content -LiteralPath update/release-version-prefix.txt -Raw).Trim()
             if ($prefix -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') { throw 'Invalid version prefix.' }
-            $offsetText = (Get-Content -LiteralPath release-run-offset.txt -Raw).Trim()
+            $offsetText = (Get-Content -LiteralPath update/release-run-offset.txt -Raw).Trim()
             if ($offsetText -notmatch '^(0|[1-9][0-9]*)$') { throw 'Invalid release run offset.' }
             $patch = [long]$env:RELEASE_RUN - [long]$offsetText
             if ($patch -lt 1) { throw 'This run predates the version reset; start a new run.' }

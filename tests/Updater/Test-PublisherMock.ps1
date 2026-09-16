@@ -1,4 +1,4 @@
-Run-Test 'Publisher mock (no network)' 'Public rerun verified, conflicting draft untouched, old draft cannot become latest, upload failure stays draft' {
+﻿Run-Test 'Publisher mock (no network)' 'Public rerun verified, conflicting draft untouched, old draft cannot become latest, upload failure stays draft' {
     $global:ttskMockCommit=(git rev-parse HEAD).Trim()
     $global:ttskMockPackage=Join-Path $testRunDir 'inventory_pkg'
     $global:ttskMockCalls=[Collections.Generic.List[string]]::new()
@@ -7,19 +7,24 @@ Run-Test 'Publisher mock (no network)' 'Public rerun verified, conflicting draft
     $publisherSandbox = Join-Path $testRunDir 'github-publisher'
     $publisherScripts = Join-Path $publisherSandbox 'scripts'
     $publisherConfig = Join-Path $publisherSandbox 'TTSK Dim Plates\TTSK Dim Plates'
-    New-Item -ItemType Directory -Path $publisherScripts,$publisherConfig | Out-Null
+    New-Item -ItemType Directory -Path $publisherScripts,$publisherConfig,(Join-Path $publisherSandbox 'update') | Out-Null
     foreach ($name in @('Publish-GitHubPortableRelease.ps1','Resolve-PortableReleaseVersion.ps1','GoogleDrive-ReleaseApi.ps1')) {
         Copy-Item -LiteralPath (Join-Path $repoRoot "scripts\$name") -Destination $publisherScripts
     }
     [IO.File]::WriteAllText((Join-Path $publisherConfig 'App.config'), '<configuration><appSettings><add key="GoogleDriveManifestId" value="index"/><add key="GoogleDriveApiKey" value="fake_key"/></appSettings></configuration>')
-    [IO.File]::WriteAllText((Join-Path $publisherSandbox 'release-version-prefix.txt'), '1.0')
-    [IO.File]::WriteAllText((Join-Path $publisherSandbox 'release-request.json'), '{"notes":"fixture notes"}')
+    [IO.File]::WriteAllText((Join-Path $publisherSandbox 'update/release-version-prefix.txt'), '1.0')
+    [IO.File]::WriteAllText((Join-Path $publisherSandbox 'update/release-request.json'), '{"notes":"fixture notes"}')
     function Invoke-RestMethod {
         param($Uri,$Method,$Headers,$TimeoutSec,$MaximumRedirection,$ErrorAction)
         if ($Uri -like 'https://api.github.com/*') { return @{tag_name='v1.0.49';body=''} }
         if ($global:ttskMockMode -eq 'driveoffline') { throw 'Drive offline' }
         $driveVersion = if ($global:ttskMockMode -eq 'driveconflict') {'1.0.50'} else {'1.0.49'}
         return [pscustomobject]@{schemaVersion=1;product='TTSK Dim Plates';version=$driveVersion;notes='';zipFileId='zip';sha256FileId='sha';zipSizeBytes=1024;sha256SizeBytes=96}
+    }
+    function Invoke-WebRequest {
+        param($Uri,$Method,$Headers,$TimeoutSec,$MaximumRedirection,$ErrorAction,[switch]$UseBasicParsing)
+        $value = Invoke-RestMethod -Uri $Uri -Method $Method -Headers $Headers
+        return @{Content=($value | ConvertTo-Json -Compress)}
     }
     function gh {
         $a=@($args); $global:LASTEXITCODE=0

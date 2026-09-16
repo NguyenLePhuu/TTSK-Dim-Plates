@@ -83,7 +83,7 @@ namespace TTSK_AutoDim_Plates.Updater
                     response.StatusCode == HttpStatusCode.TemporaryRedirect ||
                     (int)response.StatusCode == 308)
                 {
-                    if (isDrive) { response.Dispose(); throw new WebException("Google Drive media redirect is not supported; verify public API access."); }
+                    if (isDrive) { response.Dispose(); throw new WebException("Google Drive download requires direct public access."); }
                     Uri redirectUri = response.Headers.Location;
                     if (redirectUri == null)
                     {
