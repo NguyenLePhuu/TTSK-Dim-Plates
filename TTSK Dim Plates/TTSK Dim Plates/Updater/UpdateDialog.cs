@@ -252,6 +252,8 @@ namespace TTSK_AutoDim_Plates.Updater
             btnOpenReleasePage.Click += (s, e) =>
             {
                 string url = "https://github.com/NguyenLePhuu/TTSK-Dim-Plates/releases/latest";
+                if (_releaseInfo?.Source == "GoogleDrive" && UpdateSources.IsDriveMediaUrl(_releaseInfo.ZipDownloadUrl))
+                    url = "https://drive.google.com/file/d/" + new Uri(_releaseInfo.ZipDownloadUrl).Segments[4] + "/view";
                 try
                 {
                     Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
@@ -317,6 +319,7 @@ namespace TTSK_AutoDim_Plates.Updater
 
             _isDownloading = true;
             btnUpdate.Enabled = false;
+            btnUpdate.Text = "Đang cập nhật...";
             btnOpenReleasePage.Enabled = false;
             btnLater.Text = "Hủy bỏ";
             progressBar.Visible = true;
@@ -325,7 +328,7 @@ namespace TTSK_AutoDim_Plates.Updater
             _cts = new CancellationTokenSource();
             var progress = new Progress<UpdateDownloadProgress>(report =>
             {
-                if (IsDisposed) return;
+                if (IsDisposed || !_isDownloading) return;
                 if (_releaseInfo.Version != null)
                 {
                     string size = _releaseInfo.ZipSizeBytes > 0 ? string.Format(" (~{0:F1} MB)", _releaseInfo.ZipSizeBytes / (1024.0 * 1024.0)) : "";
@@ -348,6 +351,7 @@ namespace TTSK_AutoDim_Plates.Updater
                 {
                     lblStatus.Text = "Đã hủy bỏ tải cập nhật.";
                     btnUpdate.Enabled = true;
+                    btnUpdate.Text = "↓   Cập nhật ngay";
                     btnOpenReleasePage.Enabled = true;
                     btnLater.Text = "Để sau";
                     progressBar.Visible = false;
@@ -359,14 +363,10 @@ namespace TTSK_AutoDim_Plates.Updater
             {
                 if (!IsDisposed)
                 {
-                    MessageBox.Show(
-                        string.Format("Tải bản cập nhật thất bại: {0}", ex.Message),
-                        "Lỗi tải cập nhật",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Error
-                    );
-                    lblStatus.Text = "Tải thất bại.";
+                    UpdateSecurity.Log(Application.StartupPath, "Prepare update failed: " + ex.Message);
+                    lblStatus.Text = "Chưa tải được bản cập nhật. Bấm Thử lại khi bạn sẵn sàng.";
                     btnUpdate.Enabled = true;
+                    btnUpdate.Text = "Thử lại";
                     btnOpenReleasePage.Enabled = true;
                     btnLater.Text = "Để sau";
                     progressBar.Visible = false;
@@ -386,6 +386,7 @@ namespace TTSK_AutoDim_Plates.Updater
                     MessageBoxIcon.Information
                 );
                 btnUpdate.Enabled = true;
+                btnUpdate.Text = "↓   Cập nhật ngay";
                 btnOpenReleasePage.Enabled = true;
                 btnLater.Text = "Để sau";
                 _isDownloading = false;

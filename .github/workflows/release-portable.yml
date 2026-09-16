@@ -35,15 +35,22 @@ jobs:
         shell: pwsh
         env:
           RELEASE_RUN: ${{ github.run_number }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $prefix = (Get-Content -LiteralPath release-version-prefix.txt -Raw).Trim()
-          if ($prefix -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') { throw 'Invalid version prefix.' }
-          $offsetText = (Get-Content -LiteralPath release-run-offset.txt -Raw).Trim()
-          if ($offsetText -notmatch '^(0|[1-9][0-9]*)$') { throw 'Invalid release run offset.' }
-          $patch = [long]$env:RELEASE_RUN - [long]$offsetText
-          if ($patch -lt 1) { throw 'This run predates the version reset; start a new run.' }
-          $version = "$prefix.$patch"
+          $request = Get-Content -LiteralPath release-request.json -Raw | ConvertFrom-Json
+          if ($request.PSObject.Properties['version']) {
+            $version = & ./scripts/Resolve-PortableReleaseVersion.ps1 -RequestedVersion $request.version -CommitSha $env:GITHUB_SHA
+          } else {
+            # Compatibility with requests created before version reservation was introduced.
+            $prefix = (Get-Content -LiteralPath release-version-prefix.txt -Raw).Trim()
+            if ($prefix -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') { throw 'Invalid version prefix.' }
+            $offsetText = (Get-Content -LiteralPath release-run-offset.txt -Raw).Trim()
+            if ($offsetText -notmatch '^(0|[1-9][0-9]*)$') { throw 'Invalid release run offset.' }
+            $patch = [long]$env:RELEASE_RUN - [long]$offsetText
+            if ($patch -lt 1) { throw 'This run predates the version reset; start a new run.' }
+            $version = & ./scripts/Resolve-PortableReleaseVersion.ps1 -MinimumVersion "$prefix.$patch" -CommitSha $env:GITHUB_SHA
+          }
           $null = [version]$version
           "RELEASE_VERSION=$version" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
           & ./scripts/Build-GitHubReleasePackage.ps1 -Version $version -Tag "v$version" -CommitSha $env:GITHUB_SHA -OutDir '.codex-artifacts/release-package'

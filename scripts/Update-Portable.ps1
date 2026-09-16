@@ -3,6 +3,7 @@ param(
     [switch]$NoPause,
     [switch]$BuildOnly,
     [switch]$Publish,
+    [ValidateSet('GitHub','GoogleDrive')][string]$Destination,
     [string]$ReleaseNotes,
     [string]$TeklaBinPath
 )
@@ -69,9 +70,22 @@ function Copy-Verified([string]$Source, [string]$Destination) {
 try {
     if ($BuildOnly -and $Publish) { throw 'Khong dung BuildOnly cung Publish.' }
     if (!$BuildOnly -and !$Publish) {
-        do { $choice = Read-Host 'Ban co muon day len GitHub va phat hanh khong? (Yes/No)' }
+        do { $choice = Read-Host 'Ban co muon tai len va phat hanh ban cap nhat khong? (Yes/No)' }
         while ($choice -notmatch '^(?i:yes|no|y|n)$')
         $BuildOnly = $choice -match '^(?i:no|n)$'
+    }
+    if (!$BuildOnly -and !$Destination) {
+        do { $sourceChoice = Read-Host 'Chon noi phat hanh: 1 = GitHub, 2 = Google Drive' } while ($sourceChoice -notin @('1','2'))
+        $Destination = if ($sourceChoice -eq '2') { 'GoogleDrive' } else { 'GitHub' }
+    }
+    $publishGitHub = !$BuildOnly -and $Destination -eq 'GitHub'
+    if (!$BuildOnly -and $Destination -eq 'GoogleDrive') {
+        . (Join-Path $PSScriptRoot 'GoogleDrive-ReleaseApi.ps1')
+        $driveSettings = Get-DriveUpdateSettings
+        if (!$driveSettings['GoogleDriveFolderId'] -or !$driveSettings['GoogleDriveManifestId'] -or !$driveSettings['GoogleDriveApiKey']) {
+            throw 'Chua cau hinh Google Drive. Xem docs/GOOGLE_DRIVE_UPDATES.md va chay scripts/Initialize-GoogleDriveUpdates.ps1.'
+        }
+        $null = Get-DriveAccessToken
     }
     if (!$BuildOnly -and [string]::IsNullOrWhiteSpace($ReleaseNotes)) {
         Write-Host 'Nhap noi dung ban phat hanh / nhung gi duoc cap nhat. Nhap END tren dong rieng de ket thuc.'
@@ -90,7 +104,7 @@ try {
     Write-Host '[1/4] Kiem tra Git va cong cu build...'
     $branch = ''
     $syncError = $null
-    if (!$BuildOnly) {
+    if ($publishGitHub) {
         try {
             Get-Command git -ErrorAction Stop | Out-Null
             $branch = Invoke-Git @('symbolic-ref', '--quiet', '--short', 'HEAD')
@@ -184,11 +198,19 @@ try {
     Write-Host "Portable da xac minh: $($files.Count) file runtime."
     if ($BuildOnly) {
         Write-Host '[HOAN TAT] BuildOnly: portable moi tu source local; khong push GitHub.'
+    } elseif ($Destination -eq 'GoogleDrive') {
+        Write-Host '[4/4] Chon version moi nhat tu hai nguon, dong goi va phat hanh Google Drive...'
+        $version = & (Join-Path $PSScriptRoot 'Resolve-PortableReleaseVersion.ps1') -Reserve
+        $head = Invoke-Git @('rev-parse','HEAD')
+        $package = Join-Path $run 'release-package'
+        & (Join-Path $PSScriptRoot 'Build-GitHubReleasePackage.ps1') -PortableDir $portable -Version $version -Tag "v$version" -CommitSha $head -CreatedUtc ([DateTime]::UtcNow.ToString('o')) -OutDir $package
+        & (Join-Path $PSScriptRoot 'Publish-GoogleDrivePortableRelease.ps1') -Version $version -PackageDirectory $package -ReleaseNotes $ReleaseNotes
     } else {
         if ($syncError) { throw "Portable da cap nhat, nhung GitHub CHUA dong bo: $syncError" }
+        $version = & (Join-Path $PSScriptRoot 'Resolve-PortableReleaseVersion.ps1') -Reserve
         Write-Host "[4/4] Commit va push nhanh $branch len origin..."
         # Notes belong to the same commit as the verified portable, never to a previous release.
-        $request = [ordered]@{ requestId = [guid]::NewGuid().ToString('N'); notes = $ReleaseNotes; createdUtc = [DateTime]::UtcNow.ToString('o') }
+        $request = [ordered]@{ requestId = [guid]::NewGuid().ToString('N'); version = $version; notes = $ReleaseNotes; createdUtc = [DateTime]::UtcNow.ToString('o') }
         [IO.File]::WriteAllText((Join-Path $repo 'release-request.json'), ($request | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
         Invoke-Git @('add', '--all') | Write-Host
         if (Invoke-Git @('diff', '--cached', '--name-only')) { Invoke-Git @('commit', '-m', ('Cap nhat source va portable ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))) | Write-Host }

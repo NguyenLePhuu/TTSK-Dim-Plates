@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
@@ -17,6 +17,7 @@ namespace TTSK_AutoDim_Plates.Updater
     /// </summary>
     public sealed class GitHubReleaseInfo
     {
+        public string Source { get; set; } = "GitHub";
         public string TagName { get; set; }
         public UpdateVersion Version { get; set; }
         public string Name { get; set; }

@@ -104,6 +104,8 @@ $stable = @(Invoke-Gh @('api', "repos/$repo/releases?per_page=100", '--paginate'
 foreach ($item in $stable) {
     if ($item.tag_name -match '^v(\d+\.\d+\.\d+)$' -and [version]$Matches[1] -ge $numericVersion) { throw 'A newer/equal stable release already exists. Keep this older draft unpublished.' }
 }
+# Never publish a draft using the current Drive version number for different content.
+$null = & (Join-Path $PSScriptRoot 'Resolve-PortableReleaseVersion.ps1') -RequestedVersion $Version -CommitSha $CommitSha
 Invoke-Gh @('release','edit',$tag,'--repo',$repo,'--draft=false','--prerelease=false','--latest') | Out-Null
 Assert-TagCommit
 Write-Host "Published and verified $tag at $CommitSha."

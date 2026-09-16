@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Drawing;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -16,6 +16,7 @@ namespace TTSK_AutoDim_Plates
         private bool _updateCheckRunning;
         private DownloadUpdateButton _downloadUpdateButton;
         private bool _updateDialogOpen;
+        private string _updateCheckFeedback;
 
         /// <summary>
         /// Kiểm tra xem ứng dụng có đang rảnh rỗi để có thể áp dụng cập nhật an toàn hay không.
@@ -84,6 +85,7 @@ namespace TTSK_AutoDim_Plates
                 {
                     _pendingUpdateRelease = new GitHubReleaseInfo
                     {
+                        Source = cached.Source ?? "GitHub",
                         TagName = cached.LatestTagName,
                         Version = cachedVer,
                         Body = cached.ReleaseNotes,
@@ -146,7 +148,7 @@ namespace TTSK_AutoDim_Plates
             else
             {
                 mainVersionLabel.Text = curVerStr;
-                _versionToolTip.SetToolTip(mainVersionLabel, string.Format("Phiên bản hiện tại: {0}\r\nBấm vào để kiểm tra cập nhật.", curVerStr));
+                _versionToolTip.SetToolTip(mainVersionLabel, _updateCheckFeedback ?? string.Format("Phiên bản hiện tại: {0}\r\nBấm vào để kiểm tra cập nhật.", curVerStr));
             }
 
             UpdateVersionLabelTheme();
@@ -154,7 +156,7 @@ namespace TTSK_AutoDim_Plates
             {
                 _downloadUpdateButton.Available = _pendingUpdateRelease != null;
                 _downloadUpdateButton.Invalidate();
-                _versionToolTip.SetToolTip(_downloadUpdateButton, _pendingUpdateRelease == null ? "Đang dùng bản mới nhất • Bấm để kiểm tra lại" :
+                _versionToolTip.SetToolTip(_downloadUpdateButton, _pendingUpdateRelease == null ? (_updateCheckFeedback ?? "Bấm để kiểm tra cập nhật phần mềm") :
                     "Có bản " + _pendingUpdateRelease.Version.ToDisplayString() + " • Bấm một lần để tải, cập nhật và khởi động lại");
             }
         }
@@ -189,17 +191,18 @@ namespace TTSK_AutoDim_Plates
         /// </summary>
         private async Task CheckForUpdatesManualAsync(bool startImmediately = false)
         {
-            if (mainVersionLabel == null || _updateCheckRunning || _updaterHandoffClosing) return;
+            if (mainVersionLabel == null || _updateManager == null || _updateCheckRunning || _updaterHandoffClosing || _updateDialogOpen) return;
             _updateCheckRunning = true;
-
-            string oldText = mainVersionLabel.Text;
-            mainVersionLabel.Text = "Checking...";
+            _updateCheckFeedback = null;
+            mainVersionLabel.Text = "Đang kiểm tra...";
             mainVersionLabel.Enabled = false;
+            if (_downloadUpdateButton != null) _downloadUpdateButton.Enabled = false;
 
             try
             {
                 GitHubReleaseInfo release = await _updateManager.CheckForUpdatesAsync(true, _updaterLifetime.Token);
-                if (IsDisposed) return;
+                if (IsDisposed || _updaterLifetime.IsCancellationRequested) return;
+                // Provider failures are diagnostics only. Present a single combined result.
                 if (release != null && release.Version > _updateManager.CurrentVersion)
                 {
                     _pendingUpdateRelease = release;
@@ -209,25 +212,15 @@ namespace TTSK_AutoDim_Plates
                 else
                 {
                     _pendingUpdateRelease = null;
-                    UpdateVersionLabelIndicator();
-                    MessageBox.Show(
-                        string.Format("Bạn đang sử dụng phiên bản mới nhất ({0}).\r\nChưa có bản cập nhật mới trên hệ thống.", _updateManager.CurrentVersion.ToDisplayString()),
-                        "Kiểm tra cập nhật",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Information
-                    );
+                    ShowUpdateCheckFeedback("Chưa tìm thấy bản cập nhật mới.\r\nBạn có thể tiếp tục sử dụng TTSK.");
                 }
             }
+            catch (OperationCanceledException) when (_updaterLifetime.IsCancellationRequested) { }
             catch (Exception ex)
             {
                 if (IsDisposed) return;
-                UpdateVersionLabelIndicator();
-                MessageBox.Show(
-                    string.Format("Kiểm tra cập nhật thất bại: {0}\r\nHãy kiểm tra kết nối mạng Internet hoặc truy cập trực tiếp trang GitHub Release.", ex.Message),
-                    "Lỗi kết nối cập nhật",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning
-                );
+                UpdateSecurity.Log(Application.StartupPath, "Manual update check: " + ex.Message);
+                ShowUpdateCheckFeedback("Chưa thể kiểm tra cập nhật lúc này.\r\nBạn có thể thử lại sau.");
             }
             finally
             {
@@ -235,8 +228,18 @@ namespace TTSK_AutoDim_Plates
                 if (!IsDisposed && mainVersionLabel != null)
                 {
                     mainVersionLabel.Enabled = true;
+                    if (_downloadUpdateButton != null) _downloadUpdateButton.Enabled = true;
+                    UpdateVersionLabelIndicator();
                 }
             }
+        }
+
+        private void ShowUpdateCheckFeedback(string message)
+        {
+            _updateCheckFeedback = message;
+            UpdateVersionLabelIndicator();
+            if (Visible && _versionToolTip != null && _downloadUpdateButton != null && _downloadUpdateButton.IsHandleCreated)
+                _versionToolTip.Show(message, _downloadUpdateButton, 0, -48, 6000);
         }
 
         /// <summary>

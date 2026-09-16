@@ -50,3 +50,6 @@ launcher/
 .tmp.driveupload/
 .tmp.drivedownload/
 
+# Google publisher credentials (never ship with portable/source)
+client_secret*.json
+google-oauth.xml

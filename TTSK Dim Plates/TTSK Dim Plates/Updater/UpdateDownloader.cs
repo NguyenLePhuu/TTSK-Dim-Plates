@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
@@ -39,7 +39,9 @@ namespace TTSK_AutoDim_Plates.Updater
             "objects.githubusercontent.com",
             "release-assets.githubusercontent.com",
             "github-releases.githubusercontent.com",
-            "github-production-release-asset-2e65be.s3.amazonaws.com"
+            "github-production-release-asset-2e65be.s3.amazonaws.com",
+            // Google Drive API hosts — dùng cho tải gói cập nhật từ Google Drive
+            "www.googleapis.com"
         };
 
         private static HttpClient CreateDownloadClient()
@@ -64,7 +66,8 @@ namespace TTSK_AutoDim_Plates.Updater
         /// </summary>
         private static async Task<HttpResponseMessage> SendRequestWithSafeRedirectsAsync(HttpClient client, string initialUrl, CancellationToken ct)
         {
-            GitHubReleaseService.ValidateAssetDownloadUrl(initialUrl);
+            bool isDrive = UpdateSources.IsDriveMediaUrl(initialUrl);
+            if (!isDrive) GitHubReleaseService.ValidateAssetDownloadUrl(initialUrl);
             string currentUrl = initialUrl;
             int redirectHops = 0;
 
@@ -80,6 +83,7 @@ namespace TTSK_AutoDim_Plates.Updater
                     response.StatusCode == HttpStatusCode.TemporaryRedirect ||
                     (int)response.StatusCode == 308)
                 {
+                    if (isDrive) { response.Dispose(); throw new WebException("Google Drive media redirect is not supported; verify public API access."); }
                     Uri redirectUri = response.Headers.Location;
                     if (redirectUri == null)
                     {

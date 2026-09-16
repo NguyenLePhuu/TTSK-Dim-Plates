@@ -12,6 +12,7 @@ namespace TTSK_AutoDim_Plates.Updater
 {
     public sealed class UpdateStateCache
     {
+        public string Source { get; set; }
         public string LastCheckUtc { get; set; }
         public string LastAttemptUtc { get; set; }
         public string LatestVersion { get; set; }
@@ -36,6 +37,7 @@ namespace TTSK_AutoDim_Plates.Updater
         private readonly SemaphoreSlim _checkGate = new SemaphoreSlim(1, 1);
 
         public UpdateVersion CurrentVersion { get; }
+        public string LastSourceWarning { get; private set; }
 
         public UpdateManager(string targetDirectory)
         {
@@ -128,7 +130,7 @@ namespace TTSK_AutoDim_Plates.Updater
         }
 
         /// <summary>
-        /// Kiểm tra cập nhật mới nhất từ GitHub.
+        /// Kiểm tra cập nhật mới nhất từ GitHub và Google Drive.
         /// Tự động sử dụng cache nếu chưa hết thời hạn 6 giờ (trừ khi người dùng kiểm tra thủ công).
         /// </summary>
         public async Task<GitHubReleaseInfo> CheckForUpdatesAsync(bool isManualCheck, CancellationToken ct = default(CancellationToken))
@@ -152,6 +154,7 @@ namespace TTSK_AutoDim_Plates.Updater
                         {
                             return new GitHubReleaseInfo
                             {
+                                Source = cached.Source ?? "GitHub",
                                 TagName = cached.LatestTagName,
                                 Version = cachedVer,
                                 Body = cached.ReleaseNotes,
@@ -174,17 +177,20 @@ namespace TTSK_AutoDim_Plates.Updater
             var attempt = cached ?? new UpdateStateCache();
             attempt.LastAttemptUtc = DateTime.UtcNow.ToString("o");
             SaveStateCache(attempt);
-            GitHubReleaseInfo latestRelease = await GitHubReleaseService.GetLatestReleaseAsync(ct).ConfigureAwait(false);
-            if (latestRelease == null) throw new InvalidDataException("GitHub did not return a valid stable release with both assets.");
+            LastSourceWarning = null;
+            GitHubReleaseInfo latestRelease = await UpdateSources.GetLatestAsync(message => { LastSourceWarning += message + " "; UpdateSecurity.Log(_targetDirectory, message); }, ct).ConfigureAwait(false);
+            if (latestRelease == null) throw new InvalidDataException("No valid stable release from configured sources.");
 
             var newCache = new UpdateStateCache
             {
-                LastCheckUtc = DateTime.UtcNow.ToString("o")
+                LastCheckUtc = string.IsNullOrEmpty(LastSourceWarning) ? DateTime.UtcNow.ToString("o") : null,
+                LastAttemptUtc = DateTime.UtcNow.ToString("o")
             };
 
             if (latestRelease != null && latestRelease.Version != null && latestRelease.Version > CurrentVersion)
             {
                 newCache.HasUpdate = true;
+                newCache.Source = latestRelease.Source;
                 newCache.LatestVersion = latestRelease.Version.ToString();
                 newCache.LatestTagName = latestRelease.TagName;
                 newCache.ReleaseNotes = latestRelease.Body;
@@ -208,10 +214,10 @@ namespace TTSK_AutoDim_Plates.Updater
         public async Task<string> DownloadAndPrepareStagingAsync(GitHubReleaseInfo release, IProgress<UpdateDownloadProgress> progress, CancellationToken ct)
         {
             // Dialogs and persisted state may outlive a deleted/replaced release.
-            // Resolve GitHub Latest again at the actual download boundary; never fall back to cached URLs.
+            // Resolve both sources again at the actual download boundary; never fall back to cached URLs.
             var latest = await CheckForUpdatesAsync(true, ct).ConfigureAwait(false);
-            if (latest == null) throw new InvalidDataException("Bạn đã dùng bản mới nhất hiện có trên GitHub. Không cần tải lại.");
-            if (release == null) throw new InvalidDataException("No selected release.");
+            UpdateSources.ValidateDownloadSelection(release, latest, CurrentVersion);
+            release.Source = latest.Source;
             release.TagName = latest.TagName;
             release.Version = latest.Version;
             release.Body = latest.Body;
@@ -222,8 +228,7 @@ namespace TTSK_AutoDim_Plates.Updater
             release.Sha256SizeBytes = latest.Sha256SizeBytes;
             if (release == null || release.Version == null || release.TagName != "v" + release.Version || release.Version <= CurrentVersion)
                 throw new InvalidDataException("Invalid selected release.");
-            GitHubReleaseService.ValidateExactAssetUrl(release.ZipDownloadUrl, release.TagName, GitHubReleaseService.ExpectedZipAssetName);
-            GitHubReleaseService.ValidateExactAssetUrl(release.Sha256DownloadUrl, release.TagName, GitHubReleaseService.ExpectedSha256AssetName);
+            UpdateSources.ValidateAssets(release);
             string sessionGuid = Guid.NewGuid().ToString("N");
             string sessionTempRoot = Path.Combine(
                 Path.GetTempPath(),
@@ -245,7 +250,7 @@ namespace TTSK_AutoDim_Plates.Updater
                 progress.Report(new UpdateDownloadProgress
                 {
                     ProgressPercentage = 0,
-                    StatusMessage = "Đang tải mã băm SHA256..."
+                    StatusMessage = "Đang chuẩn bị bản cập nhật..."
                 });
             }
 
@@ -269,7 +274,7 @@ namespace TTSK_AutoDim_Plates.Updater
             UpdateDownloader.ExtractAndValidatePackage(zipPath, stagingDir, out metadata);
             ct.ThrowIfCancellationRequested();
             if (metadata.version != release.Version.ToString() || metadata.tag != release.TagName)
-                throw new InvalidDataException("Downloaded metadata does not match the selected GitHub release.");
+                throw new InvalidDataException("Downloaded metadata does not match the selected release.");
 
             if (progress != null)
             {

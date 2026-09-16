@@ -125,6 +125,8 @@ if ($true) {
 . (Join-Path $repoRoot "tests\Updater\Test-PackagingAndWorkflow.ps1")
 . (Join-Path $repoRoot "tests\Updater\Test-ReviewRegressions.ps1")
 . (Join-Path $repoRoot "tests\Updater\Test-PublisherMock.ps1")
+. (Join-Path $repoRoot "tests\Updater\Test-DualSources.ps1")
+. (Join-Path $repoRoot "tests\Updater\Test-ReleaseNumbering.ps1")
 
 # Tổng kết
 $total = $testResults.Count
