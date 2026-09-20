@@ -2241,6 +2241,7 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static void CheckTopBottomHolesAndMark(Model model, ModelPart part, View topView, bool allowCrossFaceSymmetry)
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             TopBottomHoleCheckResult = -1;
 
             if (
@@ -3911,6 +3912,7 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static void VerifyManualScaleApplied(List<View> views)
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             double manualScale;
             if (!TTSK_AutoDim_Plates.ManualDrawingScaleOverride.TryGet(out manualScale))
                 return;
@@ -11458,6 +11460,7 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static void CreateTopBottomHorizontalGroupCenterLine(View view, List<Point> holes)
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             try
             {
                 if (view == null || holes == null || holes.Count < 2)
@@ -13685,6 +13688,7 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static void ApplyExactRepresentationToView(View view)
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             try
             {
                 if (view == null)
@@ -14390,6 +14394,7 @@ namespace Tekla.Technology.Akit.UserScript
             List<View> views
         )
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             try
             {
                 if (
@@ -14794,6 +14799,7 @@ namespace Tekla.Technology.Akit.UserScript
             int targetMaxTier
         )
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             try
             {
                 if (baseView == null || targetView == null)
@@ -14874,6 +14880,7 @@ namespace Tekla.Technology.Akit.UserScript
             double greenBoxGap
         )
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             try
             {
                 if (sectionView == null || frontView == null)
@@ -15465,6 +15472,7 @@ namespace Tekla.Technology.Akit.UserScript
             List<View> bottomViews
         )
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             try
             {
                 if (drawing == null || topView == null)
@@ -15583,6 +15591,7 @@ namespace Tekla.Technology.Akit.UserScript
             double remainingGap
         )
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             try
             {
                 List<View> stackViews = new List<View>();
@@ -15680,6 +15689,7 @@ namespace Tekla.Technology.Akit.UserScript
             double gap
         )
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             try
             {
                 if (topView == null || frontView == null)
@@ -16187,6 +16197,7 @@ namespace Tekla.Technology.Akit.UserScript
             List<TopBoundary> bottomBoundaries
         )
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             try
             {
                 if (drawing == null || topView == null)
@@ -16385,6 +16396,7 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static void UpdateDrawingTitle3Scale(Drawing drawing, View referenceView)
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             try
             {
                 if (drawing == null)
@@ -16605,6 +16617,7 @@ namespace Tekla.Technology.Akit.UserScript
             double maxY
         )
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             if (!AllowViewBoundaryResizeForCurrentDrawing || UseSelectedMainPartMode)
                 return;
 
@@ -19682,6 +19695,7 @@ namespace Tekla.Technology.Akit.UserScript
             ModelPart part
         )
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             TransformationPlane oldPlane = model
                 .GetWorkPlaneHandler()
                 .GetCurrentTransformationPlane();
@@ -19907,6 +19921,7 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static void DeleteAllDimensions(Drawing drawing)
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             // FIX DELETE DIM SHAPE:
             // Không dùng GetAllObjects() không filter nữa, vì một số drawing có object
             // LeaderLinePlacing bị lỗi deserialize làm macro dừng trước khi xóa DIM.
@@ -20071,6 +20086,7 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static void SelectViews(DrawingHandler dh, List<View> views)
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             try
             {
                 DrawingObjectSelector selector = dh.GetDrawingObjectSelector();

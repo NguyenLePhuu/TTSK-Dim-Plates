@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -20,8 +20,54 @@ class Program
     [STAThread]
     static int Main(string[] args)
     {
+        RevisionTests.SetProcessDPIAware();
         try
         {
+            if(args.Length==2 && args[0]=="--batch-preview") { BatchTests.Preview(args[1]); return 0; }
+            if(args.Length==1 && args[0]=="--batch-tests") { BatchTests.Run(); return 0; }
+            if(args.Length==2 && args[0]=="--revision-create-tests") { RevisionCreateTests.Run(args[1]); return 0; }
+            if(args.Length==2 && args[0]=="--revision-rollback-live") { RevisionCreateTests.Rollback(args[1]); return 0; }
+            if(args.Length==2 && args[0]=="--revision-navigation-live") { RevisionCreateTests.NavigationLive(args[1]); return 0; }
+            if(args.Length==2 && args[0]=="--revision-layout-audit") { RevisionCreateTests.Audit(args[1]); return 0; }
+            if(args.Length==3 && args[0]=="--revision-create-live") { RevisionCreateTests.Live(args[1],args[2]); return 0; }
+            if(args.Length==3 && args[0]=="--revision-main-preview") { RevisionCreateTests.MainPreview(args[1],args[2]); return 0; }
+            if(args.Length==2 && args[0]=="--revision-data-audit") { RevisionAudit.Run(args[1]); return 0; }
+            if(args.Length==2 && args[0]=="--revision-performance") { RevisionRepairLive.Performance(args[1]); return 0; }
+            if(args.Length==2 && args[0]=="--revision-cache-live") { RevisionRepairLive.CacheAndStaleColor(args[1]); return 0; }
+            if(args.Length==2 && args[0]=="--revision-color-cycle") { RevisionRepairLive.ColorCycle(args[1]); return 0; }
+            if(args.Length==2 && args[0]=="--revision-delete-selection-live") { RevisionRepairLive.DeleteSection(args[1],true); return 0; }
+            if(args.Length==3 && args[0]=="--product-revision-audit")
+            {
+                var assembly=System.Reflection.Assembly.LoadFrom(Path.GetFullPath(args[1]));
+                var type=assembly.GetType("Tekla.Technology.Akit.UserScript.PHU_DimensionRevision",true);
+                var result=type.GetMethod("Analyze").Invoke(null,new object[]{false});
+                string report=(string)result.GetType().GetMethod("Report").Invoke(result,null);
+                File.WriteAllText(args[2],report);Console.WriteLine(report);return 0;
+            }
+            if(args.Length==2 && args[0]=="--revision-color-live") { RevisionRepairLive.Color(args[1]); return 0; }
+            if(args.Length==2 && args[0]=="--revision-color-persistence") { RevisionRepairLive.Color(args[1],true); return 0; }
+            if(args.Length==1 && args[0]=="--revision-color-select")
+            {
+                var r=Tekla.Technology.Akit.UserScript.PHU_DimensionRevision.Analyze(false);
+                var target=r.Items.Where(i=>!i.ReadOnly&&i.Changed&&!i.Review&&i.Dimension!=null)
+                    .OrderByDescending(i=>r.Items.Concat(r.UnchangedItems).Count(s=>s.Object!=null&&s.Object.IsSameDatabaseObject(i.Object))).First();
+                Tekla.Technology.Akit.UserScript.PHU_DimensionRevision.Select(r,target);return 0;
+            }
+            if(args.Length==2 && args[0]=="--revision-recreate-live") { RevisionRepairLive.Recreate(args[1]); return 0; }
+            if(args.Length==2 && args[0]=="--revision-delete-live") { RevisionRepairLive.DeleteSection(args[1]); return 0; }
+            if(args.Length==2 && args[0]=="--revision-apply")
+            {
+                var revision=Tekla.Technology.Akit.UserScript.PHU_DimensionRevision.Analyze(false);
+                var targets=revision.Items.FindAll(i=>!i.ReadOnly&&i.Changed&&!i.Review);
+                try { Console.WriteLine("Applied="+Tekla.Technology.Akit.UserScript.PHU_DimensionRevision.Apply(revision,targets)); }
+                finally { File.WriteAllText(args[1],Tekla.Technology.Akit.UserScript.PHU_DimensionRevision.Analyze(false).Report(),new UTF8Encoding(false)); }
+                return 0;
+            }
+            if(args.Length==2 && args[0]=="--revision-offline-preview") { RevisionTests.OfflinePreview(args[1]); return 0; }
+            if(args.Length==2 && args[0]=="--revision-live") { RevisionTests.Live(args[1]); return 0; }
+            if(args.Length==2 && args[0]=="--revision-preview") { RevisionTests.Preview(args[1]); return 0; }
+            if(args.Length==2 && args[0]=="--revision-audit")
+            { var revision=Tekla.Technology.Akit.UserScript.PHU_DimensionRevision.Analyze(false); File.WriteAllText(args[1],revision.Report(),new UTF8Encoding(false)); Console.WriteLine(revision.Report()); return 0; }
             if(args.Length==2 && args[0]=="--hardening-live")
             { HardeningTests.Live(args[1]); return 0; }
             if(args.Length==2 && args[0]=="--beam-live")
@@ -112,43 +158,58 @@ class Program
                     {
                         form.ShowInTaskbar=false; form.StartPosition=System.Windows.Forms.FormStartPosition.Manual;
                         if(scenario=="compact")form.Size=form.MinimumSize;
-                        form.Location=new System.Drawing.Point(-20000,-20000); form.Show();
+                        RevisionTests.ShowPreview(form);
                         System.Windows.Forms.Application.DoEvents(); form.PerformLayout();
                         if(selections!=0)throw new Exception("Opening the report selected a drawing object");
+                        var flags=System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic;
+                        var success=Descendants(form).Single(c=>c.Name=="SuccessCheck");
+                        if(success.Visible!=(scenario=="clean"))throw new Exception("Incorrect green success state: "+scenario);
+                        var revision=Descendants(form).OfType<System.Windows.Forms.Button>().Single(b=>b.Name=="OpenRevision");
+                        revision.PerformClick();System.Windows.Forms.Application.DoEvents();
+                        var formType=form.GetType();
+                        if(formType.GetField("revisionPanel",flags).GetValue(form)==null || formType.GetField("revisionResult",flags).GetValue(form)!=null)
+                            throw new Exception("Revision shortcut must open idle Revision without running Tekla mutations");
+                        formType.GetMethod("CloseRevision",flags).Invoke(form,null);System.Windows.Forms.Application.DoEvents();
+                        if(!revision.Visible || success.Visible!=(scenario=="clean"))throw new Exception("Returning from Revision lost Check DIM state");
+                        var cards=(System.Windows.Forms.FlowLayoutPanel)Descendants(form).Single(c=>c.Name=="FindingCards");
                         if(!clean)
                         {
-                            var grid=Descendants(form).OfType<System.Windows.Forms.DataGridView>().Single();
-                            typeof(System.Windows.Forms.DataGridView).GetMethod("OnCellClick",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance)
-                                .Invoke(grid,new object[]{new System.Windows.Forms.DataGridViewCellEventArgs(0,0)});
-                            if(selections!=1 || !ReferenceEquals(lastSelected,grid.CurrentRow.Tag))throw new Exception("Single row click did not select its DIM");
+                            typeof(Tekla.Technology.Akit.UserScript.PHU_DimensionReportForm).GetMethod("ChooseFinding",flags).Invoke(form,new object[]{0});
+                            if(selections!=1 || !ReferenceEquals(lastSelected,cards.Controls[0].Tag))throw new Exception("Card click did not select its DIM");
+                            foreach(var label in Descendants(cards).OfType<System.Windows.Forms.Label>().Where(l=>l.Text.StartsWith("Hình chiếu")))
+                                if(label.Height<System.Windows.Forms.TextRenderer.MeasureText(label.Text,label.Font).Height)throw new Exception("View caption is clipped");
                         }
                         if(!clean && scenario!="single")
                         {
-                            var bar=Descendants(form).Single(c=>c.GetType().Name=="ReportScroll");
-                            var grid=Descendants(form).OfType<System.Windows.Forms.DataGridView>().Single();
-                            var mouse=new System.Windows.Forms.MouseEventArgs(System.Windows.Forms.MouseButtons.Left,1,8,bar.Height-8,0);
-                            bar.GetType().GetMethod("OnMouseDown",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance).Invoke(bar,new object[]{mouse});
-                            bar.GetType().GetMethod("OnMouseUp",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance).Invoke(bar,new object[]{mouse});
-                            if(grid.FirstDisplayedScrollingRowIndex<=0) throw new Exception("Scrollbar did not scroll");
-                            grid.FirstDisplayedScrollingRowIndex=0;
-                            var next=Descendants(form).OfType<System.Windows.Forms.Button>().Single(b=>b.Text=="Vị trí tiếp theo  →");
+                            var bar=Descendants(form).Single(c=>c.Name=="FindingScroll");
+                            bar.GetType().GetMethod("Reveal").Invoke(bar,new object[]{cards.Controls[cards.Controls.Count-1]});
+                            if(cards.Top>=0)throw new Exception("Cards did not scroll");
+                            var next=Descendants(form).OfType<System.Windows.Forms.Button>().Single(b=>b.Text=="Vị trí tiếp  →");
                             next.PerformClick();
-                            if(grid.CurrentRow.Index!=1)throw new Exception("Next finding did not update selection");
+                            if(!ReferenceEquals(lastSelected,cards.Controls[1].Tag))throw new Exception("Next finding did not select its DIM");
                             var previous=Descendants(form).OfType<System.Windows.Forms.Button>().Single(b=>b.Text=="←  Vị trí trước");
                             previous.PerformClick();
-                            if(grid.CurrentRow.Index!=0 || previous.Enabled)throw new Exception("Previous finding boundary failed");
-                            if(selections!=3 || !ReferenceEquals(lastSelected,grid.CurrentRow.Tag))throw new Exception("Navigation did not select the corresponding DIM");
+                            if(!ReferenceEquals(lastSelected,cards.Controls[0].Tag)||previous.Enabled||selections!=3)throw new Exception("Previous finding boundary failed");
                         }
                         using(var bitmap=new System.Drawing.Bitmap(form.Width,form.Height))
                         { form.DrawToBitmap(bitmap,new System.Drawing.Rectangle(0,0,form.Width,form.Height));
+                            if(scenario=="clean")
+                            {
+                                int greenPixels=0;
+                                for(int y=bitmap.Height/3;y<bitmap.Height*2/3;y++)
+                                    for(int x=bitmap.Width/3;x<bitmap.Width*2/3;x++)
+                                    {var pixel=bitmap.GetPixel(x,y);if(pixel.G>pixel.R+40 && pixel.G>pixel.B+15)greenPixels++;}
+                                if(greenPixels<1000)throw new Exception("Large green check is obscured or missing");
+                            }
                             bitmap.Save(Path.Combine(args[1],(dark?"dark":"light")+"-"+scenario+".png")); }
                         var recheck=Descendants(form).OfType<System.Windows.Forms.Button>().Single(b=>b.Name=="Recheck");
                         recheck.PerformClick(); System.Windows.Forms.Application.DoEvents();
-                        if(runs!=1 || Descendants(form).OfType<System.Windows.Forms.DataGridView>().Single().RowCount!=0)
+                        if(runs!=1 || Descendants(form).Single(c=>c.Name=="FindingCards").Controls.Count!=0)
                             throw new Exception("Recheck did not clear old findings");
+                        if(!Descendants(form).Single(c=>c.Name=="SuccessCheck").Visible)throw new Exception("Clean recheck lost green success check");
                         recheck=Descendants(form).OfType<System.Windows.Forms.Button>().Single(b=>b.Name=="Recheck");
                         recheck.PerformClick(); System.Windows.Forms.Application.DoEvents();
-                        if(runs!=2 || Descendants(form).OfType<System.Windows.Forms.DataGridView>().Single().RowCount!=sample.Findings.Count)
+                        if(runs!=2 || Descendants(form).Single(c=>c.Name=="FindingCards").Controls.Count!=sample.Findings.Count)
                             throw new Exception("Second recheck did not restore findings");
                     }
                 }
@@ -331,7 +392,7 @@ class Program
                 ||user.Contains("VIEW=")||user.Contains("residual")||user.Contains("P106")) throw new Exception("User report missing readable location or leaking diagnostics");
             count++; Console.WriteLine("PASS readable clean/failure reports");
             Console.WriteLine("PASS "+count+" classifier cases");
-            HardeningTests.Run(); return 0;
+            HardeningTests.Run(); RevisionTests.Run(); BatchTests.Run(); return 0;
         }
         catch(Exception e) { Console.Error.WriteLine(e); return 1; }
     }

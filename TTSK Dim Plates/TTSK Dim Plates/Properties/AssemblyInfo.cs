@@ -14,6 +14,10 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
 
+// Regression tests reference the built production assembly instead of compiling
+// production source files a second time. Keep test-only access internal.
+[assembly: InternalsVisibleTo("Slot09DimensionCheck")]
+
 // Setting ComVisible to false makes the types in this assembly not visible
 // to COM components.  If you need to access a type in this assembly from
 // COM, set the ComVisible attribute to true on that type.

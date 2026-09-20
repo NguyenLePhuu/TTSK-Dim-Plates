@@ -647,6 +647,7 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static void DeleteAllDimensions(Drawing drawing)
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             // SAFE FIX:
             // Không quét toàn bộ object bằng GetAllObjects() nữa.
             // Sau khi chạy Shape, một số mark/leader object có thể làm Tekla lỗi deserialize
@@ -823,6 +824,7 @@ namespace Tekla.Technology.Akit.UserScript
 
                 StraightDimensionSetHandler handler = new StraightDimensionSetHandler();
 
+
                 // Section detail has one semantic rule regardless of whether the
                 // cut was perpendicular to Front X or to an oblique bevel edge.
                 if (IsSectionView(view))
@@ -858,6 +860,26 @@ namespace Tekla.Technology.Akit.UserScript
                     // cạnh vát không xuyên hết độ dày.
                     if (thinOuterContour != null && thinOuterContour.Count >= 3)
                         thinBoundaries.Insert(0, thinOuterContour);
+
+                    // Legacy thin-view recognition has a 5 mm detail minimum.
+                    // Small real thickness bevels still require run, land,
+                    // thickness and angle dimensions. Reuse the exact-profile
+                    // planner only when the established rule found no bevel.
+                    List<SectionBevelDimPlan> smallBevelPlans;
+                    if (TryBuildSmallThicknessBevelPlans(thinOuterContour, realThickness, out smallBevelPlans))
+                    {
+                        count += CreateSectionBevelDimPlans(handler, view, thinOuterContour, smallBevelPlans);
+                        count += CreateSectionBevelAngleDims(view, smallBevelPlans);
+                        double left, right, bottom, top;
+                        GetMinMax(thinOuterContour, out left, out right, out bottom, out top);
+                        bool topOccupied = smallBevelPlans.Exists(p => p.IsBevelWidth && p.Normal.Y > 0);
+                        if (CreateDim(handler, view,
+                            FindExactExtremePoint(thinOuterContour, left, true),
+                            FindExactExtremePoint(thinOuterContour, right, true),
+                            new Vector(0, 1, 0), GetCleanDimOffsetByTier(topOccupied ? 2 : 1))) count++;
+                        ResizeViewBoundary(view, min, max);
+                        return count;
+                    }
 
                     // Dùng chung cho mọi vai trò view có hình chiếu bề dày:
                     // Front, Top hoặc Section A-A. Không phân nhánh theo tên view.
@@ -1268,6 +1290,7 @@ namespace Tekla.Technology.Akit.UserScript
         #region 03 - VIEW BOUNDARY SAFETY
         private static void ResizeViewBoundary(View view, Point min, Point max)
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             // BẢN SAFE: vẫn mở khung tím + VIEW_PADDING, nhưng không load/cut theo tiêu chuẩn.
             // Chỉ set RestrictionBox khi box hợp lệ, depth hợp lệ, kích thước không bất thường.
             try
@@ -1671,6 +1694,32 @@ namespace Tekla.Technology.Akit.UserScript
             public Vector Normal;
             public int Tier;
             public bool IsBevelWidth;
+        }
+
+        private static bool TryBuildSmallThicknessBevelPlans(List<Point> contour, double thickness,
+            out List<SectionBevelDimPlan> plans)
+        {
+            plans = null;
+            if (contour == null || contour.Count < 4) return false;
+            double minX, maxX, minY, maxY;
+            GetMinMax(contour, out minX, out maxX, out minY, out maxY);
+            for (int i = 0; i < contour.Count; i++)
+                if (IsValidChamferSegment(contour[i], contour[(i + 1) % contour.Count],
+                    minX, maxX, minY, maxY)) return false;
+            if (!TryBuildSectionBevelDimPlans(contour, thickness, out plans)) return false;
+            foreach (var plan in plans)
+            {
+                if (!plan.IsBevelWidth) continue;
+                Point first = plan.Feet[0], last = plan.Feet[plan.Feet.Count - 1];
+                // A rounded end projected through the plate can leave a tiny
+                // lateral sliver spanning the full thickness. It is not a
+                // dimensionable thickness bevel. Keep it on the legacy total
+                // path, using that path's established 1 mm edge tolerance.
+                double run = Math.Abs((last.X - first.X) * plan.Normal.Y
+                    - (last.Y - first.Y) * plan.Normal.X);
+                if (run <= THIN_CHAMFER_EDGE_TOL) { plans = null; return false; }
+            }
+            return true;
         }
 
         private static List<Point> GetSectionBevelContour(Solid solid)
@@ -7796,6 +7845,7 @@ namespace Tekla.Technology.Akit.UserScript
                 // leader chạy về góc plate, còn box mark đứng nguyên.
                 SafeCommitAndWait(drawing, 80);
 
+                bool placeAbove = HasDownwardDimensionForPartMark(view, minY);
                 for (int i = 0; i < preparedMarks.Count; i++)
                 {
                     try
@@ -7804,12 +7854,14 @@ namespace Tekla.Technology.Akit.UserScript
                     }
                     catch { }
 
-                    MovePartMarkBoxToCenterBottom(
+                    MovePartMarkBoxToClearSide(
                         preparedMarks[i],
                         i,
                         minX,
                         maxX,
-                        minY
+                        minY,
+                        maxY,
+                        placeAbove
                     );
                 }
             }
@@ -7847,12 +7899,49 @@ namespace Tekla.Technology.Akit.UserScript
             }
         }
 
-        private static void MovePartMarkBoxToCenterBottom(
+        private static bool HasDownwardDimensionForPartMark(View view, double minY)
+        {
+            var dimensions = view.GetAllObjects(typeof(StraightDimensionSet));
+            while (dimensions.MoveNext())
+            {
+                var set = dimensions.Current as StraightDimensionSet;
+                if (set == null) continue;
+                var feet = ReadDimensionPointsForHoleMarkV3(set);
+                var direction = GetMemberValueForHoleMarkV3(set, "UpDirection") as Vector;
+                if (feet.Count < 2 || direction == null) continue;
+                if (IsDownwardDimensionForPartMark(feet[0], direction, set.Distance, minY)) return true;
+            }
+            return false;
+        }
+
+        private static bool IsDownwardDimensionForPartMark(Point first, Vector direction,
+            double distance, double minY)
+        {
+            if (first == null || direction == null || double.IsNaN(distance) || double.IsInfinity(distance)) return false;
+            double length = Math.Sqrt(direction.X * direction.X + direction.Y * direction.Y);
+            if (length <= .000001) return false;
+            double offsetY = direction.Y / length * distance;
+            // Inspect the actual line side, including negative API distances.
+            // Vertical dimensions on the left/right must not move the mark up.
+            return Math.Abs(direction.Y) > Math.Abs(direction.X)
+                && offsetY < -.001 && first.Y + offsetY < minY - .001;
+        }
+
+        private static double GetPartMarkTargetCenterY(double minY, double maxY,
+            double halfBoxHeight, int index, bool placeAbove)
+        {
+            double gap = PART_MARK_GAP_FROM_PLATE + index * PART_MARK_STAGGER;
+            return placeAbove ? maxY + gap + halfBoxHeight : minY - gap - halfBoxHeight;
+        }
+
+        private static void MovePartMarkBoxToClearSide(
             MarkBase mark,
             int index,
             double minX,
             double maxX,
-            double minY
+            double minY,
+            double maxY,
+            bool placeAbove
         )
         {
             if (mark == null)
@@ -7861,10 +7950,6 @@ namespace Tekla.Technology.Akit.UserScript
             try
             {
                 double centerX = (minX + maxX) / 2.0;
-                // Đỉnh khung mark luôn cách mép dưới thanh 15mm.
-                double targetAnchorY =
-                    minY - PART_MARK_GAP_FROM_PLATE - index * PART_MARK_STAGGER;
-
                 // Lấy khung bao thật của mark. InsertionPoint của Mark là tâm khung,
                 // vì vậy phải trừ nửa chiều cao để khoảng hở được đo từ mép box.
                 Point boxMin;
@@ -7874,7 +7959,9 @@ namespace Tekla.Technology.Akit.UserScript
 
                 double halfBoxHeight = Math.Abs(boxMax.Y - boxMin.Y) * 0.5;
 
-                double targetCenterY = targetAnchorY - halfBoxHeight;
+                // Restore the reference file's box-edge clearance above;
+                // preserve the existing clearance below when no bottom DIM.
+                double targetCenterY = GetPartMarkTargetCenterY(minY, maxY, halfBoxHeight, index, placeAbove);
                 Point currentCenter = new Point(
                     (boxMin.X + boxMax.X) * 0.5,
                     (boxMin.Y + boxMax.Y) * 0.5,
@@ -11187,6 +11274,7 @@ namespace Tekla.Technology.Akit.UserScript
             View view
         )
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             TransformationPlane oldPlane = null;
 
             try
@@ -11437,6 +11525,7 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static void UpdateDrawingTitle3ScaleFromViews(Drawing drawing, List<View> views)
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             try
             {
                 if (drawing == null || views == null || views.Count == 0)
@@ -11704,6 +11793,7 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static void CenterProcessedViewsBySheetSize(Drawing drawing, List<View> views)
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             try
             {
                 if (drawing == null || views == null || views.Count == 0)
@@ -11811,6 +11901,7 @@ namespace Tekla.Technology.Akit.UserScript
             double gap
         )
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             ArrangeSinglePlateTopFrontBySemanticRole(topView, frontView, gap);
         }
 
@@ -11820,6 +11911,7 @@ namespace Tekla.Technology.Akit.UserScript
             double gap
         )
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             ArrangeSinglePlateTopFrontBySemanticRole(topView, frontView, gap);
         }
 
@@ -11829,6 +11921,7 @@ namespace Tekla.Technology.Akit.UserScript
             double gap
         )
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             try
             {
                 if (topView == null || frontView == null)
@@ -11916,6 +12009,7 @@ namespace Tekla.Technology.Akit.UserScript
             double gap
         )
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             try
             {
                 if (processedViews == null || frontView == null)
@@ -12256,6 +12350,7 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static void SelectProcessedViews(DrawingHandler dh, List<View> views)
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             try
             {
                 if (views == null || views.Count == 0)
@@ -12288,6 +12383,7 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static void AutoFixBadJapaneseBoltMarks(Drawing drawing)
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             try
             {
                 if (drawing == null)

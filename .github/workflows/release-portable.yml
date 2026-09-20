@@ -4,18 +4,7 @@ on:
     branches:
       - main
     paths:
-      - 'portable/**'
       - 'update/release-request.json'
-      - '!portable/README.txt'
-      - '!portable/**/*.cfg'
-      - '!portable/**/*.bat'
-      - '!portable/**/*.cmd'
-      - '!portable/**/*.ps1'
-      - '!portable/**/*.lnk'
-      - '!portable/**/*.pdb'
-      - '!portable/**/*.log'
-      - '!portable/logs/**'
-      - '!portable/**/backup/**'
   workflow_dispatch:
 concurrency:
   group: ttsk-portable-release

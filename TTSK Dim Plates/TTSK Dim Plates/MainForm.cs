@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -188,6 +188,7 @@ namespace TTSK_AutoDim_Plates
             _shortcutManager.Load();
             BuildUi();
             InitializeUpdater();
+            InitializeWorkJournal();
         }
 
         // Cooperative waits retain Tekla calls and ThreadStatic contexts on their original thread.
@@ -253,6 +254,7 @@ namespace TTSK_AutoDim_Plates
                 return;
             }
             base.OnFormClosing(e);
+            if (!e.Cancel && workSession != null && CanApplyUpdateNow()) ObserveWorkProject();
         }
 
         protected override void OnHandleCreated(EventArgs e)
@@ -842,11 +844,11 @@ namespace TTSK_AutoDim_Plates
 
             Label foot = new Label();
             foot.Text =
-                "ⓘ  Optimized for Tekla Structures 2025 SP7                                      ♥  Developed by TTSK VN BIM TEAM                                                    ⌬  富";
+                "ⓘ  Optimized for Tekla Structures 2025 SP7                                      ♥  Developed by TTSK VN BIM TEAM";
             foot.ForeColor = Color.White;
             foot.Font = new Font("Segoe UI", 10F);
             foot.Location = new Point(30, 9);
-            foot.Size = new System.Drawing.Size(900, 24);
+            foot.Size = new System.Drawing.Size(MainClientWidth - 130, 24);
             mainFooter.Controls.Add(foot);
 
             BuildSlideToolsPanel();
@@ -1353,6 +1355,7 @@ namespace TTSK_AutoDim_Plates
             slideArrangePanel.Controls[5].Text = "Khoảng cách giữa view (mm)";
             nudArrangeGap.SetBounds(16, 240, 282, 44);
             slideArrangePanel.Controls[7].SetBounds(16, 304, 282, 40);
+            BuildArrangeReferenceControls();
 
             slideGridPanel.Height = 238;
             slideGridPanel.Controls[0].Width = 282;
@@ -1498,7 +1501,7 @@ namespace TTSK_AutoDim_Plates
                 toolContextHint.SetBounds(30, detail.Bottom + 16, 286, Math.Max(32, 564 - detail.Bottom - 16));
                 toolContextHint.Text = slideDimOpen ? "THAO TÁC\r\n\r\nChọn phạm vi và khoảng cách giữa các tầng DIM, sau đó áp dụng trong bản vẽ."
                     : slideLineOpen ? "THAO TÁC\r\n\r\nNhập chiều dài line hoặc dùng Chọn 2 điểm để xác định trực tiếp trong bản vẽ."
-                    : "THAO TÁC\r\n\r\nChọn hướng bố trí mặt cắt, nhập khoảng cách giữa view rồi áp dụng.";
+                    : "Theo bản mẫu: tải các bản đang chọn và căn view theo bản đầu danh sách.";
             }
             toolHomeButton.BringToFront();
             toolNavigation.BringToFront();
@@ -2740,6 +2743,13 @@ namespace TTSK_AutoDim_Plates
             {
                 _lastRepeatableShortcutActionId = null;
                 RunDimensionCheck();
+                return;
+            }
+
+            if (string.Equals(actionId, ShortcutManager.ActionRevision, StringComparison.OrdinalIgnoreCase))
+            {
+                _lastRepeatableShortcutActionId = null;
+                RunRevisionCheck();
                 return;
             }
 
@@ -5831,6 +5841,7 @@ namespace TTSK_AutoDim_Plates
             ApplyAutoSectionSwitchUi();
             ApplyToolPresentationTheme();
             ApplyMainPresentationTheme();
+            ApplyWorkJournalFooterTheme();
             for (int i = 0; i < stateLabels.Length; i++)
                 if (stateLabels[i] != null) stateLabels[i].ForeColor = stateColors[i];
             Invalidate(true);
@@ -6340,6 +6351,7 @@ namespace TTSK_AutoDim_Plates
 
         private void btnLoad_Click(object sender, EventArgs e)
         {
+            ResetDimensionCheckBatch();
             _resumeIndex = 0;
             _stopRequested = false;
             _selectedDrawings.Clear();
@@ -6375,6 +6387,7 @@ namespace TTSK_AutoDim_Plates
                     AddDrawingGridRow(count, mark, rev, changes);
                 }
 
+                CaptureDimensionCheckBatchSource();
                 dgvDrawings.ClearSelection();
 
                 lblCount.Text = "Tổng số bản vẽ:  " + count;
@@ -6397,7 +6410,9 @@ namespace TTSK_AutoDim_Plates
             }
             catch (Exception ex)
             {
+                _selectedDrawings.Clear();
                 dgvDrawings.Rows.Clear();
+                lblCount.Text = "Tổng số bản vẽ:  0";
                 SetMainStatus("Load Selected Drawings lỗi: " + ex.Message, MainStatusKind.Error);
             }
         }
@@ -8638,27 +8653,29 @@ namespace TTSK_AutoDim_Plates
 
                 if (platePrecheck == null)
                 {
-                    autoSectionWorkerRequired = false;
-                    execution.SectionStatus = AutoSectionStatus.NotApplicable;
+                    execution.CanSaveDrawing = false;
+                    execution.SectionStatus = AutoSectionStatus.PreflightFailed;
                     execution.SectionMessage =
-                        "Plate Auto Section precheck khong tra ket qua; tiep tuc Dim Plate.";
+                        "Plate Auto Section precheck khong tra ket qua.";
+                    return execution;
                 }
 
+                else if (platePrecheck.Decision
+                    == Tekla.Technology.Akit.UserScript.PlateAutoSectionDecision.Rejected)
+                {
+                    execution.CanSaveDrawing = false;
+                    execution.SectionStatus = AutoSectionStatus.PreflightFailed;
+                    execution.SectionMessage = platePrecheck.Message;
+                    return execution;
+                }
                 else if (
                     platePrecheck.Decision
                         == Tekla.Technology.Akit.UserScript.PlateAutoSectionDecision.NoSection
-                    || platePrecheck.Decision
-                        == Tekla.Technology.Akit.UserScript.PlateAutoSectionDecision.Rejected
                 )
                 {
                     autoSectionWorkerRequired = false;
                     execution.SectionStatus = AutoSectionStatus.NotApplicable;
-                    execution.SectionMessage =
-                        platePrecheck.Decision
-                            == Tekla.Technology.Akit.UserScript.PlateAutoSectionDecision.Rejected
-                        ? "Auto Section bo qua an toan; tiep tuc Plate AutoDim. "
-                            + platePrecheck.Message
-                        : platePrecheck.Message;
+                    execution.SectionMessage = platePrecheck.Message;
                 }
                 else if (
                     platePrecheck.Decision
@@ -8706,17 +8723,20 @@ namespace TTSK_AutoDim_Plates
                 {
                     execution.SectionStatus = AutoSectionStatus.PreflightFailed;
                     execution.SectionMessage = sectionAttributeResolutionBeforeLoad.Error;
-                    if (partType == AutoDimPartType.Plate)
-                    {
-                        autoSectionWorkerRequired = false;
-                        execution.SectionStatus = AutoSectionStatus.NotApplicable;
-                        execution.SectionMessage += " | Tiep tuc Dim Plate.";
-                    }
-                    else
-                    {
-                        execution.CanSaveDrawing = false;
-                        return execution;
-                    }
+                    execution.CanSaveDrawing = false;
+                    return execution;
+                }
+                if (partType == AutoDimPartType.Plate
+                    && (sectionAttributeResolutionBeforeLoad == null
+                        || !sectionAttributeResolutionBeforeLoad.Success
+                        || string.IsNullOrWhiteSpace(sectionAttributeResolutionBeforeLoad.AttributeName)))
+                {
+                    execution.CanSaveDrawing = false;
+                    execution.SectionStatus = AutoSectionStatus.PreflightFailed;
+                    execution.SectionMessage = "Plate Section View property: "
+                        + (sectionAttributeResolutionBeforeLoad == null ? "Resolver returned no result."
+                            : sectionAttributeResolutionBeforeLoad.Error);
+                    return execution;
                 }
             }
 
@@ -8777,7 +8797,7 @@ namespace TTSK_AutoDim_Plates
                         createdAutoSectionWorkerResult = workerResult;
                 }
 
-                if (!execution.CanSaveDrawing && partType != AutoDimPartType.Plate)
+                if (!execution.CanSaveDrawing)
                     return execution;
             }
 
@@ -9879,16 +9899,6 @@ namespace TTSK_AutoDim_Plates
 
             execution.SectionMessage = workerResult.Message ?? "";
             execution.IsPlateSection = workerResult.IsPlateSection;
-
-            if (workerResult.IsPlateSection && workerResult.IsSafeToContinue
-                && (workerResult.Status == Tekla.Technology.Akit.UserScript.AutoSectionWorkerStatus.PreflightFailed
-                    || workerResult.Status == Tekla.Technology.Akit.UserScript.AutoSectionWorkerStatus.CreateFailed
-                    || workerResult.Status == Tekla.Technology.Akit.UserScript.AutoSectionWorkerStatus.RolledBack))
-            {
-                execution.SectionStatus = AutoSectionStatus.NotApplicable;
-                execution.SectionMessage += " | Tiep tuc Dim Plate.";
-                return;
-            }
 
             switch (workerResult.Status)
             {
@@ -12099,6 +12109,7 @@ namespace TTSK_AutoDim_Plates
             public bool ConnectedTop { get; set; }
             public bool ConnectedBottom { get; set; }
             public bool FlushOuterEdge { get; set; }
+            public string IconAlignmentReference { get; set; }
 
             public SafeRoundedButton()
             {
@@ -12267,6 +12278,18 @@ namespace TTSK_AutoDim_Plates
 
                     GraphicsState state = e.Graphics.Save();
                     e.Graphics.SetClip(path);
+                    System.Drawing.Rectangle textBounds = System.Drawing.Rectangle.Round(rect);
+                    const TextFormatFlags measureFlags = TextFormatFlags.NoPadding | TextFormatFlags.SingleLine;
+                    int separator = Text.IndexOf("  ", StringComparison.Ordinal);
+                    if (!string.IsNullOrEmpty(IconAlignmentReference) && separator > 0)
+                    {
+                        // Keep the original centered label position; only move the icon.
+                        int fullWidth = TextRenderer.MeasureText(e.Graphics, Text, Font, System.Drawing.Size.Empty, measureFlags).Width;
+                        int prefixWidth = TextRenderer.MeasureText(e.Graphics, Text.Substring(0, separator + 2), Font, System.Drawing.Size.Empty, measureFlags).Width;
+                        int labelLeft = textBounds.Left + (textBounds.Width - fullWidth) / 2 + prefixWidth;
+                        e.Graphics.SetClip(new System.Drawing.Rectangle(labelLeft, textBounds.Top,
+                            Math.Max(0, textBounds.Right - labelLeft), textBounds.Height), CombineMode.Intersect);
+                    }
                     TextRenderer.DrawText(
                         e.Graphics,
                         Text,
@@ -12276,10 +12299,24 @@ namespace TTSK_AutoDim_Plates
                         TextFormatFlags.HorizontalCenter
                             | TextFormatFlags.VerticalCenter
                             | TextFormatFlags.EndEllipsis
+                            | TextFormatFlags.PreserveGraphicsClipping
                             | TextFormatFlags.NoPadding
                             | TextFormatFlags.SingleLine
                     );
                     e.Graphics.Restore(state);
+                    if (!string.IsNullOrEmpty(IconAlignmentReference) && separator > 0)
+                    {
+                        int referenceWidth = TextRenderer.MeasureText(e.Graphics, IconAlignmentReference, Font, System.Drawing.Size.Empty, measureFlags).Width;
+                        string referenceIcon = IconAlignmentReference.Substring(0, IconAlignmentReference.IndexOf("  ", StringComparison.Ordinal));
+                        int iconWidth = TextRenderer.MeasureText(e.Graphics, referenceIcon, Font, System.Drawing.Size.Empty, measureFlags).Width;
+                        System.Drawing.Rectangle iconBounds = new System.Drawing.Rectangle(textBounds.Left + (textBounds.Width - referenceWidth) / 2,
+                            textBounds.Top, iconWidth, textBounds.Height);
+                        state = e.Graphics.Save();
+                        e.Graphics.SetClip(path);
+                        TextRenderer.DrawText(e.Graphics, Text.Substring(0, separator), Font, iconBounds, text,
+                            measureFlags | TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                        e.Graphics.Restore(state);
+                    }
                 }
             }
 

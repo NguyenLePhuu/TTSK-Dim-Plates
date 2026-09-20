@@ -37,6 +37,9 @@ Run-Test "Nhom 12: Workflow Validation" "Kiem tra cu phap YAML, concurrency grou
     Assert-True ($wfContent -match 'contents:\s*write') "Permissions phai co contents: write"
     Assert-True ($wfContent -match 'branches:\s*\r?\n\s*-\s*main') "Trigger push phai chi dinh branch main"
     Assert-True ($wfContent -match 'paths:') "Phai co path filter"
+    $pushBlock = ($wfContent -split 'workflow_dispatch:')[0]
+    Assert-True ($pushBlock -match "'update/release-request.json'") 'Release requires explicit request change'
+    Assert-True ($pushBlock -notmatch "'portable/\*\*'") 'Ordinary portable push must not publish'
     Assert-True ($wfContent -match 'Build-GitHubReleasePackage\.ps1') "Phai goi script dong goi"
     $publisher = Get-Content (Join-Path $repoRoot 'scripts\Publish-GitHubPortableRelease.ps1') -Raw
     Assert-True ($wfContent -match 'Publish-GitHubPortableRelease.ps1') 'Workflow calls audited publisher'

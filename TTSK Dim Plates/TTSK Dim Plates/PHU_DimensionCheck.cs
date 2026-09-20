@@ -74,6 +74,7 @@ namespace Tekla.Technology.Akit.UserScript
             public int Main, Views, Dimensions;
             public readonly List<Finding> Findings = new List<Finding>();
             public readonly List<string> Warnings = new List<string>();
+            public readonly List<string> SkippedAngles = new List<string>();
             public readonly Dictionary<int, List<Feature>> Features = new Dictionary<int, List<Feature>>();
             public readonly List<string> Relations = new List<string>();
             public bool GeometryCoverageTracked;
@@ -85,7 +86,8 @@ namespace Tekla.Technology.Akit.UserScript
                 bool incomplete=Warnings.Count>0 || Findings.Any(f=>f.Status=="REVIEW");
                 return (count==0 ? (incomplete ? "Chưa thể kết luận toàn bộ bản vẽ." : "Không phát hiện chân kích thước sai.")
                     : "Phát hiện "+count+" chân kích thước có dấu hiệu bắt sai.")
-                    + " Đã kiểm tra "+Dimensions+" chuỗi kích thước trong "+Views+" hình chiếu.";
+                    + " Đã kiểm tra "+Dimensions+" chuỗi kích thước trong "+Views+" hình chiếu."
+                    + (SkippedAngles.Count>0?" Bỏ qua "+SkippedAngles.Count+" DIM góc; không tính vào kết quả kiểm tra.":"");
             } }
             public string UserReport()
             {
@@ -95,6 +97,7 @@ namespace Tekla.Technology.Akit.UserScript
                         .AppendLine(UserReason(f));
                 if(Warnings.Count>0 || Findings.Any(f=>f.Status=="REVIEW"))
                     text.AppendLine().AppendLine("Một số chuỗi cần xác minh, dữ liệu chưa đọc được hoặc loại kích thước chưa được hỗ trợ. Đây không phải kết luận bản vẽ sai.");
+                foreach(string skipped in SkippedAngles)text.AppendLine().AppendLine(skipped);
                 return text.ToString();
             }
             public string Report()
@@ -115,6 +118,7 @@ namespace Tekla.Technology.Akit.UserScript
                         +" candidateOwners="+String.Join(",",f.CandidateOwners)+" measuredResidual="
                         +f.MeasurementResidual.ToString("0.###",CultureInfo.InvariantCulture));
                 foreach (var w in Warnings) s.AppendLine("INCOMPLETE " + w);
+                foreach (var skipped in SkippedAngles) s.AppendLine("SKIPPED ANGULAR " + skipped);
                 return s.ToString();
             }
         }
@@ -337,10 +341,17 @@ namespace Tekla.Technology.Akit.UserScript
                     if(!(dim is D.DimensionBase) && !(dim is D.StraightDimensionSet)) continue;
                     // Straight children are represented by the parent set's complete point list.
                     if(dim is D.StraightDimension) continue;
-                    if(!seen.Add(Id(dim))) continue;
-                    result.Dimensions++;
-                    if(!(dim is D.StraightDimensionSet))
-                    { result.Warnings.Add("VIEW="+Id(view)+" DIM="+Id(dim)+" chưa hỗ trợ "+dim.GetType().Name); continue; }
+                    int dimensionId;
+                    try {dimensionId=Id(dim);}
+                    catch(Exception ex)
+                    {
+                        // Even an unreadable angle ID must not abort the other DIMs in this drawing.
+                        if(dim is D.AngleDimension)IncludeDimension(result,Id(view),0,dim.GetType());
+                        else result.Warnings.Add("VIEW="+Id(view)+" không đọc được ID DIM: "+ex.Message);
+                        continue;
+                    }
+                    if(!seen.Add(dimensionId)) continue;
+                    if(!IncludeDimension(result,Id(view),dimensionId,dim.GetType()))continue;
                     try
                     {
                         var raw=Member(dim,"DimensionPoints") as IEnumerable;
@@ -353,6 +364,8 @@ namespace Tekla.Technology.Akit.UserScript
                         if(chainReview!=null) result.Warnings.Add("VIEW="+Id(view)+" DIM="+Id(dim)+" "+chainReview);
                         result.Objects[Id(dim)]=(D.DrawingObject)dim;
                         string dimensionLabel=DimensionLabel(points,normal);
+                        var displayed=ReadDisplayedSegments(dim as D.StraightDimensionSet,normal);
+                        if(displayed.Count>0)dimensionLabel=String.Join(" – ",displayed.Select(s=>s.Text))+" mm";
                         int index=0;
                         foreach(object value in points)
                         {
@@ -361,12 +374,14 @@ namespace Tekla.Technology.Akit.UserScript
                             finding.ViewLabel=ViewLabel(view);
                             finding.DimensionLabel=dimensionLabel;
                             finding.Location=Location(finding.Point,points,normal,finding.Foot);
+                            string measured=FootDimensionLabel(finding.Point,normal,displayed);
+                            if(measured!=null)finding.Location=measured;
                             if(normal!=null)
                             {
                                 double sign=distance<0?-1:1;
                                 string side=Math.Abs(normal.X)>Math.Abs(normal.Y)?(normal.X*sign<0?"Chuỗi bên trái":"Chuỗi bên phải")
                                     :(normal.Y*sign<0?"Chuỗi phía dưới":"Chuỗi phía trên");
-                                finding.Location=side+" — "+finding.Location.ToLowerInvariant();
+                                finding.Location=side+" — "+(measured==null?finding.Location.ToLowerInvariant():finding.Location);
                             }
                             if(incomplete && finding.Status=="ERROR")
                             { finding.Status="REVIEW"; finding.Reason="Geometry chưa đầy đủ. "+finding.Reason; }
@@ -389,6 +404,20 @@ namespace Tekla.Technology.Akit.UserScript
             var active=handler.GetActiveDrawing();
             if(active==null || !active.IsSameDatabaseObject(drawing)) throw new InvalidOperationException("Drawing thay đổi trong lúc kiểm tra.");
             return result;
+        }
+        internal static bool IncludeDimension(Result result,int viewId,int dimensionId,Type type)
+        {
+            if(typeof(D.AngleDimension).IsAssignableFrom(type))
+            {
+                result.SkippedAngles.Add("VIEW="+viewId+" DIM="+(dimensionId==0?"?":dimensionId.ToString())+
+                    " · DIM góc chưa hỗ trợ: chỉ bỏ qua DIM này, các DIM thẳng còn lại vẫn được kiểm tra.");
+                return false;
+            }
+            if(typeof(D.StraightDimension).IsAssignableFrom(type))return false;
+            if(!typeof(D.StraightDimensionSet).IsAssignableFrom(type))
+            {result.Warnings.Add("VIEW="+viewId+" DIM="+dimensionId+" chưa hỗ trợ "+type.Name);return false;}
+            result.Dimensions++;
+            return true;
         }
         // Cross-check the two dimensions describing the same end notch. A matching REF
         // elsewhere on the main part cannot replace the wall of this particular notch.
@@ -664,6 +693,43 @@ namespace Tekla.Technology.Akit.UserScript
             string position=rank==0?(vertical?"Chân dưới cùng":"Chân bên trái"):
                 rank==ordered.Count-1?(vertical?"Chân trên cùng":"Chân bên phải"):"Chân giữa số "+(rank+1);
             return position;
+        }
+        internal sealed class DisplayedSegment
+        {
+            public double A,B;
+            public string Text;
+        }
+        private static List<DisplayedSegment> ReadDisplayedSegments(D.StraightDimensionSet set,G.Vector normal)
+        {
+            var result=new List<DisplayedSegment>();double dx,dy;
+            if(set==null||!TryMeasurementAxis(normal,out dx,out dy))return result;
+            if(dx<-.0001||(Math.Abs(dx)<.0001&&dy<0)){dx=-dx;dy=-dy;}
+            try
+            {
+                var children=set.GetObjects();
+                while(children.MoveNext())
+                {
+                    var child=children.Current as D.StraightDimension;if(child==null)continue;
+                    string text=String.Concat(child.Value.Cast<object>().OfType<D.TextElement>().Select(e=>e.Value)).Trim();
+                    if(String.IsNullOrEmpty(text)||!Finite(child.StartPoint)||!Finite(child.EndPoint))return new List<DisplayedSegment>();
+                    double a=child.StartPoint.X*dx+child.StartPoint.Y*dy,b=child.EndPoint.X*dx+child.EndPoint.Y*dy;
+                    result.Add(new DisplayedSegment{A=Math.Min(a,b),B=Math.Max(a,b),Text=text});
+                }
+            }
+            catch{return new List<DisplayedSegment>();} // Presentation failure never changes the geometry verdict.
+            return result.OrderBy(s=>s.A).ThenBy(s=>s.B).ToList();
+        }
+        internal static string FootDimensionLabel(G.Point point,G.Vector normal,IList<DisplayedSegment> segments)
+        {
+            double dx,dy;if(!Finite(point)||!TryMeasurementAxis(normal,out dx,out dy))return null;
+            if(dx<-.0001||(Math.Abs(dx)<.0001&&dy<0)){dx=-dx;dy=-dy;}
+            double station=point.X*dx+point.Y*dy;
+            // A shared foot affects both adjacent values. Lead with the segment ending at
+            // the foot (left/below), and identify the other value without guessing which one is wrong.
+            var touching=segments.Where(s=>Math.Abs(s.A-station)<=Tolerance||Math.Abs(s.B-station)<=Tolerance)
+                .OrderBy(s=>Math.Abs(s.B-station)<=Tolerance?0:1).ThenBy(s=>s.A).Select(s=>s.Text).Distinct().ToList();
+            if(touching.Count==0)return null;
+            return "Kích thước "+touching[0]+" mm"+(touching.Count>1?" · giáp "+String.Join(" / ",touching.Skip(1))+" mm":"");
         }
         internal static string UserReason(Finding finding)
         {

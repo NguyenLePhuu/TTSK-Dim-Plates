@@ -39,6 +39,7 @@ TestResults/
 # Development snapshots kept outside version control
 backup/
 **/backup/
+/backups/
 
 # Local Codex artifacts and one-off launchers
 .codex-artifacts/

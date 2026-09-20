@@ -214,7 +214,7 @@ namespace Tekla.Technology.Akit.UserScript
 
                 foreach (ViewDimensionPlan plan in plans)
                 {
-                    if (!ApplyExactToTargetPart(plan.View, part.Identifier))
+                    if (!PHU_RevisionDimensionScope.IsActive && !ApplyExactToTargetPart(plan.View, part.Identifier))
                     {
                         return Fail(
                             result,
@@ -228,7 +228,7 @@ namespace Tekla.Technology.Akit.UserScript
                 foreach (ViewDimensionPlan plan in plans)
                 {
                     string deleteError;
-                    if (!DeleteDimensionsInView(plan.View, out deleteError))
+                    if (!PHU_RevisionDimensionScope.IsActive && !DeleteDimensionsInView(plan.View, out deleteError))
                     {
                         throw new InvalidOperationException(
                             "Khong xoa duoc dim cu trong view " + plan.Name + ": " + deleteError
@@ -574,6 +574,7 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static void VerifyManualScaleAppliedUnknown(List<View> views)
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             double manualScale;
             if (!TTSK_AutoDim_Plates.ManualDrawingScaleOverride.TryGet(out manualScale))
                 return;
@@ -821,6 +822,7 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static void ApplyExactRepresentationToViewUnknown(View view)
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             try
             {
                 if (view == null)
@@ -1301,6 +1303,7 @@ namespace Tekla.Technology.Akit.UserScript
             List<View> views
         )
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             try
             {
                 if (
@@ -1687,6 +1690,7 @@ namespace Tekla.Technology.Akit.UserScript
             double maxY
         )
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             try
             {
                 AABB oldBox = view != null ? view.RestrictionBox : null;
@@ -1707,6 +1711,7 @@ namespace Tekla.Technology.Akit.UserScript
             ViewDimensionPlan targetPlan
         )
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             try
             {
                 if (
@@ -1749,6 +1754,7 @@ namespace Tekla.Technology.Akit.UserScript
             double greenBoxGap
         )
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             try
             {
                 if (sectionView == null || frontView == null)
@@ -1904,6 +1910,7 @@ namespace Tekla.Technology.Akit.UserScript
             List<View> bottomViews
         )
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             try
             {
                 if (drawing == null || topView == null)
@@ -2136,6 +2143,7 @@ namespace Tekla.Technology.Akit.UserScript
             double remainingGap
         )
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             try
             {
                 List<View> stackViews = new List<View>();
@@ -2220,6 +2228,7 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static void UpdateDrawingTitle3ScaleUnknown(Drawing drawing, View referenceView)
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             try
             {
                 if (drawing == null)
@@ -2284,6 +2293,7 @@ namespace Tekla.Technology.Akit.UserScript
 
         private static void SelectViewsUnknown(List<View> views)
         {
+            if (PHU_RevisionDimensionScope.IsActive) return;
             try
             {
                 DrawingHandler drawingHandler = new DrawingHandler();

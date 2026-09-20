@@ -284,7 +284,6 @@ namespace Tekla.Technology.Akit.UserScript
             "TTSK_GEO_SECTION_MERGED";
         private const double PLATE_GEOMETRY_TOL = 0.5;
         private const double PLATE_PARALLEL_ANGLE_DEGREES = 3.0;
-        private const double PLATE_MIN_LONGITUDINAL_SPAN_RATIO = 0.55;
         private const double PLATE_MAX_BOUNDARY_OFFSET_RATIO = 0.30;
         private const double PLATE_SECTION_MARK_EXTENSION_PAPER_MM = 4.0;
         private const double PLATE_SECTION_INSERT_GAP_PAPER_MM = 12.0;
@@ -421,6 +420,10 @@ namespace Tekla.Technology.Akit.UserScript
             string sectionViewAttributeName
         )
         {
+            if (FindExistingTargetPlateSection(drawing, part) != null)
+                return new AutoSectionWorkerResult { IsPlateSection = true,
+                    Status = AutoSectionWorkerStatus.ExistingLayout,
+                    Message = "Plate da co mat cat cua chi tiet; giu nguyen va tiep tuc DIM." };
             var combined = new AutoSectionWorkerResult { IsPlateSection = true,
                 Status = AutoSectionWorkerStatus.NoSectionRequired };
             var messages = new List<string>();
@@ -433,11 +436,12 @@ namespace Tekla.Technology.Akit.UserScript
                     var analysis = AnalyzePlateFrontBevelFamily(drawing, model, part, family);
                     var one = RunPlateSectionPlanSafe(drawing, model, part, sectionViewAttributeName, analysis);
                     messages.Add(analysis.SectionName + ": " + one.Message);
-                    if (!one.IsSafeToContinue)
+                    if (!one.IsSafeToContinue || IsPlateSectionFailure(one.Status))
                     {
-                        // Preserve unsafe rollback diagnostics; ordinary section
-                        // detection/creation failures do not block the plate DIM.
-                        combined.IsSafeToContinue = false;
+                        combined.Status = one.Status;
+                        combined.IsSafeToContinue = one.IsSafeToContinue;
+                        combined.Message = String.Join(" | ", messages.ToArray());
+                        return combined;
                     }
                     if (one.Status == AutoSectionWorkerStatus.CreatedSingle)
                         combined.Status = AutoSectionWorkerStatus.CreatedSingle;
@@ -447,10 +451,24 @@ namespace Tekla.Technology.Akit.UserScript
                     if (analysis.SectionName == "A") { combined.SectionA = one.SectionA; combined.MarkA = one.MarkA; }
                     else { combined.SectionB = one.SectionA; combined.MarkB = one.MarkA; }
                 }
-                catch (Exception ex) { messages.Add((family == 0 ? "A: " : "B: ") + ex.Message); }
+                catch (Exception ex)
+                {
+                    combined.Status = AutoSectionWorkerStatus.PreflightFailed;
+                    messages.Add((family == 0 ? "A: " : "B: ") + ex.Message);
+                    combined.Message = String.Join(" | ", messages.ToArray());
+                    return combined;
+                }
             }
             combined.Message = String.Join(" | ", messages.ToArray());
             return combined;
+        }
+
+        private static bool IsPlateSectionFailure(AutoSectionWorkerStatus status)
+        {
+            return status == AutoSectionWorkerStatus.PreflightFailed
+                || status == AutoSectionWorkerStatus.CreateFailed
+                || status == AutoSectionWorkerStatus.RolledBack
+                || status == AutoSectionWorkerStatus.UnsafeRollbackFailed;
         }
 
         private static AutoSectionWorkerResult RunPlateSectionPlanSafe(
@@ -524,13 +542,8 @@ namespace Tekla.Technology.Akit.UserScript
 
             if (analysis.Decision == PlateAutoSectionDecision.Rejected)
             {
-                // REJECT_UNSAFE chỉ có nghĩa là không đủ bằng chứng hình học
-                // để cắt. Chưa có drawing object nào bị mutate, nên nhánh an
-                // toàn là bỏ qua Section và tiếp tục Plate AutoDim.
-                result.Status = AutoSectionWorkerStatus.NoSectionRequired;
-                result.Message =
-                    "Auto Section bo qua an toan; tiep tuc Plate AutoDim. "
-                    + analysis.Message;
+                result.Status = AutoSectionWorkerStatus.PreflightFailed;
+                result.Message = analysis.Message;
                 return result;
             }
 
@@ -622,6 +635,14 @@ namespace Tekla.Technology.Akit.UserScript
             // the geometry-derived name on the created mark before read-back.
             try
             {
+                // CreateSectionView may offset the returned view origin from
+                // its insertion point (notably for horizontal thickness views).
+                // Apply the plate's sheet-space placement explicitly before
+                // validating it; do not alter the Front or Top view origins.
+                sectionA.Origin = ClonePoint(analysis.InsertionPoint);
+                if (!sectionA.Modify())
+                    return FinishPlateCreateFailure(drawing, "Cannot place Plate Section " + analysis.SectionName,
+                        sectionA, markA, analysis.FrontView, analysis.TopView);
                 markA.Attributes.MarkName = analysis.SectionName;
                 if (!markA.Modify())
                     return FinishPlateCreateFailure(drawing, "Cannot set section mark name " + analysis.SectionName,
@@ -688,6 +709,13 @@ namespace Tekla.Technology.Akit.UserScript
             ModelPart part
         )
         {
+            DrawingView existing = FindExistingTargetPlateSection(drawing, part);
+            if (existing != null)
+                return new PlateAutoSectionAnalysisResult {
+                    Decision = PlateAutoSectionDecision.ExistingEquivalent,
+                    ExistingSectionA = existing,
+                    Message = "Plate da co mat cat cua chi tiet; giu nguyen va tiep tuc DIM."
+                };
             var straight = AnalyzePlateFrontBevelFamily(drawing, model, part, 0);
             var oblique = AnalyzePlateFrontBevelFamily(drawing, model, part, 1);
             var summary = new PlateAutoSectionAnalysisResult();
@@ -696,6 +724,11 @@ namespace Tekla.Technology.Akit.UserScript
             summary.Decision = PlateAutoSectionDecision.NoSection;
             foreach (var section in summary.Sections)
             {
+                if (section.Decision == PlateAutoSectionDecision.Rejected)
+                {
+                    summary.Decision = PlateAutoSectionDecision.Rejected;
+                    break;
+                }
                 if (section.Decision == PlateAutoSectionDecision.Required)
                     summary.Decision = PlateAutoSectionDecision.Required;
                 else if (section.Decision == PlateAutoSectionDecision.ExistingEquivalent
@@ -703,7 +736,25 @@ namespace Tekla.Technology.Akit.UserScript
                     summary.Decision = PlateAutoSectionDecision.ExistingEquivalent;
             }
             summary.Message = "A: " + straight.Message + " | B: " + oblique.Message;
+            if (summary.Decision == PlateAutoSectionDecision.Rejected)
+                summary.Message = "Plate Auto Section precheck failed: " + String.Join(" | ",
+                    summary.Sections.FindAll(s => s.Decision == PlateAutoSectionDecision.Rejected)
+                        .ConvertAll(s => s.SectionName + ": " + s.Message).ToArray());
             return summary;
+        }
+
+        private static DrawingView FindExistingTargetPlateSection(Drawing drawing, ModelPart part)
+        {
+            if (!(drawing is SinglePartDrawing) || part == null || part.Identifier == null)
+                return null;
+            DrawingObjectEnumerator views = drawing.GetSheet().GetAllViews();
+            while (views.MoveNext())
+            {
+                DrawingView view = views.Current as DrawingView;
+                if (IsSectionView(view) && ViewContainsPart(view, part.Identifier))
+                    return view;
+            }
+            return null;
         }
 
         private static PlateAutoSectionAnalysisResult AnalyzePlateFrontBevelFamily(
@@ -778,7 +829,7 @@ namespace Tekla.Technology.Akit.UserScript
                 }
 
                 List<PlateProjectedAxisCandidate> axisCandidates =
-                    BuildProjectedAxisCandidates(projectedSegments);
+                    BuildProjectedAxisCandidates(projectedSegments, true);
                 if (axisCandidates.Count == 0)
                     return RejectPlate(result, "Khong tim duoc ho canh dai trong FrontView.");
 
@@ -792,6 +843,10 @@ namespace Tekla.Technology.Akit.UserScript
                 for (int axisIndex = 0; axisIndex < axisCandidates.Count; axisIndex++)
                 {
                     PlateProjectedAxisCandidate axis = axisCandidates[axisIndex];
+                    // Front-vertical bevels are outside the plate Auto Section
+                    // contract. Family 0 is horizontal; family 1 is oblique.
+                    if (!IsPlateSectionAxisAllowed(axis.Direction, axis.RepresentativeLength))
+                        continue;
                     PlateAutoSectionAnalysisResult geometry =
                         new PlateAutoSectionAnalysisResult();
                     geometry.AxisOrigin = ClonePoint(axis.Origin);
@@ -824,15 +879,28 @@ namespace Tekla.Technology.Akit.UserScript
 
                     List<PlateLongitudinalWitness> axisWitnesses =
                         FindPlateLongitudinalWitnesses(projectedSegments, geometry);
-                    List<Point> axisCenterHull;
-                    List<Point> axisBevelSegments;
-                    bool axisHasCenterBevel = TryGetPlateCenterBevelProof(
-                        solid,
-                        geometry,
-                        axisWitnesses,
-                        out axisCenterHull,
-                        out axisBevelSegments
-                    );
+                    var allWitnesses = new List<PlateLongitudinalWitness>(axisWitnesses);
+                    allWitnesses.Sort((a, b) => {
+                        int span = (b.MaxT - b.MinT).CompareTo(a.MaxT - a.MinT);
+                        return span != 0 ? span : a.MinT.CompareTo(b.MinT);
+                    });
+                    var stations = new List<double> { geometry.MidLongitudinal };
+                    foreach (var witness in allWitnesses)
+                        stations.Add((witness.MinT + witness.MaxT) * 0.5);
+                    List<Point> axisCenterHull = new List<Point>();
+                    List<Point> axisBevelSegments = new List<Point>();
+                    bool axisHasCenterBevel = false;
+                    double stationMargin = Math.Max(0.001, GetPlateAdaptiveTolerance(geometry)) * 2.0;
+                    foreach (double station in stations)
+                    {
+                        geometry.MidLongitudinal = station;
+                        axisWitnesses = allWitnesses.FindAll(w =>
+                            w.MinT + stationMargin < station && w.MaxT - stationMargin > station);
+                        if (axisWitnesses.Count == 0) continue;
+                        axisHasCenterBevel = TryGetPlateCenterBevelProof(solid, geometry,
+                            axisWitnesses, out axisCenterHull, out axisBevelSegments);
+                        if (axisHasCenterBevel) break;
+                    }
                     bool axisHasFrontWitness = axisWitnesses.Count > 0;
                     anyFrontWitness = anyFrontWitness || axisHasFrontWitness;
 
@@ -958,6 +1026,13 @@ namespace Tekla.Technology.Akit.UserScript
                     (result.MaxLongitudinal - result.MinLongitudinal) * 0.01
                 );
                 result.DepthDown = result.DepthUp;
+                foreach (var witness in selected.Witnesses)
+                {
+                    double clearance = Math.Min(result.MidLongitudinal - witness.MinT,
+                        witness.MaxT - result.MidLongitudinal);
+                    result.DepthUp = Math.Min(result.DepthUp, clearance * 0.5);
+                }
+                result.DepthDown = result.DepthUp;
                 result.SectionViewCountBefore = CountSectionViews(drawing);
 
                 if (!inspectExisting)
@@ -977,7 +1052,8 @@ namespace Tekla.Technology.Akit.UserScript
                         result,
                         out equivalent,
                         out collision,
-                        out existingMessage
+                        out existingMessage,
+                        solid
                     )
                 )
                 {
@@ -992,7 +1068,7 @@ namespace Tekla.Technology.Akit.UserScript
                     result.Decision = PlateAutoSectionDecision.ExistingEquivalent;
                     result.ExistingSectionA = equivalent;
                     result.Message =
-                        "Plate da co center Section A-A tuong duong; khong tao trung. "
+                        "Plate da co Section " + result.SectionName + " tuong duong; khong tao trung. "
                         + result.FrontProof
                         + " "
                         + result.CenterProof
@@ -1003,7 +1079,7 @@ namespace Tekla.Technology.Akit.UserScript
 
                 result.Decision = PlateAutoSectionDecision.Required;
                 result.Message =
-                    "Plate can 1 center Section A-A. "
+                    "Plate can Section " + result.SectionName + " tai vi tri vat da xac nhan. "
                     + result.FrontProof
                     + " "
                     + result.CenterProof
@@ -1716,7 +1792,7 @@ namespace Tekla.Technology.Akit.UserScript
         }
 
         private static List<PlateProjectedAxisCandidate> BuildProjectedAxisCandidates(
-            List<ProjectedFrontSegment> segments
+            List<ProjectedFrontSegment> segments, bool includePartialEdges = false
         )
         {
             List<PlateProjectedAxisCandidate> result =
@@ -1740,7 +1816,8 @@ namespace Tekla.Technology.Akit.UserScript
             {
                 ProjectedFrontSegment segment = segments[i];
                 double segmentLength = DistancePlate2D(segment.Start, segment.End);
-                if (segmentLength < maximumLength * 0.5)
+                if (segmentLength <= PLATE_NUMERIC_EPSILON
+                    || (!includePartialEdges && segmentLength < maximumLength * 0.5))
                     continue;
                 double dx = (segment.End.X - segment.Start.X) / segmentLength;
                 double dy = (segment.End.Y - segment.Start.Y) / segmentLength;
@@ -1867,6 +1944,12 @@ namespace Tekla.Technology.Akit.UserScript
             }
         }
 
+        private static bool IsPlateSectionAxisAllowed(Point direction, double span)
+        {
+            return direction != null && IsFinitePoint(direction) && IsFinite(span)
+                && span > PLATE_NUMERIC_EPSILON && Math.Abs(direction.X) * span > 0.001;
+        }
+
         private static List<PlateLongitudinalWitness> FindPlateLongitudinalWitnesses(
             List<ProjectedFrontSegment> segments,
             PlateAutoSectionAnalysisResult analysis
@@ -1882,8 +1965,7 @@ namespace Tekla.Technology.Akit.UserScript
             // Oblique projections of the same solid edge can differ by sub-micron
             // rounding. Keep this floor local to Front witness matching.
             double geometryTolerance = Math.Max(0.001, GetPlateAdaptiveTolerance(analysis));
-            double minimumSpan = length * PLATE_MIN_LONGITUDINAL_SPAN_RATIO;
-            double centerMargin = Math.Max(geometryTolerance * 2.0, length * 0.01);
+            double minimumSpan = Math.Max(geometryTolerance * 4.0, analysis.Thickness * 2.0);
             double maximumOffset = width * PLATE_MAX_BOUNDARY_OFFSET_RATIO;
             double sinTolerance = Math.Sin(
                 PLATE_PARALLEL_ANGLE_DEGREES * Math.PI / 180.0
@@ -1918,11 +2000,7 @@ namespace Tekla.Technology.Akit.UserScript
                 double minT = Math.Min(startT, endT);
                 double maxT = Math.Max(startT, endT);
                 double span = maxT - minT;
-                if (
-                    span < minimumSpan
-                    || minT > analysis.MidLongitudinal - centerMargin
-                    || maxT < analysis.MidLongitudinal + centerMargin
-                )
+                if (span < minimumSpan)
                     continue;
 
                 double startN = PlateProjection(
@@ -1946,26 +2024,23 @@ namespace Tekla.Technology.Akit.UserScript
                 if (
                     offset <= geometryTolerance
                     || offset > maximumOffset
+                    || span < offset * 2.0
                 )
                     continue;
+                // A sloping outer contour can lie inside the whole-part bounds
+                // without being an internal bevel edge. Require its paired
+                // parallel exterior edge over the same longitudinal region.
+                double boundary = boundarySide > 0 ? analysis.MaxPerpendicular : analysis.MinPerpendicular;
+                if (!HasPlateParallelBoundarySupport(segments, analysis, boundary,
+                    minT, maxT, minimumSpan, geometryTolerance)) continue;
 
-                if (
-                    !HasPlateBoundaryEndpointSupport(
-                        segment.Start,
-                        segments,
-                        analysis,
-                        boundarySide,
-                        geometryTolerance
-                    )
-                    || !HasPlateBoundaryEndpointSupport(
-                        segment.End,
-                        segments,
-                        analysis,
-                        boundarySide,
-                        geometryTolerance
-                    )
-                )
-                    continue;
+                // This is a Front candidate, not sufficient proof of a bevel.
+                // At rounded corners or partial edge treatments, its endpoints
+                // can reach the outer boundary through several solid edges.
+                // Requiring a direct endpoint-to-boundary edge rejects those
+                // plates even when the exact center slice contains the bevel.
+                // AnalyzePlateFrontBevelFamily must also prove a diagonal on
+                // that same exterior boundary in TryGetPlateCenterBevelProof.
 
                 bool duplicate = false;
                 for (int j = 0; j < result.Count; j++)
@@ -2005,40 +2080,21 @@ namespace Tekla.Technology.Akit.UserScript
             return result;
         }
 
-        private static bool HasPlateBoundaryEndpointSupport(
-            Point endpoint,
-            List<ProjectedFrontSegment> segments,
-            PlateAutoSectionAnalysisResult analysis,
-            int boundarySide,
-            double geometryTolerance
-        )
+        private static bool HasPlateParallelBoundarySupport(List<ProjectedFrontSegment> segments,
+            PlateAutoSectionAnalysisResult geometry, double boundary, double minT, double maxT,
+            double minimumOverlap, double tolerance)
         {
-            if (endpoint == null || segments == null || analysis == null)
-                return false;
-            double boundary = boundarySide > 0
-                ? analysis.MaxPerpendicular
-                : analysis.MinPerpendicular;
-            double boundaryTolerance = geometryTolerance * 2.0;
-
-            for (int i = 0; i < segments.Count; i++)
+            foreach (var segment in segments)
             {
-                Point other = null;
-                if (DistancePlate2D(endpoint, segments[i].Start) <= geometryTolerance)
-                    other = segments[i].End;
-                else if (DistancePlate2D(endpoint, segments[i].End) <= geometryTolerance)
-                    other = segments[i].Start;
-                if (other == null || DistancePlate2D(endpoint, other) <= PLATE_NUMERIC_EPSILON)
-                    continue;
-
-                double otherN = PlateProjection(
-                    other,
-                    analysis.AxisOrigin,
-                    analysis.PerpendicularDirection
-                );
-                if (Math.Abs(otherN - boundary) <= boundaryTolerance)
-                    return true;
+                double aN = PlateProjection(segment.Start, geometry.AxisOrigin, geometry.PerpendicularDirection);
+                double bN = PlateProjection(segment.End, geometry.AxisOrigin, geometry.PerpendicularDirection);
+                if (Math.Abs(aN - boundary) > tolerance * 2.0
+                    || Math.Abs(bN - boundary) > tolerance * 2.0) continue;
+                double aT = PlateProjection(segment.Start, geometry.AxisOrigin, geometry.LongitudinalDirection);
+                double bT = PlateProjection(segment.End, geometry.AxisOrigin, geometry.LongitudinalDirection);
+                if (Math.Min(maxT, Math.Max(aT, bT)) - Math.Max(minT, Math.Min(aT, bT))
+                    >= minimumOverlap) return true;
             }
-
             return false;
         }
 
@@ -2140,7 +2196,10 @@ namespace Tekla.Technology.Akit.UserScript
 
             double minN = Math.Min(start.X, end.X);
             double maxN = Math.Max(start.X, end.X);
-            double geometryTolerance = GetPlateAdaptiveTolerance(analysis);
+            // IntersectAllFaces and projected solid endpoints have independent
+            // rounding. Use the same matching tolerance as the Front witness
+            // extractor; a stricter slice check rejects valid oblique bevels.
+            double geometryTolerance = Math.Max(0.001, GetPlateAdaptiveTolerance(analysis));
             for (int i = 0; i < witnesses.Count; i++)
             {
                 PlateLongitudinalWitness witness = witnesses[i];
@@ -2148,15 +2207,13 @@ namespace Tekla.Technology.Akit.UserScript
                 {
                     if (
                         Math.Abs(maxN - analysis.MaxPerpendicular) <= geometryTolerance * 2.0
-                        && minN <= witness.Level + geometryTolerance
-                        && maxN >= witness.Level - geometryTolerance
+                        && Math.Abs(minN - witness.Level) <= geometryTolerance * 2.0
                     )
                         return true;
                 }
                 else if (
                     Math.Abs(minN - analysis.MinPerpendicular) <= geometryTolerance * 2.0
-                    && minN <= witness.Level + geometryTolerance
-                    && maxN >= witness.Level - geometryTolerance
+                    && Math.Abs(maxN - witness.Level) <= geometryTolerance * 2.0
                 )
                     return true;
             }
@@ -2399,7 +2456,8 @@ namespace Tekla.Technology.Akit.UserScript
             PlateAutoSectionAnalysisResult analysis,
             out DrawingView equivalent,
             out bool collision,
-            out string message
+            out string message,
+            Solid frontSolid
         )
         {
             equivalent = null;
@@ -2428,7 +2486,8 @@ namespace Tekla.Technology.Akit.UserScript
                         section,
                         part,
                         analysis,
-                        out geometryMessage
+                        out geometryMessage,
+                        frontSolid
                     );
 
                     if (nameA && !sameGeometry)
@@ -2476,7 +2535,8 @@ namespace Tekla.Technology.Akit.UserScript
             DrawingView section,
             ModelPart part,
             PlateAutoSectionAnalysisResult analysis,
-            out string message
+            out string message,
+            Solid frontSolid = null
         )
         {
             message = "";
@@ -2526,15 +2586,7 @@ namespace Tekla.Technology.Akit.UserScript
                     PLATE_GEOMETRY_TOL * 2.0,
                     plateLength * 0.01
                 );
-                if (Math.Abs(station - analysis.MidLongitudinal) > stationTolerance)
-                {
-                    message =
-                        "station="
-                        + FormatDiagnosticNumber(station)
-                        + " != mid="
-                        + FormatDiagnosticNumber(analysis.MidLongitudinal);
-                    return false;
-                }
+                bool differentStation = Math.Abs(station - analysis.MidLongitudinal) > stationTolerance;
 
                 Vector frontLongitudinalGlobal = AddScaledVectors(
                     frontCs.AxisX,
@@ -2562,6 +2614,17 @@ namespace Tekla.Technology.Akit.UserScript
                     message = "Section axes do not represent true plate thickness";
                     return false;
                 }
+                // A manually positioned cut within the same constant bevel
+                // region is equivalent even when it is not at our chosen
+                // midpoint. Prove its exact profile instead of moving it or
+                // creating a duplicate. Wrong directions were rejected above.
+                string profileDiagnostic;
+                if (differentStation && !HasEquivalentPlateBevelAtStation(frontSolid, analysis, station, out profileDiagnostic))
+                {
+                    message = "Existing cut station has a different bevel profile: "
+                        + FormatDiagnosticNumber(station) + " " + profileDiagnostic;
+                    return false;
+                }
 
                 double scale = GetViewScale(section);
                 if (
@@ -2587,6 +2650,49 @@ namespace Tekla.Technology.Akit.UserScript
                 message = "equivalence audit loi: " + ex.Message;
                 return false;
             }
+        }
+
+        private static bool HasEquivalentPlateBevelAtStation(
+            Solid solid, PlateAutoSectionAnalysisResult analysis, double station, out string diagnostic)
+        {
+            diagnostic = "No continuous Front witness.";
+            try
+            {
+                // Reuse the analyzer's Solid in Front coordinates. Re-reading
+                // or reselecting the part under a nested work plane would mix
+                // the model object's cached coordinates with the slice frame.
+                if (solid == null) return false;
+                List<Point> points;
+                List<ProjectedFrontSegment> segments;
+                if (!TryCollectPlateProjectedSolidGeometry(solid, out points, out segments)) return false;
+                var geometry = new PlateAutoSectionAnalysisResult {
+                    AxisOrigin = analysis.AxisOrigin,
+                    LongitudinalDirection = analysis.LongitudinalDirection,
+                    PerpendicularDirection = analysis.PerpendicularDirection,
+                    MinLongitudinal = analysis.MinLongitudinal, MaxLongitudinal = analysis.MaxLongitudinal,
+                    MinPerpendicular = analysis.MinPerpendicular, MaxPerpendicular = analysis.MaxPerpendicular,
+                    Thickness = analysis.Thickness, MidLongitudinal = analysis.MidLongitudinal
+                };
+                var witnesses = FindPlateLongitudinalWitnesses(segments, geometry);
+                double margin = Math.Max(0.001, GetPlateAdaptiveTolerance(geometry)) * 2.0;
+                // Require the same continuous witness region at both stations.
+                witnesses.RemoveAll(w => Math.Min(station, analysis.MidLongitudinal) <= w.MinT + margin
+                    || Math.Max(station, analysis.MidLongitudinal) >= w.MaxT - margin);
+                if (witnesses.Count == 0) return false;
+                List<Point> planned, actual, bevels;
+                diagnostic = "Planned slice has no correlated bevel.";
+                if (!TryGetPlateCenterBevelProof(solid, geometry, witnesses, out planned, out bevels)) return false;
+                geometry.MidLongitudinal = station;
+                diagnostic = "Existing slice has no correlated bevel.";
+                if (!TryGetPlateCenterBevelProof(solid, geometry, witnesses, out actual, out bevels)) return false;
+                diagnostic = "Slice polygon mismatch.";
+                if (planned.Count != actual.Count) return false;
+                double tolerance = Math.Max(0.01, GetPlateAdaptiveTolerance(geometry) * 2.0);
+                foreach (Point point in planned)
+                    if (!actual.Exists(p => DistancePlate2D(p, point) <= tolerance)) return false;
+                return true;
+            }
+            catch (Exception ex) { diagnostic = ex.Message; return false; }
         }
 
         private static bool IsSectionView(DrawingView view)
@@ -2821,7 +2927,9 @@ namespace Tekla.Technology.Akit.UserScript
             )
             {
                 message =
-                    "Plate Section A khong nam ben phai va canh ngang voi FrontView; rollback.";
+                    "Plate Section A placement mismatch: actual=" + sectionA.Origin
+                    + ", planned=" + analysis.InsertionPoint + ", frontRight="
+                    + FormatDiagnosticNumber(frontRight) + "; rollback.";
                 return false;
             }
 

@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text;
 using C = Tekla.Technology.Akit.UserScript.PHU_DimensionCheck;
 using G = Tekla.Structures.Geometry3d;
+using D = Tekla.Structures.Drawing;
 
 // Replays operate on value snapshots only; no drawing mutation or selection.
 static class HardeningTests
@@ -60,6 +61,20 @@ static class HardeningTests
         var review=new C.Finding { Status="REVIEW",Reason="CHAIN: Hai chân trùng nhau." };
         Require(C.UserReason(review)=="Hai chân trùng nhau.","review explains chain issue");
 
+        foreach(bool anglesFirst in new[]{true,false})
+        {
+            var mixed=new C.Result {GeometryCoverageTracked=true};
+            var types=new[]{typeof(D.AngleDimension),typeof(D.StraightDimensionSet),typeof(D.AngleDimension),typeof(D.StraightDimensionSet)};
+            if(!anglesFirst)Array.Reverse(types);
+            for(int i=0;i<types.Length;i++)
+                if(C.IncludeDimension(mixed,1,i+1,types[i]))mixed.Findings.Add(Classify(P(1,0),n,hole));
+            Require(mixed.Dimensions==2&&mixed.SkippedAngles.Count==2,"angle objects are excluded from checked set count regardless of order");
+            Require(mixed.Findings.Count==2&&mixed.Findings.All(f=>f.Status=="ERROR"),"angles do not stop or downgrade remaining straight feet");
+            Require(mixed.Warnings.Count==0&&mixed.IncompleteGeometryViews.Count==0,"intentional angle exclusion cannot invalidate straight geometry coverage");
+            Require(!C.IncludeDimension(mixed,1,0,typeof(D.AngleDimension))&&mixed.Dimensions==2,"angle with unreadable ID still skipped locally");
+            Require(mixed.Report().Contains("SKIPPED ANGULAR")&&mixed.Summary.Contains("Bỏ qua 3 DIM góc"),"scope exclusions remain visible in reports");
+        }
+
         foreach(double angle in new[]{0.0,0.17,Math.PI/4,1.31,Math.PI,4.72})
         foreach(int mirror in new[]{-1,1})
         foreach(double size in new[]{0.5,1.0,7.0})
@@ -92,6 +107,9 @@ static class HardeningTests
             r=Notch(angle,mirror);r.GeometryCoverageTracked=true;r.Warnings.Add("VIEW=1 unsupported curved dimension");
             C.CheckNotchPairs(r);
             Require(Target(r).Status=="ERROR","unsupported unrelated set cannot disable readable notch pair");
+            r=Notch(angle,mirror);r.GeometryCoverageTracked=true;
+            C.IncludeDimension(r,1,99,typeof(D.AngleDimension));C.CheckNotchPairs(r);
+            Require(Target(r).Status=="ERROR","angle excluded in same view cannot disable readable notch pair");
             r=Notch(angle,mirror);r.GeometryCoverageTracked=true;r.IncompleteGeometryViews.Add(1);
             C.CheckNotchPairs(r);
             Require(Target(r).Status=="OK","incomplete local contour cannot prove notch relation");

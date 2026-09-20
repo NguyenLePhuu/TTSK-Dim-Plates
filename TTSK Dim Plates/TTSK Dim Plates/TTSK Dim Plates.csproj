@@ -173,7 +173,9 @@
     <Compile Include="Class1.cs" />
     <Compile Include="JapaneseDictionary.cs" />
     <Compile Include="ManualDrawingScaleOverride.cs" />
-    <Compile Include="MainForm.CheckMenu.cs" />
+    <Compile Include="MainForm.CheckMenu.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="MainForm.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -203,7 +205,28 @@
     <Compile Include="PHU_RefConnectionAutoDim_Temp.cs" />
     <Compile Include="PHU_Slot08_NeighborCleanup.cs" />
     <Compile Include="PHU_DimensionCheck.cs" />
-    <Compile Include="PHU_Slot09_ReportForm.cs" />
+    <Compile Include="PHU_DimensionBatch.cs" />
+    <Compile Include="PHU_DimensionBatchForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="PHU_DimensionRevision.cs" />
+    <Compile Include="PHU_ArrangeByReference.cs" />
+    <Compile Include="MainForm.ArrangeReference.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="MainForm.WorkJournal.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="WorkJournal.cs" />
+    <Compile Include="WorkJournalReportForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="PHU_DimensionRevisionForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="PHU_DimensionReportForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="PHU_CopyDrawingSnapshot_Temp.cs" />
     <Compile Include="PHU_BeamGridDimensionEngine.cs" />
     <Compile Include="PHU_ColumnProjectRouter.cs" />

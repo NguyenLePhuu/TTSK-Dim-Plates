@@ -315,6 +315,13 @@ public static class PHU_AllPartsDeletedMarker
         catch { }
     }
 
+    public static Tekla.Structures.Drawing.Line.LineAttributes CreateRevisionLineAttributes()
+    {
+        var attributes = new Tekla.Structures.Drawing.Line.LineAttributes();
+        ApplyDeletedLineAttributes(attributes);
+        return attributes;
+    }
+
     private static void ApplyDeletedLineAttributes(object attr)
     {
         if (attr == null)

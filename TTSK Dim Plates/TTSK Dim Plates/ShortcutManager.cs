@@ -11,6 +11,7 @@ namespace TTSK_AutoDim_Plates
         public const string ActionCreateDrawing = "CreateDrawing";
         public const string ActionBatchCreate = "BatchCreate";
         public const string ActionCheckDim = "CheckDim";
+        public const string ActionRevision = "Revision";
         public const string ActionCheckScale = "CheckScale";
         public const string ActionLineDistance = "LineDistance";
         public const string ActionRepeatLast = "RepeatLast";
@@ -149,6 +150,7 @@ namespace TTSK_AutoDim_Plates
                 string[] lines = File.ReadAllLines(_filePath, Encoding.UTF8);
                 bool hasBatchCreateSetting = false;
                 bool hasArrangeViewSetting = false;
+                bool hasRevisionSetting = false;
                 bool hasSlot07Setting = false;
                 bool hasSlot08Setting = false;
                 bool hasSlot09Setting = false;
@@ -188,6 +190,9 @@ namespace TTSK_AutoDim_Plates
                     )
                         hasArrangeViewSetting = true;
 
+                    if (string.Equals(actionId, ActionRevision, StringComparison.OrdinalIgnoreCase))
+                        hasRevisionSetting = true;
+
                     if (string.Equals(actionId, ActionSlot07, StringComparison.OrdinalIgnoreCase))
                         hasSlot07Setting = true;
                     if (string.Equals(actionId, ActionSlot08, StringComparison.OrdinalIgnoreCase))
@@ -220,6 +225,12 @@ namespace TTSK_AutoDim_Plates
                         _shortcuts[ActionAutoSection] = Keys.None;
 
                     _shortcuts[ActionArrangeView] = Keys.A;
+                    migratedDefaults = true;
+                }
+
+                if (!hasRevisionSetting)
+                {
+                    _shortcuts[ActionRevision] = Keys.R;
                     migratedDefaults = true;
                 }
 
@@ -431,6 +442,11 @@ namespace TTSK_AutoDim_Plates
             list.Add(
                 new ShortcutActionDefinition(
                     ActionCheckDim, "CheckDim", "Kiểm tra chân DIM trên bản vẽ đang mở", "C", Keys.C
+                )
+            );
+            list.Add(
+                new ShortcutActionDefinition(
+                    ActionRevision, "Revision", "Mở hộp thoại Revision cho bản vẽ đang mở", "R", Keys.R
                 )
             );
             list.Add(

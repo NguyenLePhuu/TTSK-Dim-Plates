@@ -141,11 +141,12 @@ try {
     $stage = Join-Path $run 'build'
     New-Item -ItemType Directory -Path $stage | Out-Null
     Write-Host '[2/4] Rebuild Release x64 vao thu muc rieng...'
-    # MSBuild receives Windows command-line arguments. A single trailing slash
-    # before a closing quote escapes that quote, so use a double trailing slash.
-    $outDirArgument = '/p:OutDir="' + $stage + '\\"'
+    # Do not embed quotes or retain a trailing slash. Windows PowerShell 5.1
+    # adds native-command quoting itself, and that final slash would escape its
+    # closing quote. MSBuild normalizes OutDir before writing build outputs.
+    $outDirArgument = '/p:OutDir=' + $stage.TrimEnd('\')
     $buildArguments = @($project, '/t:Rebuild', '/p:Configuration=Release', '/p:Platform=x64', $outDirArgument, '/nologo', '/v:q', '/clp:ErrorsOnly')
-    if ($TeklaBinPath) { $buildArguments += ('/p:TeklaBinPath="' + $TeklaBinPath.TrimEnd('\\') + '"') }
+    if ($TeklaBinPath) { $buildArguments += ('/p:TeklaBinPath=' + $TeklaBinPath.TrimEnd('\')) }
     & $msbuild @buildArguments
     if ($LASTEXITCODE -ne 0) { throw 'Build loi. Portable cu chua bi thay doi.' }
     # Only actual project runtime files; no local settings or Tekla product DLLs.
@@ -220,7 +221,7 @@ try {
         $remote = Invoke-Git @('ls-remote', '--exit-code', 'origin', "refs/heads/$branch") 3
         if (($remote -split '\s+')[0] -ne $head) { throw 'Commit tren GitHub khong khop HEAD. Chua xac minh duoc dong bo.' }
         if ($branch -eq 'main') {
-            Write-Host "[THANH CONG] Portable da xac minh SHA256; GitHub main = $head. GitHub Actions se tu dong dong goi va phat hanh Release chinh thuc neu co thay doi runtime."
+            Write-Host "[THANH CONG] Portable da xac minh SHA256; GitHub main = $head. GitHub Actions se tu dong dong goi va phat hanh Release chinh thuc khi release-request.json thay doi."
         } else {
             Write-Host "[THANH CONG] Portable da xac minh SHA256; GitHub $branch = $head. Da push branch $branch, chua phat hanh Release (chi phat hanh tu branch main)."
         }

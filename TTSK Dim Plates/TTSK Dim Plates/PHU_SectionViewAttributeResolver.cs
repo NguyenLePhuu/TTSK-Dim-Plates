@@ -929,11 +929,10 @@ namespace Tekla.Technology.Akit.UserScript
                 diagnostic = "The selected drawing property has no Section views row.";
                 return false;
             }
-            if (string.Equals(sectionRow.EnabledCode, "0", StringComparison.OrdinalIgnoreCase))
-            {
-                diagnostic = "The selected drawing property disables Section views.";
-                return false;
-            }
+            // The row's creation switch controls Tekla's automatic drawing
+            // generation, not whether its View property can be loaded for an
+            // explicit Auto Section command. Preserve EnabledCode as evidence,
+            // but resolve the configured property even when creation is off.
 
             string attributeName = NormalizeViewAttributeName(
                 sectionRow.ViewAttributeName

@@ -106,7 +106,11 @@ if ($true) {
     if (!$msbuild) { $msbuild = & $vswhere -latest -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1 }
     $proj = Join-Path $repoRoot "TTSK Dim Plates\TTSK Dim Plates\TTSK Dim Plates.csproj"
     $outDir = Join-Path $repoRoot ".codex-artifacts\test-build\"
-    & $msbuild $proj /t:Rebuild /p:Configuration=Release /p:Platform=x64 ('/p:OutDir="' + $outDir.TrimEnd('\') + '\\"') /nologo /v:q /clp:ErrorsOnly
+    # Do not embed quotes or retain a trailing slash. Windows PowerShell 5.1
+    # adds native-command quoting itself, and that final slash would escape its
+    # closing quote. MSBuild normalizes OutDir before writing build outputs.
+    $outDirArgument = '/p:OutDir=' + $outDir.TrimEnd('\')
+    & $msbuild $proj /t:Rebuild /p:Configuration=Release /p:Platform=x64 $outDirArgument /nologo /v:q /clp:ErrorsOnly
     if ($LASTEXITCODE -ne 0) { throw 'Fresh build failed; do not test an old EXE.' }
 }
 
