@@ -25,6 +25,8 @@ class Program
         {
             if(args.Length==2 && args[0]=="--batch-preview") { BatchTests.Preview(args[1]); return 0; }
             if(args.Length==1 && args[0]=="--batch-tests") { BatchTests.Run(); return 0; }
+            if(args.Length==1 && args[0]=="--revision-matching-tests") { RevisionMatchingTests.Run(); return 0; }
+            if(args.Length==2 && args[0]=="--revision-matching-audit") { RevisionMatchingTests.Audit(args[1]); return 0; }
             if(args.Length==2 && args[0]=="--revision-create-tests") { RevisionCreateTests.Run(args[1]); return 0; }
             if(args.Length==2 && args[0]=="--revision-rollback-live") { RevisionCreateTests.Rollback(args[1]); return 0; }
             if(args.Length==2 && args[0]=="--revision-navigation-live") { RevisionCreateTests.NavigationLive(args[1]); return 0; }

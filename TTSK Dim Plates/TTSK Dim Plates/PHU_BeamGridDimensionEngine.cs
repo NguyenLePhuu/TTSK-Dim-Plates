@@ -73,6 +73,7 @@ namespace Tekla.Technology.Akit.UserScript
         private sealed class ViewGeometry
         {
             public string Key;
+            public bool SupplementaryInteriorView;
             public TSD.View View;
             public P2 RefLeft;
             public P2 RefRight;
@@ -254,6 +255,12 @@ namespace Tekla.Technology.Akit.UserScript
                     }
                 }
 
+                // Only opt additional standard longitudinal views into the new
+                // interior-grid case. Their existing Shape handoff supplies the
+                // exact feet/tier; views not dimensioned by Shape stay untouched.
+                if (_requestedAxisCount == 1 || _requestedAxisCount == 2)
+                    PrepareSupplementaryInteriorViews(context, currentToGlobal);
+
                 _context = context;
                 LastRunMessage =
                     "Grid preflight passed: requested "
@@ -287,6 +294,9 @@ namespace Tekla.Technology.Akit.UserScript
             ViewGeometry geometry = FindPreparedView(view);
             if (geometry == null)
                 return false;
+
+            if (geometry.SupplementaryInteriorView)
+                return geometry.Axes != null && geometry.Axes.InteriorEnd != null;
 
             if (_requestedAxisCount == 1)
             {
@@ -866,11 +876,84 @@ namespace Tekla.Technology.Akit.UserScript
 
             foreach (KeyValuePair<string, ViewGeometry> pair in _context.Views)
             {
-                if (Object.ReferenceEquals(pair.Value.View, view))
+                if (Object.ReferenceEquals(pair.Value.View, view)
+                    || (pair.Value.SupplementaryInteriorView && pair.Value.View.IsSameDatabaseObject(view)))
                     return pair.Value;
             }
 
             return null;
+        }
+
+        private static bool IsSupplementaryInteriorRole(string viewType, int mode)
+        {
+            return (mode == 1 || mode == 2)
+                && (String.Equals(viewType, "BottomView", StringComparison.OrdinalIgnoreCase)
+                    || (mode == 2 && String.Equals(viewType, "BackView", StringComparison.OrdinalIgnoreCase)));
+        }
+
+        private static void PrepareSupplementaryInteriorViews(Context context, TSG.Matrix currentToGlobal)
+        {
+            TSD.DrawingObjectEnumerator views = context.Drawing.GetSheet().GetAllViews();
+            int index = 0;
+            while (views.MoveNext())
+            {
+                TSD.View view = views.Current as TSD.View;
+                if (view == null || !IsSupplementaryInteriorRole(view.ViewType.ToString(), _requestedAxisCount))
+                    continue;
+                bool alreadyPrepared = false;
+                foreach (ViewGeometry existing in context.Views.Values)
+                    if (existing.View.IsSameDatabaseObject(view))
+                        alreadyPrepared = true;
+                if (alreadyPrepared)
+                    continue;
+
+                try
+                {
+                    ViewGeometry geometry = ReadViewGeometry(context.Model, context.MainPart, view,
+                        view.ViewType.ToString(), currentToGlobal);
+                    GridAxis interior = ResolveUniqueInteriorEndAxis(geometry);
+                    if (interior == null)
+                        continue;
+                    geometry.Axes = new ResolvedAxes();
+                    geometry.Axes.InteriorEnd = interior;
+                    geometry.SupplementaryInteriorView = true;
+                    context.Views.Add("INTERIOR_" + (++index).ToString(CultureInfo.InvariantCulture), geometry);
+                }
+                catch (InvalidOperationException)
+                {
+                    // Non-longitudinal/missing-main views cannot claim a Shape
+                    // total. Optional discovery must not disable TOP/FRONT.
+                }
+            }
+        }
+
+        private static void BuildSupplementaryInteriorPlans(Context context, List<DimPlan> plans)
+        {
+            foreach (ViewGeometry view in context.Views.Values)
+            {
+                if (!view.SupplementaryInteriorView || view.Takeover == null)
+                    continue;
+                TotalTakeover takeover = view.Takeover;
+                view.HorizontalGridPlanCount = 0;
+                double g1 = takeover.HorizontalLineNormal;
+                AddHorizontalPlanMode1(plans, view, view.Key + " G1 REF-EDGE-EDGE-REF", g1,
+                    view.RefLeft, takeover.OriginalLeft, takeover.OriginalRight, view.RefRight);
+                AddInteriorHorizontalPlans(view, g1,
+                    g1 + takeover.NextHorizontalTierOffset - takeover.HorizontalTierOffset,
+                    g1 + takeover.OuterHorizontalTierOffset - takeover.HorizontalTierOffset, plans);
+            }
+        }
+
+        private static void AddInteriorHorizontalPlans(ViewGeometry view, double g1Line,
+            double g2Line, double g3Line, List<DimPlan> plans)
+        {
+            // Inside -> outside: edge chain, grid chain, REF overall.
+            // Keep Shape's exact first level and its scale-aware tier steps.
+            AddHorizontalPlanMode1(plans, view, view.Key + " G2 REF-GRID-REF", g2Line,
+                view.RefLeft, FromLocal(view, view.Axes.InteriorEnd.Coordinate, g1Line), view.RefRight);
+            AddHorizontalPlanMode1(plans, view, view.Key + " G3 REF-REF", g3Line,
+                view.RefLeft, view.RefRight);
+            view.HorizontalGridPlanCount += 2;
         }
 
         private static ViewGeometry ReadViewGeometry(
@@ -929,11 +1012,12 @@ namespace Tekla.Technology.Akit.UserScript
             if (result.RefLength <= GeometryTolerance)
                 throw new InvalidOperationException(key + " reference line is invalid.");
 
-            if (String.Equals(key, "TOP", StringComparison.OrdinalIgnoreCase))
+            if (String.Equals(key, "TOP", StringComparison.OrdinalIgnoreCase)
+                || _requestedAxisCount == 1 || _requestedAxisCount == 2)
             {
                 // Keep the no-cut line above as the approved REF span. The cut
                 // reference line is the exact physical MainPart span and is used
-                // only to classify a TOP Grid that falls inside the main beam.
+                // only to classify a Grid that falls inside the main beam.
                 List<P2> mainSpan = ReadReferenceLine(
                     mainPart,
                     true,
@@ -1042,7 +1126,8 @@ namespace Tekla.Technology.Akit.UserScript
 
             if (requestedAxisCount == 2)
             {
-                if (left == null && right == null)
+                resolved.InteriorEnd = ResolveUniqueInteriorEndAxis(view);
+                if (left == null && right == null && resolved.InteriorEnd == null)
                     throw new InvalidOperationException(view.Key + " needs one resolved End Grid.");
                 if (left == null)
                 {
@@ -1284,7 +1369,7 @@ namespace Tekla.Technology.Akit.UserScript
                     continue;
                 }
 
-                // Grid=1 has one semantic TOP axis. More than one strict
+                // Modes 1/2 have one semantic interior axis. More than one strict
                 // interior candidate is ambiguous, so do not guess.
                 if (interior != null)
                     return null;
@@ -1381,7 +1466,8 @@ namespace Tekla.Technology.Akit.UserScript
             }
 
             if (requestedAxisCount == 2)
-                return (hasLeftEnd || hasRightEnd ? 1 : 0) + (hasCross ? 1 : 0);
+                return (hasLeftEnd || hasRightEnd || ResolveUniqueInteriorEndAxis(view) != null ? 1 : 0)
+                    + (hasCross ? 1 : 0);
             return (hasLeftEnd ? 1 : 0) + (hasRightEnd ? 1 : 0) + (hasCross ? 1 : 0);
         }
 
@@ -1398,12 +1484,14 @@ namespace Tekla.Technology.Akit.UserScript
                     BuildViewPlansMode1(top, true, plans);
                 if (context.Views.TryGetValue("FRONT", out front) && front != null)
                     BuildViewPlansMode1(front, false, plans);
+                BuildSupplementaryInteriorPlans(context, plans);
                 return plans;
             }
 
             // Mode 2 & 3: Legacy behavior unchanged
             BuildViewPlans(context.Views["TOP"], true, plans);
             BuildViewPlans(context.Views["FRONT"], false, plans);
+            BuildSupplementaryInteriorPlans(context, plans);
             return plans;
         }
 
@@ -1436,36 +1524,9 @@ namespace Tekla.Technology.Akit.UserScript
 
                 if (view.Axes.InteriorEnd != null)
                 {
-                    // TOP CENTER uses the approved three-tier order:
-                    // inner  G1 = REF-EDGE-EDGE-REF
-                    // middle G2 = REF-REF
-                    // outer  G3 = REF-GRID-REF
-                    // The working left/right branch below remains unchanged.
-                    AddHorizontalPlanMode1(
-                        plans,
-                        view,
-                        view.Key + " G2 REF-REF",
-                        g2Line,
-                        view.RefLeft,
-                        view.RefRight
-                    );
-
                     double g3Line =
-                        g1Line
-                        + (takeover.OuterHorizontalTierOffset - takeover.HorizontalTierOffset);
-                    // Start only the center Grid extension at the inner G1
-                    // level. This matches the approved TOP drawing and avoids
-                    // dragging that extension through the beam/detail area.
-                    AddHorizontalPlanMode1(
-                        plans,
-                        view,
-                        view.Key + " G3 REF-GRID-REF",
-                        g3Line,
-                        view.RefLeft,
-                        FromLocal(view, view.Axes.InteriorEnd.Coordinate, g1Line),
-                        view.RefRight
-                    );
-                    view.HorizontalGridPlanCount += 2;
+                        g1Line + (takeover.OuterHorizontalTierOffset - takeover.HorizontalTierOffset);
+                    AddInteriorHorizontalPlans(view, g1Line, g2Line, g3Line, plans);
                     return;
                 }
 
@@ -1729,7 +1790,10 @@ namespace Tekla.Technology.Akit.UserScript
 
             if (_requestedAxisCount == 1 || _requestedAxisCount == 2)
             {
-                AddSingleEndBaseHorizontalPlan(view, g2Line, plans);
+                if (_requestedAxisCount == 2 && view.Axes.InteriorEnd != null)
+                    AddInteriorHorizontalPlans(view, g1Line, g2Line, g3Line, plans);
+                else
+                    AddSingleEndBaseHorizontalPlan(view, g2Line, plans);
 
                 if (_requestedAxisCount == 2)
                     AddCrossGridPlan(view, takeover, plans);
@@ -1910,6 +1974,8 @@ namespace Tekla.Technology.Akit.UserScript
             // Mode 2 & 3: Giữ nguyên 100% logic cũ
             foreach (KeyValuePair<string, ViewGeometry> pair in context.Views)
             {
+                if (pair.Value.SupplementaryInteriorView)
+                    continue; // Only active Shape handoffs participate.
                 if (pair.Value.Takeover == null)
                     throw new InvalidOperationException(
                         pair.Key + " Shape total handoff was not completed."

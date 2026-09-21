@@ -29,6 +29,9 @@ using M = Tekla.Structures.Model;
             public bool HasPaperGeometry;
             public double FootA, FootB;
             public bool HasFeet;
+            // DPM witness starts are clipped by extension gaps; they are NOT model feet.
+            // Keep their provenance so rendered corridors can support regenerated chains.
+            public bool HasWitnessGeometry;
             public string Text;
         }
         [Serializable]
@@ -45,6 +48,8 @@ using M = Tekla.Structures.Model;
         {
             public int Id, ViewId;
             public string View, Before, After, Reason, Signature, SetSignature, Message;
+            // Presentation data only; comparison and snapshot matching keep their existing rules.
+            public ContentBlock ContentBefore, ContentAfter;
             public bool Changed, Review, AlreadyRed, IsNew, ReadOnly;
             public D.DrawingColors? NativeColor;
             public D.StraightDimensionSet Object;
@@ -228,14 +233,21 @@ using M = Tekla.Structures.Model;
                     double value;
                     if (texts.Count != 1 || points.Count != 2 || !TryNumber(Convert.ToString(Member(texts[0], "Text")), out value))
                     { target.UnsupportedDimensions.Add((int)Number(group,"Id")); warnings.Add("Snapshot: DIM " + Number(group, "Id") + " có nội dung/định dạng chưa hỗ trợ."); continue; }
-                    double angle = Number(texts[0], "Angle"), x = Math.Cos(angle), y = Math.Sin(angle);
+                    double dx=Number(points[1],"X")-Number(points[0],"X"),dy=Number(points[1],"Y")-Number(points[0],"Y");
+                    double length=Math.Sqrt(dx*dx+dy*dy);
+                    if(!Finite(length)||length<.001)
+                    {target.UnsupportedDimensions.Add((int)Number(group,"Id"));warnings.Add("Snapshot: DIM không có khoảng đo hợp lệ.");continue;}
+                    // Arrow stations define the measurement axis. Text can be horizontal,
+                    // reversed, or rounded independently of an inclined dimension line.
+                    double x=dx/length,y=dy/length;
                     // Canonical direction makes reversed endpoint/enumeration order equivalent.
                     if (x < -0.0001 || (Math.Abs(x) < 0.0001 && y < 0)) { x = -x; y = -y; }
                     if (Math.Abs(x) < 0.0001) x = 0;
                     if (Math.Abs(y) < 0.0001) y = 0;
                     double a = Number(points[0], "X") * x + Number(points[0], "Y") * y;
                     double b = Number(points[1], "X") * x + Number(points[1], "Y") * y;
-                    if (Math.Abs(a - b) < 0.001) { warnings.Add("Snapshot: DIM không có khoảng đo hợp lệ."); continue; }
+                    if (!Finite(a)||!Finite(b)||Math.Abs(a-b)<.001)
+                    {target.UnsupportedDimensions.Add((int)Number(group,"Id"));warnings.Add("Snapshot: DIM không có khoảng đo hợp lệ.");continue;}
                     // Scale derived from displayed value and arrow span is used only for matching.
                     // Value comparison uses the actual printed number, not this reconstructed geometry.
                     double scale = value / Math.Abs(a - b);
@@ -260,7 +272,7 @@ using M = Tekla.Structures.Model;
             var normal = Member(set, "UpDirection") as Tekla.Structures.Geometry3d.Vector;
             if (normal == null) throw new InvalidDataException("Không đọc được hướng đo.");
             double length = Math.Sqrt(normal.X * normal.X + normal.Y * normal.Y);
-            if (length < 1e-9 || Double.IsNaN(length)) throw new InvalidDataException("Hướng đo không hợp lệ.");
+            if (length < 1e-9 || !Finite(length)) throw new InvalidDataException("Hướng đo không hợp lệ.");
             double x = normal.Y / length, y = -normal.X / length;
             if (x < -0.0001 || (Math.Abs(x) < 0.0001 && y < 0)) { x = -x; y = -y; }
             foreach(var child in children)
@@ -302,6 +314,8 @@ using M = Tekla.Structures.Model;
             {
                 var baseline = old.SingleOrDefault(v => v.Id == Id(view));
                 var presentation=current.SingleOrDefault(v=>v.Id==Id(view));
+                bool scaleReview=baseline!=null&&SnapshotScaleDiffers(baseline,view.Attributes.Scale);
+                if(scaleReview)result.Warnings.Add("Hình chiếu "+Id(view)+": tỷ lệ snapshot khác hiện hành; cần đối chiếu thủ công.");
                 var paperById=presentation==null?null:presentation.Segments.ToLookup(s=>s.Id);
                 var chains=Chains(baseline==null?new List<Segment>():baseline.Segments);
                 var objects = view.GetAllObjects(); var seen = new HashSet<int>();
@@ -316,7 +330,7 @@ using M = Tekla.Structures.Model;
                     if (!seen.Add(Id(set))) continue;
                     sets.Add(set);
                 }
-                var members=new Dictionary<int,Item>();
+                var members=new Dictionary<int,Item>();bool incompleteCurrent=false;
                 foreach(var set in sets)
                 {
                     try
@@ -330,13 +344,14 @@ using M = Tekla.Structures.Model;
                             if(paper==null||Math.Abs(paper.Value-segment.Value)>.0001)throw new InvalidDataException("Chưa đọc đủ hình học hiển thị của DIM; kiểm tra lại.");
                             segment.PaperA=paper.PaperA;segment.PaperB=paper.PaperB;segment.Level=paper.Level;segment.HasPaperGeometry=true;
                             segment.FootA=paper.FootA;segment.FootB=paper.FootB;segment.HasFeet=paper.HasFeet;
+                            segment.HasWitnessGeometry=paper.HasWitnessGeometry;
                             pending.Add(new Item {Id=segment.Id,ViewId=Id(view),View=ViewName(view),Object=set,Dimension=children[segment.Id],
                                 Segments=new List<Segment>{segment},Signature=Signature(new List<Segment>{segment}),SetSignature=setSignature,After=segment.Text});
                         }
                         // An unreadable child invalidates the entire set, never publish a partial chain.
                         foreach(var item in pending)members.Add(item.Id,item);
                     }
-                    catch(Exception ex){result.Items.Add(new Item{Id=Id(set),ViewId=Id(view),View=ViewName(view),Object=set,Review=true,Before="?",After="Chưa đọc được",Reason=ex.GetBaseException().Message});}
+                    catch(Exception ex){incompleteCurrent=true;result.Items.Add(new Item{Id=Id(set),ViewId=Id(view),View=ViewName(view),Object=set,Review=true,Before="?",After="Chưa đọc được",Reason=ex.GetBaseException().Message});}
                 }
                 // A visual chain may have multiple native sets after assigning different colours.
                 var visualChains=Chains(members.Values.SelectMany(i=>i.Segments));
@@ -344,15 +359,15 @@ using M = Tekla.Structures.Model;
                 for(int chainIndex=0;chainIndex<visualChains.Count;chainIndex++)
                 {
                     var segments=visualChains[chainIndex];var chain=chainMatches[chainIndex];bool ambiguous=chainReviews[chainIndex];
-                    ambiguous|=chain==null&&baseline!=null&&baseline.UnsupportedDimensions.Count>0;
                     var matched=MatchChainSegments(segments,chain);
                     for(int i=0;i<segments.Count;i++)
                     {
                         var segment=segments[i];var before=matched[i];var child=members[segment.Id];
-                        child.Before=before==null?(ambiguous?"?":"DIM mới"):before.Text;child.IsNew=before==null&&!ambiguous;
-                        child.Changed=!ambiguous&&(before==null||Math.Abs(segment.Value-before.Value)>.0001);child.Review=ambiguous;
-                        child.Reason=ambiguous?"Chưa xác định duy nhất chân đo trong snapshot; không tự đổi màu.":
-                            before==null?"Chân đo/cụm DIM chưa có trong snapshot. DIM mới.":"Đối chiếu chân đo trong cùng cụm DIM; không phụ thuộc ID hay vị trí kéo dòng DIM.";
+                        bool review=RevisionReviewRequired(baseline,segments,chain,before,ambiguous,incompleteCurrent,scaleReview);
+                        child.Before=before==null?(review?"?":"DIM mới"):before.Text;child.IsNew=before==null&&!review;
+                        child.Changed=!review&&(before==null||Math.Abs(segment.Value-before.Value)>.0001);child.Review=review;
+                        child.Reason=review?"Chưa đủ dữ liệu/không xác định duy nhất cụm DIM trong snapshot; không tự đổi màu.":
+                            before==null?"Khoảng đo/cụm DIM chưa có trong snapshot. DIM mới.":"Đối chiếu hướng, khoảng đo và hình học nét dóng của cụm DIM; không coi đầu nét dóng là chân đo thật.";
                         result.Compared++;
                         if(!child.Changed&&!child.Review){result.Unchanged++;result.UnchangedItems.Add(child);}else result.Items.Add(child);
                     }
@@ -364,6 +379,21 @@ using M = Tekla.Structures.Model;
             var colorItems=result.Items.Concat(result.UnchangedItems).Where(i=>!i.ReadOnly&&i.Dimension!=null&&i.Object!=null).ToList();
             WriteColorPlans(result,colorItems.ToDictionary(i=>i,i=>D.DrawingColors.Black),true);
             return result;
+        }
+        static bool SnapshotScaleDiffers(SnapshotView snapshot,double scale)
+        {
+            if(!Finite(scale)||scale<=0)return true;
+            // Allow printed rounding, but never compare two different paper scales as
+            // though their station coordinates were in the same coordinate system.
+            return snapshot.Segments.Any(s=>Math.Abs((s.PaperB-s.PaperA)*scale-s.Value)>1.01);
+        }
+        static bool RevisionReviewRequired(SnapshotView baseline,IList<Segment> current,IList<Segment> matchedChain,
+            Segment matchedSegment,bool ambiguous,bool incompleteCurrent,bool scaleChanged)
+        {
+            // Failed extraction / changed coordinate system is never evidence of absence.
+            return baseline==null||ambiguous||incompleteCurrent||scaleChanged||current.Any(s=>!s.HasFeet)||
+                matchedChain!=null&&matchedChain.Any(s=>!s.HasFeet)||
+                baseline.UnsupportedDimensions.Count>0&&matchedSegment==null;
         }
         static string ViewName(D.View view)
         {
@@ -380,10 +410,38 @@ using M = Tekla.Structures.Model;
                 throw new InvalidOperationException("Bản vẽ/model đã thay đổi. Hãy kiểm tra lại Revision.");
             return drawing;
         }
+        public static bool CanSelectMark(Item item)
+        {
+            return item!=null&&item.ReadOnly&&item.ContentAfter!=null&&
+                item.ContentAfter.Kind=="Mark"&&item.ContentAfter.Id>0;
+        }
         public static void Select(Result result, Item item)
         {
-            EnsureActive(result);
-            if(item.ReadOnly)return;
+            if(item.ReadOnly&&!CanSelectMark(item))return;
+            var active=EnsureActive(result);
+            if(item.ReadOnly)
+            {
+                var sheet=active.GetSheet();
+                D.ViewBase target=Id(sheet)==item.ViewId?sheet:null;
+                var views=sheet.GetAllViews();
+                while(target==null&&views.MoveNext())
+                    if(Id(views.Current)==item.ViewId)target=views.Current as D.ViewBase;
+                D.MarkBase mark=null;
+                if(target!=null)
+                {
+                    var objects=target.GetAllObjects();
+                    while(objects.MoveNext())
+                    {
+                        var candidate=objects.Current as D.MarkBase;
+                        if(candidate!=null&&Id(candidate)==item.ContentAfter.Id){mark=candidate;break;}
+                    }
+                }
+                if(mark==null||!mark.Select())
+                    throw new InvalidOperationException("Mark không còn tồn tại. Hãy chạy lại Check Revision.");
+                if(!new D.DrawingHandler().GetDrawingObjectSelector().SelectObjects(new ArrayList {mark},false))
+                    throw new InvalidOperationException("Chưa chọn được mark trên bản vẽ. Hãy thử lại.");
+                return;
+            }
             D.DrawingObject selected=(D.DrawingObject)item.Dimension??item.Object;
             if (selected==null||!selected.Select()) throw new InvalidOperationException("DIM không còn tồn tại. Hãy kiểm tra lại.");
             if (!new D.DrawingHandler().GetDrawingObjectSelector().SelectObjects(new ArrayList { selected }, false))
@@ -404,12 +462,21 @@ using M = Tekla.Structures.Model;
         }
         public static int Apply(Result result, IList<Item> chosen)
         {
+            if(chosen.Any(i=>i==null||i.ReadOnly||i.Review||!i.Changed))
+                throw new InvalidOperationException("Chỉ tự tô đỏ DIM đã xác định thay đổi; DIM cần kiểm tra phải được chọn màu thủ công.");
             var colors=chosen.Distinct().ToDictionary(i=>i,i=>D.DrawingColors.Red);
             // Unchanged siblings may have intentional user colours; never reset them implicitly.
             return SetColors(result,colors);
         }
         public static int SetColor(Result result,IList<Item> chosen,D.DrawingColors color)
         { return SetColors(result,chosen.Distinct().ToDictionary(i=>i,i=>color)); }
+        public static int RestoreUnchangedColors(Result result,IList<Item> chosen,D.DrawingColors color)
+        {
+            if(chosen.Any(i=>i==null||i.Review||i.Changed||!result.UnchangedItems.Contains(i)))
+                throw new InvalidOperationException("Chỉ khôi phục màu DIM đã xác định không đổi.");
+            // A manual colour change between analysis and restoration must win.
+            return WriteColorPlans(result,chosen.Distinct().ToDictionary(i=>i,i=>color),false,D.DrawingColors.Red);
+        }
         static int SetColors(Result result,IDictionary<Item,D.DrawingColors> colors)
         {
             return WriteColorPlans(result,colors);
@@ -842,15 +909,28 @@ using D = Tekla.Structures.Drawing;
 
         public static List<List<Segment>> Chains(IEnumerable<Segment> source)
         {
+            var remaining=source.OrderBy(s=>s.PaperA).ThenBy(s=>s.PaperB).ThenBy(s=>s.Level).ThenBy(s=>s.Id).ToList();
             var chains=new List<List<Segment>>();
-            foreach(var s in source.OrderBy(s=>s.X).ThenBy(s=>s.Y).ThenBy(s=>s.Level).ThenBy(s=>s.PaperA))
+            // Group by connectivity, not floating-point sort order of line levels.
+            // A branch/duplicate remains separate and will require review when matching.
+            while(remaining.Count>0)
             {
-                var chain=chains.LastOrDefault(c=>c[0].X*s.X+c[0].Y*s.Y>.999&&Math.Abs(c[0].Level-s.Level)<.15&&
-                    Math.Abs(c.Max(p=>p.PaperB)-s.PaperA)<.15);
-                if(chain==null){chain=new List<Segment>();chains.Add(chain);}chain.Add(s);
+                var chain=new List<Segment>{remaining[0]};remaining.RemoveAt(0);
+                while(true)
+                {
+                    var next=remaining.Where(s=>CanJoin(chain.Last(),s)&&Math.Abs(chain[0].Level-s.Level)<.15).ToList();
+                    if(next.Count!=1)break;
+                    if(remaining.Count(s=>CanJoin(s,next[0]))>0)break;
+                    chain.Add(next[0]);remaining.Remove(next[0]);
+                }
+                chains.Add(chain);
             }
             return chains;
         }
+        static bool SameAxis(Segment a,Segment b)
+        {return a.X*b.X+a.Y*b.Y>0&&Math.Abs(a.X*b.Y-a.Y*b.X)<.0001;}
+        static bool CanJoin(Segment a,Segment b)
+        {return SameAxis(a,b)&&Math.Abs(a.Level-b.Level)<.15&&Math.Abs(a.PaperB-b.PaperA)<FootTolerance;}
         static void ReadWitnessFeet(Segment segment,IEnumerable<object> primitives)
         {
             var ends=new List<Tuple<double,double>>();
@@ -859,19 +939,23 @@ using D = Tekla.Structures.Drawing;
                 var a=Member(line,"StartPoint");var b=Member(line,"EndPoint");
                 double ax=Number(a,"X")*segment.X+Number(a,"Y")*segment.Y,bx=Number(b,"X")*segment.X+Number(b,"Y")*segment.Y;
                 double an=-Number(a,"X")*segment.Y+Number(a,"Y")*segment.X,bn=-Number(b,"X")*segment.Y+Number(b,"Y")*segment.X;
-                if(Math.Abs(ax-bx)>.02||Math.Abs(an-bn)<.05)continue;
+                if(!Finite(ax)||!Finite(bx)||!Finite(an)||!Finite(bn)||Math.Abs(ax-bx)>.02||Math.Abs(an-bn)<.05)continue;
+                // A witness must reach its own dimension line; unrelated tags do not qualify.
+                if(segment.Level<Math.Min(an,bn)-.03||segment.Level>Math.Max(an,bn)+.03)continue;
                 ends.Add(Tuple.Create((ax+bx)/2,Math.Abs(an-segment.Level)>Math.Abs(bn-segment.Level)?an:bn));
             }
             var left=ends.Where(p=>Math.Abs(p.Item1-segment.PaperA)<.03).OrderByDescending(p=>Math.Abs(p.Item2-segment.Level)).ToList();
             var right=ends.Where(p=>Math.Abs(p.Item1-segment.PaperB)<.03).OrderByDescending(p=>Math.Abs(p.Item2-segment.Level)).ToList();
             if(left.Count==0||right.Count==0)return;
-            segment.FootA=left[0].Item2;segment.FootB=right[0].Item2;segment.HasFeet=true;
+            segment.FootA=left[0].Item2;segment.FootB=right[0].Item2;segment.HasFeet=true;segment.HasWitnessGeometry=true;
         }
         public static List<Segment> MatchChain(IList<Segment> current,IList<List<Segment>> old,out bool ambiguous)
         {
             ambiguous=false;if(current.Count==0)return null;
+            if(current.Any(s=>!ValidMatchSegment(s))||old.Any(c=>c.Count==0||c.Any(s=>!ValidMatchSegment(s))))
+            {ambiguous=true;return null;}
             double a=current.Min(s=>s.PaperA),b=current.Max(s=>s.PaperB),span=b-a;
-            var candidates=old.Where(c=>c[0].X*current[0].X+c[0].Y*current[0].Y>.999&&SameChainFeet(current,c))
+            var candidates=old.Where(c=>SameAxis(c[0],current[0])&&SameChainFeet(current,c))
                 .Where(c=>Math.Max(0,Math.Min(b,c.Max(s=>s.PaperB))-Math.Max(a,c.Min(s=>s.PaperA)))/Math.Max(span,c.Max(s=>s.PaperB)-c.Min(s=>s.PaperA))>=.65 ||
                     current.Any(n=>c.Any(s=>SameInterval(n,s)))).ToList();
             // IDs are only a tie breaker inside geometrically compatible candidates.
@@ -894,13 +978,17 @@ using D = Tekla.Structures.Drawing;
                 // same witness feet.  The dimension-line level is the remaining
                 // geometric identity; use it only when one candidate is clearly
                 // nearer, and retain review for genuinely coincident candidates.
-                var ranked=candidates.Select(c=>new { Chain=c, Distance=ChainLevelDistance(current,c) })
+                var ranked=anchored.Select(c=>new { Chain=c.Chain, Distance=ChainLevelDistance(current,c.Chain) })
                     .OrderBy(p=>p.Distance).ToList();
                 if(ranked.Count>1&&ranked[1].Distance-ranked[0].Distance>.5)return ranked[0].Chain;
             }
             ambiguous=candidates.Count>1;return candidates.Count==1?candidates[0]:null;
         }
         const double FootTolerance=.025;
+        static bool ValidMatchSegment(Segment s)
+        {return s!=null&&s.HasPaperGeometry&&Finite(s.PaperA)&&Finite(s.PaperB)&&s.PaperB-s.PaperA>1e-6&&
+            Finite(s.Level)&&Finite(s.X)&&Finite(s.Y)&&Math.Abs(s.X*s.X+s.Y*s.Y-1)<.001&&
+            Finite(s.Value)&&s.Value>0&&(!s.HasFeet||Finite(s.FootA)&&Finite(s.FootB));}
         static bool SameInterval(Segment a,Segment b)
         {return Math.Abs(a.PaperA-b.PaperA)<FootTolerance&&Math.Abs(a.PaperB-b.PaperB)<FootTolerance;}
         // Resolve all chains together. Two recreated chains competing for one baseline must
@@ -923,11 +1011,28 @@ using D = Tekla.Structures.Drawing;
             var a=current.OrderBy(s=>s.PaperA).ToList();var b=old.OrderBy(s=>s.PaperA).ToList();
             if(a[0].HasFeet&&b[0].HasFeet&&a.Last().HasFeet&&b.Last().HasFeet)
             {
-                return Math.Abs(a[0].FootA-b[0].FootA)<=.3&&Math.Abs(a.Last().FootB-b.Last().FootB)<=.3;
+                if(Math.Abs(a[0].FootA-b[0].FootA)<=.3&&Math.Abs(a.Last().FootB-b.Last().FootB)<=.3)return true;
+                // Create drawing changes gaps, witness origins and line offsets. Compare
+                // the rendered corridors at BOTH outer stations, never increase the foot
+                // tolerance or match by the printed values alone. The interior new chain
+                // has disjoint corridors even when it displays the same 75-75 values.
+                return Math.Abs(a[0].PaperA-b[0].PaperA)<FootTolerance&&Math.Abs(a.Last().PaperB-b.Last().PaperB)<FootTolerance&&
+                    WitnessCorridorsOverlap(a[0],b[0],false)&&WitnessCorridorsOverlap(a.Last(),b.Last(),true);
             }
             // Complete equal/recreated ranges do not become new just because their line was dragged.
             if(Math.Abs(a[0].PaperA-b[0].PaperA)<FootTolerance&&Math.Abs(a.Last().PaperB-b.Last().PaperB)<FootTolerance)return true;
             return Math.Abs(a[0].Level-b[0].Level)<=2;
+        }
+        static bool WitnessCorridorsOverlap(Segment a,Segment b,bool end)
+        {
+            if(!a.HasWitnessGeometry||!b.HasWitnessGeometry)return false;
+            double af=end?a.FootB:a.FootA,bf=end?b.FootB:b.FootA;
+            double da=a.Level-af,db=b.Level-bf;
+            if(da*db<=0)return false;
+            double overlap=Math.Max(0,Math.Min(Math.Max(af,a.Level),Math.Max(bf,b.Level))-
+                Math.Max(Math.Min(af,a.Level),Math.Min(bf,b.Level)));
+            // Require agreement over most of each visible witness (not just crossing).
+            return overlap/Math.Max(Math.Abs(da),Math.Abs(db))>=.65;
         }
         static double ChainLevelDistance(IList<Segment> current,IList<Segment> old)
         {
@@ -1028,6 +1133,7 @@ using D = Tekla.Structures.Drawing;
         static Item ContentItem(int id,int viewId,ContentBlock old,ContentBlock current)
         {
             return new Item {Id=id,ViewId=viewId,ReadOnly=true,Changed=true,View=(current??old).Kind+" · chỉ thông báo",
+                ContentBefore=old,ContentAfter=current,
                 Before=old==null?"Không có":old.Text,After=current==null?"Đã xóa":current.Text,
                 Message=(current??old).Kind=="Bảng thuộc tính"?TableMessage(old,current):null,
                 Reason="Snapshot: "+(old==null?0:old.Rows)+" hàng; hiện hành: "+(current==null?0:current.Rows)+" hàng. Chỉ đọc nội dung; người dùng tự chỉnh thuộc tính."};
@@ -1094,7 +1200,7 @@ using D=Tekla.Structures.Drawing;
         // Same native property proxy as Tekla's Properties pane, inside its macro runtime.
         // Change only proFontColor on existing children: no selection, parent Modify,
         // deletion or recreation. All model/drawing/chain checks repeat inside Tekla.
-        static int WriteColorPlans(Result result,IDictionary<Item,D.DrawingColors> colors,bool readOnly=false)
+        static int WriteColorPlans(Result result,IDictionary<Item,D.DrawingColors> colors,bool readOnly=false,D.DrawingColors? expectedColor=null)
         {
             EnsureActive(result);if(colors.Count==0)return 0;
             if(Hash(result.BaselinePath)!=result.BaselineHash)throw new InvalidOperationException("Snapshot đã thay đổi. Hãy kiểm tra lại.");
@@ -1139,7 +1245,7 @@ using D=Tekla.Structures.Drawing;
                     foreach(var set in changes.Select(p=>p.Key.Object).Distinct())
                         rows.Add("S\t"+Id(set)+"\t"+Encode(geometries[Id(set)]));
                     foreach(var pair in changes.Where(p=>!readOnly))
-                        rows.Add("C\t"+pair.Key.Id+"\t-1\t"+(int)pair.Value);
+                        rows.Add("C\t"+pair.Key.Id+"\t"+(expectedColor.HasValue?(int)expectedColor.Value:-1)+"\t"+(int)pair.Value);
                     File.WriteAllLines(request,rows,Encoding.UTF8);
                     // LoadFile caches by path in Tekla. Use a content-addressed copy so a
                     // rebuilt TTSK cannot accidentally execute an older loaded writer.

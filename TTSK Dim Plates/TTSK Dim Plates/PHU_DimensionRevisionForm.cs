@@ -135,15 +135,6 @@ namespace Tekla.Technology.Akit.UserScript
             delete.ForeColor=Color.IndianRed;delete.Click+=(s,e)=>DeleteRevisionSection();
             actions.Controls.Add(refresh,0,0);actions.Controls.Add(create,1,0);actions.Controls.Add(delete,3,0);layout.Controls.Add(actions,0,6);
             revisionPanel.Controls.Add(layout); Controls.Add(revisionPanel); revisionPanel.BringToFront();
-            foreach (var text in new[]{
-                new[]{"Bắt đầu", "Đối chiếu DIM hiện tại với snapshot và tô đỏ các giá trị thay đổi."},
-                new[]{"Create drawing", "Tạo lại DIM và Check REV. Giữ scale, căn cạnh dưới và tâm ngang thanh theo snapshot."},
-                new[]{"Delete REV", "Chọn view mặt cắt cần xóa trong Tekla, rồi bấm Delete REV để ghi dấu xóa."}})
-            {
-                var card=Card();card.Dock=DockStyle.None;card.Height=100;card.Margin=new Padding(0,0,0,12);card.Padding=new Padding(18,12,18,12);
-                var rows=Stack(32,36);rows.Controls.Add(TextLabel(text[0],14,ink,true),0,0);rows.Controls.Add(TextLabel(text[1],10,muted),0,1);
-                card.Controls.Add(rows);revisionCards.Controls.Add(card);
-            }
             ResizeRevisionCards();
             UpdateRevisionNavigation();
         }
@@ -224,6 +215,11 @@ namespace Tekla.Technology.Akit.UserScript
                 }
                 // Persist original colors only. Exclusions belong to this open Revision session.
                 SaveRevisionChoices();
+                // Repair only red DIMs for which this tool recorded the same geometry
+                // and original colour. Unrecorded/manual colours remain user-owned.
+                var restores=RevisionColorRestorations();
+                foreach(var group in restores.GroupBy(p=>p.Value))
+                    PHU_DimensionRevision.RestoreUnchangedColors(revisionResult,group.Select(p=>p.Key).ToList(),group.Key);
                 var identities=revisionResult.Items.Where(CanToggleRevision).ToDictionary(i=>i,i=>i.Id);
                 var targets=revisionResult.Items.Where(i=>CanAutoRevision(i)&&!revisionChoices[i.Id].Excluded).ToList();
                 PHU_DimensionRevision.Apply(revisionResult,targets);
@@ -244,6 +240,18 @@ namespace Tekla.Technology.Akit.UserScript
                 ShowRevisionError("Chưa hoàn tất: "+ex.Message);
             }
             finally {checking=false;UseWaitCursor=false;}
+        }
+        Dictionary<PHU_DimensionRevision.Item,D.DrawingColors> RevisionColorRestorations()
+        {
+            var result=new Dictionary<PHU_DimensionRevision.Item,D.DrawingColors>();
+            foreach(var item in revisionResult.UnchangedItems)
+            {
+                RevisionChoice choice;
+                if(!item.Review&&!item.Changed&&item.AlreadyRed&&revisionChoices.TryGetValue(item.Id,out choice)&&
+                    choice.Signature==item.Signature&&choice.Original!=D.DrawingColors.Red)
+                    result[item]=choice.Original;
+            }
+            return result;
         }
         void RemapRevisionChoices(Dictionary<PHU_DimensionRevision.Item,int> identities)
         {
@@ -315,7 +323,12 @@ namespace Tekla.Technology.Akit.UserScript
             if(revisionCards==null)return;
             int width=Math.Max(300,revisionViewport.ClientSize.Width);
             revisionCards.Width=width;
-            foreach(Control card in revisionCards.Controls)card.Width=width-revisionCards.Padding.Horizontal;
+            foreach(Control card in revisionCards.Controls)
+            {
+                card.Width=width-revisionCards.Padding.Horizontal;
+                var content=card.Controls.OfType<RevisionContentDiff>().FirstOrDefault();
+                if(content!=null)card.Height=content.RequiredHeight(card.DisplayRectangle.Width)+card.Padding.Vertical+((RaisedCard)card).FrameSpace;
+            }
             revisionCards.Height=revisionCards.Padding.Vertical+revisionCards.Controls.Cast<Control>().Sum(c=>c.Height+c.Margin.Vertical);
             revisionScroll.Clamp();
         }
@@ -327,6 +340,26 @@ namespace Tekla.Technology.Akit.UserScript
             var visible=VisibleRevisionItems();
             foreach(var item in visible)
             {
+                if(item.ReadOnly)
+                {
+                    var contentCard=Card();contentCard.Dock=DockStyle.None;
+                    contentCard.Margin=new Padding(0,0,0,8);contentCard.Padding=new Padding(18,12,18,12);
+                    contentCard.BackColor=item.Id==revisionSelected?soft:surface;
+                    var comparison=new RevisionContentDiff(item,dark,ink,muted,border) {Dock=DockStyle.Fill};
+                    contentCard.Controls.Add(comparison);
+                    bool selectable=PHU_DimensionRevision.CanSelectMark(item);
+                    contentCard.TabStop=selectable;contentCard.AccessibleName=comparison.AccessibleName;
+                    if(selectable)
+                    {
+                        contentCard.Cursor=comparison.Cursor=Cursors.Hand;
+                        tips.SetToolTip(contentCard,"Bấm để chọn mark trên bản vẽ");
+                        tips.SetToolTip(comparison,"Bấm để chọn mark trên bản vẽ");
+                        contentCard.Click+=(s,e)=>SelectRevision(item);comparison.Click+=(s,e)=>SelectRevision(item);
+                        contentCard.KeyDown+=(s,e)=>{if(e.KeyCode==Keys.Enter||e.KeyCode==Keys.Space){SelectRevision(item);e.Handled=true;e.SuppressKeyPress=true;}};
+                    }
+                    revisionCards.Controls.Add(contentCard);revisionCardControls[item.Id]=contentCard;
+                    continue;
+                }
                 bool capable=CanToggleRevision(item)&&revisionChoices.ContainsKey(item.Id);
                 bool off=capable&&revisionChoices[item.Id].Excluded;
                 bool on=item.AlreadyRed;
@@ -376,9 +409,207 @@ namespace Tekla.Technology.Akit.UserScript
             ResizeRevisionCards();revisionCards.ResumeLayout();
             UpdateRevisionNavigation();
         }
+        // A read-only comparison surface. It never writes back to snapshot or drawing data.
+        sealed class RevisionContentDiff : Control
+        {
+            sealed class Row
+            {
+                public int Before,After;
+                public string[] Old,Current;
+                public bool Changed { get { return Old==null||Current==null||!Old.SequenceEqual(Current); } }
+            }
+            sealed class Run
+            {
+                public string Text;
+                public bool Changed;
+                public Run(string text,bool changed) { Text=text;Changed=changed; }
+            }
+            readonly List<Row> rows;
+            readonly bool table;
+            readonly Color ink,muted,border,oldInk,newInk,oldFill,newFill;
+            readonly Font body=new Font("Segoe UI",12),bold=new Font("Segoe UI",12,FontStyle.Bold),small=new Font("Segoe UI",9);
+            readonly string title,summary,columnHint;
+            const TextFormatFlags Flags=TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix|TextFormatFlags.SingleLine;
+            public RevisionContentDiff(PHU_DimensionRevision.Item item,bool dark,Color ink,Color muted,Color border)
+            {
+                this.ink=ink;this.muted=muted;this.border=border;
+                SetStyle(ControlStyles.SupportsTransparentBackColor|ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,true);
+                BackColor=Color.Transparent;
+                oldInk=dark?Color.FromArgb(255,186,165):Color.FromArgb(155,59,38);
+                newInk=dark?Color.FromArgb(145,232,197):Color.FromArgb(16,107,77);
+                oldFill=dark?Color.FromArgb(78,46,40):Color.FromArgb(255,233,225);
+                newFill=dark?Color.FromArgb(30,69,56):Color.FromArgb(215,246,233);
+                var source=item.ContentAfter??item.ContentBefore;
+                table=source!=null?source.Kind=="Bảng thuộc tính":(item.View??"").StartsWith("Bảng");
+                title=table?"Mark bảng":"Mark tên";
+                var before=ContentRows(item.ContentBefore,item.Before,source==null);
+                var after=ContentRows(item.ContentAfter,item.After,source==null);
+                rows=AlignRows(before,after);
+                int changed=rows.Count(r=>r.Changed),same=rows.Count-changed;
+                string unit=table?"hàng":"dòng";
+                summary=before.Count==0?"Được thêm mới":after.Count==0?"Đã xóa":changed+" "+unit+" thay đổi";
+                if(table&&before.Count>0&&after.Count>0)
+                {
+                    var counts=new List<string>();
+                    int added=rows.Count(r=>r.Old==null),removed=rows.Count(r=>r.Current==null),edited=changed-added-removed;
+                    if(edited>0)counts.Add(edited+" hàng sửa");
+                    if(added>0)counts.Add(added+" hàng thêm");
+                    if(removed>0)counts.Add(removed+" hàng xóa");
+                    summary=String.Join(" · ",counts);
+                }
+                if(table&&same>0)summary+=" · "+same+" hàng không đổi";
+                columnHint=table&&before.Concat(after).Any(r=>r.Contains("製品マーク")&&r.Contains("数量"))?"  ·  Mark / Số lượng":"";
+                if(table)rows=rows.Where(r=>r.Changed).ToList();
+                AccessibleRole=AccessibleRole.StaticText;
+                AccessibleName=title+". "+summary+". Bản cũ: "+item.Before+". Hiện tại: "+item.After;
+            }
+            static List<string[]> ContentRows(PHU_DimensionRevision.ContentBlock block,string fallback,bool legacy)
+            {
+                if(block==null)return legacy?new List<string[]> {new[]{fallback??""}}:new List<string[]>();
+                return block.Values??new List<string[]> {new[]{block.Text??""}};
+            }
+            // Anchor identical rows so inserting one table row does not mark every later row as edited.
+            static List<Row> AlignRows(IList<string[]> before,IList<string[]> after)
+            {
+                int n=before.Count,m=after.Count;
+                var anchors=new List<Tuple<int,int>>();
+                if((long)n*m<=250000)
+                {
+                    var lengths=new int[n+1,m+1];
+                    for(int i=n-1;i>=0;i--)for(int j=m-1;j>=0;j--)
+                        lengths[i,j]=before[i].SequenceEqual(after[j])?1+lengths[i+1,j+1]:Math.Max(lengths[i+1,j],lengths[i,j+1]);
+                    for(int i=0,j=0;i<n&&j<m;)
+                        if(before[i].SequenceEqual(after[j])){anchors.Add(Tuple.Create(i++,j++));}
+                        else if(lengths[i+1,j]>=lengths[i,j+1])i++;else j++;
+                }
+                anchors.Add(Tuple.Create(n,m));
+                var result=new List<Row>();int a=0,b=0;
+                foreach(var anchor in anchors)
+                {
+                    while(a<anchor.Item1||b<anchor.Item2)
+                    {
+                        bool hasOld=a<anchor.Item1,hasNew=b<anchor.Item2;
+                        result.Add(new Row {Before=hasOld?a+1:0,After=hasNew?b+1:0,Old=hasOld?before[a++]:null,Current=hasNew?after[b++]:null});
+                    }
+                    if(a<n&&b<m)result.Add(new Row {Before=a+1,After=b+1,Old=before[a++],Current=after[b++]});
+                }
+                return result;
+            }
+            static string[] Tokens(string value)
+            {
+                return System.Text.RegularExpressions.Regex.Matches(value??"",@"\p{L}+|\p{N}+|\s+|[^\p{L}\p{N}\s]")
+                    .Cast<System.Text.RegularExpressions.Match>().Select(m=>m.Value).ToArray();
+            }
+            static List<Run> CellRuns(string value,string other,bool missing)
+            {
+                var tokens=Tokens(value);var matches=new bool[tokens.Length];
+                if(!missing)
+                {
+                    var peers=Tokens(other);
+                    if((long)tokens.Length*peers.Length<=250000)
+                    {
+                        var lengths=new int[tokens.Length+1,peers.Length+1];
+                        for(int i=tokens.Length-1;i>=0;i--)for(int j=peers.Length-1;j>=0;j--)
+                            lengths[i,j]=tokens[i]==peers[j]?1+lengths[i+1,j+1]:Math.Max(lengths[i+1,j],lengths[i,j+1]);
+                        for(int i=0,j=0;i<tokens.Length&&j<peers.Length;)
+                            if(tokens[i]==peers[j]){matches[i++]=true;j++;}
+                            else if(lengths[i+1,j]>=lengths[i,j+1])i++;else j++;
+                    }
+                    else if(value==other)for(int i=0;i<matches.Length;i++)matches[i]=true;
+                }
+                if(tokens.Length==0)return new List<Run>{new Run("(trống)",missing||!String.IsNullOrEmpty(other))};
+                var result=new List<Run>();
+                for(int i=0;i<tokens.Length;i++)
+                {
+                    bool changed=!matches[i];
+                    if(result.Count>0&&result[result.Count-1].Changed==changed)result[result.Count-1].Text+=tokens[i];
+                    else result.Add(new Run(tokens[i],changed));
+                }
+                return result;
+            }
+            static List<Run> Runs(string[] value,string[] other)
+            {
+                if(value==null)return new List<Run>{new Run("—",false)};
+                if(value.Length==0)return new List<Run>{new Run("(hàng trống)",other==null||other.Length!=0)};
+                var result=new List<Run>();
+                for(int c=0;c<value.Length;c++)
+                {
+                    if(c>0)result.Add(new Run("   ·   ",false));
+                    result.AddRange(CellRuns(value[c],other!=null&&c<other.Length?other[c]:null,other==null||c>=other.Length));
+                }
+                return result;
+            }
+            int S(int value) { return Math.Max(1,(int)Math.Round(value*DeviceDpi/96.0)); }
+            int TextWidth(string text,Font font,Graphics graphics)
+            {
+                var size=new Size(Int32.MaxValue,Int32.MaxValue);
+                return (graphics==null?TextRenderer.MeasureText(text,font,size,Flags):TextRenderer.MeasureText(graphics,text,font,size,Flags)).Width;
+            }
+            int Flow(Graphics graphics,List<Run> runs,Rectangle area,bool previous)
+            {
+                int x=area.X,y=area.Y,line=TextRenderer.MeasureText("Ag",body).Height+S(6);
+                foreach(var run in runs)
+                {
+                    Font font=run.Changed?bold:body;
+                    // Break oversized tokens by Unicode text elements; no clipped long marks.
+                    var pieces=new List<string>();
+                    if(TextWidth(run.Text,font,graphics)>area.Width)
+                    {
+                        var elements=System.Globalization.StringInfo.GetTextElementEnumerator(run.Text);
+                        while(elements.MoveNext())pieces.Add(elements.GetTextElement());
+                    }
+                    else pieces.Add(run.Text);
+                    foreach(string piece in pieces)
+                    {
+                        if(piece.Contains("\n")||piece.Contains("\r")){x=area.X;y+=line;continue;}
+                        int w=TextWidth(piece,font,graphics);
+                        if(x>area.X&&x+w>area.Right){x=area.X;y+=line;}
+                        if(graphics!=null)
+                        {
+                            var rect=new Rectangle(x,y,w,line-S(2));
+                            if(run.Changed)using(var brush=new SolidBrush(previous?oldFill:newFill))graphics.FillRectangle(brush,rect);
+                            TextRenderer.DrawText(graphics,piece,font,rect,run.Changed?(previous?oldInk:newInk):ink,Flags|TextFormatFlags.VerticalCenter);
+                        }
+                        x+=w;
+                    }
+                }
+                return y-area.Y+line;
+            }
+            int LayoutContent(Graphics graphics,int width)
+            {
+                int label=S(76),gap=S(26),column=Math.Max(S(60),(width-label-gap)/2);
+                int left=label,right=label+column+gap,y=S(72);
+                if(graphics!=null)
+                {
+                    TextRenderer.DrawText(graphics,title,bold,new Rectangle(0,0,width,S(28)),ink,Flags);
+                    TextRenderer.DrawText(graphics,summary,small,new Rectangle(0,S(28),width,S(22)),muted,Flags);
+                    TextRenderer.DrawText(graphics,"BẢN CŨ"+columnHint,small,new Rectangle(left,S(52),column,S(20)),oldInk,Flags);
+                    TextRenderer.DrawText(graphics,"HIỆN TẠI"+columnHint,small,new Rectangle(right,S(52),column,S(20)),newInk,Flags);
+                }
+                foreach(var row in rows)
+                {
+                    var oldRuns=Runs(row.Old,row.Current);var newRuns=Runs(row.Current,row.Old);
+                    int height=Math.Max(Flow(null,oldRuns,new Rectangle(left,y,column,0),true),Flow(null,newRuns,new Rectangle(right,y,column,0),false))+S(14);
+                    if(graphics!=null)
+                    {
+                        using(var pen=new Pen(border))graphics.DrawLine(pen,0,y,width,y);
+                        string number=row.Before==row.After?row.Before.ToString():row.Before+" → "+row.After;
+                        string rowLabel=row.Before==0?"Thêm · "+row.After:row.After==0?"Xóa · "+row.Before:(table?"Hàng ":"Dòng ")+number;
+                        TextRenderer.DrawText(graphics,rowLabel,small,new Rectangle(0,y+S(10),label-S(6),height),muted,TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix|TextFormatFlags.WordBreak);
+                        Flow(graphics,oldRuns,new Rectangle(left,y+S(7),column,0),true);
+                        Flow(graphics,newRuns,new Rectangle(right,y+S(7),column,0),false);
+                    }
+                    y+=height;
+                }
+                return y+S(4);
+            }
+            public int RequiredHeight(int width) { return LayoutContent(null,width); }
+            protected override void OnPaint(PaintEventArgs e) { base.OnPaint(e);LayoutContent(e.Graphics,ClientSize.Width); }
+            protected override void Dispose(bool disposing) { if(disposing){body.Dispose();bold.Dispose();small.Dispose();}base.Dispose(disposing); }
+        }
         void SelectRevision(PHU_DimensionRevision.Item item)
         {
-            if(checking)return;
+            if(checking||(item.ReadOnly&&!PHU_DimensionRevision.CanSelectMark(item)))return;
             try
             {
                 PHU_DimensionRevision.Select(revisionResult,item);revisionSelected=item.Id;

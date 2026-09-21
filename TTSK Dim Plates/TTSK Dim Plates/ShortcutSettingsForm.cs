@@ -28,6 +28,8 @@ namespace TTSK_AutoDim_Plates
         private Keys _editingModifierCandidate;
         private bool _workingAutoSectionEnabled;
         private bool _syncingAutoSectionSwitches;
+        private string _filterGroup = "All";
+        private readonly List<ShortcutFlatButton> _groupButtons = new List<ShortcutFlatButton>();
 
         private Color _formBack;
         private Color _cardBack;
@@ -190,14 +192,14 @@ namespace TTSK_AutoDim_Plates
             headerIcon.Controls.Add(keyboard);
 
             Label title = new Label();
-            title.Text = "Customize Shortcuts";
+            title.Text = "Phím tắt của bạn";
             title.Font = new Font("Segoe UI", 16F, FontStyle.Bold);
             title.Location = new Point(126, 78);
             title.Size = new Size(320, 32);
             Controls.Add(title);
 
             Label subtitle = new Label();
-            subtitle.Text = "Set your preferred keyboard shortcuts for AutoDim functions.";
+            subtitle.Text = "Phím hoạt động khi cửa sổ TTSK đang được chọn.";
             subtitle.Font = new Font("Segoe UI", 9.3F, FontStyle.Bold);
             subtitle.Location = new Point(128, 112);
             subtitle.Size = new Size(430, 22);
@@ -238,19 +240,40 @@ namespace TTSK_AutoDim_Plates
 
             txtSearch = new ShortcutTextBox();
             txtSearch.Location = new Point(28, 170);
-            txtSearch.Size = new Size(555, 32);
+            txtSearch.Size = new Size(400, 32);
             txtSearch.Font = new Font("Segoe UI", 10F);
             txtSearch.TextChanged += delegate
             {
                 ApplySearchFilter();
             };
             Controls.Add(txtSearch);
+            string[] groups = { "All", "Tools", "Slots" };
+            string[] captions = { "Tất cả", "Công cụ", "Slot 01–18" };
+            for (int i = 0; i < groups.Length; i++)
+            {
+                string group = groups[i];
+                var filter = new ShortcutFlatButton { Text = captions[i], Tag = group,
+                    Location = new Point(438 + i * 100, 170), Size = new Size(94, 32),
+                    UseNeutralStyle = true, IsPrimary = i == 0 };
+                filter.Click += delegate
+                {
+                    _filterGroup = group;
+                    foreach (var button in _groupButtons)
+                    {
+                        button.IsPrimary = (string)button.Tag == group;
+                        ApplyThemeToControl(button);
+                    }
+                    ApplySearchFilter();
+                };
+                _groupButtons.Add(filter);
+                Controls.Add(filter);
+            }
 
             Label searchIcon = new Label();
             searchIcon.Text = "";
             searchIcon.Font = new Font("Segoe MDL2 Assets", 10.5F, FontStyle.Regular);
             searchIcon.TextAlign = ContentAlignment.MiddleCenter;
-            searchIcon.Location = new Point(43, 176);
+            searchIcon.Location = new Point(15, 6);
             searchIcon.Size = new Size(18, 18);
             searchIcon.BackColor = Color.Transparent;
             searchIcon.Cursor = Cursors.IBeam;
@@ -258,7 +281,7 @@ namespace TTSK_AutoDim_Plates
             {
                 txtSearch.Focus();
             };
-            Controls.Add(searchIcon);
+            txtSearch.Controls.Add(searchIcon);
             searchIcon.BringToFront();
 
             rowsPanel = new ShortcutRowsPanel();
@@ -284,7 +307,7 @@ namespace TTSK_AutoDim_Plates
 
             Label infoText = new Label();
             infoText.Text =
-                "Shortcuts are active only when the AutoDim window is open.\nClick Edit, then press a shortcut. Backspace clears it; Esc cancels.";
+                "Slot 01–09: 1–9  ·  Slot 10–18: Ctrl + 0–8\nBấm Sửa rồi nhấn phím mới. Backspace: bỏ gán · Esc: hủy.";
             infoText.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
             infoText.Location = new Point(68, 16);
             infoText.Size = new Size(560, 44);
@@ -300,7 +323,7 @@ namespace TTSK_AutoDim_Plates
             Controls.Add(lblMessage);
 
             ShortcutFlatButton reset = new ShortcutFlatButton();
-            reset.Text = "⟳  Reset to Default";
+            reset.Text = "⟳  Phím mặc định";
             reset.Location = new Point(28, 590);
             reset.Size = new Size(200, 38);
             reset.Click += delegate
@@ -310,7 +333,7 @@ namespace TTSK_AutoDim_Plates
             Controls.Add(reset);
 
             ShortcutFlatButton save = new ShortcutFlatButton();
-            save.Text = "▣  Save";
+            save.Text = "Lưu";
             save.IsPrimary = true;
             save.Location = new Point(472, 590);
             save.Size = new Size(130, 38);
@@ -321,7 +344,7 @@ namespace TTSK_AutoDim_Plates
             Controls.Add(save);
 
             ShortcutFlatButton cancel = new ShortcutFlatButton();
-            cancel.Text = "Cancel";
+            cancel.Text = "Hủy";
             cancel.Location = new Point(614, 590);
             cancel.Size = new Size(118, 38);
             cancel.Click += delegate
@@ -371,6 +394,7 @@ namespace TTSK_AutoDim_Plates
             name.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
             name.Location = new Point(72, 12);
             name.Size = new Size(270, 22);
+            name.AutoEllipsis = true;
             name.BackColor = Color.Transparent;
             card.Controls.Add(name);
 
@@ -379,6 +403,7 @@ namespace TTSK_AutoDim_Plates
             desc.Font = new Font("Segoe UI", 7.9F, FontStyle.Bold);
             desc.Location = new Point(72, 34);
             desc.Size = new Size(270, 16);
+            desc.AutoEllipsis = true;
             desc.BackColor = Color.Transparent;
             card.Controls.Add(desc);
 
@@ -409,7 +434,7 @@ namespace TTSK_AutoDim_Plates
             card.Controls.Add(keyBox);
 
             ShortcutFlatButton edit = new ShortcutFlatButton();
-            edit.Text = "Edit";
+            edit.Text = "Sửa";
             edit.UseNeutralStyle = true;
             edit.Location = new Point(572, 12);
             edit.Size = new Size(82, 36);
@@ -502,7 +527,7 @@ namespace TTSK_AutoDim_Plates
         {
             _editingActionId = actionId;
             _editingModifierCandidate = Keys.None;
-            ShowMessage("Press new shortcut. Backspace = clear; Esc = cancel.", false);
+            ShowMessage("Nhấn phím mới · Esc để hủy", false);
             RefreshRowsVisualState();
             Focus();
         }
@@ -744,13 +769,16 @@ namespace TTSK_AutoDim_Plates
                 if (!_rows.TryGetValue(def.ActionId, out row))
                     continue;
 
-                bool visible =
+                bool matchesText =
                     string.IsNullOrEmpty(filter)
                     || def.DisplayName.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0
                     || def.Description.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0
                     || ShortcutManager
                         .Format(GetWorkingShortcut(def.ActionId))
-                        .IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0;
+                        .IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0
+                    || (GetWorkingShortcut(def.ActionId) == Keys.None && "chưa gán".IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0);
+                bool isSlot = def.ActionId.StartsWith("Slot", StringComparison.OrdinalIgnoreCase);
+                bool visible = matchesText && (_filterGroup == "All" || (_filterGroup == "Slots" ? isSlot : !isSlot));
 
                 row.Panel.Visible = visible;
 
@@ -781,252 +809,55 @@ namespace TTSK_AutoDim_Plates
                 );
 
                 row.KeyBox.Text = editing
-                    ? "LISTENING..."
-                    : ShortcutManager.Format(GetWorkingShortcut(row.ActionId));
+                    ? "Nhấn phím…"
+                    : GetWorkingShortcut(row.ActionId) == Keys.None ? "Chưa gán" : ShortcutManager.Format(GetWorkingShortcut(row.ActionId));
                 row.KeyBox.IsListening = editing;
+                Color keyAccent = GetBadgeColor(row.ActionId);
+                row.KeyBox.BackColorValue = _darkMode
+                    ? Mix(_cardBack, keyAccent, 0.30)
+                    : Mix(Color.White, keyAccent, 0.52);
+                row.KeyBox.BorderColor = _darkMode
+                    ? Mix(_borderColor, keyAccent, 0.58)
+                    : Mix(_borderColor, keyAccent, 0.70);
+                row.KeyBox.TextColor = _darkMode
+                    ? Mix(_textColor, keyAccent, 0.18)
+                    : Color.FromArgb(32, 55, 48);
+                row.KeyBox.ListeningBackColor = _darkMode
+                    ? Mix(_cardBack, _accentColor, 0.36)
+                    : Mix(Color.White, _accentColor, 0.28);
+                row.KeyBox.ListeningBorderColor = _accentColor;
                 row.KeyBox.Invalidate();
 
                 row.Panel.BorderColor = editing ? _accentColor : _borderColor;
                 row.Panel.BackColor = editing ? _cardBackHover : _cardBack;
                 row.Panel.Invalidate();
 
-                row.EditButton.Text = editing ? "Cancel" : "Edit";
+                row.EditButton.Text = editing ? "Hủy" : "Sửa";
                 row.EditButton.Invalidate();
             }
         }
 
         private Color GetBadgeColor(string actionId)
         {
-            if (
-                string.Equals(
-                    actionId,
-                    ShortcutManager.ActionCreateDrawing,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-                return Color.FromArgb(249, 115, 22);
-            if (
-                string.Equals(
-                    actionId,
-                    ShortcutManager.ActionBatchCreate,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-                return Color.FromArgb(244, 114, 112);
-            if (string.Equals(actionId, ShortcutManager.ActionCheckDim, StringComparison.OrdinalIgnoreCase))
-                return Color.FromArgb(201, 122, 64);
-            if (string.Equals(actionId, ShortcutManager.ActionRevision, StringComparison.OrdinalIgnoreCase))
-                return Color.FromArgb(201, 122, 64);
-            if (
-                string.Equals(
-                    actionId,
-                    ShortcutManager.ActionCheckScale,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-                return Color.FromArgb(201, 122, 64);
-            if (
-                string.Equals(
-                    actionId,
-                    ShortcutManager.ActionLineDistance,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-                return Color.FromArgb(45, 180, 168);
-            if (
-                string.Equals(
-                    actionId,
-                    ShortcutManager.ActionRepeatLast,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-                return Color.FromArgb(167, 139, 250);
-            if (
-                string.Equals(
-                    actionId,
-                    ShortcutManager.ActionOpenGrid,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-                return Color.FromArgb(245, 183, 77);
-            if (
-                string.Equals(
-                    actionId,
-                    ShortcutManager.ActionFitView,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-                return Color.FromArgb(96, 165, 250);
-            if (
-                string.Equals(
-                    actionId,
-                    ShortcutManager.ActionNeighborGrid,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-                return Color.FromArgb(34, 197, 94);
-            if (
-                string.Equals(
-                    actionId,
-                    ShortcutManager.ActionArrangeView,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-                return Color.FromArgb(124, 58, 237);
-            if (
-                string.Equals(
-                    actionId,
-                    ShortcutManager.ActionAutoSection,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-                return Color.FromArgb(217, 119, 6);
-            if (
-                string.Equals(
-                    actionId,
-                    ShortcutManager.ActionSlot01,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-                return Color.FromArgb(13, 148, 136);
-            if (
-                string.Equals(
-                    actionId,
-                    ShortcutManager.ActionSlot02,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-                return Color.FromArgb(2, 132, 199);
-            if (
-                string.Equals(
-                    actionId,
-                    ShortcutManager.ActionSlot03,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-                return Color.FromArgb(139, 92, 246);
-            if (
-                string.Equals(
-                    actionId,
-                    ShortcutManager.ActionSlot04,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-                return Color.FromArgb(245, 158, 11);
-            if (
-                string.Equals(
-                    actionId,
-                    ShortcutManager.ActionSlot05,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-                return Color.FromArgb(239, 68, 68);
-            if (
-                string.Equals(
-                    actionId,
-                    ShortcutManager.ActionSlot06,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-                return Color.FromArgb(20, 184, 166);
-            if (
-                string.Equals(
-                    actionId,
-                    ShortcutManager.ActionSlot07,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-                return Color.FromArgb(0, 150, 125);
-            if (
-                string.Equals(
-                    actionId,
-                    ShortcutManager.ActionSlot08,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-                return Color.FromArgb(14, 165, 233);
-            if (
-                string.Equals(
-                    actionId,
-                    ShortcutManager.ActionSlot09,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-                return Color.FromArgb(48, 162, 121);
-            if (
-                string.Equals(
-                    actionId,
-                    ShortcutManager.ActionSlot10,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-                return Color.FromArgb(219, 39, 119);
-            if (
-                string.Equals(
-                    actionId,
-                    ShortcutManager.ActionSlot11,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-                return Color.FromArgb(79, 70, 229);
-            if (
-                string.Equals(
-                    actionId,
-                    ShortcutManager.ActionSlot12,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-                return Color.FromArgb(8, 145, 178);
-            if (
-                string.Equals(
-                    actionId,
-                    ShortcutManager.ActionSlot13,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-                return Color.FromArgb(101, 163, 13);
-            if (
-                string.Equals(
-                    actionId,
-                    ShortcutManager.ActionSlot14,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-                return Color.FromArgb(234, 88, 12);
-            if (
-                string.Equals(
-                    actionId,
-                    ShortcutManager.ActionSlot15,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-                return Color.FromArgb(190, 24, 93);
-            if (
-                string.Equals(
-                    actionId,
-                    ShortcutManager.ActionSlot16,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-                return Color.FromArgb(109, 40, 217);
-            if (
-                string.Equals(
-                    actionId,
-                    ShortcutManager.ActionSlot17,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-                return Color.FromArgb(21, 128, 61);
-            if (
-                string.Equals(
-                    actionId,
-                    ShortcutManager.ActionSlot18,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-                return Color.FromArgb(185, 28, 28);
-
-            return _accentColor;
+            IList<ShortcutActionDefinition> definitions = _manager.GetDefinitions();
+            int index = 0;
+            for (int i = 0; i < definitions.Count; i++)
+                if (string.Equals(definitions[i].ActionId, actionId, StringComparison.OrdinalIgnoreCase)) { index = i; break; }
+            // Spread neighboring rows across distinct soft hues; never reuse a category color.
+            double hue = (156 + index * 137.508) % 360 / 60;
+            double saturation = 0.22 + 0.05 * (index % 3);
+            double value = 0.96 - 0.035 * (index % 2);
+            double chroma = value * saturation;
+            double x = chroma * (1 - Math.Abs(hue % 2 - 1));
+            double m = value - chroma;
+            double r = 0, g = 0, b = 0;
+            if (hue < 1) { r = chroma; g = x; }
+            else if (hue < 2) { r = x; g = chroma; }
+            else if (hue < 3) { g = chroma; b = x; }
+            else if (hue < 4) { g = x; b = chroma; }
+            else if (hue < 5) { r = x; b = chroma; }
+            else { r = chroma; b = x; }
+            return Color.FromArgb((int)Math.Round((r + m) * 255), (int)Math.Round((g + m) * 255), (int)Math.Round((b + m) * 255));
         }
 
         private void ApplyTheme()
@@ -1079,7 +910,7 @@ namespace TTSK_AutoDim_Plates
                 textBox.ForeColor = _textColor;
                 textBox.BorderColor = _darkMode ? _borderColor : _accentColor;
                 textBox.PlaceholderColor = _mutedTextColor;
-                textBox.PlaceholderText = "Search function...";
+                textBox.PlaceholderText = "Tìm chức năng hoặc phím…";
                 textBox.LeftPadding = 48;
                 textBox.Invalidate();
             }
@@ -1156,7 +987,7 @@ namespace TTSK_AutoDim_Plates
             ShortcutBadge badge = control as ShortcutBadge;
             if (badge != null)
             {
-                badge.TextColor = Color.White;
+                badge.TextColor = Color.FromArgb(35, 55, 49);
                 badge.Invalidate();
             }
 
@@ -1563,19 +1394,22 @@ namespace TTSK_AutoDim_Plates
                 Color border = IsListening ? ListeningBorderColor : BorderColor;
 
                 RectangleF shadowRect = new RectangleF(2, 3, Width - 5, Height - 6);
-                using (GraphicsPath shadowPath = RoundedRectF(shadowRect, 7))
+                using (GraphicsPath shadowPath = RoundedRectF(shadowRect, 9))
                 using (SolidBrush shadow = new SolidBrush(Color.FromArgb(24, Color.Black)))
                     e.Graphics.FillPath(shadow, shadowPath);
 
                 RectangleF rect = new RectangleF(1, 1, Width - 3, Height - 4);
-                using (GraphicsPath path = RoundedRectF(rect, 7))
+                using (GraphicsPath path = RoundedRectF(rect, 9))
                 {
                     using (SolidBrush brush = new SolidBrush(fill))
                         e.Graphics.FillPath(brush, path);
 
-                    using (Pen pen = new Pen(border, IsListening ? 1.8f : 1.1f))
+                    using (Pen pen = new Pen(border, IsListening ? 1.8f : 1.25f))
                         e.Graphics.DrawPath(pen, path);
                 }
+
+                using (Pen highlight = new Pen(Color.FromArgb(IsListening ? 100 : 76, Color.White), 1.0F))
+                    e.Graphics.DrawLine(highlight, 10, 2, Width - 11, 2);
 
                 string text = Text;
                 TextRenderer.DrawText(
@@ -1913,10 +1747,22 @@ namespace TTSK_AutoDim_Plates
                 e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
                 e.Graphics.PixelOffsetMode = PixelOffsetMode.Half;
 
-                RectangleF rect = new RectangleF(0, 0, Width - 1, Height - 1);
-                using (GraphicsPath path = RoundedRectF(rect, 7))
+                RectangleF shadowRect = new RectangleF(1, 2, Width - 2, Height - 3);
+                using (GraphicsPath shadowPath = RoundedRectF(shadowRect, 8))
+                using (SolidBrush shadow = new SolidBrush(Color.FromArgb(18, Color.Black)))
+                    e.Graphics.FillPath(shadow, shadowPath);
+
+                RectangleF rect = new RectangleF(1, 1, Width - 3, Height - 3);
+                using (GraphicsPath path = RoundedRectF(rect, 8))
                 using (SolidBrush brush = new SolidBrush(BadgeColor))
                     e.Graphics.FillPath(brush, path);
+
+                using (GraphicsPath path = RoundedRectF(rect, 8))
+                using (Pen border = new Pen(Mix(BadgeColor, Color.FromArgb(32, 55, 48), 0.22), 1.0F))
+                    e.Graphics.DrawPath(border, path);
+
+                using (Pen highlight = new Pen(Color.FromArgb(110, Color.White), 1.0F))
+                    e.Graphics.DrawLine(highlight, 8, 2, Width - 9, 2);
 
                 if (string.Equals(Text, "+", StringComparison.Ordinal))
                 {

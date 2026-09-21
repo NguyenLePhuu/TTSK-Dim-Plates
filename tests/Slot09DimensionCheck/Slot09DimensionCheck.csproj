@@ -14,6 +14,7 @@
     <Compile Include="RevisionAudit.cs" />
     <Compile Include="RevisionCreateTests.cs" />
     <Compile Include="RevisionFeatureTests.cs" />
+    <Compile Include="RevisionMatchingTests.cs" />
     <Compile Include="RevisionRepairLive.cs" />
     <Compile Include="BatchTests.cs" />
     <ProjectReference Include="../../TTSK Dim Plates/TTSK Dim Plates/TTSK Dim Plates.csproj" />

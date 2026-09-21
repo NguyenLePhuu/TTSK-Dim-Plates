@@ -1,5 +1,11 @@
 # Revision — topology and native per-segment colour update, 2026-09-18
 
+September 20 snapshot matching correction after Create drawing:
+[root cause, read-only BmC-117 results and regression coverage](../../docs/REVISION_SNAPSHOT_2026-09-20.md).
+Run `--revision-matching-tests` from the repository root for the frozen drawing replay
+and geometry/parser checks; `--revision-matching-audit <folder>` captures current
+geometry and the proposed original-colour restorations without writing to the drawing.
+
 Latest performance update: see [REVISION_PERFORMANCE.md](REVISION_PERFORMANCE.md)
 for measured before/after timings, snapshot cache invalidation tests, preservation
 checks, and the remaining limit in reproducing the reported Delete REV delay.

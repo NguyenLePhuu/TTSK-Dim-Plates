@@ -30,6 +30,7 @@ static class RevisionTests
         foreach(string unsupported in new[]{"R 10","2*50=100","100 ± 1","1/2","切り欠き","NaN","Infinity","0","1,234,567"})
             Assert(!R.TryNumber(unsupported,out value),"Unsupported numeric format: "+unsupported);
         RevisionFeatureTests.Run();
+        RevisionMatchingTests.Run();
         SessionChoices();
     }
     static readonly BindingFlags Private=BindingFlags.Instance|BindingFlags.NonPublic;
@@ -71,6 +72,14 @@ static class RevisionTests
                 Assert(!(bool)Invoke(form,"CanAutoRevision",manual),"Unmatched DIM remains excluded from automatic red");
                 manual.Signature=null;
                 Assert(!(bool)Invoke(form,"CanToggleRevision",manual),"Unreadable DIM cannot be written");
+                var unchanged=new R.Item {Id=1,Signature="sample",AlreadyRed=true};
+                result.UnchangedItems.Add(unchanged);
+                var restores=(System.Collections.IDictionary)Invoke(form,"RevisionColorRestorations");
+                Assert(restores.Count==1&&(Tekla.Structures.Drawing.DrawingColors)restores[unchanged]==Tekla.Structures.Drawing.DrawingColors.Blue,"Previously owned red restores recorded original after corrected classification");
+                unchanged.Signature="changed geometry";
+                Assert(((System.Collections.IDictionary)Invoke(form,"RevisionColorRestorations")).Count==0,"Stale original colour must not affect reused ID");
+                unchanged.Id=2;unchanged.Signature="sample";
+                Assert(((System.Collections.IDictionary)Invoke(form,"RevisionColorRestorations")).Count==0,"Unrecorded/manual red remains untouched");
             }
         }
         finally {File.Delete(choicesPath);Directory.Delete(folder);}

@@ -181,6 +181,8 @@
     </Compile>
     <Compile Include="PHU_AllPartsDeleted.cs" />
     <Compile Include="PHU_ArrangeView.cs" />
+    <Compile Include="PHU_SectionLayoutPlanner.cs" />
+    <Compile Include="PHU_ArrangePresentation.cs" />
     <Compile Include="PHU_PDF-Merge.cs" />
     <Compile Include="ShortcutManager.cs" />
     <Compile Include="ShortcutSettingsForm.cs">

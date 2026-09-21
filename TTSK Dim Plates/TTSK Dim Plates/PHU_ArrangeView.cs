@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Linq;
 using Tekla.Structures.Drawing;
 using Tekla.Structures.Geometry3d;
 using System.Collections;
@@ -10,32 +11,7 @@ namespace TTSK_AutoDim_Plates
 {
     public static class PHU_ArrangeView
     {
-        private const double TOL = 1.0;
-
-        // PHU SAFE ARRANGE AREA
-        // Chừa vùng block dưới / block trên giống hướng Shape C.
-        private const bool FORCE_SAFE_BY_TOP_BOTTOM_BLOCKS = true;
-        private const double BOTTOM_BLOCK_HEIGHT_RATIO = 0.18;
-        private const double TOP_BLOCK_HEIGHT_RATIO = 0.08;
-        private const double BLOCK_EXTRA_GAP = 5.0;
-
-        //Khoảng cách tối thiểu tới mép giấy.
         private const double MIN_EDGE_SAFE = 15.0;
-
-        //Khoảng cách từ cụm dọc tới mép trên vùng khả dụng.
-        private const double VERTICAL_TOP_INSET = 15.0;
-
-        //Khoảng cách main thếp nhất đến sectuon cao nhất
-        private const double HORIZONTAL_EXTRA_DOWN = 30.0;
-
-        //Tỉ lệ view chiếm để đủ kích hoạt auto center
-        private const double AUTO_CENTER_FILL_RATIO = 0.60;
-
-        //Khoảng hở giữa cụm ngang và block GRID dưới.
-        private const double HORIZONTAL_BLOCK_CLEARANCE = 40.0;
-
-        //Né GRID
-        private const double VERTICAL_GRID_CLEARANCE = 15.0;
 
         public class Result
         {
@@ -43,6 +19,9 @@ namespace TTSK_AutoDim_Plates
             public int MainCount;
             public int SectionCount;
             public string Message;
+            public bool GapAdjusted;
+            public double RequestedGap, EffectiveGap, RightGap;
+            public string GapNotice;
 
             public string ToDisplayText()
             {
@@ -89,6 +68,7 @@ namespace TTSK_AutoDim_Plates
             try
             {
                 DrawingHandler dh = new DrawingHandler();
+                if (!dh.GetConnectionStatus()) throw new InvalidOperationException("Không kết nối Drawing API.");
                 Drawing drawing = dh.GetActiveDrawing();
                 if (drawing == null)
                 {
@@ -97,6 +77,8 @@ namespace TTSK_AutoDim_Plates
                     return result;
                 }
 
+                if (!PHU_SectionLayoutPlanner.Finite(gap)) throw new InvalidOperationException("GAP không hợp lệ.");
+                if (drawing.IsLocked) throw new InvalidOperationException("Bản vẽ đang khóa.");
                 if (gap < 0.0)
                     gap = 0.0;
 
@@ -113,7 +95,7 @@ namespace TTSK_AutoDim_Plates
                 ClassifyViews(allViews, out mainViews, out regularSectionViews);
 
                 // SECTION ONLY: không move Main View / Top / Bottom / Front / special section.
-                ArrangeRegularSectionViews(
+                var plan=ArrangeRegularSectionViews(
                     drawing,
                     mainViews,
                     regularSectionViews,
@@ -122,21 +104,21 @@ namespace TTSK_AutoDim_Plates
                     verticalBottomUp
                 );
 
-                try
-                {
-                    drawing.CommitChanges();
-                }
-                catch { }
-
                 SelectViews(dh, regularSectionViews);
 
                 result.Success = true;
                 result.MainCount = mainViews.Count;
                 result.SectionCount = regularSectionViews.Count;
+                result.RequestedGap=gap;
+                result.EffectiveGap=plan.GlobalGap;
+                result.RightGap=plan.RightGap;
+                result.GapAdjusted=plan.GapAdjusted;
+                result.GapNotice=plan.GapNotice;
                 result.Message =
                     result.SectionCount > 0
                         ? "Đã arrange " + result.SectionCount + " section view."
                         : "Không tìm thấy section thường để arrange.";
+                if(result.GapAdjusted)result.Message += " " + result.GapNotice;
                 return result;
             }
             catch (Exception ex)
@@ -167,7 +149,7 @@ namespace TTSK_AutoDim_Plates
                     AddUniqueView(views, v);
                 }
             }
-            catch { }
+            catch (Exception ex) { throw new InvalidOperationException("Không đọc đủ danh sách view.",ex); }
 
             return views;
         }
@@ -228,6 +210,11 @@ namespace TTSK_AutoDim_Plates
                     frontView,
                     frontWidth
                 );
+
+            // Geometry fallback may have promoted a non-section API view. Every view
+            // must belong to exactly one group or it would obstruct its own placement.
+            var movable = regularSectionViews;
+            mainViews.RemoveAll(v => movable.Any(s => s.IsSameDatabaseObject(v)));
 
             mainViews.Sort(
                 delegate(View a, View b)
@@ -344,492 +331,129 @@ namespace TTSK_AutoDim_Plates
             return false;
         }
 
-        private static void ArrangeRegularSectionViews(
-            Drawing drawing,
-            List<View> mainViews,
-            List<View> sectionViews,
-            bool horizontal,
-            double gap,
-            bool verticalBottomUp
-        )
+        private sealed class LayoutSnapshot
         {
+            public List<ViewBox> Sections;
+            public List<ViewBox> Fixed;
+            public PHU_SectionLayoutPlanner.Rect Paper;
+            public List<PHU_SectionLayoutPlanner.Rect> Obstacles;
+            public PHU_SectionLayoutPlanner.Rect Main;
+            public List<PHU_SectionLayoutPlanner.Item> Items;
+        }
+        private static PHU_SectionLayoutPlanner.Rect Rectangle(ViewBox b)
+        { return new PHU_SectionLayoutPlanner.Rect(b.MinX,b.MinY,b.MaxX,b.MaxY); }
+
+        private static LayoutSnapshot CaptureLayout(Drawing drawing,List<View> mainViews,List<View> sectionViews)
+        {
+            var sheet=drawing.GetSheet();double width=sheet.Width,height=sheet.Height;
+            if(!PHU_SectionLayoutPlanner.Finite(width)||!PHU_SectionLayoutPlanner.Finite(height)||width<=30||height<=30)
+                throw new InvalidOperationException("Không đọc được khổ giấy thực tế.");
+            var sections=BuildBoxes(sectionViews);var fixedViews=BuildBoxes(mainViews);
+            if(sections.Count!=sectionViews.Count||fixedViews.Count!=mainViews.Count)
+                throw new InvalidOperationException("Không đọc được đầy đủ khung view. Chưa di chuyển view nào.");
+            sections.Sort(CompareSectionBoxesByNameThenPosition);
+            var all=mainViews.Concat(sectionViews).ToList();
+            var ids=all.Select(ViewId).ToArray();
+            var rendered=PHU_ArrangePresentation.Read(ids,width,height);
+            for(int i=0;i<all.Count;i++)
+            {
+                int index=rendered.ViewIds.IndexOf(ids[i]);var origin=all[i].Origin;
+                if(index<0||origin==null||Math.Abs(origin.X-rendered.ViewX[index])>.1||Math.Abs(origin.Y-rendered.ViewY[index])>.1)
+                    throw new InvalidOperationException("Dữ liệu hiển thị chưa khớp vị trí view. Hãy refresh bản vẽ rồi chạy lại.");
+            }
+            var obstacles=fixedViews.Select(Rectangle).ToList();
+            // The fixed clearance is only a small drawing stroke/rounding allowance;
+            // obstacle widths and heights always come from current presentation data.
+            obstacles.AddRange(rendered.Obstacles.Select(r=>r.Inflate(2)));
+            return new LayoutSnapshot {
+                Sections=sections,Fixed=fixedViews,Paper=new PHU_SectionLayoutPlanner.Rect(MIN_EDGE_SAFE,MIN_EDGE_SAFE,width-MIN_EDGE_SAFE,height-MIN_EDGE_SAFE),
+                Obstacles=obstacles,Main=fixedViews.Count==0?null:Rectangle(GetClusterBoxFromBoxes(fixedViews)),
+                Items=sections.Select(b=>new PHU_SectionLayoutPlanner.Item{Key=b.SortKey,Width=b.Width,Height=b.Height}).ToList()
+            };
+        }
+        private static int ViewId(View view)
+        {
+            var property=typeof(View).GetProperty("Identifier",BindingFlags.Instance|BindingFlags.Public|BindingFlags.NonPublic);
+            var id=property==null?null:property.GetValue(view,null) as Tekla.Structures.Identifier;
+            if(id==null||id.ID<=0)throw new InvalidOperationException("Không đọc được định danh view.");return id.ID;
+        }
+        private static PHU_SectionLayoutPlanner.Plan ArrangeRegularSectionViews(Drawing drawing,List<View> mainViews,List<View> sectionViews,
+            bool horizontal,double gap,bool verticalBottomUp)
+        {
+            if(sectionViews.Count==0)return new PHU_SectionLayoutPlanner.Plan{RequestedGap=gap,GlobalGap=gap,RightGap=gap};
+            var snapshot=CaptureLayout(drawing,mainViews,sectionViews);
+            var plan=PHU_SectionLayoutPlanner.Build(snapshot.Paper,snapshot.Items,snapshot.Obstacles,snapshot.Main,gap,horizontal,verticalBottomUp);
+            if(!plan.Success)throw new InvalidOperationException(plan.Error);
+            var originals=snapshot.Sections.Select(b=>new Point(b.View.Origin)).ToList();
+            var fixedOrigins=snapshot.Fixed.Select(b=>new Point(b.View.Origin)).ToList();
+            var handler=new DrawingHandler();
+            var active=handler.GetActiveDrawing();
+            if(active==null||!active.IsSameDatabaseObject(drawing))throw new InvalidOperationException("Bản vẽ đang mở đã thay đổi.");
+            int touched=0;
             try
             {
-                if (sectionViews == null || sectionViews.Count == 0)
-                    return;
-
-                if (gap < 0.0)
-                    gap = 0.0;
-
-                double arrangeGap = gap;
-                double safeGap = Math.Max(gap, MIN_EDGE_SAFE);
-
-                List<ViewBox> sectionBoxes = BuildBoxes(sectionViews);
-                if (sectionBoxes.Count == 0)
-                    return;
-
-                sectionBoxes.Sort(CompareSectionBoxesByNameThenPosition);
-
-                List<ViewBox> mainBoxes = BuildBoxes(mainViews);
-                UsableRect usable = GetUsableRect(drawing, safeGap);
-
-                ViewBox mainCluster = GetClusterBoxFromBoxes(mainBoxes);
-                if (mainCluster == null)
-                    mainCluster = sectionBoxes[0];
-
-                ViewBox lowestMain = GetLowestMainBox(mainBoxes);
-                ViewBox highestMain = GetHighestMainBox(mainBoxes);
-                ViewBox rightMostMain = GetRightMostMainBox(mainBoxes);
-
-                if (lowestMain == null)
-                    lowestMain = mainCluster;
-                if (highestMain == null)
-                    highestMain = mainCluster;
-                if (rightMostMain == null)
-                    rightMostMain = mainCluster;
-
-                if (usable == null)
+                for(int i=0;i<snapshot.Sections.Count;i++)
                 {
-                    usable = new UsableRect();
-                    usable.Left = mainCluster.MinX - 200.0;
-                    usable.Right = mainCluster.MaxX + 300.0;
-                    usable.Bottom = mainCluster.MinY - 200.0;
-                    usable.Top = mainCluster.MaxY + 200.0;
+                    var b=snapshot.Sections[i];var target=plan.Places[i];
+                    touched=i+1;
+                    b.View.Origin=new Point(originals[i].X+target.Left-b.MinX,originals[i].Y+target.Bottom-b.MinY,originals[i].Z);
+                    if(!b.View.Modify())throw new InvalidOperationException("Tekla từ chối di chuyển mặt cắt " + b.SortKey);
                 }
-
-                if (horizontal)
-                {
-                    // PHU HORIZONTAL SAFE:
-                    // 1) Ưu tiên dàn từ bên trái usable.Left, không canh giữa / không dồn qua phải.
-                    // 2) Nếu hàng quá dài thì tự xuống hàng, không vượt margin / title block.
-                    // 3) Toàn bộ cụm đặt dưới MAIN VIEW thấp nhất, nếu đụng block thì đẩy lên khỏi block.
-                    ArrangeHorizontalLeftPriority(
-                        sectionBoxes,
-                        mainBoxes,
-                        rightMostMain,
-                        highestMain,
-                        lowestMain,
-                        usable,
-                        arrangeGap
-                    );
-                }
-                else
-                {
-                    // PHU VERTICAL SAFE:
-                    // 1) Bắt đầu bên phải main view xa nhất + safeGap.
-                    // 2) Cách margin phải / top / bottom xa hơn.
-                    // 3) Nếu dự kiến chạm main view thì tự dịch sang phải thêm safeGap.
-                    ArrangeVerticalRightOfMain(
-                        sectionBoxes,
-                        mainBoxes,
-                        rightMostMain,
-                        highestMain,
-                        usable,
-                        arrangeGap,
-                        verticalBottomUp
-                    );
-                }
+                VerifyApplied(snapshot,plan,gap,fixedOrigins);
+                drawing.CommitChanges();
+                VerifyApplied(snapshot,plan,gap,fixedOrigins);
+                var refreshed=CaptureLayout(drawing,mainViews,sectionViews);
+                if(!PHU_SectionLayoutPlanner.ValidatePlan(refreshed.Paper,refreshed.Items,refreshed.Obstacles,
+                    refreshed.Main,plan,refreshed.Sections.Select(Rectangle).ToList()))
+                    throw new InvalidOperationException("Layout bảng/keyplan sau cập nhật không còn đủ khoảng trống.");
+                return plan;
             }
-            catch { }
-        }
-
-        private class ArrangeRow
-        {
-            public List<ViewBox> Items = new List<ViewBox>();
-            public double Width;
-            public double Height;
-        }
-
-        private static void ArrangeHorizontalLeftPriority(
-            List<ViewBox> sectionBoxes,
-            List<ViewBox> mainBoxes,
-            ViewBox rightMostMain,
-            ViewBox highestMain,
-            ViewBox lowestMain,
-            UsableRect usable,
-            double gap
-        )
-        {
-            if (
-                sectionBoxes == null
-                || sectionBoxes.Count == 0
-                || lowestMain == null
-                || usable == null
-            )
-                return;
-
-            // PHU FIX GAP:
-            // Chế độ ngang chỉ được có 1 hàng dưới main.
-            // Khi hết chỗ, phần dư chuyển sang vùng phải và xếp 2 cột bottom-up.
-            // Không cho phần dư và hàng ngang dùng chung vùng X để tránh chồng khung xanh.
-            if (rightMostMain == null)
-                rightMostMain = lowestMain;
-            if (highestMain == null)
-                highestMain = lowestMain;
-
-            double rightAreaLeft = rightMostMain.MaxX + gap;
-            double horizontalRightLimit = Math.Min(usable.Right, rightAreaLeft - gap);
-
-            // Nếu vùng trái quá nhỏ thì vẫn cho hàng ngang dùng usable rộng nhất,
-            // nhưng khi có overflow thì phần dư sẽ được ép sang phải main.
-            if (horizontalRightLimit <= usable.Left + 1.0)
-                horizontalRightLimit = usable.Right;
-
-            double firstRowWidthLimit = Math.Max(1.0, horizontalRightLimit - usable.Left);
-
-            List<ViewBox> firstRow = new List<ViewBox>();
-            List<ViewBox> overflow = new List<ViewBox>();
-
-            double usedWidth = 0.0;
-            bool overflowStarted = false;
-
-            for (int i = 0; i < sectionBoxes.Count; i++)
+            catch(Exception ex)
             {
-                ViewBox b = sectionBoxes[i];
-                if (b == null)
-                    continue;
-
-                double addWidth = firstRow.Count == 0 ? b.Width : gap + b.Width;
-
-                // Sau khi đã hết chỗ một lần, toàn bộ view còn lại phải qua vùng phải.
-                // Nếu cho view sau quay lại hàng ngang thì thứ tự và gap sẽ rất dễ chồng nhau.
-                if (
-                    overflowStarted
-                    || (firstRow.Count > 0 && usedWidth + addWidth > firstRowWidthLimit)
-                )
-                {
-                    overflowStarted = true;
-                    overflow.Add(b);
-                }
-                else
-                {
-                    firstRow.Add(b);
-                    usedWidth += addWidth;
-                }
-            }
-
-            // Nếu view đầu tiên rộng hơn vùng trái thì vẫn đặt nó ở hàng ngang,
-            // không để toàn bộ list qua overflow.
-            if (firstRow.Count == 0 && overflow.Count > 0)
-            {
-                firstRow.Add(overflow[0]);
-                overflow.RemoveAt(0);
-            }
-
-            if (firstRow.Count > 0)
-            {
-                double rowHeight = GetMaxHeight(firstRow);
-                // PHU: dàn ngang dịch xuống thêm 30mm để tận dụng vùng trống phía dưới.
-                // Vẫn clamp theo usable.Bottom nên không đụng title block / margin.
-                double targetBottom = lowestMain.MinY - gap - rowHeight - HORIZONTAL_EXTRA_DOWN;
-
-                // PHU FIX: bản trước có trừ HORIZONTAL_EXTRA_DOWN nhưng bị clamp lại bởi usable.Bottom,
-                // nên thực tế không dịch xuống được. Cho phép dàn ngang dùng thêm 30mm vùng trống
-                // phía trên title block / block dưới, nhưng chỉ áp dụng cho HORIZONTAL.
-                double horizontalBottomLimit = usable.Bottom - HORIZONTAL_EXTRA_DOWN;
-                if (horizontalBottomLimit < 0.0)
-                    horizontalBottomLimit = 0.0;
-
-                targetBottom = Math.Max(targetBottom, horizontalBottomLimit);
-                if (targetBottom + rowHeight > usable.Top)
-                    targetBottom = Math.Max(horizontalBottomLimit, usable.Top - rowHeight);
-
-                double x = usable.Left;
-
-                // PHU AUTO CENTER HORIZONTAL:
-                // Chỉ canh giữa cụm dàn ngang khi cụm chiếm ít vùng đặt được.
-                // Không sửa thuật toán overflow/dàn dọc phía sau.
-                double rowWidth = GetTotalRowWidth(firstRow, gap);
-                double horizontalAreaWidth = Math.Max(1.0, firstRowWidthLimit);
-                if (rowWidth > 0.0 && rowWidth < horizontalAreaWidth * AUTO_CENTER_FILL_RATIO)
-                {
-                    // PHU FEW SECTION CENTER BY MAIN ORIGIN:
-                    // Nếu 2 main gốc tọa độ gần như cùng X và khác Y => main đang xếp dọc,
-                    // canh cụm section theo tâm main thấp nhất/gần section nhất.
-                    // Ngược lại giữ nguyên thuật toán base hiện tại.
-                    if (IsMainLayoutVerticalByOrigins(mainBoxes))
-                    {
-                        x = lowestMain.CenterX - rowWidth * 0.5;
-
-                        if (x < usable.Left)
-                            x = usable.Left;
-
-                        double maxX = horizontalRightLimit - rowWidth;
-                        if (maxX < usable.Left)
-                            maxX = usable.Left;
-
-                        if (x > maxX)
-                            x = maxX;
-                    }
-                    else
-                    {
-                        x = usable.Left + (horizontalAreaWidth - rowWidth) * 0.5;
-                    }
-                }
-
-                for (int i = 0; i < firstRow.Count; i++)
-                {
-                    ViewBox b = firstRow[i];
-                    double targetCenterX = x + b.Width * 0.5;
-                    double targetCenterY = targetBottom + b.Height * 0.5;
-                    MoveViewBySheetDelta(
-                        b.View,
-                        targetCenterX - b.CenterX,
-                        targetCenterY - b.CenterY
-                    );
-                    x += b.Width + gap;
-                }
-            }
-
-            if (overflow.Count > 0)
-            {
-                ArrangeVerticalBottomUpRightOfMain(
-                    overflow,
-                    mainBoxes,
-                    rightMostMain,
-                    highestMain,
-                    usable,
-                    gap
-                );
+                bool restored=true;
+                // Restore moved sections and any linked main view Tekla relocated implicitly.
+                for(int i=0;i<touched;i++)try { snapshot.Sections[i].View.Origin=originals[i];restored &= snapshot.Sections[i].View.Modify(); }catch{restored=false;}
+                for(int i=0;i<snapshot.Fixed.Count;i++)try {
+                    var v=snapshot.Fixed[i].View;v.Select();
+                    if(Distance.PointToPoint(v.Origin,fixedOrigins[i])>.01){v.Origin=fixedOrigins[i];restored &= v.Modify();}
+                }catch{restored=false;}
+                try { drawing.CommitChanges(); }catch{restored=false;}
+                for(int i=0;i<touched;i++)try {var v=snapshot.Sections[i].View;v.Select();restored &= Distance.PointToPoint(v.Origin,originals[i])<.1;}catch{restored=false;}
+                for(int i=0;i<snapshot.Fixed.Count;i++)try {var v=snapshot.Fixed[i].View;restored &= v.Select()&&Distance.PointToPoint(v.Origin,fixedOrigins[i])<.1;}catch{restored=false;}
+                throw new InvalidOperationException(ex.Message+(restored?" Đã khôi phục vị trí ban đầu.":" Không khôi phục được toàn bộ vị trí; cần kiểm tra bản vẽ."),ex);
             }
         }
-
-        private static void ArrangeVerticalBottomUpRightOfMain(
-            List<ViewBox> sectionBoxes,
-            List<ViewBox> mainBoxes,
-            ViewBox rightMostMain,
-            ViewBox highestMain,
-            UsableRect usable,
-            double gap
-        )
+        private static void VerifyApplied(LayoutSnapshot snapshot,PHU_SectionLayoutPlanner.Plan plan,double gap,List<Point> fixedOrigins)
         {
-            if (
-                sectionBoxes == null
-                || sectionBoxes.Count == 0
-                || rightMostMain == null
-                || usable == null
-            )
-                return;
-
-            // PHU FIX GAP CHỒNG VIEW:
-            // Tính cột bằng width lớn nhất của từng cột, hàng bằng height lớn nhất của từng hàng.
-            // Sau đó đặt từng view theo left/top của ô lưới, tuyệt đối không dùng center cũ để suy ra gap.
-            double col0Width = GetColumnWidth(sectionBoxes, 0);
-            double col1Width = GetColumnWidth(sectionBoxes, 1);
-            if (col1Width <= 0.0)
-                col1Width = 0.0;
-
-            double gridWidth = col0Width + (sectionBoxes.Count > 1 ? gap + col1Width : 0.0);
-
-            int rows = (sectionBoxes.Count + 1) / 2;
-            double[] rowHeights = new double[rows];
-            for (int i = 0; i < sectionBoxes.Count; i++)
+            var actual=new List<PHU_SectionLayoutPlanner.Rect>();
+            for(int i=0;i<snapshot.Sections.Count;i++)
             {
-                int row = i / 2;
-                if (sectionBoxes[i].Height > rowHeights[row])
-                    rowHeights[row] = sectionBoxes[i].Height;
+                var view=snapshot.Sections[i].View;
+                if(!view.Select())throw new InvalidOperationException("Không đọc lại được mặt cắt.");
+                ViewBox b;if(!TryGetViewBox(view,out b))throw new InvalidOperationException("Không đọc lại được khung mặt cắt.");
+                var target=plan.Places[i];
+                if(Math.Abs(b.MinX-target.Left)>.1||Math.Abs(b.MinY-target.Bottom)>.1)
+                    throw new InvalidOperationException("Tekla đã thay đổi vị trí ngoài phương án Arrange.");
+                actual.Add(Rectangle(b));
             }
-
-            double gridHeight = 0.0;
-            for (int i = 0; i < rows; i++)
-            {
-                if (i > 0)
-                    gridHeight += gap;
-                gridHeight += rowHeights[i];
-            }
-
-            double preferredLeft = rightMostMain.MaxX + gap;
-            double col0Left = preferredLeft;
-
-            // Không kéo cụm overflow vào vùng main nếu còn có thể giữ bên phải main.
-            if (col0Left + gridWidth > usable.Right)
-                col0Left = Math.Max(preferredLeft, usable.Right - gridWidth);
-            if (col0Left < usable.Left)
-                col0Left = usable.Left;
-
-            double bottomLimit = usable.Bottom + HORIZONTAL_BLOCK_CLEARANCE;
-            if (bottomLimit > usable.Top - 1.0)
-                bottomLimit = usable.Bottom;
-
-            double bottom = bottomLimit;
-            if (bottom + gridHeight > usable.Top)
-                bottom = Math.Max(bottomLimit, usable.Top - gridHeight);
-
-            // Nếu vùng dự kiến đụng main, dịch sang phải theo đúng gap.
-            double testLeft = col0Left;
-            double testRight = testLeft + gridWidth;
-            double testBottom = bottom;
-            double testTop = bottom + gridHeight;
-
-            int guard = 0;
-            while (
-                IntersectsAnyMain(testLeft, testRight, testBottom, testTop, mainBoxes) && guard < 50
-            )
-            {
-                guard++;
-                if (testRight + gap <= usable.Right)
-                {
-                    testLeft += gap;
-                    testRight += gap;
-                    col0Left = testLeft;
-                }
-                else
-                {
-                    break;
-                }
-            }
-
-            double col1Left = col0Left + col0Width + gap;
-            double yBottom = bottom;
-
-            for (int row = 0; row < rows; row++)
-            {
-                double rowBottom = yBottom;
-
-                for (int col = 0; col < 2; col++)
-                {
-                    int index = row * 2 + col;
-                    if (index >= sectionBoxes.Count)
-                        continue;
-
-                    ViewBox b = sectionBoxes[index];
-                    double cellLeft = col == 0 ? col0Left : col1Left;
-
-                    // Căn giữa view trong ô cột của nó để view nhỏ không bị lệch khó nhìn,
-                    // nhưng khoảng cách giữa 2 ô vẫn luôn >= gap.
-                    double cellWidth = col == 0 ? col0Width : col1Width;
-                    double targetLeft = cellLeft;
-                    double targetBottom = rowBottom;
-
-                    double targetCenterX = targetLeft + b.Width * 0.5;
-                    double targetCenterY = targetBottom + b.Height * 0.5;
-                    MoveViewBySheetDelta(
-                        b.View,
-                        targetCenterX - b.CenterX,
-                        targetCenterY - b.CenterY
-                    );
-                }
-
-                yBottom += rowHeights[row] + gap;
-            }
+            for(int i=0;i<snapshot.Fixed.Count;i++)
+            {var v=snapshot.Fixed[i].View;if(!v.Select()||Distance.PointToPoint(v.Origin,fixedOrigins[i])>.1)throw new InvalidOperationException("Tekla đã dịch view chính liên kết.");}
+            if(!PHU_SectionLayoutPlanner.ValidatePlan(snapshot.Paper,snapshot.Items,snapshot.Obstacles,snapshot.Main,plan,actual))
+                throw new InvalidOperationException("Khung view sau di chuyển không đạt kiểm tra mép giấy/vùng né/khoảng cách.");
         }
 
-        private static bool IsMainLayoutVerticalByOrigins(List<ViewBox> mainBoxes)
+        // Explicitly read-only entry point for diagnostics and regression on the open drawing.
+        public static string AuditCurrentLayout(bool horizontal,double gap,bool bottomUp)
         {
-            try
-            {
-                if (mainBoxes == null || mainBoxes.Count < 2)
-                    return false;
-
-                ViewBox a = null;
-                ViewBox b = null;
-
-                for (int i = 0; i < mainBoxes.Count; i++)
-                {
-                    if (mainBoxes[i] == null || mainBoxes[i].View == null)
-                        continue;
-
-                    if (a == null)
-                        a = mainBoxes[i];
-                    else
-                    {
-                        b = mainBoxes[i];
-                        break;
-                    }
-                }
-
-                if (a == null || b == null)
-                    return false;
-
-                Point oa = null;
-                Point ob = null;
-
-                try
-                {
-                    oa = a.View.Origin;
-                }
-                catch
-                {
-                    oa = null;
-                }
-                try
-                {
-                    ob = b.View.Origin;
-                }
-                catch
-                {
-                    ob = null;
-                }
-
-                double ax = oa != null ? oa.X : a.CenterX;
-                double ay = oa != null ? oa.Y : a.CenterY;
-                double bx = ob != null ? ob.X : b.CenterX;
-                double by = ob != null ? ob.Y : b.CenterY;
-
-                double dx = Math.Abs(ax - bx);
-                double dy = Math.Abs(ay - by);
-                double tol = 5.0;
-
-                // Cùng X, khác Y rõ ràng => layout main dọc.
-                if (dx <= tol && dy > tol)
-                    return true;
-
-                // Cùng Y, khác X rõ ràng => layout main ngang, giữ base.
-                if (dy <= tol && dx > tol)
-                    return false;
-            }
-            catch { }
-
-            return false;
-        }
-
-        private static double GetMaxHeight(List<ViewBox> boxes)
-        {
-            double max = 0.0;
-            if (boxes == null)
-                return max;
-
-            foreach (ViewBox b in boxes)
-            {
-                if (b != null && b.Height > max)
-                    max = b.Height;
-            }
-            return max;
-        }
-
-        private static List<ArrangeRow> BuildRowsByWidth(
-            List<ViewBox> boxes,
-            double usableWidth,
-            double gap
-        )
-        {
-            List<ArrangeRow> rows = new List<ArrangeRow>();
-            ArrangeRow row = new ArrangeRow();
-
-            foreach (ViewBox b in boxes)
-            {
-                if (b == null)
-                    continue;
-
-                double addWidth = row.Items.Count == 0 ? b.Width : gap + b.Width;
-
-                if (row.Items.Count > 0 && row.Width + addWidth > usableWidth)
-                {
-                    rows.Add(row);
-                    row = new ArrangeRow();
-                    addWidth = b.Width;
-                }
-
-                row.Items.Add(b);
-                row.Width += addWidth;
-                if (b.Height > row.Height)
-                    row.Height = b.Height;
-            }
-
-            if (row.Items.Count > 0)
-                rows.Add(row);
-
-            return rows;
+            var handler=new DrawingHandler();if(!handler.GetConnectionStatus())throw new InvalidOperationException("No Drawing API connection");
+            var drawing=handler.GetActiveDrawing();if(drawing==null)throw new InvalidOperationException("No active drawing");
+            List<View> main,sections;ClassifyViews(GetAllViews(drawing),out main,out sections);
+            var s=CaptureLayout(drawing,main,sections);var p=PHU_SectionLayoutPlanner.Build(s.Paper,s.Items,s.Obstacles,s.Main,gap,horizontal,bottomUp);
+            var text=new System.Text.StringBuilder("ARRANGE READ ONLY "+drawing.Mark+"\r\nPaper="+s.Paper+" Gap="+gap+"\r\n");
+            foreach(var obstacle in s.Obstacles)text.AppendLine("OBSTACLE "+obstacle);
+            for(int i=0;i<s.Sections.Count;i++)text.AppendLine("VIEW "+s.Sections[i].SortKey+" "+Rectangle(s.Sections[i])+(p.Success?" => "+p.Places[i]:""));
+            text.AppendLine(p.Success?"PLAN PASS":p.Error);
+            text.AppendLine("GlobalGap="+p.GlobalGap+" RightGap="+p.RightGap+" "+p.GapNotice);return text.ToString();
         }
 
         private static void SelectViews(DrawingHandler dh, List<View> views)
@@ -856,447 +480,6 @@ namespace TTSK_AutoDim_Plates
             catch { }
         }
 
-        private static double GetRowsTotalHeight(List<ArrangeRow> rows, double gap)
-        {
-            double h = 0.0;
-            if (rows == null)
-                return h;
-
-            for (int i = 0; i < rows.Count; i++)
-            {
-                if (i > 0)
-                    h += gap;
-                h += rows[i].Height;
-            }
-            return h;
-        }
-
-        private static void ArrangeVerticalRightOfMain(
-            List<ViewBox> sectionBoxes,
-            List<ViewBox> mainBoxes,
-            ViewBox rightMostMain,
-            ViewBox highestMain,
-            UsableRect usable,
-            double gap,
-            bool verticalBottomUp
-        )
-        {
-            if (
-                sectionBoxes == null
-                || sectionBoxes.Count == 0
-                || rightMostMain == null
-                || highestMain == null
-                || usable == null
-            )
-                return;
-
-            UsableRect verticalUsable = new UsableRect();
-            verticalUsable.Left = usable.Left;
-            verticalUsable.Right = usable.Right;
-            verticalUsable.Bottom = usable.Bottom + VERTICAL_GRID_CLEARANCE;
-            verticalUsable.Top = usable.Top;
-            if (verticalUsable.Bottom > verticalUsable.Top - 1.0)
-                verticalUsable.Bottom = usable.Bottom;
-
-            // PHU VERTICAL FINAL:
-            // Bên phải luôn là layout chính 2 x X.
-            // Không được phá thành 1 hàng ngang nếu vùng phải còn chứa được.
-            // Nếu tổng section quá cao và phần dưới sẽ đụng grid/title block,
-            // chỉ phần DƯ bị tràn mới đưa xuống hàng ngang dưới main.
-            // Nếu cụm dọc đụng main view, ưu tiên dịch nguyên cụm sang phải theo gap.
-
-            // PHU: dàn dọc luôn ưu tiên đẩy cụm 2 cột lên vùng trống phía trên.
-            // Trước đây nhiều section bị khóa theo highestMain.MaxY nên phía trên còn trống nhiều.
-            // usable.Top đã né margin / block trên nên vẫn an toàn.
-            double preferredTop = verticalUsable.Top;
-
-            preferredTop = Clamp(preferredTop, verticalUsable.Bottom, verticalUsable.Top);
-
-            int keepCount = sectionBoxes.Count;
-            double keepLeft = 0.0;
-            double keepTop = 0.0;
-            double keepGridWidth = 0.0;
-            double keepGridHeight = 0.0;
-
-            // Thử giữ nhiều section nhất có thể trong vùng phải 2 cột.
-            // Luôn giảm theo cặp để không làm vỡ quy tắc 2 x X.
-            while (keepCount > 0)
-            {
-                if (
-                    TryFindVerticalPlacement(
-                        sectionBoxes,
-                        keepCount,
-                        mainBoxes,
-                        rightMostMain,
-                        verticalUsable,
-                        gap,
-                        preferredTop,
-                        out keepLeft,
-                        out keepTop,
-                        out keepGridWidth,
-                        out keepGridHeight
-                    )
-                )
-                {
-                    break;
-                }
-
-                keepCount -= 2;
-            }
-
-            if (keepCount < 0)
-                keepCount = 0;
-
-            if (keepCount > 0)
-            {
-                PlaceVerticalPrefix(
-                    sectionBoxes,
-                    keepCount,
-                    keepLeft,
-                    keepTop,
-                    gap,
-                    verticalBottomUp
-                );
-            }
-
-            if (keepCount < sectionBoxes.Count)
-            {
-                List<ViewBox> overflow = new List<ViewBox>();
-                for (int i = keepCount; i < sectionBoxes.Count; i++)
-                {
-                    if (sectionBoxes[i] != null)
-                        overflow.Add(sectionBoxes[i]);
-                }
-
-                // Phần dư đưa xuống dưới và dàn ngang giống mode ngang:
-                // dưới main thấp nhất, có HORIZONTAL_EXTRA_DOWN, vẫn né block/grid bằng usable.Bottom.
-                ViewBox lowestMain = GetLowestMainBox(mainBoxes);
-                if (lowestMain == null)
-                    lowestMain = rightMostMain;
-
-                ArrangeBottomOverflowRow(overflow, lowestMain, verticalUsable, gap, keepLeft);
-            }
-        }
-
-        private static bool TryFindVerticalPlacement(
-            List<ViewBox> boxes,
-            int count,
-            List<ViewBox> mainBoxes,
-            ViewBox rightMostMain,
-            UsableRect usable,
-            double gap,
-            double preferredTop,
-            out double col0Left,
-            out double rowTop,
-            out double gridWidth,
-            out double gridHeight
-        )
-        {
-            col0Left = 0.0;
-            rowTop = 0.0;
-            gridWidth = 0.0;
-            gridHeight = 0.0;
-
-            if (boxes == null || count <= 0 || rightMostMain == null || usable == null)
-                return false;
-
-            gridWidth = GetColumnWidthForPrefix(boxes, count, 0);
-            double col1Width = GetColumnWidthForPrefix(boxes, count, 1);
-            if (count > 1)
-                gridWidth += gap + col1Width;
-
-            gridHeight = GetVerticalGridHeightForPrefix(boxes, count, gap);
-
-            // Không đủ chiều cao vùng an toàn thì prefix này phải giảm bớt.
-            if (gridHeight > (usable.Top - usable.Bottom) + 0.01)
-                return false;
-
-            double minTop = usable.Bottom + gridHeight;
-            double maxTop = usable.Top;
-            if (minTop > maxTop)
-                return false;
-
-            // PHU AUTO CENTER VERTICAL:
-            // Chỉ canh giữa cụm dàn dọc khi cụm chiếm ít chiều cao vùng usable.
-            // Không sửa thuật toán giảm keepCount / overflow ngang phía sau.
-            double usableHeight = Math.Max(1.0, usable.Top - usable.Bottom);
-            double targetPreferredTop = preferredTop;
-            if (gridHeight > 0.0 && gridHeight < usableHeight * AUTO_CENTER_FILL_RATIO)
-                targetPreferredTop = usable.Bottom + (usableHeight + gridHeight) * 0.5;
-
-            rowTop = Clamp(targetPreferredTop, minTop, maxTop);
-
-            double preferredLeft = rightMostMain.MaxX + gap;
-            double minLeft = usable.Left;
-            double maxLeft = usable.Right - gridWidth;
-            if (maxLeft < minLeft)
-                return false;
-
-            col0Left = preferredLeft;
-            if (col0Left < minLeft)
-                col0Left = minLeft;
-
-            // Nếu bên phải không đủ, cho phép kéo về trong giấy nhưng không được chui vào main.
-            if (col0Left > maxLeft)
-                col0Left = maxLeft;
-
-            double testLeft = col0Left;
-            double testRight = testLeft + gridWidth;
-            double testBottom = rowTop - gridHeight;
-            double testTop = rowTop;
-
-            // Nếu chạm main thì đẩy nguyên cụm sang phải từng gap.
-            int guard = 0;
-            while (
-                IntersectsAnyMain(testLeft, testRight, testBottom, testTop, mainBoxes) && guard < 80
-            )
-            {
-                guard++;
-                if (testRight + gap <= usable.Right)
-                {
-                    testLeft += gap;
-                    testRight += gap;
-                    col0Left = testLeft;
-                }
-                else
-                {
-                    return false;
-                }
-            }
-
-            // Sau khi đẩy vẫn phải nằm trong usable, không đụng grid/title block.
-            if (testBottom < usable.Bottom - 0.01)
-                return false;
-            if (testTop > usable.Top + 0.01)
-                return false;
-            if (testLeft < usable.Left - 0.01 || testRight > usable.Right + 0.01)
-                return false;
-
-            return true;
-        }
-
-        private static void PlaceVerticalPrefix(
-            List<ViewBox> boxes,
-            int count,
-            double col0Left,
-            double rowTop,
-            double gap,
-            bool verticalBottomUp
-        )
-        {
-            if (boxes == null || count <= 0)
-                return;
-
-            double col0Width = GetColumnWidthForPrefix(boxes, count, 0);
-            double col1Left = col0Left + col0Width + gap;
-
-            int rows = (count + 1) / 2;
-            double[] rowHeights = GetRowHeightsForPrefix(boxes, count);
-
-            if (verticalBottomUp)
-            {
-                double totalHeight = 0.0;
-                for (int i = 0; i < rows; i++)
-                {
-                    if (i > 0)
-                        totalHeight += gap;
-                    totalHeight += rowHeights[i];
-                }
-
-                double yBottom = rowTop - totalHeight;
-                for (int row = 0; row < rows; row++)
-                {
-                    double rowBottomY = yBottom;
-
-                    for (int col = 0; col < 2; col++)
-                    {
-                        int index = row * 2 + col;
-                        if (index >= count || index >= boxes.Count)
-                            continue;
-
-                        ViewBox b = boxes[index];
-                        if (b == null)
-                            continue;
-
-                        double left = col == 0 ? col0Left : col1Left;
-                        double cellWidth =
-                            col == 0 ? col0Width : GetColumnWidthForPrefix(boxes, count, 1);
-                        double targetLeft = left;
-                        double targetBottom = rowBottomY;
-
-                        double targetCenterX = targetLeft + b.Width * 0.5;
-                        double targetCenterY = targetBottom + b.Height * 0.5;
-                        MoveViewBySheetDelta(
-                            b.View,
-                            targetCenterX - b.CenterX,
-                            targetCenterY - b.CenterY
-                        );
-                    }
-
-                    yBottom += rowHeights[row] + gap;
-                }
-            }
-            else
-            {
-                double yTop = rowTop;
-                for (int row = 0; row < rows; row++)
-                {
-                    double rowBottomY = yTop - rowHeights[row];
-
-                    for (int col = 0; col < 2; col++)
-                    {
-                        int index = row * 2 + col;
-                        if (index >= count || index >= boxes.Count)
-                            continue;
-
-                        ViewBox b = boxes[index];
-                        if (b == null)
-                            continue;
-
-                        double left = col == 0 ? col0Left : col1Left;
-                        double cellWidth =
-                            col == 0 ? col0Width : GetColumnWidthForPrefix(boxes, count, 1);
-                        double targetLeft = left;
-                        double targetBottom = rowBottomY;
-
-                        double targetCenterX = targetLeft + b.Width * 0.5;
-                        double targetCenterY = targetBottom + b.Height * 0.5;
-                        MoveViewBySheetDelta(
-                            b.View,
-                            targetCenterX - b.CenterX,
-                            targetCenterY - b.CenterY
-                        );
-                    }
-
-                    yTop = rowBottomY - gap;
-                }
-            }
-        }
-
-        private static void ArrangeBottomOverflowRow(
-            List<ViewBox> overflow,
-            ViewBox lowestMain,
-            UsableRect usable,
-            double gap,
-            double rightClusterLeft
-        )
-        {
-            if (overflow == null || overflow.Count == 0 || lowestMain == null || usable == null)
-                return;
-
-            double rowHeight = GetMaxHeight(overflow);
-            double targetBottom = lowestMain.MinY - gap - rowHeight - HORIZONTAL_EXTRA_DOWN;
-
-            double horizontalBottomLimit = usable.Bottom - HORIZONTAL_EXTRA_DOWN;
-            if (horizontalBottomLimit < 0.0)
-                horizontalBottomLimit = 0.0;
-
-            targetBottom = Math.Max(targetBottom, horizontalBottomLimit);
-            if (targetBottom + rowHeight > usable.Top)
-                targetBottom = Math.Max(horizontalBottomLimit, usable.Top - rowHeight);
-
-            double x = usable.Left;
-
-            // Nếu hàng dưới tiến gần cụm dọc bên phải, vẫn giữ gap tối thiểu.
-            double rightLimit = rightClusterLeft - gap;
-            if (rightLimit <= usable.Left + 1.0)
-                rightLimit = usable.Right;
-
-            for (int i = 0; i < overflow.Count; i++)
-            {
-                ViewBox b = overflow[i];
-                if (b == null)
-                    continue;
-
-                // PHU: không wrap về usable.Left trên cùng một hàng.
-                // Wrap cũ làm các view phía dưới chồng lên nhau khi vùng trái hẹp.
-                // Cứ đi tiếp theo đúng width + gap để luôn giữ Gap View.
-                double targetCenterX = x + b.Width * 0.5;
-                double targetCenterY = targetBottom + b.Height * 0.5;
-                MoveViewBySheetDelta(b.View, targetCenterX - b.CenterX, targetCenterY - b.CenterY);
-
-                x += b.Width + gap;
-            }
-        }
-
-        private static double GetColumnWidthForPrefix(List<ViewBox> boxes, int count, int col)
-        {
-            double max = 0.0;
-            if (boxes == null)
-                return max;
-
-            int n = Math.Min(count, boxes.Count);
-            for (int i = col; i < n; i += 2)
-            {
-                if (boxes[i] != null && boxes[i].Width > max)
-                    max = boxes[i].Width;
-            }
-            return max;
-        }
-
-        private static double[] GetRowHeightsForPrefix(List<ViewBox> boxes, int count)
-        {
-            int rows = (count + 1) / 2;
-            if (rows < 1)
-                rows = 1;
-
-            double[] rowHeights = new double[rows];
-            if (boxes == null)
-                return rowHeights;
-
-            int n = Math.Min(count, boxes.Count);
-            for (int i = 0; i < n; i++)
-            {
-                int row = i / 2;
-                if (boxes[i] != null && boxes[i].Height > rowHeights[row])
-                    rowHeights[row] = boxes[i].Height;
-            }
-
-            return rowHeights;
-        }
-
-        private static double GetVerticalGridHeightForPrefix(
-            List<ViewBox> boxes,
-            int count,
-            double gap
-        )
-        {
-            double[] rowHeights = GetRowHeightsForPrefix(boxes, count);
-            double h = 0.0;
-            for (int i = 0; i < rowHeights.Length; i++)
-            {
-                if (i > 0)
-                    h += gap;
-                h += rowHeights[i];
-            }
-            return h;
-        }
-
-        private static bool IntersectsAnyMain(
-            double minX,
-            double maxX,
-            double minY,
-            double maxY,
-            List<ViewBox> mainBoxes
-        )
-        {
-            if (mainBoxes == null)
-                return false;
-
-            foreach (ViewBox m in mainBoxes)
-            {
-                if (m == null)
-                    continue;
-
-                if (maxX <= m.MinX || minX >= m.MaxX || maxY <= m.MinY || minY >= m.MaxY)
-                    continue;
-
-                return true;
-            }
-
-            return false;
-        }
-
         private static int CompareSectionViewsByNameThenPosition(View a, View b)
         {
             string ka = GetSectionSortKey(a);
@@ -1306,15 +489,7 @@ namespace TTSK_AutoDim_Plates
             if (nameCompare != 0)
                 return nameCompare;
 
-            ViewBox ba;
-            ViewBox bb;
-            if (!TryGetViewBox(a, out ba) || !TryGetViewBox(b, out bb))
-                return 0;
-
-            int cx = ba.CenterX.CompareTo(bb.CenterX);
-            if (cx != 0)
-                return cx;
-            return bb.CenterY.CompareTo(ba.CenterY);
+            return ViewId(a).CompareTo(ViewId(b));
         }
 
         private static int CompareSectionBoxesByNameThenPosition(ViewBox a, ViewBox b)
@@ -1329,10 +504,7 @@ namespace TTSK_AutoDim_Plates
             if (a == null || b == null)
                 return 0;
 
-            int cx = a.CenterX.CompareTo(b.CenterX);
-            if (cx != 0)
-                return cx;
-            return b.CenterY.CompareTo(a.CenterY);
+            return ViewId(a.View).CompareTo(ViewId(b.View));
         }
 
         private static int CompareSectionKeys(string a, string b)
@@ -1341,7 +513,13 @@ namespace TTSK_AutoDim_Plates
             bool hasB = !string.IsNullOrEmpty(b);
 
             if (hasA && hasB)
+            {
+                if(System.Text.RegularExpressions.Regex.IsMatch(a,@"^[A-Z]+$",System.Text.RegularExpressions.RegexOptions.IgnoreCase) &&
+                    System.Text.RegularExpressions.Regex.IsMatch(b,@"^[A-Z]+$",System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                {int length=a.Length.CompareTo(b.Length);if(length!=0)return length;}
+                long na,nb;if(Int64.TryParse(a,out na)&&Int64.TryParse(b,out nb))return na.CompareTo(nb);
                 return string.Compare(a, b, StringComparison.OrdinalIgnoreCase);
+            }
 
             if (hasA && !hasB)
                 return -1;
@@ -1383,629 +561,15 @@ namespace TTSK_AutoDim_Plates
             }
         }
 
-        private static void AddSectionTextCandidatesFromViewObjects(
-            View view,
-            List<string> candidates
-        )
-        {
-            // PHU OPTIMIZE: giữ hàm để không phá cấu trúc file, nhưng không dùng nữa.
-            // Không quét object trong view để tránh chậm.
-            return;
-        }
-
-        private static bool MoveNextObject(object enumerator)
-        {
-            try
-            {
-                MethodInfo m = enumerator.GetType().GetMethod("MoveNext");
-                if (m == null)
-                    return false;
-
-                object value = m.Invoke(enumerator, null);
-                return value is bool && (bool)value;
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        private static object GetCurrentObject(object enumerator)
-        {
-            try
-            {
-                PropertyInfo p = enumerator.GetType().GetProperty("Current");
-                if (p != null && p.CanRead)
-                    return p.GetValue(enumerator, null);
-            }
-            catch { }
-
-            return null;
-        }
-
-        private static void AddCandidate(List<string> candidates, string text)
-        {
-            if (candidates == null || string.IsNullOrEmpty(text))
-                return;
-
-            text = text.Trim();
-            if (text.Length == 0)
-                return;
-
-            candidates.Add(text);
-        }
-
-        private static string PickBestSectionKey(List<string> candidates)
-        {
-            if (candidates == null)
-                return "";
-
-            foreach (string c in candidates)
-            {
-                string key = ExtractSectionLetterKey(c, true);
-                if (!string.IsNullOrEmpty(key))
-                    return key;
-            }
-
-            foreach (string c in candidates)
-            {
-                string key = ExtractSectionLetterKey(c, false);
-                if (!string.IsNullOrEmpty(key))
-                    return key;
-            }
-
-            return "";
-        }
-
         private static string ExtractSectionLetterKey(string text, bool requirePair)
         {
-            if (string.IsNullOrEmpty(text))
-                return "";
-
-            string upper = text.ToUpperInvariant();
-
-            for (int i = 0; i < upper.Length; i++)
-            {
-                char ch = upper[i];
-                if (ch < 'A' || ch > 'Z')
-                    continue;
-
-                if (requirePair)
-                {
-                    bool hasPairSeparator = false;
-                    for (int j = i + 1; j < upper.Length; j++)
-                    {
-                        char cj = upper[j];
-                        if (
-                            cj == '-'
-                            || cj == '－'
-                            || cj == '–'
-                            || cj == '_'
-                            || cj == ' '
-                            || cj == '='
-                        )
-                            hasPairSeparator = true;
-
-                        if (cj == ch && hasPairSeparator)
-                            return ch.ToString();
-                    }
-                }
-                else
-                {
-                    return ch.ToString();
-                }
-            }
-
-            return "";
+            if(String.IsNullOrWhiteSpace(text))return "";
+            string upper=text.Trim().ToUpperInvariant();
+            var pair=System.Text.RegularExpressions.Regex.Match(upper,@"^([A-Z]+|[0-9]+)\s*[-－–_=]\s*\1$");
+            if(pair.Success)return pair.Groups[1].Value;
+            if(requirePair)return "";
+            return System.Text.RegularExpressions.Regex.IsMatch(upper,@"^([A-Z]+|[0-9]+)$")?upper:"";
         }
-
-        private class UsableRect
-        {
-            public double Left;
-            public double Right;
-            public double Bottom;
-            public double Top;
-        }
-
-        private static UsableRect GetUsableRect(Drawing drawing, double gap)
-        {
-            try
-            {
-                if (drawing == null)
-                    return null;
-
-                ContainerView sheet = drawing.GetSheet();
-                if (sheet == null)
-                    return null;
-
-                double paperW,
-                    paperH;
-                GetPaperSize(drawing, sheet, out paperW, out paperH);
-
-                UsableRect rect;
-                if (!TryGetReservedRectByPaperSize(paperW, paperH, out rect))
-                {
-                    if (!TryFindInnerFrameRect(sheet, paperW, paperH, out rect))
-                    {
-                        rect = new UsableRect();
-                        rect.Left = 5.0;
-                        rect.Bottom = 5.0;
-                        rect.Right = Math.Max(rect.Left + 1.0, paperW - 15.0);
-                        rect.Top = Math.Max(rect.Bottom + 1.0, paperH - 5.0);
-                    }
-                }
-
-                // Trừ title block phía dưới nếu tìm được đường biên trên của block.
-                // Đây là nguyên nhân section bị rơi vào khung block dù vẫn còn trong margin giấy.
-                double titleTop;
-                if (TryFindTitleBlockTop(sheet, rect, paperW, paperH, out titleTop))
-                {
-                    double safeBottom = titleTop + Math.Max(BLOCK_EXTRA_GAP, gap);
-                    if (safeBottom < rect.Top - 1.0)
-                        rect.Bottom = Math.Max(rect.Bottom, safeBottom);
-                }
-
-                // PHU BLOCK RESERVE giống Shape C:
-                // Nếu không bắt được template/title block bằng Line, vẫn ép vùng an toàn theo % khổ giấy.
-                // Tránh section nằm đè block dưới hoặc sát block trên.
-                if (FORCE_SAFE_BY_TOP_BOTTOM_BLOCKS)
-                {
-                    double h = rect.Top - rect.Bottom;
-                    double bottomByRatio =
-                        rect.Bottom + h * BOTTOM_BLOCK_HEIGHT_RATIO + BLOCK_EXTRA_GAP;
-                    double topByRatio = rect.Top - h * TOP_BLOCK_HEIGHT_RATIO - BLOCK_EXTRA_GAP;
-
-                    if (bottomByRatio < rect.Top - 1.0)
-                        rect.Bottom = Math.Max(rect.Bottom, bottomByRatio);
-
-                    if (topByRatio > rect.Bottom + 1.0)
-                        rect.Top = Math.Min(rect.Top, topByRatio);
-                }
-
-                // Chừa thêm mép trái/phải cho dễ nhìn, đặc biệt dàn dọc bên phải.
-                rect.Left += MIN_EDGE_SAFE;
-                rect.Right -= MIN_EDGE_SAFE;
-                rect.Bottom += MIN_EDGE_SAFE * 0.5;
-                rect.Top -= MIN_EDGE_SAFE * 0.5;
-
-                if (rect.Right <= rect.Left + 1.0 || rect.Top <= rect.Bottom + 1.0)
-                    return null;
-
-                return rect;
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        private static bool TryGetReservedRectByPaperSize(
-            double paperW,
-            double paperH,
-            out UsableRect rect
-        )
-        {
-            rect = null;
-
-            if (IsPaperSize(paperW, paperH, 420.0, 297.0))
-            {
-                rect = BuildReservedRect(paperW, paperH, 5.0, 15.0, 5.0, 5.0);
-                return true;
-            }
-
-            if (IsPaperSize(paperW, paperH, 841.0, 594.0))
-            {
-                rect = BuildReservedRect(paperW, paperH, 10.0, 17.3, 10.0, 10.0);
-                return true;
-            }
-
-            return false;
-        }
-
-        private static bool IsPaperSize(
-            double paperW,
-            double paperH,
-            double targetW,
-            double targetH
-        )
-        {
-            const double tol = 2.0;
-            bool same = Math.Abs(paperW - targetW) <= tol && Math.Abs(paperH - targetH) <= tol;
-            bool swapped = Math.Abs(paperW - targetH) <= tol && Math.Abs(paperH - targetW) <= tol;
-            return same || swapped;
-        }
-
-        private static UsableRect BuildReservedRect(
-            double paperW,
-            double paperH,
-            double leftReserve,
-            double rightReserve,
-            double bottomReserve,
-            double topReserve
-        )
-        {
-            UsableRect rect = new UsableRect();
-            rect.Left = leftReserve;
-            rect.Bottom = bottomReserve;
-            rect.Right = Math.Max(rect.Left + 1.0, paperW - rightReserve);
-            rect.Top = Math.Max(rect.Bottom + 1.0, paperH - topReserve);
-            return rect;
-        }
-
-        private static bool TryFindInnerFrameRect(
-            ContainerView sheet,
-            double paperW,
-            double paperH,
-            out UsableRect rect
-        )
-        {
-            rect = null;
-
-            try
-            {
-                List<double> xs = new List<double>();
-                List<double> ys = new List<double>();
-
-                DrawingObjectEnumerator e = sheet.GetAllObjects(
-                    typeof(Tekla.Structures.Drawing.Line)
-                );
-                while (e.MoveNext())
-                {
-                    Tekla.Structures.Drawing.Line ln = e.Current as Tekla.Structures.Drawing.Line;
-                    if (ln == null)
-                        continue;
-
-                    Point a,
-                        b;
-                    if (!TryGetLinePoints(ln, out a, out b))
-                        continue;
-
-                    bool vertical = Math.Abs(a.X - b.X) < 0.5 && Math.Abs(a.Y - b.Y) > 20.0;
-                    bool horizontal = Math.Abs(a.Y - b.Y) < 0.5 && Math.Abs(a.X - b.X) > 20.0;
-
-                    if (vertical)
-                    {
-                        double x = (a.X + b.X) / 2.0;
-                        if (x > 0.5 && x < paperW - 0.5)
-                            AddUniqueNear(xs, x, 1.0);
-                    }
-                    else if (horizontal)
-                    {
-                        double y = (a.Y + b.Y) / 2.0;
-                        if (y > 0.5 && y < paperH - 0.5)
-                            AddUniqueNear(ys, y, 1.0);
-                    }
-                }
-
-                if (xs.Count < 2 || ys.Count < 2)
-                    return false;
-
-                xs.Sort();
-                ys.Sort();
-
-                double left = xs[0];
-                double right = xs[xs.Count - 1];
-                double bottom = ys[0];
-                double top = ys[ys.Count - 1];
-
-                if ((right - left) < paperW * 0.60)
-                    return false;
-                if ((top - bottom) < paperH * 0.60)
-                    return false;
-
-                rect = new UsableRect();
-                rect.Left = left;
-                rect.Right = right;
-                rect.Bottom = bottom;
-                rect.Top = top;
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        private static bool TryFindTitleBlockTop(
-            ContainerView sheet,
-            UsableRect frame,
-            double paperW,
-            double paperH,
-            out double titleTop
-        )
-        {
-            titleTop = 0.0;
-
-            try
-            {
-                if (sheet == null || frame == null)
-                    return false;
-
-                double best = double.MinValue;
-                double lowerLimit = frame.Bottom + 2.0;
-                double upperLimit = frame.Bottom + (frame.Top - frame.Bottom) * 0.38;
-                double minLongLine = Math.Max(80.0, (frame.Right - frame.Left) * 0.35);
-
-                DrawingObjectEnumerator e = sheet.GetAllObjects(
-                    typeof(Tekla.Structures.Drawing.Line)
-                );
-                while (e.MoveNext())
-                {
-                    Tekla.Structures.Drawing.Line ln = e.Current as Tekla.Structures.Drawing.Line;
-                    if (ln == null)
-                        continue;
-
-                    Point a,
-                        b;
-                    if (!TryGetLinePoints(ln, out a, out b))
-                        continue;
-
-                    bool horizontal =
-                        Math.Abs(a.Y - b.Y) < 0.5 && Math.Abs(a.X - b.X) >= minLongLine;
-                    if (!horizontal)
-                        continue;
-
-                    double y = (a.Y + b.Y) * 0.5;
-                    if (y <= lowerLimit || y >= upperLimit)
-                        continue;
-
-                    double minX = Math.Min(a.X, b.X);
-                    double maxX = Math.Max(a.X, b.X);
-
-                    // Ưu tiên line thuộc title block nằm gần biên trong, không bắt nhầm dim line ngắn.
-                    bool overlapsFrame = maxX > frame.Left + 20.0 && minX < frame.Right - 20.0;
-                    if (!overlapsFrame)
-                        continue;
-
-                    if (y > best)
-                        best = y;
-                }
-
-                if (best == double.MinValue)
-                    return false;
-
-                titleTop = best;
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        private static void GetPaperSize(
-            Drawing drawing,
-            ContainerView sheet,
-            out double width,
-            out double height
-        )
-        {
-            width = 420.0;
-            height = 297.0;
-
-            object[] sources = new object[]
-            {
-                drawing,
-                sheet,
-                GetProp(drawing, "Layout"),
-                GetProp(drawing, "DrawingAttributes"),
-                GetProp(drawing, "Attributes")
-            };
-            string[] wNames = new string[] { "Width", "PaperWidth", "SheetWidth", "DrawingWidth" };
-            string[] hNames = new string[]
-            {
-                "Height",
-                "PaperHeight",
-                "SheetHeight",
-                "DrawingHeight"
-            };
-
-            foreach (object s in sources)
-            {
-                if (s == null)
-                    continue;
-                double w,
-                    h;
-                if (
-                    TryReadDoubleAny(s, wNames, out w)
-                    && TryReadDoubleAny(s, hNames, out h)
-                    && w > 50
-                    && h > 50
-                )
-                {
-                    width = w;
-                    height = h;
-                    return;
-                }
-            }
-
-            string paperName = Convert
-                .ToString(GetProp(GetProp(drawing, "Layout"), "Name") ?? "")
-                .ToUpperInvariant();
-            if (paperName.Contains("A1"))
-            {
-                width = 841;
-                height = 594;
-                return;
-            }
-            if (paperName.Contains("A2"))
-            {
-                width = 594;
-                height = 420;
-                return;
-            }
-            if (paperName.Contains("A3"))
-            {
-                width = 420;
-                height = 297;
-                return;
-            }
-            if (paperName.Contains("A4"))
-            {
-                width = 297;
-                height = 210;
-                return;
-            }
-        }
-
-        private static object GetProp(object target, string name)
-        {
-            if (target == null)
-                return null;
-            PropertyInfo p = target
-                .GetType()
-                .GetProperty(
-                    name,
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
-                );
-            if (p == null || !p.CanRead)
-                return null;
-            try
-            {
-                return p.GetValue(target, null);
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        private static bool TryReadDoubleAny(object target, string[] names, out double value)
-        {
-            value = 0.0;
-            foreach (string n in names)
-            {
-                object v = GetProp(target, n);
-                if (v == null)
-                    continue;
-                try
-                {
-                    value = Convert.ToDouble(v);
-                    return true;
-                }
-                catch { }
-            }
-            return false;
-        }
-
-        private static bool TryGetLinePoints(
-            Tekla.Structures.Drawing.Line line,
-            out Point a,
-            out Point b
-        )
-        {
-            a = null;
-            b = null;
-
-            string[] aNames = new string[] { "StartPoint", "Start", "Point1", "FirstPoint", "P1" };
-            string[] bNames = new string[] { "EndPoint", "End", "Point2", "SecondPoint", "P2" };
-
-            for (int i = 0; i < aNames.Length; i++)
-            {
-                object av = GetProp(line, aNames[i]);
-                object bv = GetProp(line, bNames[i]);
-                a = av as Point;
-                b = bv as Point;
-                if (a != null && b != null)
-                    return true;
-            }
-
-            return false;
-        }
-
-        private static void AddUniqueNear(List<double> values, double value, double tol)
-        {
-            if (values == null)
-                return;
-
-            for (int i = 0; i < values.Count; i++)
-            {
-                if (Math.Abs(values[i] - value) <= tol)
-                    return;
-            }
-            values.Add(value);
-        }
-
-        private static double Clamp(double value, double min, double max)
-        {
-            if (value < min)
-                return min;
-            if (value > max)
-                return max;
-            return value;
-        }
-
-        private static ViewBox GetLowestMainBox(List<ViewBox> boxes)
-        {
-            if (boxes == null || boxes.Count == 0)
-                return null;
-
-            ViewBox best = null;
-            foreach (ViewBox b in boxes)
-            {
-                if (b == null)
-                    continue;
-
-                if (best == null || b.MinY < best.MinY)
-                    best = b;
-            }
-            return best;
-        }
-
-        private static ViewBox GetHighestMainBox(List<ViewBox> boxes)
-        {
-            if (boxes == null || boxes.Count == 0)
-                return null;
-
-            ViewBox best = null;
-            foreach (ViewBox b in boxes)
-            {
-                if (b == null)
-                    continue;
-
-                if (best == null || b.MaxY > best.MaxY)
-                    best = b;
-            }
-            return best;
-        }
-
-        private static ViewBox GetRightMostMainBox(List<ViewBox> boxes)
-        {
-            if (boxes == null || boxes.Count == 0)
-                return null;
-
-            ViewBox best = null;
-            foreach (ViewBox b in boxes)
-            {
-                if (b == null)
-                    continue;
-
-                if (best == null || b.MaxX > best.MaxX)
-                    best = b;
-            }
-            return best;
-        }
-
-        private static double GetTotalRowWidth(List<ViewBox> boxes, double gap)
-        {
-            if (boxes == null || boxes.Count == 0)
-                return 0.0;
-
-            double total = 0.0;
-            for (int i = 0; i < boxes.Count; i++)
-            {
-                if (boxes[i] == null)
-                    continue;
-
-                total += boxes[i].Width;
-            }
-
-            if (boxes.Count > 1)
-                total += gap * (boxes.Count - 1);
-
-            return total;
-        }
-
         private static ViewBox GetClusterBoxFromBoxes(List<ViewBox> boxes)
         {
             if (boxes == null || boxes.Count == 0)
@@ -2059,37 +623,6 @@ namespace TTSK_AutoDim_Plates
             return boxes;
         }
 
-        private static ViewBox GetClusterBox(List<View> views)
-        {
-            List<ViewBox> boxes = BuildBoxes(views);
-            if (boxes.Count == 0)
-                return null;
-
-            ViewBox c = new ViewBox();
-            c.MinX = double.MaxValue;
-            c.MinY = double.MaxValue;
-            c.MaxX = double.MinValue;
-            c.MaxY = double.MinValue;
-
-            foreach (ViewBox b in boxes)
-            {
-                if (b.MinX < c.MinX)
-                    c.MinX = b.MinX;
-                if (b.MaxX > c.MaxX)
-                    c.MaxX = b.MaxX;
-                if (b.MinY < c.MinY)
-                    c.MinY = b.MinY;
-                if (b.MaxY > c.MaxY)
-                    c.MaxY = b.MaxY;
-            }
-
-            c.Width = c.MaxX - c.MinX;
-            c.Height = c.MaxY - c.MinY;
-            c.CenterX = (c.MinX + c.MaxX) * 0.5;
-            c.CenterY = (c.MinY + c.MaxY) * 0.5;
-            return c;
-        }
-
         private static bool TryGetViewBox(View view, out ViewBox box)
         {
             box = null;
@@ -2110,15 +643,17 @@ namespace TTSK_AutoDim_Plates
                 }
 
                 if (bb == null || bb.MinPoint == null || bb.MaxPoint == null)
-                    return TryGetRestrictionBoxOnSheet(view, out box);
+                    return false;
 
                 double minX = Math.Min(bb.MinPoint.X, bb.MaxPoint.X);
                 double maxX = Math.Max(bb.MinPoint.X, bb.MaxPoint.X);
                 double minY = Math.Min(bb.MinPoint.Y, bb.MaxPoint.Y);
                 double maxY = Math.Max(bb.MinPoint.Y, bb.MaxPoint.Y);
 
+                if(!PHU_SectionLayoutPlanner.Finite(minX)||!PHU_SectionLayoutPlanner.Finite(maxX)||
+                    !PHU_SectionLayoutPlanner.Finite(minY)||!PHU_SectionLayoutPlanner.Finite(maxY))return false;
                 if (maxX <= minX + 0.5 || maxY <= minY + 0.5)
-                    return TryGetRestrictionBoxOnSheet(view, out box);
+                    return false;
 
                 box = new ViewBox();
                 box.View = view;
@@ -2136,97 +671,6 @@ namespace TTSK_AutoDim_Plates
             catch
             {
                 box = null;
-                return false;
-            }
-        }
-
-        private static bool TryGetRestrictionBoxOnSheet(View view, out ViewBox box)
-        {
-            box = null;
-
-            try
-            {
-                AABB rb = view.RestrictionBox;
-                if (rb == null || rb.MinPoint == null || rb.MaxPoint == null)
-                    return false;
-
-                Point origin = view.Origin;
-                if (origin == null)
-                    return false;
-
-                double scale = TryGetViewScale(view);
-                if (scale <= 0.0)
-                    scale = 1.0;
-
-                double minX = origin.X + Math.Min(rb.MinPoint.X, rb.MaxPoint.X) / scale;
-                double maxX = origin.X + Math.Max(rb.MinPoint.X, rb.MaxPoint.X) / scale;
-                double minY = origin.Y + Math.Min(rb.MinPoint.Y, rb.MaxPoint.Y) / scale;
-                double maxY = origin.Y + Math.Max(rb.MinPoint.Y, rb.MaxPoint.Y) / scale;
-
-                box = new ViewBox();
-                box.View = view;
-                box.MinX = minX;
-                box.MaxX = maxX;
-                box.MinY = minY;
-                box.MaxY = maxY;
-                box.Width = maxX - minX;
-                box.Height = maxY - minY;
-                box.CenterX = (minX + maxX) * 0.5;
-                box.CenterY = (minY + maxY) * 0.5;
-                box.SortKey = GetSectionSortKey(view);
-                return box.Width > 0.5 && box.Height > 0.5;
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        private static void MoveViewBySheetDelta(View view, double dx, double dy)
-        {
-            try
-            {
-                if (view == null)
-                    return;
-
-                if (Math.Abs(dx) <= 0.01 && Math.Abs(dy) <= 0.01)
-                    return;
-
-                Point origin = view.Origin;
-                if (origin == null)
-                    return;
-
-                Point newOrigin = new Point(origin.X + dx, origin.Y + dy, origin.Z);
-                if (TrySetViewOrigin(view, newOrigin))
-                {
-                    try
-                    {
-                        view.Modify();
-                    }
-                    catch { }
-                }
-            }
-            catch { }
-        }
-
-        private static bool TrySetViewOrigin(View view, Point origin)
-        {
-            try
-            {
-                if (view == null || origin == null)
-                    return false;
-
-                PropertyInfo prop = view.GetType()
-                    .GetProperty("Origin", BindingFlags.Public | BindingFlags.Instance);
-
-                if (prop == null || !prop.CanWrite)
-                    return false;
-
-                prop.SetValue(view, origin, null);
-                return true;
-            }
-            catch
-            {
                 return false;
             }
         }
@@ -2259,6 +703,10 @@ namespace TTSK_AutoDim_Plates
                     return false;
 
                 name = name.Trim().ToUpperInvariant();
+
+                if(IsKnownMainView(view))return false;
+                if(ContainsIgnoreCase(GetViewTypeText(view),"Section") &&
+                    System.Text.RegularExpressions.Regex.IsMatch(name,@"^([A-Z]+|[0-9]+)$"))return true;
 
                 // A, B, C ... Z
                 if (name.Length == 1 && name[0] >= 'A' && name[0] <= 'Z')
@@ -2334,17 +782,6 @@ namespace TTSK_AutoDim_Plates
                 return b.Width;
 
             return 0.0;
-        }
-
-        private static double GetColumnWidth(List<ViewBox> boxes, int col)
-        {
-            double max = 0.0;
-            for (int i = col; i < boxes.Count; i += 2)
-            {
-                if (boxes[i].Width > max)
-                    max = boxes[i].Width;
-            }
-            return max;
         }
 
         private static void AddUniqueView(List<View> views, View view)
@@ -2439,30 +876,5 @@ namespace TTSK_AutoDim_Plates
             return text.IndexOf(pattern, StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
-        private static double TryGetViewScale(View view)
-        {
-            try
-            {
-                if (view == null || view.Attributes == null)
-                    return 1.0;
-
-                object attr = view.Attributes;
-
-                PropertyInfo p = attr.GetType().GetProperty("Scale");
-                if (p != null && p.CanRead)
-                {
-                    object value = p.GetValue(attr, null);
-                    if (value != null)
-                    {
-                        double scale;
-                        if (double.TryParse(value.ToString(), out scale) && scale > 0.0)
-                            return scale;
-                    }
-                }
-            }
-            catch { }
-
-            return 1.0;
-        }
     }
 }

@@ -1328,122 +1328,275 @@ namespace TTSK_AutoDim_Plates
 
         private void InitializeToolFields()
         {
-            // Only bounds, typography and painting change. Reuse the actual input instances.
-            slideDimPanel.Height = 368;
-            slideDimPanel.Controls[1].SetBounds(16, 130, 282, 24);
-            nudDimSpacing.SetBounds(16, 158, 282, 44);
-            slideDimPanel.Controls[3].SetBounds(16, 218, 282, 24);
-            cboDimScope.SetBounds(16, 246, 282, 40);
-            slideDimPanel.Controls[5].SetBounds(16, 308, 282, 40);
+            // Presentation only: retain each input, range, value and action callback.
+            foreach (Panel panel in new[] { slideDimPanel, slideLinePanel, slideArrangePanel,
+                slideGridPanel, slideMarkOffsetsPanel })
+            {
+                panel.Controls[0].SetBounds(20, 18, 274, 26);
+                panel.Controls[0].Tag = "tool-detail-title";
+            }
+
+            slideDimPanel.Height = 478;
+            slideDimPanel.Controls[1].Text = "Khoảng cách · mm";
+            slideDimPanel.Controls[1].SetBounds(20, 242, 274, 22);
+            nudDimSpacing.SetBounds(20, 268, 274, 54);
+            slideDimPanel.Controls[3].Text = "Phạm vi";
+            slideDimPanel.Controls[3].SetBounds(20, 338, 274, 22);
+            cboDimScope.SetBounds(20, 364, 274, 34);
+            slideDimPanel.Controls[5].Text = "Áp dụng";
+            slideDimPanel.Controls[5].SetBounds(20, 414, 274, 44);
             AddToolDiagram(slideDimPanel, true);
 
-            slideLinePanel.Height = 332;
-            slideLinePanel.Controls[2].SetBounds(16, 128, 282, 24);
-            nudLineDistance.SetBounds(16, 156, 282, 44);
-            slideLinePanel.Controls[4].SetBounds(16, 218, 282, 40);
-            slideLinePanel.Controls[1].SetBounds(16, 278, 282, 38);
+            slideLinePanel.Height = 478;
+            slideLinePanel.Controls[2].Text = "Chiều dài · mm";
+            slideLinePanel.Controls[2].SetBounds(20, 242, 274, 22);
+            nudLineDistance.SetBounds(20, 268, 274, 54);
+            slideLinePanel.Controls[4].Text = "Vẽ line";
+            slideLinePanel.Controls[4].SetBounds(20, 358, 274, 44);
+            slideLinePanel.Controls[1].Text = "Chọn 2 điểm";
+            slideLinePanel.Controls[1].SetBounds(20, 414, 274, 44);
             foreach (Control control in slideLinePanel.Controls)
-                if (control.Text == "hoặc") control.Top = 258;
+                if (control.Text == "hoặc") control.Visible = false;
             AddToolDiagram(slideLinePanel, false);
 
-            slideArrangePanel.Height = 356;
-            arrangeSectionHorizontalBox.SetBounds(16, 82, 130, 110);
-            arrangeSectionVerticalBox.SetBounds(168, 82, 130, 110);
+            slideArrangePanel.Controls[2].Visible = false;
+            slideArrangePanel.Controls[0].Width = 180;
+            arrangeVerticalOrderBox.SetBounds(222, 14, 72, 34);
+            arrangeSectionHorizontalBox.SetBounds(20, 64, 131, 136);
+            arrangeSectionVerticalBox.SetBounds(163, 64, 131, 136);
             ConfigureArrangeIllustration(arrangeSectionHorizontalBox, true);
             ConfigureArrangeIllustration(arrangeSectionVerticalBox, false);
-            slideArrangePanel.Controls[5].SetBounds(16, 210, 282, 24);
-            slideArrangePanel.Controls[5].Text = "Khoảng cách giữa view (mm)";
-            nudArrangeGap.SetBounds(16, 240, 282, 44);
-            slideArrangePanel.Controls[7].SetBounds(16, 304, 282, 40);
+            slideArrangePanel.Controls[5].SetBounds(20, 214, 274, 22);
+            slideArrangePanel.Controls[5].Text = "Khoảng cách view · mm";
+            nudArrangeGap.SetBounds(20, 242, 274, 58);
+            slideArrangePanel.Controls[7].Text = "Sắp xếp view";
+            slideArrangePanel.Controls[7].SetBounds(20, 358, 274, 44);
             BuildArrangeReferenceControls();
+            slideArrangePanel.Controls[slideArrangePanel.Controls.Count - 1].SetBounds(20, 414, 274, 44);
+            slideArrangePanel.Height = 478;
 
-            slideGridPanel.Height = 238;
-            slideGridPanel.Controls[0].Width = 282;
+            slideGridPanel.Height = 268;
             slideGridPanel.Controls[2].Visible = false;
-            slideGridPanel.Controls[2].Font = new Font("Segoe UI", 9F);
-            Label memberLabel = new Label();
-            memberLabel.Text = "Loại cấu kiện";
-            memberLabel.SetBounds(16, 56, 136, 32);
-            memberLabel.Font = new Font("Segoe UI", 9F);
-            slideGridPanel.Controls.Add(memberLabel);
-            beamColumnModeSwitch.SetBounds(162, 56, 136, 32);
+            beamColumnModeSwitch.SetBounds(20, 64, 274, 42);
             Label keepAxesLabel = new Label();
             keepAxesLabel.Text = "Giữ trục";
             keepAxesLabel.Font = new Font("Segoe UI", 9F);
-            keepAxesLabel.SetBounds(16, 104, 136, 22);
+            keepAxesLabel.SetBounds(20, 126, 131, 22);
             slideGridPanel.Controls.Add(keepAxesLabel);
-            fitViewModeSwitch.SetBounds(16, 132, 136, 32);
-            fitGridAxisCountLabel.SetBounds(162, 104, 136, 22);
+            fitViewModeSwitch.SetBounds(20, 154, 131, 34);
+            fitGridAxisCountLabel.SetBounds(163, 126, 131, 22);
             fitGridAxisCountLabel.TextAlign = ContentAlignment.MiddleLeft;
             fitGridAxisCountLabel.Font = new Font("Segoe UI", 9F);
             fitGridAxisCountLabel.Text = "Số trục";
-            fitGridAxisCountBox.SetBounds(162, 132, 136, 32);
-            slideGridPanel.Controls[6].SetBounds(16, 184, 136, 40);
-            fitViewButton.SetBounds(162, 184, 136, 40);
+            fitGridAxisCountBox.SetBounds(163, 154, 131, 34);
+            slideGridPanel.Controls[6].Text = "Open Grid";
+            slideGridPanel.Controls[6].SetBounds(20, 208, 131, 40);
+            fitViewButton.Text = "Fit View";
+            fitViewButton.SetBounds(163, 208, 131, 40);
 
-            slideMarkOffsetsPanel.Height = 178;
-            slideMarkOffsetsPanel.Controls[0].Left = 16;
+            slideMarkOffsetsPanel.Height = 204;
             Panel offsets = (Panel)slideMarkOffsetsPanel.Controls[1];
-            offsets.SetBounds(16, 48, 282, 116);
-            offsets.Controls[0].SetBounds(0, 0, 136, 20);
-            offsets.Controls[0].Text = "X  (mm)";
-            offsets.Controls[1].SetBounds(146, 0, 136, 20);
-            offsets.Controls[1].Text = "Y  (mm)";
+            offsets.SetBounds(20, 54, 274, 130);
+            offsets.Controls[0].SetBounds(0, 0, 131, 20);
+            offsets.Controls[0].Text = "X · mm";
+            offsets.Controls[1].SetBounds(143, 0, 131, 20);
+            offsets.Controls[1].Text = "Y · mm";
             offsets.Controls[2].Visible = false;
-            nudNeighborGridX.SetBounds(0, 24, 136, 40);
-            nudNeighborGridY.SetBounds(146, 24, 136, 40);
-            offsets.Controls[5].SetBounds(0, 80, 282, 36);
-            foreach (BorderNumericUpDown input in new[] { nudDimSpacing, nudLineDistance,
-                nudArrangeGap, nudNeighborGridX, nudNeighborGridY })
-                input.Font = new Font("Segoe UI", 13F, FontStyle.Bold);
+            nudNeighborGridX.SetBounds(0, 26, 131, 48);
+            nudNeighborGridY.SetBounds(143, 26, 131, 48);
+            offsets.Controls[5].Text = "Create Mark";
+            offsets.Controls[5].SetBounds(0, 90, 274, 40);
+            foreach (BorderNumericUpDown input in new[] { nudDimSpacing, nudLineDistance, nudArrangeGap })
+                input.Font = new Font("Segoe UI", 23F, FontStyle.Regular);
+            foreach (BorderNumericUpDown input in new[] { nudNeighborGridX, nudNeighborGridY })
+                input.Font = new Font("Segoe UI", 16F, FontStyle.Regular);
             cboDimScope.Font = new Font("Segoe UI", 10F);
+            foreach (Panel panel in new[] { slideDimPanel, slideLinePanel, slideArrangePanel,
+                slideGridPanel, slideMarkOffsetsPanel, offsets })
+                foreach (Control control in panel.Controls)
+                    if (control is Label && !object.Equals(control.Tag, "tool-detail-title"))
+                        control.Font = new Font("Segoe UI", 9F);
         }
 
         private void AddToolDiagram(Panel parent, bool spacing)
         {
-            Panel preview = new Panel();
-            preview.SetBounds(16, 52, 282, 62);
             BorderNumericUpDown source = spacing ? nudDimSpacing : nudLineDistance;
-            source.ValueChanged += delegate { preview.Invalidate(); };
+            ToolMeasurementPanel preview = new ToolMeasurementPanel(source, spacing);
+            preview.SetBounds(20, 54, 274, 178);
+            preview.AccessibleName = spacing ? "Kéo để chỉnh khoảng cách DIM" : "Kéo để chỉnh chiều dài line";
+            preview.AccessibleDescription = spacing ? "Kéo xuống để tăng, kéo lên để giảm khoảng cách."
+                : "Kéo sang phải để tăng, sang trái để giảm chiều dài.";
             preview.Paint += delegate(object sender, PaintEventArgs e)
             {
                 Color accent = PrimaryButtonColor;
+                e.Graphics.Clear(parent.BackColor);
                 e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-                using (Pen pen = new Pen(accent, 1.5F))
+                // Fit the full numeric range into the illustration; the input remains authoritative.
+                double ratio = Math.Log(1 + (double)(source.Value - source.Minimum))
+                    / Math.Log(1 + (double)(source.Maximum - source.Minimum));
+                using (Pen pen = new Pen(accent, 1.8F))
                 using (Pen soft = new Pen(_darkMode ? Color.FromArgb(80, 80, 80) : Color.FromArgb(205, 218, 235), 1F))
+                using (SolidBrush fill = new SolidBrush(_darkMode ? Color.FromArgb(31, 28, 25) : Color.FromArgb(242, 246, 252)))
                 {
                     if (spacing)
                     {
-                        for (int i = 0; i < 3; i++) e.Graphics.DrawLine(i == 1 ? pen : soft, 24, 14 + i * 17, 242, 14 + i * 17);
-                        e.Graphics.DrawLine(pen, 258, 14, 258, 48);
-                        e.Graphics.DrawLine(pen, 254, 18, 262, 10);
-                        e.Graphics.DrawLine(pen, 254, 52, 262, 44);
+                        int gap = 24 + (int)Math.Round(ratio * 22);
+                        int bottom = 18 + gap * 2;
+                        e.Graphics.FillRectangle(fill, 24, bottom + 14, 182, 22);
+                        e.Graphics.DrawRectangle(soft, 24, bottom + 14, 182, 22);
+                        e.Graphics.DrawLine(soft, 24, 10, 24, bottom + 40);
+                        e.Graphics.DrawLine(soft, 206, 10, 206, bottom + 40);
+                        for (int i = 0; i < 3; i++)
+                        {
+                            int y = 18 + i * gap;
+                            e.Graphics.DrawLine(i == 1 ? pen : soft, 16, y, 214, y);
+                            e.Graphics.DrawLine(pen, 20, y + 4, 28, y - 4);
+                            e.Graphics.DrawLine(pen, 202, y + 4, 210, y - 4);
+                        }
+                        e.Graphics.DrawLine(pen, 242, 18, 242, bottom);
+                        for (int i = 0; i < 3; i++) e.Graphics.DrawLine(pen, 237, 18 + i * gap, 247, 18 + i * gap);
+                        e.Graphics.FillEllipse(fill, 237, 13 + gap, 10, 10);
+                        e.Graphics.DrawEllipse(pen, 237, 13 + gap, 10, 10);
                     }
                     else
                     {
-                        e.Graphics.DrawLine(pen, 28, 30, 254, 30);
-                        e.Graphics.DrawLine(pen, 28, 19, 28, 41);
-                        e.Graphics.DrawLine(pen, 254, 19, 254, 41);
-                        e.Graphics.DrawEllipse(pen, 24, 26, 8, 8);
-                        e.Graphics.DrawEllipse(pen, 250, 26, 8, 8);
+                        // Keep the editable line prominent and centered even at small values.
+                        int length = 226 + (int)Math.Round(ratio * 24);
+                        int left = (preview.Width - length) / 2;
+                        int right = left + length;
+                        pen.Width = 2.2F;
+                        e.Graphics.DrawLine(pen, left, 64, right, 64);
+                        e.Graphics.FillEllipse(fill, left - 7, 57, 14, 14);
+                        e.Graphics.FillEllipse(fill, right - 7, 57, 14, 14);
+                        e.Graphics.DrawEllipse(pen, left - 7, 57, 14, 14);
+                        e.Graphics.DrawEllipse(pen, right - 7, 57, 14, 14);
+                        soft.DashStyle = DashStyle.Dash;
+                        e.Graphics.DrawLine(soft, left, 77, left, 128);
+                        e.Graphics.DrawLine(soft, right, 76, right, 128);
+                        soft.DashStyle = DashStyle.Solid;
+                        e.Graphics.DrawLine(soft, left, 122, right, 122);
+                        e.Graphics.DrawLine(pen, left - 4, 126, left + 4, 118);
+                        e.Graphics.DrawLine(pen, right - 4, 126, right + 4, 118);
                     }
                 }
-                string measurement = source.Value.ToString("0.#") + " mm";
-                System.Drawing.Rectangle labelBox = new System.Drawing.Rectangle(86, 19, 110, 24);
-                using (SolidBrush labelBack = new SolidBrush(preview.BackColor))
-                    e.Graphics.FillRectangle(labelBack, labelBox);
-                TextRenderer.DrawText(e.Graphics, measurement, source.Font, labelBox, accent,
-                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                using (Font valueFont = new Font("Segoe UI", 10F, FontStyle.Bold))
+                    TextRenderer.DrawText(e.Graphics, source.Value.ToString("0.#") + " mm", valueFont,
+                        new System.Drawing.Rectangle(0, 150, preview.Width, 24), accent,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             };
             parent.Controls.Add(preview);
         }
+
+        private sealed class ToolMeasurementPanel : Panel
+        {
+            private readonly BorderNumericUpDown source;
+            private readonly bool vertical;
+            private Point dragStart;
+            private decimal startValue;
+            private bool dragging;
+
+            internal ToolMeasurementPanel(BorderNumericUpDown input, bool spacing)
+            {
+                source = input;
+                vertical = spacing;
+                DoubleBuffered = true;
+                SetStyle(ControlStyles.Selectable, true);
+                TabStop = true;
+                Cursor = spacing ? Cursors.SizeNS : Cursors.SizeWE;
+                source.ValueChanged += SourceValueChanged;
+            }
+
+            private void SourceValueChanged(object sender, EventArgs e) { Invalidate(); }
+
+            private void SetMeasurement(decimal value)
+            {
+                source.Value = Math.Max(source.Minimum, Math.Min(source.Maximum,
+                    Math.Round(value, source.DecimalPlaces, MidpointRounding.AwayFromZero)));
+            }
+
+            private void UpdateDrag(MouseEventArgs e)
+            {
+                int pixels = vertical ? e.Y - dragStart.Y : e.X - dragStart.X;
+                SetMeasurement(startValue + pixels * source.Increment / 10m);
+            }
+
+            protected override void OnMouseDown(MouseEventArgs e)
+            {
+                base.OnMouseDown(e);
+                if (e.Button != MouseButtons.Left) return;
+                Focus();
+                dragStart = e.Location;
+                startValue = source.Value;
+                dragging = true;
+                Capture = true;
+                Invalidate();
+            }
+
+            protected override void OnMouseMove(MouseEventArgs e)
+            {
+                base.OnMouseMove(e);
+                if (dragging && Capture) UpdateDrag(e);
+            }
+
+            protected override void OnMouseUp(MouseEventArgs e)
+            {
+                base.OnMouseUp(e);
+                if (!dragging || e.Button != MouseButtons.Left) return;
+                UpdateDrag(e);
+                dragging = false;
+                Capture = false;
+            }
+
+            protected override void OnMouseCaptureChanged(EventArgs e)
+            {
+                base.OnMouseCaptureChanged(e);
+                if (!Capture) dragging = false;
+            }
+
+            protected override bool IsInputKey(Keys keyData)
+            {
+                Keys key = keyData & Keys.KeyCode;
+                return key == Keys.Left || key == Keys.Right || key == Keys.Up || key == Keys.Down
+                    || key == Keys.Escape || base.IsInputKey(keyData);
+            }
+
+            protected override void OnKeyDown(KeyEventArgs e)
+            {
+                base.OnKeyDown(e);
+                if (e.KeyCode == Keys.Escape && dragging)
+                {
+                    SetMeasurement(startValue);
+                    dragging = false;
+                    Capture = false;
+                    e.Handled = true;
+                }
+                else if (!dragging)
+                {
+                    int direction = e.KeyCode == Keys.Right || e.KeyCode == Keys.Up ? 1
+                        : e.KeyCode == Keys.Left || e.KeyCode == Keys.Down ? -1 : 0;
+                    if (direction == 0) return;
+                    SetMeasurement(source.Value + direction * source.Increment);
+                    e.Handled = true;
+                }
+            }
+
+            protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); Invalidate(); }
+            protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); Invalidate(); }
+
+            protected override void Dispose(bool disposing)
+            {
+                if (disposing) source.ValueChanged -= SourceValueChanged;
+                base.Dispose(disposing);
+            }
+        }
+
 
         private void ConfigureArrangeIllustration(Panel panel, bool horizontal)
         {
             Control illustration = panel.Controls[0];
             illustration.Text = "";
             illustration.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
-            illustration.SetBounds(0, 0, 130, 110);
+            illustration.SetBounds(1, 1, panel.Width - 2, panel.Height - 2);
             illustration.Paint += delegate(object sender, PaintEventArgs e)
             {
                 bool selected = horizontal == arrangeSectionHorizontal;
@@ -1452,13 +1605,12 @@ namespace TTSK_AutoDim_Plates
                 using (Pen pen = new Pen(color, 1.6F))
                 {
                     if (horizontal)
-                        for (int i = 0; i < 3; i++) e.Graphics.DrawRectangle(pen, 20 + i * 32, 32, 25, 24);
+                        for (int i = 0; i < 3; i++) e.Graphics.DrawRectangle(pen, 18 + i * 33, 38, 26, 30);
                     else
-                        for (int i = 0; i < 4; i++) e.Graphics.DrawRectangle(pen, 38 + (i % 2) * 30, 21 + (i / 2) * 27, 23, 20);
-                    if (selected) { e.Graphics.DrawLine(pen, 106, 12, 110, 16); e.Graphics.DrawLine(pen, 110, 16, 118, 8); }
+                        for (int i = 0; i < 3; i++) e.Graphics.DrawRectangle(pen, 42, 23 + i * 20, 46, 14);
                 }
                 TextRenderer.DrawText(e.Graphics, horizontal ? "Xếp ngang" : "Xếp dọc",
-                    illustration.Font, new System.Drawing.Rectangle(0, 80, 130, 24), color,
+                    illustration.Font, new System.Drawing.Rectangle(0, 98, illustration.Width, 24), color,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             };
         }
@@ -1496,12 +1648,8 @@ namespace TTSK_AutoDim_Plates
             slideMarkOffsetsPanel.Location = new Point(18, 90 + slideGridPanel.Height + 6);
             if (toolContextHint != null)
             {
-                toolContextHint.Visible = slideDimOpen || slideLineOpen || slideArrangeOpen;
-                Panel detail = slideDimOpen ? slideDimPanel : slideLineOpen ? slideLinePanel : slideArrangePanel;
-                toolContextHint.SetBounds(30, detail.Bottom + 16, 286, Math.Max(32, 564 - detail.Bottom - 16));
-                toolContextHint.Text = slideDimOpen ? "THAO TÁC\r\n\r\nChọn phạm vi và khoảng cách giữa các tầng DIM, sau đó áp dụng trong bản vẽ."
-                    : slideLineOpen ? "THAO TÁC\r\n\r\nNhập chiều dài line hoặc dùng Chọn 2 điểm để xác định trực tiếp trong bản vẽ."
-                    : "Theo bản mẫu: tải các bản đang chọn và căn view theo bản đầu danh sách.";
+                toolContextHint.Visible = false;
+                toolContextHint.Text = "";
             }
             toolHomeButton.BringToFront();
             toolNavigation.BringToFront();
@@ -1587,6 +1735,36 @@ namespace TTSK_AutoDim_Plates
                 picker.CustomBorderColor = _darkMode ? Color.FromArgb(65, 65, 65) : PanelBorder;
                 picker.CustomTextColor = ink;
                 picker.Invalidate();
+            }
+            foreach (Panel panel in new[] { slideDimPanel, slideLinePanel, slideArrangePanel,
+                slideGridPanel, slideMarkOffsetsPanel })
+            {
+                foreach (Control control in panel.Controls)
+                {
+                    Label label = control as Label;
+                    if (label != null && !object.Equals(label.Tag, "tool-detail-title"))
+                    {
+                        label.ForeColor = muted;
+                    }
+                    ToolMeasurementPanel illustration = control as ToolMeasurementPanel;
+                    if (illustration == null) continue;
+                    illustration.BackColor = surface;
+                    illustration.Invalidate();
+                }
+            }
+            foreach (Control label in ((Panel)slideMarkOffsetsPanel.Controls[1]).Controls)
+                if (label is Label)
+                {
+                    label.ForeColor = muted;
+                    ((Label)label).TextAlign = ContentAlignment.MiddleLeft;
+                }
+            foreach (SafeRoundedButton secondary in new[] {
+                (SafeRoundedButton)slideArrangePanel.Controls[slideArrangePanel.Controls.Count - 1] })
+            {
+                secondary.FillColor = surface;
+                secondary.BorderColor = _darkMode ? Color.FromArgb(65, 65, 65) : PanelBorder;
+                secondary.TextColor = ink;
+                secondary.Invalidate();
             }
             // Keep all nested switches, selected tiles and result colors under their existing theme logic.
         }
@@ -2739,6 +2917,7 @@ namespace TTSK_AutoDim_Plates
 
         private void RunShortcutAction(string actionId)
         {
+            if (TryRunAdditionalShortcut(actionId)) return;
             if (string.Equals(actionId, ShortcutManager.ActionCheckDim, StringComparison.OrdinalIgnoreCase))
             {
                 _lastRepeatableShortcutActionId = null;
@@ -2981,6 +3160,38 @@ namespace TTSK_AutoDim_Plates
                 RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot18");
                 return;
             }
+        }
+
+        private bool TryRunAdditionalShortcut(string actionId)
+        {
+            Action action;
+            switch (actionId)
+            {
+                case ShortcutManager.ActionDimensionSpacing: action = () => RunDimSpacing(true); break;
+                case ShortcutManager.ActionLineByLength: action = RunLineDistance; break;
+                case ShortcutManager.ActionArrangeReference: action = RunArrangeReferenceShortcut; break;
+                case ShortcutManager.ActionLoadSelected:
+                    action = () => { rbBatch.Checked = true; UpdateModeUi(); btnLoad.PerformClick(); }; break;
+                case ShortcutManager.ActionPrintMenu: action = ShowPrintMenu; break;
+                case ShortcutManager.ActionSnapshot: action = RunSnapshotExport; break;
+                case ShortcutManager.ActionDictionary: action = ToggleDictionaryPanel; break;
+                case ShortcutManager.ActionWorkJournal: action = ShowWorkJournal; break;
+                case ShortcutManager.ActionShortcutSettings: action = OpenShortcutSettingsDialog; break;
+                case ShortcutManager.ActionDrawingTools: action = ToggleSlideTools; break;
+                case ShortcutManager.ActionClearLog: action = () => btnClear.PerformClick(); break;
+                default: return false;
+            }
+            if (!CanApplyUpdateNow()) return true;
+            _lastRepeatableShortcutActionId = actionId == ShortcutManager.ActionDimensionSpacing
+                || actionId == ShortcutManager.ActionLineByLength ? actionId : null;
+            action();
+            return true;
+        }
+
+        private async void RunArrangeReferenceShortcut()
+        {
+            if (!CanApplyUpdateNow()) return;
+            if (LoadSelectedArrangeDrawings()) await RunArrangeReferenceBatch();
         }
 
         private void RunCheckScaleShortcut()
@@ -5328,7 +5539,7 @@ namespace TTSK_AutoDim_Plates
 
                 lblStatus.Text =
                     result != null && result.Success
-                        ? "✓  Arrange view applied"
+                        ? (result.GapAdjusted ? "✓  " + result.GapNotice : "✓  Arrange view applied")
                         : "✗  Arrange view lỗi";
 
                 lblStatus.ForeColor =

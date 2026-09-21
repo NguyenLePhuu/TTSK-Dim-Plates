@@ -20,6 +20,17 @@ namespace TTSK_AutoDim_Plates
         public const string ActionNeighborGrid = "NeighborGrid";
         public const string ActionArrangeView = "ArrangeView";
         public const string ActionAutoSection = "AutoSection";
+        public const string ActionDimensionSpacing = "DimensionSpacing";
+        public const string ActionLineByLength = "LineByLength";
+        public const string ActionArrangeReference = "ArrangeReference";
+        public const string ActionLoadSelected = "LoadSelected";
+        public const string ActionPrintMenu = "PrintMenu";
+        public const string ActionSnapshot = "Snapshot";
+        public const string ActionDictionary = "Dictionary";
+        public const string ActionWorkJournal = "WorkJournal";
+        public const string ActionShortcutSettings = "ShortcutSettings";
+        public const string ActionDrawingTools = "DrawingTools";
+        public const string ActionClearLog = "ClearLog";
         public const string ActionSlot01 = "Slot01";
         public const string ActionSlot02 = "Slot02";
         public const string ActionSlot03 = "Slot03";
@@ -148,6 +159,8 @@ namespace TTSK_AutoDim_Plates
                 }
 
                 string[] lines = File.ReadAllLines(_filePath, Encoding.UTF8);
+                bool currentSchema = Array.Exists(lines, line => line.Trim() == "# ShortcutSchema=2");
+                var loadedActions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 bool hasBatchCreateSetting = false;
                 bool hasArrangeViewSetting = false;
                 bool hasRevisionSetting = false;
@@ -205,7 +218,10 @@ namespace TTSK_AutoDim_Plates
 
                     Keys keys;
                     if (TryParse(keyText, out keys))
+                    {
                         _shortcuts[actionId] = NormalizeShortcut(keys);
+                        loadedActions.Add(actionId);
+                    }
                 }
 
                 if (
@@ -267,7 +283,31 @@ namespace TTSK_AutoDim_Plates
                     migratedDefaults = true;
                 }
 
-                if (migratedDefaults)
+                // Preserve custom keys (including deliberately cleared keys after migration).
+                // Install missing defaults only when no saved action already owns the chord.
+                var pending = new List<ShortcutActionDefinition>();
+                foreach (ShortcutActionDefinition def in _definitions)
+                {
+                    int slot;
+                    bool unassignedLegacySlot = !currentSchema && def.ActionId.StartsWith("Slot")
+                        && int.TryParse(def.ActionId.Substring(4), out slot) && slot >= 10 && slot <= 18
+                        && GetShortcut(def.ActionId) == Keys.None;
+                    bool unassignedLegacySection = !currentSchema && def.ActionId == ActionAutoSection
+                        && GetShortcut(def.ActionId) == Keys.None;
+                    if (!loadedActions.Contains(def.ActionId) || unassignedLegacySlot || unassignedLegacySection)
+                    {
+                        pending.Add(def);
+                        _shortcuts[def.ActionId] = Keys.None;
+                    }
+                }
+                var occupied = new HashSet<Keys>(_shortcuts.Values);
+                foreach (ShortcutActionDefinition def in pending)
+                {
+                    Keys candidate = NormalizeShortcut(def.DefaultShortcut);
+                    if (candidate != Keys.None && occupied.Add(candidate))
+                        _shortcuts[def.ActionId] = candidate;
+                }
+                if (migratedDefaults || pending.Count > 0 || !currentSchema)
                     Save();
             }
             catch
@@ -282,6 +322,7 @@ namespace TTSK_AutoDim_Plates
             {
                 List<string> lines = new List<string>();
                 lines.Add("# TTSK AutoDim shortcut configuration");
+                lines.Add("# ShortcutSchema=2");
                 lines.Add("# Edit from Shortcut Settings popup when possible.");
 
                 foreach (ShortcutActionDefinition def in _definitions)
@@ -461,7 +502,7 @@ namespace TTSK_AutoDim_Plates
             list.Add(
                 new ShortcutActionDefinition(
                     ActionLineDistance,
-                    "Line Distance",
+                    "Line · chọn 2 điểm",
                     "Pick 2 points to draw line",
                     "L",
                     Keys.L
@@ -518,13 +559,13 @@ namespace TTSK_AutoDim_Plates
                     "Auto Section",
                     "Tự động tạo mặt cắt (Section)",
                     "—",
-                    Keys.None
+                    Keys.Shift | Keys.S
                 )
             );
             list.Add(
                 new ShortcutActionDefinition(
                     ActionSlot01,
-                    "Slot01 (Function 1)",
+                    "Slot 01 · Main Part",
                     "Selected Main Part",
                     "1",
                     Keys.D1
@@ -533,7 +574,7 @@ namespace TTSK_AutoDim_Plates
             list.Add(
                 new ShortcutActionDefinition(
                     ActionSlot02,
-                    "Slot02 (Function 2)",
+                    "Slot 02 · Plate tham chiếu",
                     "AutoDim function 2",
                     "2",
                     Keys.D2
@@ -542,7 +583,7 @@ namespace TTSK_AutoDim_Plates
             list.Add(
                 new ShortcutActionDefinition(
                     ActionSlot03,
-                    "Slot03 (Function 3)",
+                    "Slot 03 · Mặt cắt plate",
                     "AutoDim function 3",
                     "3",
                     Keys.D3
@@ -551,7 +592,7 @@ namespace TTSK_AutoDim_Plates
             list.Add(
                 new ShortcutActionDefinition(
                     ActionSlot04,
-                    "Slot04 (Function 4)",
+                    "Slot 04 · Pallet",
                     "Use current Slot04 mode",
                     "4",
                     Keys.D4
@@ -560,7 +601,7 @@ namespace TTSK_AutoDim_Plates
             list.Add(
                 new ShortcutActionDefinition(
                     ActionSlot05,
-                    "Slot05 (Function 5)",
+                    "Slot 05 · Cạnh / lỗ plate",
                     "Use current Slot05 mode",
                     "5",
                     Keys.D5
@@ -569,7 +610,7 @@ namespace TTSK_AutoDim_Plates
             list.Add(
                 new ShortcutActionDefinition(
                     ActionSlot06,
-                    "Slot06 (Liên kết giằng xéo)",
+                    "Slot 06 · Giằng xéo",
                     "Auto dim 3 thanh L + plate liên kết",
                     "6",
                     Keys.D6
@@ -578,7 +619,7 @@ namespace TTSK_AutoDim_Plates
             list.Add(
                 new ShortcutActionDefinition(
                     ActionSlot07,
-                    "Slot07 (Injai Data Center Dầm - Cột)",
+                    "Slot 07 · Data Center",
                     "Chế độ Injai Data Center Dầm - Cột",
                     "7",
                     Keys.D7
@@ -587,7 +628,7 @@ namespace TTSK_AutoDim_Plates
             list.Add(
                 new ShortcutActionDefinition(
                     ActionSlot08,
-                    "Slot08 (Ẩn neighbor)",
+                    "Slot 08 · Ẩn neighbor",
                     "Giữ neighbor liên kết trực tiếp",
                     "8",
                     Keys.D8
@@ -596,8 +637,8 @@ namespace TTSK_AutoDim_Plates
             list.Add(
                 new ShortcutActionDefinition(
                     ActionSlot09,
-                    "Slot09 (Chờ gắn file CS)",
-                    "Chờ gắn file CS",
+                    "Slot 09 · Dự phòng",
+                    "Chưa có chức năng được gắn",
                     "9",
                     Keys.D9
                 )
@@ -605,86 +646,100 @@ namespace TTSK_AutoDim_Plates
             list.Add(
                 new ShortcutActionDefinition(
                     ActionSlot10,
-                    "Slot10 (Function 10)",
-                    "Chờ gắn file CS",
+                    "Slot 10 · Dự phòng",
+                    "Chưa có chức năng được gắn",
                     "10",
-                    Keys.None
+                    Keys.Control | Keys.D0
                 )
             );
             list.Add(
                 new ShortcutActionDefinition(
                     ActionSlot11,
-                    "Slot11 (Function 11)",
-                    "Chờ gắn file CS",
+                    "Slot 11 · Dự phòng",
+                    "Chưa có chức năng được gắn",
                     "11",
-                    Keys.None
+                    Keys.Control | Keys.D1
                 )
             );
             list.Add(
                 new ShortcutActionDefinition(
                     ActionSlot12,
-                    "Slot12 (Function 12)",
-                    "Chờ gắn file CS",
+                    "Slot 12 · Dự phòng",
+                    "Chưa có chức năng được gắn",
                     "12",
-                    Keys.None
+                    Keys.Control | Keys.D2
                 )
             );
             list.Add(
                 new ShortcutActionDefinition(
                     ActionSlot13,
-                    "Slot13 (Function 13)",
-                    "Chờ gắn file CS",
+                    "Slot 13 · Dự phòng",
+                    "Chưa có chức năng được gắn",
                     "13",
-                    Keys.None
+                    Keys.Control | Keys.D3
                 )
             );
             list.Add(
                 new ShortcutActionDefinition(
                     ActionSlot14,
-                    "Slot14 (Function 14)",
-                    "Chờ gắn file CS",
+                    "Slot 14 · Dự phòng",
+                    "Chưa có chức năng được gắn",
                     "14",
-                    Keys.None
+                    Keys.Control | Keys.D4
                 )
             );
             list.Add(
                 new ShortcutActionDefinition(
                     ActionSlot15,
-                    "Slot15 (Function 15)",
-                    "Chờ gắn file CS",
+                    "Slot 15 · Dự phòng",
+                    "Chưa có chức năng được gắn",
                     "15",
-                    Keys.None
+                    Keys.Control | Keys.D5
                 )
             );
             list.Add(
                 new ShortcutActionDefinition(
                     ActionSlot16,
-                    "Slot16 (Function 16)",
-                    "Chờ gắn file CS",
+                    "Slot 16 · Dự phòng",
+                    "Chưa có chức năng được gắn",
                     "16",
-                    Keys.None
+                    Keys.Control | Keys.D6
                 )
             );
             list.Add(
                 new ShortcutActionDefinition(
                     ActionSlot17,
-                    "Slot17 (Function 17)",
-                    "Chờ gắn file CS",
+                    "Slot 17 · Dự phòng",
+                    "Chưa có chức năng được gắn",
                     "17",
-                    Keys.None
+                    Keys.Control | Keys.D7
                 )
             );
             list.Add(
                 new ShortcutActionDefinition(
                     ActionSlot18,
-                    "Slot18 (Dim Spacing Audit)",
+                    "Slot 18 · Kiểm tra khoảng cách",
                     "Kiểm tra khoảng cách đường kích thước",
                     "18",
-                    Keys.None
+                    Keys.Control | Keys.D8
                 )
             );
 
-            return list;
+            list.Add(new ShortcutActionDefinition(ActionDimensionSpacing, "Dimension Spacing", "Áp dụng khoảng cách GAP đang đặt", "G", Keys.Shift | Keys.G));
+            list.Add(new ShortcutActionDefinition(ActionLineByLength, "Line · theo chiều dài", "Vẽ line theo chiều dài đang đặt", "↔", Keys.Shift | Keys.L));
+            list.Add(new ShortcutActionDefinition(ActionArrangeReference, "Arrange · theo bản mẫu", "Căn danh sách theo bản đầu được chọn", "V", Keys.Shift | Keys.A));
+            list.Add(new ShortcutActionDefinition(ActionLoadSelected, "Load Selected", "Nạp bản vẽ đang chọn trong Document Manager", "↓", Keys.Control | Keys.L));
+            list.Add(new ShortcutActionDefinition(ActionPrintMenu, "Print / PDF", "Mở các lựa chọn in và xuất PDF", "P", Keys.Control | Keys.P));
+            list.Add(new ShortcutActionDefinition(ActionSnapshot, "Snapshot", "Xuất ảnh bản vẽ", "S", Keys.Control | Keys.Shift | Keys.P));
+            list.Add(new ShortcutActionDefinition(ActionDictionary, "Từ điển", "Mở / đóng từ điển tiếng Nhật", "字", Keys.Control | Keys.J));
+            list.Add(new ShortcutActionDefinition(ActionWorkJournal, "Nhật ký làm việc", "Xem nhật ký dự án và giờ làm", "J", Keys.Control | Keys.Shift | Keys.J));
+            list.Add(new ShortcutActionDefinition(ActionShortcutSettings, "Shortcut Settings", "Chỉnh phím tắt", "⌨", Keys.Control | Keys.K));
+            list.Add(new ShortcutActionDefinition(ActionDrawingTools, "Drawing Tools", "Mở / đóng bảng công cụ", "T", Keys.Control | Keys.T));
+            list.Add(new ShortcutActionDefinition(ActionClearLog, "Clear Log", "Xóa nội dung log đang hiển thị", "×", Keys.Control | Keys.Shift | Keys.Delete));
+
+            var ordered = list.FindAll(def => !def.ActionId.StartsWith("Slot"));
+            ordered.AddRange(list.FindAll(def => def.ActionId.StartsWith("Slot")));
+            return ordered;
         }
 
         public static Keys NormalizeShortcut(Keys keyData)

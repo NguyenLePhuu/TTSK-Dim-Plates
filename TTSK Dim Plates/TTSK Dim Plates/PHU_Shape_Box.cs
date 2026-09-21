@@ -366,6 +366,20 @@ namespace Tekla.Technology.Akit.UserScript
                 CommitAndWait(drawing, 250);
             }
 
+            // The extra BACK flow is restricted to a resolved interior Grid=2.
+            View backGridView = FindViewByViewTypeForC(views, "BackView", "Back");
+            if (backGridView != null
+                && PHU_BeamGridDimensionEngine.ShouldTakeOverHorizontalTotal(backGridView))
+            {
+                int savedFrontTier = LastFrontMaxDimTier;
+                TopBoundary backBoundary;
+                CreateDimsForFrontView(model, part, backGridView, out backBoundary);
+                LastFrontMaxDimTier = savedFrontTier;
+                if (backBoundary.IsValid)
+                    ResizeViewBoundaryKeepDepth(backGridView, backBoundary.MinX, backBoundary.MaxX,
+                        backBoundary.MinY, backBoundary.MaxY);
+            }
+
             // BOTTOM VIEW: cho phép người dùng tự cắt mặt bottom ra.
             // Không bắt buộc view phải có hướng nhìn ngược Top, vì mặt cắt bottom có thể không phải
             // là Bottom View chuẩn của Tekla. Các view phụ còn lại sau khi bỏ Top / Front / view nhỏ nhất Exact
@@ -412,6 +426,9 @@ namespace Tekla.Technology.Akit.UserScript
             bool beamGridDimensionsCreated = PHU_BeamGridDimensionEngine.CreatePreparedDimensions();
             if (beamGridDimensionsCreated)
             {
+                foreach (View bottomView in bottomViews)
+                    LastBottomMaxDimTier = Math.Max(LastBottomMaxDimTier,
+                        PHU_BeamGridDimensionEngine.GetOutermostHorizontalTier(bottomView));
                 LastTopMaxDimTier = Math.Max(
                     LastTopMaxDimTier,
                     PHU_BeamGridDimensionEngine.GetOutermostHorizontalTier(topView)

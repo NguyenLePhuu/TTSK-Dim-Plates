@@ -590,13 +590,17 @@ namespace Tekla.Technology.Akit.UserScript
             // Không đưa BACK vào dimViews vì danh sách đó còn được dùng để nhận diện BOTTOM.
             List<View> backViews = new List<View>();
             if (
-                cShapeLongitudinalVertical
+                (cShapeLongitudinalVertical
+                    || PHU_BeamGridDimensionEngine.ShouldTakeOverHorizontalTotal(backViewByType))
                 && backViewByType != null
                 && !IsSameViewForC(backViewByType, frontView)
             )
             {
                 TopBoundary backBoundary;
+                int savedFrontTier = LastFrontMaxDimTier;
                 CreateDimsForFrontView(model, part, backViewByType, true, out backBoundary);
+                if (!cShapeLongitudinalVertical)
+                    LastFrontMaxDimTier = savedFrontTier;
                 CommitAndWait(drawing, 250);
 
                 if (backBoundary.IsValid)
@@ -665,6 +669,9 @@ namespace Tekla.Technology.Akit.UserScript
             bool beamGridDimensionsCreated = PHU_BeamGridDimensionEngine.CreatePreparedDimensions();
             if (beamGridDimensionsCreated)
             {
+                foreach (View bottomView in bottomViews)
+                    LastBottomMaxDimTier = Math.Max(LastBottomMaxDimTier,
+                        PHU_BeamGridDimensionEngine.GetOutermostHorizontalTier(bottomView));
                 LastTopMaxDimTier = Math.Max(
                     LastTopMaxDimTier,
                     PHU_BeamGridDimensionEngine.GetOutermostHorizontalTier(topView)
