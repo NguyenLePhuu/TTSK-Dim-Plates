@@ -24,6 +24,7 @@ namespace TTSK_AutoDim_Plates
         /// </summary>
         public bool CanApplyUpdateNow()
         {
+            if (operationRunning) return false;
             if (_isBatchRunning) return false;
             if (_pdfCommandRunning) return false;
             if (_gridVisibilityMacroRunning) return false;

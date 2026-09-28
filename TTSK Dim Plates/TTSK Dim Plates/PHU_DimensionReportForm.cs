@@ -85,7 +85,7 @@ namespace Tekla.Technology.Akit.UserScript
             reportContent.Controls.Add(root);Controls.Add(reportContent);BuildChrome();
             var heading=new Panel {Dock=DockStyle.Fill,Margin=Padding.Empty};
             heading.Controls.Add(TextLabel("Kiểm tra chân kích thước",20,ink,true));
-            revisionButton=Button("Revision →",false);revisionButton.Name="OpenRevision";
+            revisionButton=Button("Revision · R →",false);revisionButton.Name="OpenRevision";
             revisionButton.Dock=DockStyle.Right;revisionButton.Width=145;
             revisionButton.Click+=(s,e)=>OpenRevision();heading.Controls.Add(revisionButton);
             root.Controls.Add(heading,0,0);
@@ -128,7 +128,7 @@ namespace Tekla.Technology.Akit.UserScript
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,145));
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,85));
-            recheckButton=Button("↻  Kiểm tra lại · F5",false);recheckButton.Name="Recheck";recheckButton.Dock=DockStyle.Fill;
+            recheckButton=Button("↻  Kiểm tra · C / F5",false);recheckButton.Name="Recheck";recheckButton.Dock=DockStyle.Fill;
             recheckButton.Click+=(s,e)=>Recheck(recheckButton);footer.Controls.Add(recheckButton,0,0);
             previous=Button("←  Vị trí trước",false);previous.Dock=DockStyle.Fill;previous.Click+=(s,e)=>MoveFinding(-1);
             next=Button("Vị trí tiếp  →",false);next.Dock=DockStyle.Fill;next.Click+=(s,e)=>MoveFinding(1);
@@ -259,6 +259,9 @@ namespace Tekla.Technology.Akit.UserScript
                 if(keyData==Keys.Escape&&batchSession.Running){StartOrPauseBatch();return true;}
                 return base.ProcessCmdKey(ref msg,keyData);
             }
+            // These commands act on the current Tekla drawing, including after switching drawings.
+            if(keyData==Keys.C){CheckCurrentDimensions();return true;}
+            if(keyData==Keys.R){if(!checking){OpenRevision();RefreshRevision();}return true;}
             if(revisionPanel != null)
             {
                 if(keyData==Keys.F5) { RefreshRevision(); return true; }

@@ -21,6 +21,7 @@
 theme.cfg
 shortcut.cfg
 auto_section.cfg
+keyplan.cfg
 *.log
 *.pdb
 

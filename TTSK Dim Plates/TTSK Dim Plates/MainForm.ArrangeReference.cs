@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Drawing;
 using Rectangle = System.Drawing.Rectangle;
 using System.Linq;
@@ -18,17 +18,17 @@ namespace TTSK_AutoDim_Plates
                 Font = new Font("Segoe UI", 10F, FontStyle.Bold) };
             run.Click += async delegate
             {
-                if (_isBatchRunning || _snapshotExportRunning || _fitAndCleanupRunning) return;
-                if (LoadSelectedArrangeDrawings()) await RunArrangeReferenceBatch();
+                if (operationRunning || _isBatchRunning || _snapshotExportRunning || _fitAndCleanupRunning) return;
+                if (await LoadSelectedArrangeDrawings()) await RunArrangeReferenceBatch();
             };
             slideArrangePanel.Controls.Add(run);
         }
-        private bool LoadSelectedArrangeDrawings()
+        private async Task<bool> LoadSelectedArrangeDrawings()
         {
-            if (_isBatchRunning || _snapshotExportRunning || _fitAndCleanupRunning) return false;
+            if (operationRunning || _isBatchRunning || _snapshotExportRunning || _fitAndCleanupRunning) return false;
             rbBatch.Checked = true;
             UpdateModeUi();
-            btnLoad_Click(btnLoad, EventArgs.Empty);
+            await ExecuteTeklaCommandAsync("Load Selected", LoadSelectedDrawingsCore);
             if (_selectedDrawings.Count == 0) return false;
             if (_selectedDrawings.Count < 2)
             {
@@ -40,7 +40,11 @@ namespace TTSK_AutoDim_Plates
 
         private async Task RunArrangeReferenceBatch()
         {
-            if (_isBatchRunning || _snapshotExportRunning || _fitAndCleanupRunning) return;
+            await ExecuteTeklaCommandAsync("Arrange Reference", RunArrangeReferenceCore);
+        }
+
+        private void RunArrangeReferenceCore()
+        {
             var handler = new DrawingHandler();
             if (_selectedDrawings.Count < 2)
             { SetMainStatus("Hãy chọn ít nhất 2 bản vẽ trong Document Manager để căn theo bản mẫu.", MainStatusKind.Warning); return; }
@@ -48,24 +52,31 @@ namespace TTSK_AutoDim_Plates
             { SetMainStatus("Hãy lưu và đóng bản vẽ đang mở trước khi căn cả danh sách.", MainStatusKind.Warning); return; }
             var drawings = _selectedDrawings.ToList();
             var modelPath = new Tekla.Structures.Model.Model().GetInfo().ModelPath;
-            var progress = new Form { Text = "Arrange View · Theo bản đầu", Width = 580, Height = 180,
-                StartPosition = FormStartPosition.CenterParent, MinimizeBox = false, MaximizeBox = false, ControlBox = false };
-            var status = new Label { Dock = DockStyle.Fill, Padding = new Padding(16), Text = "Đang đọc bản chuẩn..." };
-            bool cancel = false;
-            var stop = new Button { Text = "Dừng sau bản hiện tại", Dock = DockStyle.Bottom, Height = 36 };
-            stop.Click += delegate { cancel = true; stop.Enabled = false; };
-            progress.Controls.Add(status); progress.Controls.Add(stop);
+            _stopRequested = false;
+            var display = ReadUi(() =>
+            {
+                var form = new Form { Text = "Arrange View · Theo bản đầu", Width = 580, Height = 180,
+                    StartPosition = FormStartPosition.CenterParent, MinimizeBox = false, MaximizeBox = false, ControlBox = false };
+                var label = new Label { Dock = DockStyle.Fill, Padding = new Padding(16), Text = "Đang đọc bản chuẩn..." };
+                var stop = new Button { Text = "Dừng sau bản hiện tại", Dock = DockStyle.Bottom, Height = 36 };
+                stop.Click += delegate { _stopRequested = true; stop.Enabled = false; };
+                form.Controls.Add(label); form.Controls.Add(stop);
+                return Tuple.Create(form, label);
+            });
+            var progress = display.Item1;
+            var status = display.Item2;
             int ok = 0, failed = 0; Drawing owned = null;
-            _isBatchRunning = true; Enabled = false;
+            _isBatchRunning = true;
+            Ui(() => { btnRun.Text = "■  STOP"; btnRun.Enabled = true; });
             try
             {
-                progress.Show(this);
+                Ui(() => progress.Show(this));
                 R.ArrangeReference reference = null;
-                for (int i = 0; i < drawings.Count && !cancel; i++)
+                for (int i = 0; i < drawings.Count && !_stopRequested; i++)
                 {
-                    status.Text = (i + 1) + " / " + drawings.Count + " · " + SafeDrawingMark(drawings[i]);
-                    await Task.Delay(1); // Yield paint/cancel only; Tekla calls stay on the UI STA.
-                    if (cancel) break;
+                    string progressText = (i + 1) + " / " + drawings.Count + " · " + SafeDrawingMark(drawings[i]);
+                    Ui(() => status.Text = progressText);
+                    if (_stopRequested) break;
                     if (!String.Equals(modelPath, new Tekla.Structures.Model.Model().GetInfo().ModelPath, StringComparison.OrdinalIgnoreCase)
                         || handler.GetActiveDrawing() != null) throw new InvalidOperationException("Model/bản vẽ đang mở đã thay đổi; dừng batch.");
                     bool saveFailed = false;
@@ -80,28 +91,34 @@ namespace TTSK_AutoDim_Plates
                         else
                         {
                             var before = R.CaptureArrangeReference();
-                            result = R.ApplyArrangeReference(reference);
-                            saveFailed = true;
-                            if (!handler.SaveActiveDrawing())
-                                throw new InvalidOperationException("Lưu thất bại; giữ bản vẽ đang mở để kiểm tra.");
-                            // Tekla can save AND close a drawing opened with visible=false.
-                            // Always reopen the persisted drawing; never validate a null active drawing.
-                            var afterSave = handler.GetActiveDrawing();
-                            if (afterSave != null)
+                            int moved;
+                            result = R.ApplyArrangeReference(reference, before, out moved);
+                            // A fresh snapshot already proves an unchanged drawing is aligned.
+                            // Avoid Save/reopen when this operation wrote nothing.
+                            if (moved > 0)
                             {
-                                if (!afterSave.IsSameDatabaseObject(drawings[i]) || !handler.CloseActiveDrawing(false))
-                                    throw new InvalidOperationException("Không đóng được đúng bản vẽ sau lưu.");
+                                saveFailed = true;
+                                if (!handler.SaveActiveDrawing())
+                                    throw new InvalidOperationException("Lưu thất bại; giữ bản vẽ đang mở để kiểm tra.");
+                                // Tekla can save AND close a drawing opened with visible=false.
+                                // Always reopen the persisted drawing; never validate a null active drawing.
+                                var afterSave = handler.GetActiveDrawing();
+                                if (afterSave != null)
+                                {
+                                    if (!afterSave.IsSameDatabaseObject(drawings[i]) || !handler.CloseActiveDrawing(false))
+                                        throw new InvalidOperationException("Không đóng được đúng bản vẽ sau lưu.");
+                                }
+                                if (!handler.SetActiveDrawing(drawings[i], false))
+                                    throw new InvalidOperationException("Đã lưu nhưng không mở lại được bản vẽ để xác minh.");
+                                owned = handler.GetActiveDrawing();
+                                if (owned == null || !owned.IsSameDatabaseObject(drawings[i]))
+                                {
+                                    owned = null;
+                                    throw new InvalidOperationException("Bản vẽ mở lại không đúng bản vừa lưu.");
+                                }
+                                R.VerifyArrangeReference(reference, before);
+                                saveFailed = false;
                             }
-                            if (!handler.SetActiveDrawing(drawings[i], false))
-                                throw new InvalidOperationException("Đã lưu nhưng không mở lại được bản vẽ để xác minh.");
-                            owned = handler.GetActiveDrawing();
-                            if (owned == null || !owned.IsSameDatabaseObject(drawings[i]))
-                            {
-                                owned = null;
-                                throw new InvalidOperationException("Bản vẽ mở lại không đúng bản vừa lưu.");
-                            }
-                            R.VerifyArrangeReference(reference, before);
-                            saveFailed = false;
                             ok++;
                         }
                         SetArrangeRowResult(i, result);
@@ -124,17 +141,22 @@ namespace TTSK_AutoDim_Plates
                         }
                     }
                 }
-                SetMainStatus((cancel ? "Đã dừng" : failed > 0 ? (ok == 0 ? "Không căn được bản nào" : "Kết thúc có lỗi") : "Hoàn tất")
+                SetMainStatus((_stopRequested ? "Đã dừng" : failed > 0 ? (ok == 0 ? "Không căn được bản nào" : "Kết thúc có lỗi") : "Hoàn tất")
                     + " · căn " + ok + " bản · lỗi/bỏ qua " + failed
                     + " · chưa xử lý " + Math.Max(0, drawings.Count - 1 - ok - failed),
                     failed > 0 ? (ok == 0 ? MainStatusKind.Error : MainStatusKind.Warning) : MainStatusKind.Success);
             }
             catch (Exception ex) { SetMainStatus(ex.Message, MainStatusKind.Error); }
-            finally { progress.Close(); progress.Dispose(); Enabled = true; _isBatchRunning = false; UpdateModeUi(); }
+            finally
+            {
+                _isBatchRunning = false; _stopRequested = false;
+                Ui(() => { progress.Close(); progress.Dispose(); btnRun.Text = "▶  CREATE DRAWING"; btnRun.Enabled = true; UpdateModeUi(); });
+            }
         }
 
         private void SetArrangeRowResult(int index, string result)
         {
+            if (InvokeRequired) { Ui(() => SetArrangeRowResult(index, result)); return; }
             if (index >= dgvDrawings.Rows.Count) return;
             var row = dgvDrawings.Rows[index];
             row.Cells["STATUS"].Value = result.StartsWith("ERROR") ? "ERROR" : result.StartsWith("REFERENCE") ? "REFERENCE" : "OK";

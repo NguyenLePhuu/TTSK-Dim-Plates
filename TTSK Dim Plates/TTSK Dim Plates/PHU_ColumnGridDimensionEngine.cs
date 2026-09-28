@@ -406,6 +406,32 @@ namespace Tekla.Technology.Akit.UserScript
         /// Read-only production audit for the routed Column strategy. It never
         /// creates, modifies, deletes, or commits a drawing object.
         /// </summary>
+        public static bool PreflightPreparedGeometry(out string message)
+        {
+            // Typed read-only gate for the Slot 07 coordinator before Shape's
+            // replacement pass. Reuse the existing geometry readers/selectors.
+            try
+            {
+                if (_context == null)
+                    throw new InvalidOperationException("Column view preflight has not passed.");
+                RebindCapturedViews(_context);
+                TSG.Matrix currentToGlobal = _context.Model.GetWorkPlaneHandler()
+                    .GetCurrentTransformationPlane().TransformationMatrixToGlobal;
+                bool general = _context.Strategy == ColumnGridStrategy.GeneralSystem;
+                ViewGeometry left = ReadViewGeometry(_context, _context.Left, currentToGlobal, true, general);
+                ReadViewGeometry(_context, _context.Right, currentToGlobal, general, general);
+                if (!general && left.HorizontalLevels.Count != 2)
+                    throw new InvalidOperationException("Inzai LEFT view requires exactly two floor Grid levels.");
+                message = "Column Grid geometry preflight passed for both captured views.";
+                return true;
+            }
+            catch (Exception ex)
+            {
+                message = "Column Grid geometry preflight failed: " + ex.Message;
+                return false;
+            }
+        }
+
         public static string AuditPreparedGeometry()
         {
             if (_context == null)

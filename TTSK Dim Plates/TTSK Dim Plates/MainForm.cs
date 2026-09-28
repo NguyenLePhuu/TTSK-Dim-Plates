@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -20,9 +20,9 @@ namespace TTSK_AutoDim_Plates
 
         private readonly List<Drawing> _selectedDrawings = new List<Drawing>();
 
-        private bool _isBatchRunning = false;
+        private volatile bool _isBatchRunning = false;
         private bool _pdfCommandRunning;
-        private bool _stopRequested = false;
+        private volatile bool _stopRequested = false;
         private int _resumeIndex = 0;
         private bool _gridVisibilityMacroRunning = false;
         private const bool DEFAULT_AUTO_SECTION_ENABLED = false;
@@ -34,6 +34,7 @@ namespace TTSK_AutoDim_Plates
         private double? _batchManualScaleSnapshot = null;
         private bool _batchManualScaleSnapshotCaptured = false;
         private bool _dataCenterModeEnabled = false;
+        private bool _slot07Running;
         private bool? _batchDataCenterModeSnapshot = null;
         private bool _syncingAutoSectionSwitch = false;
 
@@ -189,6 +190,7 @@ namespace TTSK_AutoDim_Plates
             BuildUi();
             InitializeUpdater();
             InitializeWorkJournal();
+            Disposed += delegate { teklaOperations.Dispose(); };
         }
 
         // Cooperative waits retain Tekla calls and ThreadStatic contexts on their original thread.
@@ -248,7 +250,7 @@ namespace TTSK_AutoDim_Plates
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            if (_pdfCommandRunning && e.CloseReason == CloseReason.UserClosing)
+            if ((_pdfCommandRunning || operationRunning) && e.CloseReason == CloseReason.UserClosing)
             {
                 e.Cancel = true;
                 return;
@@ -965,6 +967,7 @@ namespace TTSK_AutoDim_Plates
 
             Label closeTools = new Label();
             closeTools.Text = "×";
+            closeTools.Tag = "OperationNavigation";
             closeTools.TextAlign = ContentAlignment.MiddleCenter;
             closeTools.Font = new Font("Segoe UI", 15F, FontStyle.Bold);
             closeTools.Location = new Point(SlideToolsWidth - 42, 16);
@@ -1915,7 +1918,7 @@ namespace TTSK_AutoDim_Plates
                 boxW, boxH, delegate { RunVisibleAutoDimSlot(6); });
             page1.Controls.Add(slot6);
             dataCenterSlotTile = MakeAutoDimSlotBox("⑦", "Injai Data Center",
-                "Dầm - Cột", innerMargin, 0, boxW, boxH,
+                "Bấm chạy · Shift: chế độ", innerMargin, 0, boxW, boxH,
                 delegate { RunVisibleAutoDimSlot(7); });
             page2.Controls.Add(dataCenterSlotTile);
             if (dataCenterSlotTile.Controls.Count >= 3)
@@ -1927,9 +1930,7 @@ namespace TTSK_AutoDim_Plates
                 "Giữ liên kết trực tiếp", innerMargin + boxW + gap, 0, boxW, boxH,
                 delegate { RunVisibleAutoDimSlot(8); });
             page2.Controls.Add(slot8);
-            page2.Controls.Add(MakeAutoDimSlotBox("⑨", "Slot 09", "Chờ gắn file CS",
-                innerMargin, boxH + gap, boxW, boxH, delegate { RunVisibleAutoDimSlot(9); }));
-            AddAutoDimPlaceholderSlots(page2, 10, 12, innerMargin, gap, boxW, boxH);
+            AddAutoDimPlaceholderSlots(page2, 9, 12, innerMargin, gap, boxW, boxH);
             AddAutoDimPlaceholderSlots(page3, 13, 17, innerMargin, gap, boxW, boxH);
 
             Panel slot18 = MakeAutoDimSlotBox(
@@ -2015,7 +2016,7 @@ namespace TTSK_AutoDim_Plates
                 Panel slot = MakeAutoDimSlotBox(
                     GetAutoDimCircledNumber(slotNumber),
                     "Slot " + slotNumber.ToString("00"),
-                    "Chờ gắn file CS",
+                    slotNumber == 9 ? "Keyplan · Dầm / Cột · X / Y" : "Chờ gắn file CS",
                     innerMargin + (column * (boxW + gap)),
                     row * (boxH + gap),
                     boxW,
@@ -2078,8 +2079,53 @@ namespace TTSK_AutoDim_Plates
             }
         }
 
+        private void RunSlot07Injai()
+        {
+            if (DispatchTeklaCommand("DIM", RunSlot07Injai)) return;
+            if (_slot07Running || _isBatchRunning || _pdfCommandRunning
+                || _snapshotExportRunning || _fitAndCleanupRunning) return;
+
+            double? manualScale;
+            if (!ManualDrawingScaleOverride.TryParseInput(
+                txtManualScaleDenominator != null ? ReadUi(() => txtManualScaleDenominator.Text) : string.Empty,
+                out manualScale))
+            {
+                SetMainStatus("Tỷ lệ không hợp lệ. Kiểm tra ô tỷ lệ trước khi chạy Slot 07.", MainStatusKind.Warning);
+                return;
+            }
+
+
+            _slot07Running = true;
+
+            try
+            {
+                SetMainStatus("Slot 07: đang chạy INJAI trên bản vẽ hiện tại...", MainStatusKind.Information);
+                DataCenterExecutionResult result;
+                using (ManualDrawingScaleOverride.BeginRun(manualScale))
+                    result = RunDataCenterCurrentDrawing(true);
+
+                bool success = result != null && result.Success;
+                SetAutoDimResult(success ? "INJAI OK" : "INJAI ERROR");
+                SetMainStatus(
+                    result == null ? "Slot 07 không trả kết quả."
+                        : "Slot 07 | " + (success ? result.Message : result.FailedStage + " | " + result.Message),
+                    success ? MainStatusKind.Success : MainStatusKind.Error);
+            }
+            catch (Exception ex)
+            {
+                SetAutoDimResult("INJAI ERROR");
+                SetMainStatus("Slot 07 lỗi: " + ex.Message, MainStatusKind.Error);
+            }
+            finally
+            {
+                _slot07Running = false;
+
+            }
+        }
+
         private void ToggleDataCenterMode()
         {
+            if (operationRunning) return;
             if (_isBatchRunning)
             {
                 SetMainStatus(
@@ -2124,6 +2170,7 @@ namespace TTSK_AutoDim_Plates
 
         private void ApplyDataCenterModeUi()
         {
+            if (InvokeRequired) { Ui(() => ApplyDataCenterModeUi()); return; }
             RoundedPanel tile = dataCenterSlotTile as RoundedPanel;
             if (tile == null)
                 return;
@@ -2148,9 +2195,9 @@ namespace TTSK_AutoDim_Plates
             {
                 dataCenterSlotDescription.Text = _dataCenterModeEnabled
                     ? rbActive != null && rbActive.Checked
-                          ? "Dầm - Cột · ON · ACTIVE"
-                          : "Dầm - Cột · ON · BATCH"
-                      : "Dầm - Cột";
+                          ? "INJAI ON · Shift: tắt"
+                          : "BATCH ON · Shift: tắt"
+                      : "Bấm chạy · Shift: chế độ";
             }
 
             if (dataCenterSlotTitle != null)
@@ -2464,6 +2511,7 @@ namespace TTSK_AutoDim_Plates
 
         private void RunSlot04ByCurrentMode()
         {
+            if (operationRunning) return;
             if (slot04AutoMode || slot04TargetSwitch == null)
             {
                 RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot04");
@@ -2500,6 +2548,7 @@ namespace TTSK_AutoDim_Plates
 
         private void RunSlot05ByCurrentMode()
         {
+            if (operationRunning) return;
             if (slot05ModeSwitch != null && slot05ModeSwitch.SelectedMode == 1)
             {
                 RunExternalAutoDimSlot(
@@ -2518,13 +2567,17 @@ namespace TTSK_AutoDim_Plates
 
         private void RunVisibleAutoDimSlot(int slot)
         {
-            if (_snapshotExportRunning || _isBatchRunning || _fitAndCleanupRunning) return;
+            if (_slot07Running || _snapshotExportRunning || _isBatchRunning || _fitAndCleanupRunning) return;
             switch(slot)
             {
                 case 6: RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot06"); return;
-                case 7: ToggleDataCenterMode(); return;
+                case 7:
+                    if ((ModifierKeys & Keys.Shift) == Keys.Shift) ToggleDataCenterMode();
+                    else RunSlot07Injai();
+                    return;
                 case 8: RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot08"); return;
-                case 9: case 10: case 11: case 12:
+                case 9: RunKeyplanSlot09(); return;
+                case 10: case 11: case 12:
                     SetAutoDimResult("Slot " + slot.ToString("00") + ": Chờ gắn file CS"); return;
                 default: RunExternalAutoDimSlot("Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot" + slot.ToString("00")); return;
             }
@@ -2532,12 +2585,13 @@ namespace TTSK_AutoDim_Plates
 
         private void RunExternalAutoDimSlot(string typeFullName)
         {
-            if (_snapshotExportRunning || _fitAndCleanupRunning) return;
+            if (_slot07Running || _snapshotExportRunning || _fitAndCleanupRunning) return;
             if (typeFullName == "Tekla.Technology.Akit.UserScript.PHU_CopyDrawingSnapshot_Temp")
             {
                 RunSnapshotExport();
                 return;
             }
+            if (DispatchTeklaCommand("Auto Dimension", () => RunExternalAutoDimSlot(typeFullName))) return;
             try
             {
                 Type t = FindTypeInLoadedAssemblies(typeFullName);
@@ -2638,6 +2692,7 @@ namespace TTSK_AutoDim_Plates
 
         private void SetAutoDimResult(string text)
         {
+            if (InvokeRequired) { Ui(() => SetAutoDimResult(text)); return; }
             if (autoDimResultLabel == null)
                 return;
 
@@ -2917,6 +2972,12 @@ namespace TTSK_AutoDim_Plates
 
         private void RunShortcutAction(string actionId)
         {
+            if (operationRunning)
+            {
+                if (actionId == ShortcutManager.ActionDrawingTools) ToggleSlideTools();
+                else if (actionId == ShortcutManager.ActionDictionary) ToggleDictionaryPanel();
+                return;
+            }
             if (TryRunAdditionalShortcut(actionId)) return;
             if (string.Equals(actionId, ShortcutManager.ActionCheckDim, StringComparison.OrdinalIgnoreCase))
             {
@@ -3191,11 +3252,12 @@ namespace TTSK_AutoDim_Plates
         private async void RunArrangeReferenceShortcut()
         {
             if (!CanApplyUpdateNow()) return;
-            if (LoadSelectedArrangeDrawings()) await RunArrangeReferenceBatch();
+            if (await LoadSelectedArrangeDrawings()) await RunArrangeReferenceBatch();
         }
 
-        private void RunCheckScaleShortcut()
+        private async void RunCheckScaleShortcut()
         {
+            if (!CanApplyUpdateNow()) return;
             try
             {
                 if (rbBatch != null)
@@ -3206,11 +3268,11 @@ namespace TTSK_AutoDim_Plates
 
                 UpdateModeUi();
 
-                if (btnLoad != null && btnLoad.Enabled)
-                    btnLoad.PerformClick();
-
-                if (btnCheckScale != null && btnCheckScale.Enabled)
-                    btnCheckScale.PerformClick();
+                await ExecuteTeklaCommandAsync("Load / Check Scale", () =>
+                {
+                    LoadSelectedDrawingsCore();
+                    RunScaleCheck();
+                });
             }
             catch (Exception ex)
             {
@@ -3851,6 +3913,7 @@ namespace TTSK_AutoDim_Plates
 
         private void ApplyAutoSectionSwitchUi()
         {
+            if (InvokeRequired) { Ui(() => ApplyAutoSectionSwitchUi()); return; }
             if (autoSectionSwitch == null)
                 return;
 
@@ -4458,10 +4521,11 @@ namespace TTSK_AutoDim_Plates
 
         private void RunDimSpacing(bool apply)
         {
+            if (DispatchTeklaCommand("Dimension spacing", () => RunDimSpacing(apply))) return;
             try
             {
-                double spacing = Convert.ToDouble(nudDimSpacing.Value);
-                string scope = cboDimScope.Text;
+                double spacing = Convert.ToDouble(ReadUi(() => nudDimSpacing.Value));
+                string scope = ReadUi(() => cboDimScope.Text);
 
                 PHU_DimSpacingNormalize.Result result = PHU_DimSpacingNormalize.Run(
                     spacing,
@@ -4471,68 +4535,69 @@ namespace TTSK_AutoDim_Plates
 
                 if (dimResultLabel != null)
                 {
-                    dimResultLabel.Text =
-                        result == null ? "Không có kết quả." : result.ToDisplayText(apply);
+                    Ui(() => { dimResultLabel.Text =
+                        result == null ? "Không có kết quả." : result.ToDisplayText(apply); });
 
-                    dimResultLabel.ForeColor =
+                    Ui(() => { dimResultLabel.ForeColor =
                         result != null && result.FailedCount > 0
                             ? Color.FromArgb(220, 38, 38)
-                            : Color.FromArgb(22, 163, 74);
+                            : Color.FromArgb(22, 163, 74); });
                 }
 
-                lblStatus.Text = apply
+                Ui(() => { lblStatus.Text = apply
                     ? "✓  Dimension spacing applied"
-                    : "✓  Dimension spacing preview";
-                lblStatus.ForeColor = Color.FromArgb(22, 163, 74);
+                    : "✓  Dimension spacing preview"; });
+                Ui(() => { lblStatus.ForeColor = Color.FromArgb(22, 163, 74); });
             }
             catch (Exception ex)
             {
                 if (dimResultLabel != null)
                 {
-                    dimResultLabel.Text = ex.Message;
-                    dimResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
+                    Ui(() => { dimResultLabel.Text = ex.Message; });
+                    Ui(() => { dimResultLabel.ForeColor = Color.FromArgb(220, 38, 38); });
                 }
 
-                lblStatus.Text = "✗  Dimension spacing lỗi";
-                lblStatus.ForeColor = Color.Firebrick;
+                Ui(() => { lblStatus.Text = "✗  Dimension spacing lỗi"; });
+                Ui(() => { lblStatus.ForeColor = Color.Firebrick; });
             }
         }
 
         private void RunLineDistance()
         {
+            if (DispatchTeklaCommand("Line distance", RunLineDistance)) return;
             try
             {
-                double distance = Convert.ToDouble(nudLineDistance.Value);
+                double distance = Convert.ToDouble(ReadUi(() => nudLineDistance.Value));
 
                 PHU_LineDistance.Result result = PHU_LineDistance.Run(distance);
 
                 if (lineResultLabel != null)
                 {
-                    lineResultLabel.Text =
-                        result == null ? "Không có kết quả." : result.ToDisplayText();
+                    Ui(() => { lineResultLabel.Text =
+                        result == null ? "Không có kết quả." : result.ToDisplayText(); });
 
-                    lineResultLabel.ForeColor =
+                    Ui(() => { lineResultLabel.ForeColor =
                         result != null && result.Success
                             ? Color.FromArgb(22, 163, 74)
-                            : Color.FromArgb(220, 38, 38);
+                            : Color.FromArgb(220, 38, 38); });
                 }
 
-                lblStatus.Text =
+                Ui(() => { lblStatus.Text =
                     result != null && result.Success
                         ? "✓  Line distance created"
-                        : "✗  Line distance lỗi";
+                        : "✗  Line distance lỗi"; });
 
-                lblStatus.ForeColor =
+                Ui(() => { lblStatus.ForeColor =
                     result != null && result.Success
                         ? Color.FromArgb(22, 163, 74)
-                        : Color.Firebrick;
+                        : Color.Firebrick; });
             }
             catch (Exception ex)
             {
                 if (lineResultLabel != null)
                 {
-                    lineResultLabel.Text = ex.Message;
-                    lineResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
+                    Ui(() => { lineResultLabel.Text = ex.Message; });
+                    Ui(() => { lineResultLabel.ForeColor = Color.FromArgb(220, 38, 38); });
                 }
 
                 SetMainStatus("Line distance lỗi: " + ex.Message, MainStatusKind.Error);
@@ -4541,6 +4606,7 @@ namespace TTSK_AutoDim_Plates
 
         private void RunPickTwoPointsLine()
         {
+            if (DispatchTeklaCommand("Pick line", RunPickTwoPointsLine)) return;
             try
             {
                 TTSK_AutoDim_Plates.PHU_LineDistance.Result result =
@@ -4568,28 +4634,17 @@ namespace TTSK_AutoDim_Plates
             RunShortcutAction(_lastRepeatableShortcutActionId);
         }
 
-        private void RunBatchCreateShortcut()
+        private async void RunBatchCreateShortcut()
         {
-            try
+            if (operationRunning || _isBatchRunning || _pdfCommandRunning || _snapshotExportRunning) return;
+            rbBatch.Checked = true;
+            rbActive.Checked = false;
+            UpdateModeUi();
+            await ExecuteTeklaCommandAsync("Batch Create", () =>
             {
-                if (rbBatch != null)
-                    rbBatch.Checked = true;
-
-                if (rbActive != null)
-                    rbActive.Checked = false;
-
-                UpdateModeUi();
-
-                if (btnLoad != null && btnLoad.Enabled)
-                    btnLoad.PerformClick();
-
-                if (_selectedDrawings.Count > 0 && btnRun != null && btnRun.Enabled)
-                    btnRun.PerformClick();
-            }
-            catch (Exception ex)
-            {
-                SetMainStatus("Shortcut Batch Create lỗi: " + ex.Message, MainStatusKind.Error);
-            }
+                LoadSelectedDrawingsCore();
+                if (_selectedDrawings.Count > 0) btnRun_Click(null, EventArgs.Empty);
+            });
         }
 
         private enum MainStatusKind
@@ -4602,6 +4657,7 @@ namespace TTSK_AutoDim_Plates
 
         private void SetMainStatus(string message, MainStatusKind kind)
         {
+            if (InvokeRequired) { Ui(() => SetMainStatus(message, kind)); return; }
             if (lblStatus == null)
                 return;
 
@@ -4669,6 +4725,7 @@ namespace TTSK_AutoDim_Plates
 
         private void RunOpenGridView()
         {
+            if (DispatchTeklaCommand("Open Grid", RunOpenGridView)) return;
             try
             {
                 string selectionError;
@@ -4676,12 +4733,12 @@ namespace TTSK_AutoDim_Plates
                 {
                     if (gridResultLabel != null)
                     {
-                        gridResultLabel.Text = selectionError;
-                        gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
+                        Ui(() => { gridResultLabel.Text = selectionError; });
+                        Ui(() => { gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38); });
                     }
 
-                    lblStatus.Text = "✗  Không chọn được view";
-                    lblStatus.ForeColor = Color.Firebrick;
+                    Ui(() => { lblStatus.Text = "✗  Không chọn được view"; });
+                    Ui(() => { lblStatus.ForeColor = Color.Firebrick; });
                     return;
                 }
 
@@ -4690,14 +4747,14 @@ namespace TTSK_AutoDim_Plates
                 {
                     if (gridResultLabel != null)
                     {
-                        gridResultLabel.Text = macroError;
-                        gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
+                        Ui(() => { gridResultLabel.Text = macroError; });
+                        Ui(() => { gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38); });
                     }
 
-                    lblStatus.Text = string.IsNullOrWhiteSpace(macroError)
+                    Ui(() => { lblStatus.Text = string.IsNullOrWhiteSpace(macroError)
                         ? "✗  Không bật được grid"
-                        : "✗  " + macroError;
-                    lblStatus.ForeColor = Color.Firebrick;
+                        : "✗  " + macroError; });
+                    Ui(() => { lblStatus.ForeColor = Color.Firebrick; });
                     return;
                 }
 
@@ -4707,13 +4764,13 @@ namespace TTSK_AutoDim_Plates
                 {
                     if (gridResultLabel != null)
                     {
-                        gridResultLabel.Text =
-                            result == null ? "Không có kết quả." : result.ToDisplayText();
-                        gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
+                        Ui(() => { gridResultLabel.Text =
+                            result == null ? "Không có kết quả." : result.ToDisplayText(); });
+                        Ui(() => { gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38); });
                     }
 
-                    lblStatus.Text = "✗  Open grid view lỗi";
-                    lblStatus.ForeColor = Color.Firebrick;
+                    Ui(() => { lblStatus.Text = "✗  Open grid view lỗi"; });
+                    Ui(() => { lblStatus.ForeColor = Color.Firebrick; });
                     return;
                 }
 
@@ -4721,43 +4778,43 @@ namespace TTSK_AutoDim_Plates
                 {
                     if (gridResultLabel != null)
                     {
-                        gridResultLabel.Text = result.ToDisplayText();
-                        gridResultLabel.ForeColor = Color.FromArgb(217, 119, 6);
+                        Ui(() => { gridResultLabel.Text = result.ToDisplayText(); });
+                        Ui(() => { gridResultLabel.ForeColor = Color.FromArgb(217, 119, 6); });
                     }
 
-                    lblStatus.Text =
+                    Ui(() => { lblStatus.Text =
                         "⚠  Open Grid chỉ hoàn thành "
                         + result.SuccessCount
                         + "/"
                         + result.ViewCount
-                        + " View.";
-                    lblStatus.ForeColor = Color.FromArgb(217, 119, 6);
+                        + " View."; });
+                    Ui(() => { lblStatus.ForeColor = Color.FromArgb(217, 119, 6); });
                     return;
                 }
 
                 if (gridResultLabel != null)
                 {
-                    gridResultLabel.Text =
-                        result == null ? "Không có kết quả." : result.ToDisplayText();
-                    gridResultLabel.ForeColor =
+                    Ui(() => { gridResultLabel.Text =
+                        result == null ? "Không có kết quả." : result.ToDisplayText(); });
+                    Ui(() => { gridResultLabel.ForeColor =
                         result != null && result.FailedCount > 0
                             ? Color.FromArgb(220, 38, 38)
-                            : Color.FromArgb(22, 163, 74);
+                            : Color.FromArgb(22, 163, 74); });
                 }
 
-                lblStatus.Text = "✓  Open grid view applied";
-                lblStatus.ForeColor = Color.FromArgb(22, 163, 74);
+                Ui(() => { lblStatus.Text = "✓  Open grid view applied"; });
+                Ui(() => { lblStatus.ForeColor = Color.FromArgb(22, 163, 74); });
             }
             catch (Exception ex)
             {
                 if (gridResultLabel != null)
                 {
-                    gridResultLabel.Text = ex.Message;
-                    gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
+                    Ui(() => { gridResultLabel.Text = ex.Message; });
+                    Ui(() => { gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38); });
                 }
 
-                lblStatus.Text = "✗  Open grid view lỗi";
-                lblStatus.ForeColor = Color.Firebrick;
+                Ui(() => { lblStatus.Text = "✗  Open grid view lỗi"; });
+                Ui(() => { lblStatus.ForeColor = Color.Firebrick; });
             }
         }
 
@@ -4768,19 +4825,19 @@ namespace TTSK_AutoDim_Plates
                 return true;
 
             if (string.IsNullOrEmpty(prerequisiteMessage))
-                prerequisiteMessage = "FIT chưa được thực thi. Hãy chạy OPEN GRID trước khi FIT.";
+                prerequisiteMessage = "Không đọc được bản vẽ hoặc view để Fit.";
 
             if (gridResultLabel != null)
             {
-                gridResultLabel.Text = prerequisiteMessage;
-                gridResultLabel.ForeColor = Color.FromArgb(217, 119, 6);
+                Ui(() => { gridResultLabel.Text = prerequisiteMessage; });
+                Ui(() => { gridResultLabel.ForeColor = Color.FromArgb(217, 119, 6); });
             }
 
             if (lblStatus != null)
             {
-                lblStatus.Text = "⚠  Hãy chạy OPEN GRID trước khi FIT.";
-                lblStatus.ForeColor = Color.FromArgb(217, 119, 6);
-                lblStatus.AccessibleDescription = "";
+                Ui(() => { lblStatus.Text = "⚠  " + prerequisiteMessage; });
+                Ui(() => { lblStatus.ForeColor = Color.FromArgb(217, 119, 6); });
+                Ui(() => { lblStatus.AccessibleDescription = ""; });
             }
 
             return false;
@@ -4788,7 +4845,7 @@ namespace TTSK_AutoDim_Plates
 
         private void RunNeighborCleanupAfterFit()
         {
-            string fitStatus = lblStatus.Text;
+            string fitStatus = ReadUi(() => lblStatus.Text);
             try
             {
                 var handler = new DrawingHandler();
@@ -4799,7 +4856,7 @@ namespace TTSK_AutoDim_Plates
                 Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot08.Run();
                 string message = Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot08.LastRunMessage;
                 bool success = Tekla.Technology.Akit.UserScript.PHU_AutoDimSlot08.LastRunSucceeded;
-                if (gridResultLabel != null) gridResultLabel.Text += "\n" + message;
+                if (gridResultLabel != null) Ui(() => { gridResultLabel.Text += "\n" + message; });
                 bool fitWarning = fitStatus.IndexOf("⚠", StringComparison.Ordinal) >= 0;
                 SetMainStatus(fitStatus.TrimStart('✓', '⚠', ' ') + " | " + message,
                     success && !fitWarning ? MainStatusKind.Success : MainStatusKind.Warning);
@@ -4815,6 +4872,7 @@ namespace TTSK_AutoDim_Plates
         private Drawing _fitSourceDrawing;
         private void RunFitView()
         {
+            if (DispatchTeklaCommand("Fit View", RunFitView)) return;
             if (_fitAndCleanupRunning || _snapshotExportRunning || _isBatchRunning) return;
             _fitAndCleanupRunning = true;
             _fitReadyForCleanup = false;
@@ -4843,12 +4901,12 @@ namespace TTSK_AutoDim_Plates
                 {
                     if (gridResultLabel != null)
                     {
-                        gridResultLabel.Text = selectionError;
-                        gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
+                        Ui(() => { gridResultLabel.Text = selectionError; });
+                        Ui(() => { gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38); });
                     }
 
-                    lblStatus.Text = "✗  Không chọn được view";
-                    lblStatus.ForeColor = Color.Firebrick;
+                    Ui(() => { lblStatus.Text = "✗  Không chọn được view"; });
+                    Ui(() => { lblStatus.ForeColor = Color.Firebrick; });
                     return;
                 }
 
@@ -4860,12 +4918,12 @@ namespace TTSK_AutoDim_Plates
                 {
                     if (gridResultLabel != null)
                     {
-                        gridResultLabel.Text = macroError;
-                        gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
+                        Ui(() => { gridResultLabel.Text = macroError; });
+                        Ui(() => { gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38); });
                     }
 
-                    lblStatus.Text = "✗  Không tắt được grid";
-                    lblStatus.ForeColor = Color.Firebrick;
+                    Ui(() => { lblStatus.Text = "✗  Không tắt được grid"; });
+                    Ui(() => { lblStatus.ForeColor = Color.Firebrick; });
                     return;
                 }
 
@@ -4875,13 +4933,13 @@ namespace TTSK_AutoDim_Plates
                 {
                     if (gridResultLabel != null)
                     {
-                        gridResultLabel.Text =
-                            result == null ? "Không có kết quả." : result.Message;
-                        gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
+                        Ui(() => { gridResultLabel.Text =
+                            result == null ? "Không có kết quả." : result.Message; });
+                        Ui(() => { gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38); });
                     }
 
-                    lblStatus.Text = "✗  Fit view lỗi";
-                    lblStatus.ForeColor = Color.Firebrick;
+                    Ui(() => { lblStatus.Text = "✗  Fit view lỗi"; });
+                    Ui(() => { lblStatus.ForeColor = Color.Firebrick; });
                     return;
                 }
 
@@ -4890,48 +4948,52 @@ namespace TTSK_AutoDim_Plates
                 {
                     if (gridResultLabel != null)
                     {
-                        gridResultLabel.Text =
+                        Ui(() => { gridResultLabel.Text =
                             "Fit đã chạy nhưng chưa đặt được Collect By = 4: "
-                            + fitCompleteMacroError;
-                        gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
+                            + fitCompleteMacroError; });
+                        Ui(() => { gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38); });
                     }
 
-                    lblStatus.Text = "✗  Fit xong nhưng chưa hoàn tất Collect By";
-                    lblStatus.ForeColor = Color.Firebrick;
+                    Ui(() => { lblStatus.Text = "✗  Fit xong nhưng chưa hoàn tất Collect By"; });
+                    Ui(() => { lblStatus.ForeColor = Color.Firebrick; });
                     return;
                 }
 
+                PHU_OpenGridView.VerifyFinalFitRestrictionBoxes();
+
                 if (gridResultLabel != null)
                 {
-                    gridResultLabel.Text =
-                        result == null ? "Không có kết quả." : result.ToDisplayText();
-                    gridResultLabel.ForeColor =
+                    Ui(() => { gridResultLabel.Text =
+                        result == null ? "Không có kết quả." : result.ToDisplayText(); });
+                    Ui(() => { gridResultLabel.ForeColor =
                         result != null && result.FailedCount > 0
                             ? Color.FromArgb(220, 38, 38)
-                            : Color.FromArgb(22, 163, 74);
+                            : Color.FromArgb(22, 163, 74); });
                 }
 
-                lblStatus.Text =
+                Ui(() => { lblStatus.Text =
                     result != null && result.FailedCount > 0
                         ? "✗  Fit view lỗi"
-                        : "✓  Fit None Grid applied";
+                        : result != null && result.GeometryOnlyViewCount > 0
+                            ? "✓  Fit trực tiếp hoàn tất | Không cần Open Grid"
+                            : "✓  Fit None Grid applied"; });
 
-                lblStatus.ForeColor =
+                Ui(() => { lblStatus.ForeColor =
                     result != null && result.FailedCount > 0
                         ? Color.Firebrick
-                        : Color.FromArgb(22, 163, 74);
+                        : Color.FromArgb(22, 163, 74); });
                 _fitReadyForCleanup = true;
             }
             catch (Exception ex)
             {
                 if (gridResultLabel != null)
                 {
-                    gridResultLabel.Text = ex.Message;
-                    gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
+                    Ui(() => { gridResultLabel.Text = ex.Message; });
+                    Ui(() => { gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38); });
                 }
 
-                lblStatus.Text = "✗  Fit view lỗi";
-                lblStatus.ForeColor = Color.Firebrick;
+                Ui(() => { lblStatus.Text = "✗  Fit view lỗi"; });
+                Ui(() => { lblStatus.ForeColor = Color.Firebrick; });
             }
         }
 
@@ -4944,12 +5006,12 @@ namespace TTSK_AutoDim_Plates
                 {
                     if (gridResultLabel != null)
                     {
-                        gridResultLabel.Text = selectionError;
-                        gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
+                        Ui(() => { gridResultLabel.Text = selectionError; });
+                        Ui(() => { gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38); });
                     }
 
-                    lblStatus.Text = "✗  Không chọn được view";
-                    lblStatus.ForeColor = Color.Firebrick;
+                    Ui(() => { lblStatus.Text = "✗  Không chọn được view"; });
+                    Ui(() => { lblStatus.ForeColor = Color.Firebrick; });
                     return;
                 }
 
@@ -4961,12 +5023,12 @@ namespace TTSK_AutoDim_Plates
                 {
                     if (gridResultLabel != null)
                     {
-                        gridResultLabel.Text = macroError;
-                        gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
+                        Ui(() => { gridResultLabel.Text = macroError; });
+                        Ui(() => { gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38); });
                     }
 
-                    lblStatus.Text = "✗  Fit có trục lỗi, view đã được restore";
-                    lblStatus.ForeColor = Color.Firebrick;
+                    Ui(() => { lblStatus.Text = "✗  Fit có trục lỗi, view đã được restore"; });
+                    Ui(() => { lblStatus.ForeColor = Color.Firebrick; });
                     return;
                 }
 
@@ -4981,18 +5043,18 @@ namespace TTSK_AutoDim_Plates
 
                     if (gridResultLabel != null)
                     {
-                        gridResultLabel.Text =
-                            result == null ? "Không có kết quả." : result.Message;
-                        gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
+                        Ui(() => { gridResultLabel.Text =
+                            result == null ? "Không có kết quả." : result.Message; });
+                        Ui(() => { gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38); });
                     }
 
-                    lblStatus.Text = "✗  Fit có trục lỗi, view đã được restore";
-                    lblStatus.ForeColor = Color.Firebrick;
+                    Ui(() => { lblStatus.Text = "✗  Fit có trục lỗi, view đã được restore"; });
+                    Ui(() => { lblStatus.ForeColor = Color.Firebrick; });
                     return;
                 }
 
                 if (lblStatus != null)
-                    lblStatus.AccessibleDescription = result == null ? "" : result.SelectedGridAxes;
+                    Ui(() => { lblStatus.AccessibleDescription = result == null ? "" : result.SelectedGridAxes; });
 
                 string verifyMacroError;
                 if (!TryRunGridVisibilityMacro("FIT_KEEP_GRID", out verifyMacroError))
@@ -5001,12 +5063,12 @@ namespace TTSK_AutoDim_Plates
 
                     if (gridResultLabel != null)
                     {
-                        gridResultLabel.Text = verifyMacroError;
-                        gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
+                        Ui(() => { gridResultLabel.Text = verifyMacroError; });
+                        Ui(() => { gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38); });
                     }
 
-                    lblStatus.Text = "✗  Fit có trục lỗi, view đã được restore";
-                    lblStatus.ForeColor = Color.Firebrick;
+                    Ui(() => { lblStatus.Text = "✗  Fit có trục lỗi, view đã được restore"; });
+                    Ui(() => { lblStatus.ForeColor = Color.Firebrick; });
                     return;
                 }
 
@@ -5015,17 +5077,18 @@ namespace TTSK_AutoDim_Plates
                 {
                     if (gridResultLabel != null)
                     {
-                        gridResultLabel.Text =
+                        Ui(() => { gridResultLabel.Text =
                             "Fit Grid đã chạy nhưng chưa bật được Neighbor: "
-                            + fitCompleteMacroError;
-                        gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
+                            + fitCompleteMacroError; });
+                        Ui(() => { gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38); });
                     }
 
-                    lblStatus.Text = "✗  Fit Grid xong nhưng chưa bật được Neighbor";
-                    lblStatus.ForeColor = Color.Firebrick;
+                    Ui(() => { lblStatus.Text = "✗  Fit Grid xong nhưng chưa bật được Neighbor"; });
+                    Ui(() => { lblStatus.ForeColor = Color.Firebrick; });
                     return;
                 }
 
+                PHU_OpenGridView.VerifyFinalFitRestrictionBoxes();
                 PHU_OpenGridView.FitGridOriginArrangeResult arrangeResult = null;
                 // Geometry and final neighbor attributes have completed. Grid/layout warnings
                 // below must not suppress the cleanup handoff in the common Fit wrapper.
@@ -5034,6 +5097,7 @@ namespace TTSK_AutoDim_Plates
                     result != null
                     && result.FailedCount == 0
                     && result.SuccessCount == result.ViewCount
+                    && result.GeometryOnlyViewCount == 0
                     && result.GridAxisNoGridViewCount == 0;
 
                 if (canArrangeTopFront && !fitArrangeColumnMode)
@@ -5043,14 +5107,14 @@ namespace TTSK_AutoDim_Plates
 
                 if (gridResultLabel != null)
                 {
-                    gridResultLabel.Text = result == null ? "Không có kết quả." : result.Message;
+                    Ui(() => { gridResultLabel.Text = result == null ? "Không có kết quả." : result.Message; });
 
                     if (arrangeResult != null && !string.IsNullOrEmpty(arrangeResult.Message))
                     {
-                        gridResultLabel.Text += "\n" + arrangeResult.Message;
+                        Ui(() => { gridResultLabel.Text += "\n" + arrangeResult.Message; });
                     }
 
-                    gridResultLabel.ForeColor =
+                    Ui(() => { gridResultLabel.ForeColor =
                         arrangeResult != null && !arrangeResult.Success
                             ? Color.FromArgb(217, 119, 6)
                         : result != null
@@ -5059,15 +5123,23 @@ namespace TTSK_AutoDim_Plates
                         && result.GridAxesFoundCount >= result.GridAxesExpectedCount
                             ? Color.FromArgb(22, 163, 74)
                         : result != null && result.FailedCount == 0 ? Color.FromArgb(217, 119, 6)
-                        : Color.FromArgb(220, 38, 38);
+                        : Color.FromArgb(220, 38, 38); });
                 }
 
                 if (result == null || result.FailedCount > 0)
                 {
                     PHU_OpenGridView.RestoreFitKeepGridRestrictionBoxes();
                     _fitReadyForCleanup = false;
-                    lblStatus.Text = "✗  Fit có trục lỗi, view đã được restore";
-                    lblStatus.ForeColor = Color.Firebrick;
+                    Ui(() => { lblStatus.Text = "✗  Fit có trục lỗi, view đã được restore"; });
+                    Ui(() => { lblStatus.ForeColor = Color.Firebrick; });
+                    return;
+                }
+
+                if (result.GeometryOnlyViewCount == result.ViewCount)
+                {
+                    if (gridResultLabel != null)
+                        Ui(() => { gridResultLabel.ForeColor = Color.FromArgb(22, 163, 74); });
+                    SetMainStatus(result.Message, MainStatusKind.Success);
                     return;
                 }
 
@@ -5080,10 +5152,10 @@ namespace TTSK_AutoDim_Plates
                             StringComparison.OrdinalIgnoreCase
                         );
 
-                    lblStatus.Text = multipleTopOrFront
+                    Ui(() => { lblStatus.Text = multipleTopOrFront
                         ? "⚠  Fit Grid hoàn tất nhưng không xác định được cặp Top/Front"
-                        : "⚠  Fit Grid hoàn tất nhưng sắp xếp Origin thất bại";
-                    lblStatus.ForeColor = Color.FromArgb(217, 119, 6);
+                        : "⚠  Fit Grid hoàn tất nhưng sắp xếp Origin thất bại"; });
+                    Ui(() => { lblStatus.ForeColor = Color.FromArgb(217, 119, 6); });
                     if (
                         fitArrangeColumnMode
                         && arrangeResult != null
@@ -5091,41 +5163,41 @@ namespace TTSK_AutoDim_Plates
                         && arrangeResult.Message.StartsWith("⚠", StringComparison.Ordinal)
                     )
                     {
-                        lblStatus.Text = arrangeResult.Message;
+                        Ui(() => { lblStatus.Text = arrangeResult.Message; });
                     }
                     return;
                 }
 
                 if (result.GridAxisNoGridViewCount == result.ViewCount)
                 {
-                    lblStatus.Text =
+                    Ui(() => { lblStatus.Text =
                         result.GridAxesExpectedCount == 1 && !string.IsNullOrEmpty(result.Message)
                             ? "⚠  " + result.Message
-                            : "⚠  Không tìm thấy grid để chạy chế độ Có trục.";
-                    lblStatus.ForeColor = Color.FromArgb(217, 119, 6);
+                            : "⚠  Không tìm thấy grid để chạy chế độ Có trục."; });
+                    Ui(() => { lblStatus.ForeColor = Color.FromArgb(217, 119, 6); });
                     return;
                 }
 
                 if (result.GridAxesFoundCount < result.GridAxesExpectedCount)
                 {
-                    lblStatus.Text =
+                    Ui(() => { lblStatus.Text =
                         "⚠  Fit có trục: chỉ tìm thấy "
                         + result.GridAxesFoundCount
                         + "/"
                         + result.GridAxesExpectedCount
-                        + " grid gần main part.";
-                    lblStatus.ForeColor = Color.FromArgb(217, 119, 6);
+                        + " grid gần main part."; });
+                    Ui(() => { lblStatus.ForeColor = Color.FromArgb(217, 119, 6); });
                     return;
                 }
 
-                lblStatus.Text =
+                Ui(() => { lblStatus.Text =
                     arrangeResult != null && arrangeResult.Applied
                         ? "✓  Fit Grid applied | Top/Front aligned by Origin"
-                        : "✓  Fit Grid applied";
-                lblStatus.ForeColor = Color.FromArgb(22, 163, 74);
+                        : "✓  Fit Grid applied"; });
+                Ui(() => { lblStatus.ForeColor = Color.FromArgb(22, 163, 74); });
                 if (fitArrangeColumnMode)
                 {
-                    lblStatus.Text = "✓  Fit Grid applied | Column view order/positions preserved";
+                    Ui(() => { lblStatus.Text = "✓  Fit Grid applied | Column view order/positions preserved"; });
                 }
             }
             catch (Exception ex)
@@ -5135,12 +5207,12 @@ namespace TTSK_AutoDim_Plates
 
                 if (gridResultLabel != null)
                 {
-                    gridResultLabel.Text = ex.Message;
-                    gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
+                    Ui(() => { gridResultLabel.Text = ex.Message; });
+                    Ui(() => { gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38); });
                 }
 
-                lblStatus.Text = "✗  Fit có trục lỗi, view đã được restore";
-                lblStatus.ForeColor = Color.Firebrick;
+                Ui(() => { lblStatus.Text = "✗  Fit có trục lỗi, view đã được restore"; });
+                Ui(() => { lblStatus.ForeColor = Color.Firebrick; });
             }
         }
 
@@ -5367,6 +5439,7 @@ namespace TTSK_AutoDim_Plates
 
         private void RunNeighborGridMarkOffsets()
         {
+            if (DispatchTeklaCommand("Neighbor Grid", RunNeighborGridMarkOffsets)) return;
             try
             {
                 string selectionError;
@@ -5374,12 +5447,12 @@ namespace TTSK_AutoDim_Plates
                 {
                     if (gridResultLabel != null)
                     {
-                        gridResultLabel.Text = selectionError;
-                        gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
+                        Ui(() => { gridResultLabel.Text = selectionError; });
+                        Ui(() => { gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38); });
                     }
 
-                    lblStatus.Text = "✗  Không chọn được view";
-                    lblStatus.ForeColor = Color.Firebrick;
+                    Ui(() => { lblStatus.Text = "✗  Không chọn được view"; });
+                    Ui(() => { lblStatus.ForeColor = Color.Firebrick; });
                     return;
                 }
 
@@ -5388,19 +5461,19 @@ namespace TTSK_AutoDim_Plates
                 {
                     if (gridResultLabel != null)
                     {
-                        gridResultLabel.Text = macroError;
-                        gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
+                        Ui(() => { gridResultLabel.Text = macroError; });
+                        Ui(() => { gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38); });
                     }
 
-                    lblStatus.Text = "✗  Không chuẩn bị được grid";
-                    lblStatus.ForeColor = Color.Firebrick;
+                    Ui(() => { lblStatus.Text = "✗  Không chuẩn bị được grid"; });
+                    Ui(() => { lblStatus.ForeColor = Color.Firebrick; });
                     return;
                 }
 
                 double xOffset =
-                    nudNeighborGridX == null ? 30.0 : Convert.ToDouble(nudNeighborGridX.Value);
+                    nudNeighborGridX == null ? 30.0 : Convert.ToDouble(ReadUi(() => nudNeighborGridX.Value));
                 double yOffset =
-                    nudNeighborGridY == null ? 0.0 : Convert.ToDouble(nudNeighborGridY.Value);
+                    nudNeighborGridY == null ? 0.0 : Convert.ToDouble(ReadUi(() => nudNeighborGridY.Value));
 
                 PHU_OpenGridView.Result result = null;
 
@@ -5442,34 +5515,34 @@ namespace TTSK_AutoDim_Plates
 
                 if (gridResultLabel != null)
                 {
-                    gridResultLabel.Text =
-                        result == null ? "Không có kết quả." : result.ToDisplayText();
-                    gridResultLabel.ForeColor =
+                    Ui(() => { gridResultLabel.Text =
+                        result == null ? "Không có kết quả." : result.ToDisplayText(); });
+                    Ui(() => { gridResultLabel.ForeColor =
                         result != null && result.FailedCount > 0
                             ? Color.FromArgb(220, 38, 38)
-                            : Color.FromArgb(22, 163, 74);
+                            : Color.FromArgb(22, 163, 74); });
                 }
 
-                lblStatus.Text =
+                Ui(() => { lblStatus.Text =
                     result != null && result.FailedCount > 0
                         ? "✗  Neighbor grid lỗi"
-                        : "✓  Neighbor grid created";
+                        : "✓  Neighbor grid created"; });
 
-                lblStatus.ForeColor =
+                Ui(() => { lblStatus.ForeColor =
                     result != null && result.FailedCount > 0
                         ? Color.Firebrick
-                        : Color.FromArgb(22, 163, 74);
+                        : Color.FromArgb(22, 163, 74); });
             }
             catch (Exception ex)
             {
                 if (gridResultLabel != null)
                 {
-                    gridResultLabel.Text = ex.Message;
-                    gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
+                    Ui(() => { gridResultLabel.Text = ex.Message; });
+                    Ui(() => { gridResultLabel.ForeColor = Color.FromArgb(220, 38, 38); });
                 }
 
-                lblStatus.Text = "✗  Neighbor grid lỗi";
-                lblStatus.ForeColor = Color.Firebrick;
+                Ui(() => { lblStatus.Text = "✗  Neighbor grid lỗi"; });
+                Ui(() => { lblStatus.ForeColor = Color.Firebrick; });
             }
         }
 
@@ -5517,9 +5590,10 @@ namespace TTSK_AutoDim_Plates
 
         private void RunArrangeView()
         {
+            if (DispatchTeklaCommand("Arrange View", RunArrangeView)) return;
             try
             {
-                double gap = Convert.ToDouble(nudArrangeGap.Value);
+                double gap = Convert.ToDouble(ReadUi(() => nudArrangeGap.Value));
 
                 PHU_ArrangeView.Result result = RunArrangeViewWithVerticalOrder(
                     arrangeSectionHorizontal,
@@ -5529,34 +5603,34 @@ namespace TTSK_AutoDim_Plates
 
                 if (arrangeResultLabel != null)
                 {
-                    arrangeResultLabel.Text =
-                        result == null ? "Không có kết quả." : result.ToDisplayText();
-                    arrangeResultLabel.ForeColor =
+                    Ui(() => { arrangeResultLabel.Text =
+                        result == null ? "Không có kết quả." : result.ToDisplayText(); });
+                    Ui(() => { arrangeResultLabel.ForeColor =
                         result != null && result.Success
                             ? Color.FromArgb(22, 163, 74)
-                            : Color.FromArgb(220, 38, 38);
+                            : Color.FromArgb(220, 38, 38); });
                 }
 
-                lblStatus.Text =
+                Ui(() => { lblStatus.Text =
                     result != null && result.Success
                         ? (result.GapAdjusted ? "✓  " + result.GapNotice : "✓  Arrange view applied")
-                        : "✗  Arrange view lỗi";
+                        : "✗  Arrange view lỗi"; });
 
-                lblStatus.ForeColor =
+                Ui(() => { lblStatus.ForeColor =
                     result != null && result.Success
                         ? Color.FromArgb(22, 163, 74)
-                        : Color.Firebrick;
+                        : Color.Firebrick; });
             }
             catch (Exception ex)
             {
                 if (arrangeResultLabel != null)
                 {
-                    arrangeResultLabel.Text = ex.Message;
-                    arrangeResultLabel.ForeColor = Color.FromArgb(220, 38, 38);
+                    Ui(() => { arrangeResultLabel.Text = ex.Message; });
+                    Ui(() => { arrangeResultLabel.ForeColor = Color.FromArgb(220, 38, 38); });
                 }
 
-                lblStatus.Text = "✗  Arrange view lỗi";
-                lblStatus.ForeColor = Color.Firebrick;
+                Ui(() => { lblStatus.Text = "✗  Arrange view lỗi"; });
+                Ui(() => { lblStatus.ForeColor = Color.Firebrick; });
             }
         }
 
@@ -5832,6 +5906,7 @@ namespace TTSK_AutoDim_Plates
 
         private void UpdateModeUi()
         {
+            if (InvokeRequired) { Ui(() => UpdateModeUi()); return; }
             if (btnLoad != null)
                 btnLoad.Enabled = !_isBatchRunning && rbBatch != null && rbBatch.Checked;
 
@@ -5854,6 +5929,7 @@ namespace TTSK_AutoDim_Plates
 
         private void SetManualScaleInputEnabled(bool enabled)
         {
+            if (InvokeRequired) { Ui(() => SetManualScaleInputEnabled(enabled)); return; }
             if (manualScaleInputHost != null)
                 manualScaleInputHost.Enabled = enabled;
 
@@ -6514,59 +6590,46 @@ namespace TTSK_AutoDim_Plates
 
         private bool _snapshotExportRunning;
 
-        private async void RunSnapshotExport()
+        private void RunSnapshotExport()
         {
-            if (_snapshotExportRunning || _isBatchRunning || _fitAndCleanupRunning) return;
+            if (DispatchTeklaCommand("Snapshot", RunSnapshotExport)) return;
             _snapshotExportRunning = true;
-            var disabled = new System.Collections.Generic.Dictionary<Control,bool>();
             try
             {
                 var handler = new DrawingHandler();
                 var selected = handler.GetDrawingSelector().GetSelected();
                 var drawings = new List<Drawing>();
-                while(selected.MoveNext())drawings.Add(selected.Current);
-                if(drawings.Count==0)throw new InvalidOperationException("Hãy chọn bản vẽ trong Document manager.");
-                if(drawings.Count>1)
+                while (selected.MoveNext()) drawings.Add(selected.Current);
+                if (drawings.Count == 0) throw new InvalidOperationException("Hãy chọn bản vẽ trong Document manager.");
+                if (drawings.Count > 1)
                 {
-                    rbBatch.Checked=true;
-                    rbActive.Checked=false;
-                    UpdateModeUi();
-                    btnLoad_Click(btnLoad,EventArgs.Empty);
-                    if(_selectedDrawings.Count==0 || dgvDrawings.Rows.Count<_selectedDrawings.Count)
-                        throw new InvalidOperationException("Load Selected chưa hoàn tất; chưa xuất snapshot.");
-                    drawings=new List<Drawing>(_selectedDrawings);
+                    Ui(() => { rbBatch.Checked = true; rbActive.Checked = false; UpdateModeUi(); });
+                    LoadSelectedDrawingsCore();
+                    if (_selectedDrawings.Count == 0) throw new InvalidOperationException("Load Selected chưa hoàn tất.");
+                    drawings = new List<Drawing>(_selectedDrawings);
                 }
-                var sources=Tekla.Technology.Akit.UserScript.PHU_CopyDrawingSnapshot_Temp.FindSources(drawings);
-                // Snapshot API reads finish on the UI thread; only file/worker processing runs in background.
-                foreach(Control control in Controls)
-                {
-                    disabled[control]=control.Enabled;
-                    control.Enabled=false;
-                }
-                SetMainStatus("Snapshot: đang xuất "+sources.Count+" bản vẽ vào một thư mục...",MainStatusKind.Information);
-                string folder=await System.Threading.Tasks.Task.Run(() =>
-                    Tekla.Technology.Akit.UserScript.PHU_CopyDrawingSnapshot_Temp.ExportSources(sources));
-                SetMainStatus("Snapshot: đã xuất "+sources.Count+" ảnh PNG → "+folder,MainStatusKind.Success);
-                SetAutoDimResult("Snapshot: "+sources.Count+" PNG → "+folder);
+                var sources = Tekla.Technology.Akit.UserScript.PHU_CopyDrawingSnapshot_Temp.FindSources(drawings);
+                SetMainStatus("Snapshot: đang xuất " + sources.Count + " bản vẽ...", MainStatusKind.Information);
+                string folder = Tekla.Technology.Akit.UserScript.PHU_CopyDrawingSnapshot_Temp.ExportSources(sources);
+                SetMainStatus("Snapshot: đã xuất " + sources.Count + " ảnh PNG → " + folder, MainStatusKind.Success);
+                SetAutoDimResult("Snapshot: " + sources.Count + " PNG → " + folder);
             }
-            catch(Exception ex)
-            {
-                SetMainStatus("Snapshot: "+ex.GetBaseException().Message,MainStatusKind.Error);
-            }
-            finally
-            {
-                foreach(var entry in disabled)if(!entry.Key.IsDisposed)entry.Key.Enabled=entry.Value;
-                _snapshotExportRunning=false;
-            }
+            catch (Exception ex) { SetMainStatus("Snapshot: " + ex.GetBaseException().Message, MainStatusKind.Error); }
+            finally { _snapshotExportRunning = false; }
         }
 
         private void btnLoad_Click(object sender, EventArgs e)
+        {
+            DispatchTeklaCommand("Load Selected", LoadSelectedDrawingsCore);
+        }
+
+        private void LoadSelectedDrawingsCore()
         {
             ResetDimensionCheckBatch();
             _resumeIndex = 0;
             _stopRequested = false;
             _selectedDrawings.Clear();
-            dgvDrawings.Rows.Clear();
+            Ui(() => dgvDrawings.Rows.Clear());
 
             try
             {
@@ -6599,31 +6662,31 @@ namespace TTSK_AutoDim_Plates
                 }
 
                 CaptureDimensionCheckBatchSource();
-                dgvDrawings.ClearSelection();
+                Ui(() => dgvDrawings.ClearSelection());
 
-                lblCount.Text = "Tổng số bản vẽ:  " + count;
+                Ui(() => { lblCount.Text = "Tổng số bản vẽ:  " + count; });
                 if (count == 0)
                 {
-                    lblStatus.Text = _dataCenterModeEnabled
+                    Ui(() => { lblStatus.Text = _dataCenterModeEnabled
                         ? "⚠  Data Center | Chưa có drawing nào được Load Selected"
-                        : "⚠  Loaded    |    0 bản vẽ";
-                    lblStatus.ForeColor = Color.DarkOrange;
+                        : "⚠  Loaded    |    0 bản vẽ"; });
+                    Ui(() => { lblStatus.ForeColor = Color.DarkOrange; });
                 }
                 else
                 {
-                    lblStatus.Text = _dataCenterModeEnabled
+                    Ui(() => { lblStatus.Text = _dataCenterModeEnabled
                         ? "✓  Data Center | Loaded Selected: "
                             + count
                             + " bản vẽ | Chờ CREATE DRAWING"
-                        : "✓  Loaded    |    " + count + " bản vẽ";
-                    lblStatus.ForeColor = Color.FromArgb(22, 163, 74);
+                        : "✓  Loaded    |    " + count + " bản vẽ"; });
+                    Ui(() => { lblStatus.ForeColor = Color.FromArgb(22, 163, 74); });
                 }
             }
             catch (Exception ex)
             {
                 _selectedDrawings.Clear();
-                dgvDrawings.Rows.Clear();
-                lblCount.Text = "Tổng số bản vẽ:  0";
+                Ui(() => dgvDrawings.Rows.Clear());
+                Ui(() => { lblCount.Text = "Tổng số bản vẽ:  0"; });
                 SetMainStatus("Load Selected Drawings lỗi: " + ex.Message, MainStatusKind.Error);
             }
         }
@@ -6792,6 +6855,7 @@ namespace TTSK_AutoDim_Plates
 
         private void RunExternalPdfMergeCommand()
         {
+            if (operationRunning) return;
             try
             {
                 HidePrintMenu();
@@ -6944,9 +7008,11 @@ namespace TTSK_AutoDim_Plates
 
         private async void RunPdfCommand(bool mergeAndDeleteChildren)
         {
+            if (operationRunning) return;
             if (_pdfCommandRunning || _isBatchRunning || _snapshotExportRunning || _fitAndCleanupRunning) return;
             _pdfCommandRunning = true;
-            var busyControls = new Dictionary<Control, bool>();
+            var responsiveInput = new OperationInputFilter(this);
+            Application.AddMessageFilter(responsiveInput);
             string commandName = mergeAndDeleteChildren ? "Merge" : "Print";
 
             try
@@ -6987,8 +7053,7 @@ namespace TTSK_AutoDim_Plates
                     MainStatusKind.Information
                 );
 
-                btnLoad_Click(btnLoad, EventArgs.Empty);
-                Application.DoEvents();
+                await teklaOperations.RunAsync(LoadSelectedDrawingsCore);
 
                 if (_selectedDrawings.Count == 0)
                 {
@@ -7073,11 +7138,6 @@ namespace TTSK_AutoDim_Plates
                 lblCount.Text = "PDF: 0/" + printJobs.Count + " (0%)";
                 lblCount.Refresh();
                 Action<DrawingPdfProgress> onProgress = progress => UpdatePdfProgress(progress, printRowIndices);
-                foreach (Control control in Controls)
-                {
-                    busyControls[control] = control.Enabled;
-                    control.Enabled = false;
-                }
                 DrawingPdfPrintResult result = await DrawingPdfPrinter.PrintPdfsAsync(
                     printJobs, this, mergeAndDeleteChildren, onProgress);
                 lblCount.Text = "PDF OK: " + result.SuccessfulDrawingCount + "/" + printJobs.Count;
@@ -7269,8 +7329,7 @@ namespace TTSK_AutoDim_Plates
             }
             finally
             {
-                foreach (var entry in busyControls)
-                    if (!entry.Key.IsDisposed) entry.Key.Enabled = entry.Value;
+                Application.RemoveMessageFilter(responsiveInput);
                 _pdfCommandRunning = false;
                 if (btnPrint != null)
                     btnPrint.Enabled = true;
@@ -7287,6 +7346,7 @@ namespace TTSK_AutoDim_Plates
 
         private void AddDrawingGridRow(int index, string mark, string rev, string changes)
         {
+            if (InvokeRequired) { Ui(() => AddDrawingGridRow(index, mark, rev, changes)); return; }
             bool isRev = !string.IsNullOrWhiteSpace(rev);
 
             string status = isRev ? "REV" : "READY";
@@ -7357,6 +7417,7 @@ namespace TTSK_AutoDim_Plates
 
         private void SetGridResult(int rowIndex, string text, Color color)
         {
+            if (InvokeRequired) { Ui(() => SetGridResult(rowIndex, text, color)); return; }
             if (dgvDrawings == null)
                 return;
 
@@ -7380,7 +7441,7 @@ namespace TTSK_AutoDim_Plates
             }
             catch { }
 
-            Application.DoEvents();
+
         }
 
         private void SetGridStatusAndResult(
@@ -7392,6 +7453,7 @@ namespace TTSK_AutoDim_Plates
             bool processPendingEvents = true
         )
         {
+            if (InvokeRequired) { Ui(() => SetGridStatusAndResult(rowIndex, statusText, statusColor, resultText, resultColor, false)); return; }
             if (dgvDrawings == null)
                 return;
 
@@ -7423,11 +7485,12 @@ namespace TTSK_AutoDim_Plates
             }
             catch { }
 
-            if (processPendingEvents) Application.DoEvents();
+
         }
 
         private void dgvDrawings_CellDoubleClick(object sender, DataGridViewCellEventArgs e)
         {
+            if (operationRunning) return;
             if (e.RowIndex < 0)
                 return;
 
@@ -7502,28 +7565,29 @@ namespace TTSK_AutoDim_Plates
 
         private void RunScaleCheck()
         {
+            if (DispatchTeklaCommand("Check Scale", RunScaleCheck)) return;
             _resumeIndex = 0;
             _stopRequested = false;
 
             if (_selectedDrawings.Count == 0)
             {
-                lblStatus.Text = "✗  Chưa có bản vẽ để Check Scale";
-                lblStatus.ForeColor = Color.Firebrick;
+                Ui(() => { lblStatus.Text = "✗  Chưa có bản vẽ để Check Scale"; });
+                Ui(() => { lblStatus.ForeColor = Color.Firebrick; });
                 return;
             }
 
-            btnRun.Enabled = false;
-            btnLoad.Enabled = false;
-            btnCheckScale.Enabled = false;
+            Ui(() => { btnRun.Enabled = false; });
+            Ui(() => { btnLoad.Enabled = false; });
+            Ui(() => { btnCheckScale.Enabled = false; });
 
             List<Drawing> sourceDrawings = new List<Drawing>(_selectedDrawings);
             List<ScaleCheckResult> errors = new List<ScaleCheckResult>();
 
             try
             {
-                lblStatus.Text = "▶  Checking scale...";
-                lblStatus.ForeColor = Blue;
-                Application.DoEvents();
+                Ui(() => { lblStatus.Text = "▶  Checking scale..."; });
+                Ui(() => { lblStatus.ForeColor = Blue; });
+
 
                 DrawingHandler dh = new DrawingHandler();
 
@@ -7534,9 +7598,9 @@ namespace TTSK_AutoDim_Plates
                     string rev = SafeDrawingRevision(dr);
                     string changes = SafeDrawingChanges(dr);
 
-                    lblStatus.Text =
-                        "▶  Checking scale " + (i + 1) + "/" + sourceDrawings.Count + " : " + mark;
-                    lblStatus.ForeColor = Blue;
+                    Ui(() => { lblStatus.Text =
+                        "▶  Checking scale " + (i + 1) + "/" + sourceDrawings.Count + " : " + mark; });
+                    Ui(() => { lblStatus.ForeColor = Blue; });
 
                     SetGridStatusAndResult(
                         i,
@@ -7575,14 +7639,14 @@ namespace TTSK_AutoDim_Plates
 
                 if (errors.Count == 0)
                 {
-                    lblStatus.Text = "✓  Scale OK: không có bản vẽ sai tỉ lệ";
-                    lblStatus.ForeColor = Color.FromArgb(22, 163, 74);
-                    dgvDrawings.ClearSelection();
+                    Ui(() => { lblStatus.Text = "✓  Scale OK: không có bản vẽ sai tỉ lệ"; });
+                    Ui(() => { lblStatus.ForeColor = Color.FromArgb(22, 163, 74); });
+                    Ui(() => dgvDrawings.ClearSelection());
                     return;
                 }
 
                 _selectedDrawings.Clear();
-                dgvDrawings.Rows.Clear();
+                Ui(() => dgvDrawings.Rows.Clear());
 
                 for (int i = 0; i < errors.Count; i++)
                 {
@@ -7591,12 +7655,12 @@ namespace TTSK_AutoDim_Plates
                     AddScaleErrorGridRow(i + 1, error);
                 }
 
-                dgvDrawings.ClearSelection();
+                Ui(() => dgvDrawings.ClearSelection());
 
-                lblCount.Text = "Sai tỉ lệ:  " + errors.Count + "/" + sourceDrawings.Count;
-                lblStatus.Text =
-                    "✗  Scale Error: " + errors.Count + "/" + sourceDrawings.Count + " bản vẽ";
-                lblStatus.ForeColor = Color.FromArgb(220, 38, 38);
+                Ui(() => { lblCount.Text = "Sai tỉ lệ:  " + errors.Count + "/" + sourceDrawings.Count; });
+                Ui(() => { lblStatus.Text =
+                    "✗  Scale Error: " + errors.Count + "/" + sourceDrawings.Count + " bản vẽ"; });
+                Ui(() => { lblStatus.ForeColor = Color.FromArgb(220, 38, 38); });
             }
             catch (Exception ex)
             {
@@ -7604,14 +7668,15 @@ namespace TTSK_AutoDim_Plates
             }
             finally
             {
-                btnRun.Enabled = true;
-                btnCheckScale.Enabled = true;
+                Ui(() => { btnRun.Enabled = true; });
+                Ui(() => { btnCheckScale.Enabled = true; });
                 UpdateModeUi();
             }
         }
 
         private void AddScaleErrorGridRow(int index, ScaleCheckResult error)
         {
+            if (InvokeRequired) { Ui(() => AddScaleErrorGridRow(index, error)); return; }
             string resultText = BuildScaleErrorResultText(error);
 
             int rowIndex = dgvDrawings.Rows.Add(
@@ -8542,21 +8607,31 @@ namespace TTSK_AutoDim_Plates
 
         private void btnRun_Click(object sender, EventArgs e)
         {
+            if (!teklaOperations.IsWorkerThread && _isBatchRunning)
+            {
+                _stopRequested = true;
+                Ui(() => { btnRun.Text = "■  STOPPING..."; });
+                Ui(() => { btnRun.Enabled = false; });
+                SetMainStatus("Sẽ dừng sau khi hoàn tất bản vẽ hiện tại.", MainStatusKind.Information);
+                return;
+            }
+            if (DispatchTeklaCommand("Create Drawing", () => btnRun_Click(sender, e))) return;
+            if (_slot07Running) return;
             if (_isBatchRunning)
             {
                 _stopRequested = true;
-                btnRun.Text = "■  STOPPING...";
-                btnRun.Enabled = false;
-                lblStatus.Text = "■  Stop requested. Sẽ dừng sau khi xong bản vẽ hiện tại...";
-                lblStatus.ForeColor = Color.DarkOrange;
-                Application.DoEvents();
+                Ui(() => { btnRun.Text = "■  STOPPING..."; });
+                Ui(() => { btnRun.Enabled = false; });
+                Ui(() => { lblStatus.Text = "■  Stop requested. Sẽ dừng sau khi xong bản vẽ hiện tại..."; });
+                Ui(() => { lblStatus.ForeColor = Color.DarkOrange; });
+
                 return;
             }
 
             double? manualScale;
             bool resumeBatchWithSnapshot =
                 rbBatch != null
-                && rbBatch.Checked
+                && ReadUi(() => rbBatch.Checked)
                 && _resumeIndex > 0
                 && _batchManualScaleSnapshotCaptured;
 
@@ -8568,33 +8643,33 @@ namespace TTSK_AutoDim_Plates
             else if (
                 !ManualDrawingScaleOverride.TryParseInput(
                     txtManualScaleDenominator != null
-                        ? txtManualScaleDenominator.Text
+                        ? ReadUi(() => txtManualScaleDenominator.Text)
                         : string.Empty,
                     out manualScale
                 )
             )
             {
-                MessageBox.Show(
+                Ui(() => MessageBox.Show(
                     this,
                     "Nhập 5, 10, 15, 20, 30 để cố định tỷ lệ; nhập số âm tương ứng để loại khỏi Auto Scale.",
                     "TTSK AutoDim",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning
-                );
+                ));
 
                 if (txtManualScaleDenominator != null)
                 {
-                    txtManualScaleDenominator.Focus();
-                    txtManualScaleDenominator.SelectAll();
+                    Ui(() => txtManualScaleDenominator.Focus());
+                    Ui(() => txtManualScaleDenominator.SelectAll());
                 }
 
                 return;
             }
 
-            if (rbActive.Checked)
+            if (ReadUi(() => rbActive.Checked))
             {
-                btnRun.Enabled = false;
-                btnLoad.Enabled = false;
+                Ui(() => { btnRun.Enabled = false; });
+                Ui(() => { btnLoad.Enabled = false; });
                 if (txtManualScaleDenominator != null)
                     SetManualScaleInputEnabled(false);
 
@@ -8604,8 +8679,8 @@ namespace TTSK_AutoDim_Plates
                 }
                 finally
                 {
-                    btnRun.Enabled = true;
-                    btnRun.Text = "▶  CREATE DRAWING";
+                    Ui(() => { btnRun.Enabled = true; });
+                    Ui(() => { btnRun.Text = "▶  CREATE DRAWING"; });
                     UpdateModeUi();
                 }
 
@@ -8775,6 +8850,11 @@ namespace TTSK_AutoDim_Plates
 
         private AutoDimExecutionResult RunCurrentAutoDimScript()
         {
+            return RunCurrentAutoDimScript(false);
+        }
+
+        private AutoDimExecutionResult RunCurrentAutoDimScript(bool slot07LegacyColumn)
+        {
             AutoDimExecutionResult execution = new AutoDimExecutionResult();
             Tekla.Technology.Akit.UserScript.PHU_BeamGridDimensionEngine.Reset();
             Tekla.Technology.Akit.UserScript.PHU_ColumnGridDimensionEngine.Reset();
@@ -8832,7 +8912,16 @@ namespace TTSK_AutoDim_Plates
                     );
             }
 
-            bool runAutoSection = ShouldRunAutoSection(partType);
+            if (slot07LegacyColumn && !verticalShapeLayoutCaptured)
+            {
+                execution.CanSaveDrawing = false;
+                execution.SectionMessage = "Slot 07 cột cần đúng hai hình chiếu đứng có MainPart và thứ tự trái/phải rõ ràng. "
+                    + Tekla.Technology.Akit.UserScript.PHU_VerticalShapeViewLayoutContext.LastMessage;
+                return execution;
+            }
+
+            // Slot 07 operates on the prepared column views and existing sections.
+            bool runAutoSection = !slot07LegacyColumn && ShouldRunAutoSection(partType);
             bool autoSectionWorkerRequired = runAutoSection;
             bool autoSectionDimPassRequired = false;
             bool autoSectionSingleLayout = false;
@@ -8953,9 +9042,12 @@ namespace TTSK_AutoDim_Plates
 
             // Geometry Standard is independent from Auto Section and must
             // finish before geometry analysis or any Section-specific work.
-            string loadStandardMessage;
-            if (!TryRunLoadStandardBeforeAutoDim(out loadStandardMessage))
-                throw new Exception(loadStandardMessage);
+            if (!slot07LegacyColumn)
+            {
+                string loadStandardMessage;
+                if (!TryRunLoadStandardBeforeAutoDim(out loadStandardMessage))
+                    throw new Exception(loadStandardMessage);
+            }
 
             // MainPart identity is preserved by model ID; drawing selection is not restored.
 
@@ -9012,9 +9104,9 @@ namespace TTSK_AutoDim_Plates
                     return execution;
             }
 
-            bool gridModeEnabled = IsGridDimensionModeEnabledForAutoDim();
-            bool beamModeEnabled = IsBeamModeForAutoDimGrid();
-            int requestedGridAxisCount = GetGridDimensionAxisCountForAutoDim();
+            bool gridModeEnabled = slot07LegacyColumn || IsGridDimensionModeEnabledForAutoDim();
+            bool beamModeEnabled = !slot07LegacyColumn && IsBeamModeForAutoDimGrid();
+            int requestedGridAxisCount = slot07LegacyColumn ? 3 : GetGridDimensionAxisCountForAutoDim();
             bool shapeSupportsBeamGridDimensions =
                 partType == AutoDimPartType.ShapeIH
                 || partType == AutoDimPartType.ShapeC
@@ -9074,10 +9166,10 @@ namespace TTSK_AutoDim_Plates
                 runColumnGridDimensions
             );
             bool runDataCenterBeamType2Dimensions =
-                Tekla.Technology.Akit.UserScript
+                !slot07LegacyColumn && Tekla.Technology.Akit.UserScript
                     .PHU_Slot07_DataCenterBeamType2Context.IsActive;
             bool runDataCenterBeamType1SectionDimensions =
-                Tekla.Technology.Akit.UserScript
+                !slot07LegacyColumn && Tekla.Technology.Akit.UserScript
                     .PHU_Slot07_DataCenterContext.IsActive
                 && !runDataCenterBeamType2Dimensions
                 && partType == AutoDimPartType.ShapeIH;
@@ -9107,11 +9199,24 @@ namespace TTSK_AutoDim_Plates
             {
                 if (runColumnGridDimensions)
                 {
-                    Tekla.Technology.Akit.UserScript.PHU_ColumnGridDimensionEngine.Begin(
+                    bool columnReady = Tekla.Technology.Akit.UserScript.PHU_ColumnGridDimensionEngine.Begin(
                         shapeModel,
                         shapeDrawing,
                         resolvedMainPart
                     );
+                    if (slot07LegacyColumn)
+                    {
+                        string geometry = Tekla.Technology.Akit.UserScript.PHU_ColumnGridDimensionEngine.LastRunMessage;
+                        bool geometryReady = columnReady && Tekla.Technology.Akit.UserScript
+                            .PHU_ColumnGridDimensionEngine.PreflightPreparedGeometry(out geometry);
+                        if (!geometryReady)
+                        {
+                            execution.CanSaveDrawing = false;
+                            execution.GridDimensionRequested = true;
+                            execution.GridDimensionMessage = geometry;
+                            return execution;
+                        }
+                    }
                     Tekla.Technology.Akit.UserScript.PHU_InzaiColumnNeighborDimensionEngine.Begin(
                         shapeModel,
                         shapeDrawing,
@@ -9370,6 +9475,15 @@ namespace TTSK_AutoDim_Plates
                             .UserScript
                             .PHU_ColumnGridDimensionEngine
                             .LastRunSucceeded && layoutSucceeded;
+                    if (slot07LegacyColumn)
+                    {
+                        execution.GridDimensionApplied = execution.GridDimensionApplied
+                            && Tekla.Technology.Akit.UserScript.PHU_InzaiColumnNeighborDimensionEngine.LastRunSucceeded
+                            && Tekla.Technology.Akit.UserScript.PHU_InzaiColumnSpliceDimensionEngine.LastRunSucceeded
+                            && Tekla.Technology.Akit.UserScript.PHU_InzaiColumnSectionDimensionEngine.LastRunSucceeded
+                            && Tekla.Technology.Akit.UserScript.PHU_InzaiColumnSectionDimensionEngine.LastConflictCount == 0;
+                        execution.CanSaveDrawing &= execution.GridDimensionApplied;
+                    }
                     execution.GridDimensionMessage =
                         Tekla
                             .Technology
@@ -9540,12 +9654,17 @@ namespace TTSK_AutoDim_Plates
         )
         {
             DataCenterExecutionResult result = new DataCenterExecutionResult();
+            IDisposable selectedInjaiScope = null;
             IDisposable beamType2Scope = null;
             bool beamType2Active = false;
             bool preservePreparedDataCenterLayout = activeQuickDimensionOnly;
 
             try
             {
+                // Covers topology preflight and every Inzai consumer in this
+                // explicitly selected Slot 07 operation, including Batch.
+                selectedInjaiScope = Tekla.Technology.Akit.UserScript
+                    .PHU_ColumnProjectRouter.BeginInjaiSelection();
                 DrawingHandler drawingHandler = new DrawingHandler();
                 if (!drawingHandler.GetConnectionStatus())
                     return FailDataCenter(
@@ -9564,6 +9683,48 @@ namespace TTSK_AutoDim_Plates
                         "Không có active drawing."
                     );
 
+                // Decide once from authoritative MainPart orientation + profile,
+                // before creating any Beam Type1/Type2 execution context.
+                AutoDimPartType actualPartType = DetectActiveDrawingAutoDimPartType();
+                bool legacyColumnFamily = actualPartType == AutoDimPartType.ShapeIH
+                    || actualPartType == AutoDimPartType.ShapeC || actualPartType == AutoDimPartType.ShapeL;
+                bool verticalMain = Tekla.Technology.Akit.UserScript.PHU_Slot07_ColumnConnections
+                    .IsCurrentDrawingVertical(drawing);
+                var slot07Route = Tekla.Technology.Akit.UserScript.PHU_Slot07_DrawingRoute.Resolve(
+                    verticalMain, legacyColumnFamily,
+                    verticalMain && !legacyColumnFamily && Tekla.Technology.Akit.UserScript.PHU_Slot07_ColumnConnections.IsCurrentDrawingColumn(drawing));
+                if (slot07Route == Tekla.Technology.Akit.UserScript.Slot07DrawingRoute.LegacyColumn)
+                    return RunDataCenterLegacyColumn();
+                if (slot07Route == Tekla.Technology.Akit.UserScript.Slot07DrawingRoute.UnsupportedColumn)
+                    return FailDataCenter(result,"DC SKIP","COLUMN PREFLIGHT","MainPart là cột đứng nhưng chưa có bộ giải cho tiết diện này.");
+                if (slot07Route == Tekla.Technology.Akit.UserScript.Slot07DrawingRoute.HollowColumn)
+                {
+                    result.Message = Tekla.Technology.Akit.UserScript
+                        .PHU_Slot07_ColumnConnections.Execute();
+                    // Restore the existing section stage for this column route.
+                    // Configure/reset on every exit so a later beam run cannot inherit it.
+                    try
+                    {
+                        Tekla.Technology.Akit.UserScript.PHU_InzaiColumnSectionDimensionEngine.Configure(true);
+                        Tekla.Technology.Akit.UserScript.PHU_InzaiColumnSectionDimensionEngine.ExecuteAfterColumnFlow();
+                        string sectionMessage = Tekla.Technology.Akit.UserScript.PHU_InzaiColumnSectionDimensionEngine.LastRunMessage;
+                        if (!Tekla.Technology.Akit.UserScript.PHU_InzaiColumnSectionDimensionEngine.LastRunSucceeded
+                            || Tekla.Technology.Akit.UserScript.PHU_InzaiColumnSectionDimensionEngine.LastConflictCount > 0)
+                            return FailDataCenter(result, "DC SECTION ERR", "SECTION",
+                                result.Message + " Phần mặt cắt chưa hoàn tất: " + sectionMessage);
+                        result.Message += " " + sectionMessage;
+                    }
+                    finally
+                    {
+                        Tekla.Technology.Akit.UserScript.PHU_InzaiColumnSectionDimensionEngine.Reset();
+                    }
+                    result.Success = true;
+                    result.DimApplied = true;
+                    result.ResultCode = "DC OK";
+                    result.FailedStage = string.Empty;
+                    return result;
+                }
+
                 string beamType2Message;
                 beamType2Scope = Tekla.Technology.Akit.UserScript
                     .PHU_Slot07_DataCenterBeamType2Context
@@ -9576,8 +9737,6 @@ namespace TTSK_AutoDim_Plates
                             .PHU_Slot07_DataCenterBeamType2Context
                             .PreservePreparedDrawingLayout
                     );
-
-                AutoDimPartType actualPartType = DetectActiveDrawingAutoDimPartType();
 
                 if (!IsDataCenterSupportedPartType(actualPartType))
                 {
@@ -9768,8 +9927,53 @@ namespace TTSK_AutoDim_Plates
             }
             finally
             {
-                if (beamType2Scope != null)
-                    beamType2Scope.Dispose();
+                try
+                {
+                    if (beamType2Scope != null)
+                        beamType2Scope.Dispose();
+                }
+                finally
+                {
+                    if (selectedInjaiScope != null)
+                        selectedInjaiScope.Dispose();
+                }
+            }
+        }
+
+        private DataCenterExecutionResult RunDataCenterLegacyColumn()
+        {
+            var result = new DataCenterExecutionResult();
+            try
+            {
+                // Reuse the original Shape -> Neighbor -> Splice -> Grid ->
+                // Section -> alignment pipeline. Beam REF connectors and Slot04
+                // are not success conditions for a column.
+                var execution = RunCurrentAutoDimScript(true);
+                result.DimResult = execution;
+                if (execution == null || !execution.GridDimensionRequested
+                    || !execution.GridDimensionApplied || IsBatchAutoDimFailure(execution))
+                    return FailDataCenter(result,"DC COLUMN ERR","COLUMN DIM",
+                        execution == null ? "Luồng cột không trả kết quả."
+                        : execution.GridDimensionMessage + " " + execution.SectionMessage);
+                result.Success = true;
+                result.DimApplied = true;
+                result.ArrangeApplied = true;
+                result.GridAxisCount = 3;
+                result.ResultCode = "DC OK";
+                result.Message = "COLUMN: " + execution.GridDimensionMessage;
+                return result;
+            }
+            finally
+            {
+                // Also covers failures before the old runner's writing try/finally.
+                Tekla.Technology.Akit.UserScript.PHU_BeamGridDimensionEngine.Reset();
+                Tekla.Technology.Akit.UserScript.PHU_ColumnGridDimensionEngine.Reset();
+                Tekla.Technology.Akit.UserScript.PHU_InzaiColumnNeighborDimensionEngine.Reset();
+                Tekla.Technology.Akit.UserScript.PHU_InzaiColumnSpliceDimensionEngine.Reset();
+                Tekla.Technology.Akit.UserScript.PHU_InzaiColumnSectionDimensionEngine.Reset();
+                Tekla.Technology.Akit.UserScript.PHU_Slot07_DataCenterBeamType2DimensionEngine.Reset();
+                Tekla.Technology.Akit.UserScript.PHU_ColumnDimensionTierContext.Reset();
+                Tekla.Technology.Akit.UserScript.PHU_VerticalShapeViewLayoutContext.Reset();
             }
         }
 
@@ -9873,8 +10077,6 @@ namespace TTSK_AutoDim_Plates
                     || fit.ViewCount <= 0
                     || fit.FailedCount > 0
                     || fit.SuccessCount != fit.ViewCount
-                    || fit.GridAxisNoGridViewCount == fit.ViewCount
-                    || fit.GridAxesFoundCount <= 0
                 )
                 {
                     PHU_OpenGridView.RestoreFitKeepGridRestrictionBoxes();
@@ -9898,6 +10100,13 @@ namespace TTSK_AutoDim_Plates
                     return stage;
                 }
 
+                PHU_OpenGridView.VerifyFinalFitRestrictionBoxes();
+                if (fit.GridAxisNoGridViewCount > 0)
+                {
+                    stage.Success = true;
+                    stage.Message = fit.Message + "\nView không có trục đã Fit theo main/plate/neighbor; giữ vị trí view.";
+                    return stage;
+                }
                 PHU_OpenGridView.FitGridOriginArrangeResult arrange =
                     PHU_OpenGridView.ArrangeTopFrontByOriginAfterGridFit();
                 if (arrange == null || !arrange.Success || !arrange.Applied)
@@ -9952,9 +10161,9 @@ namespace TTSK_AutoDim_Plates
                 }
 
                 double xOffset =
-                    nudNeighborGridX == null ? 30.0 : Convert.ToDouble(nudNeighborGridX.Value);
+                    nudNeighborGridX == null ? 30.0 : Convert.ToDouble(ReadUi(() => nudNeighborGridX.Value));
                 double yOffset =
-                    nudNeighborGridY == null ? 0.0 : Convert.ToDouble(nudNeighborGridY.Value);
+                    nudNeighborGridY == null ? 0.0 : Convert.ToDouble(ReadUi(() => nudNeighborGridY.Value));
 
                 string verificationMessage;
                 if (
@@ -10166,6 +10375,7 @@ namespace TTSK_AutoDim_Plates
 
         private void ApplyActiveAutoDimExecutionStatus(AutoDimExecutionResult execution)
         {
+            if (InvokeRequired) { Ui(() => ApplyActiveAutoDimExecutionStatus(execution)); return; }
             if (execution == null)
             {
                 lblStatus.Text = "AutoDim khong tra ket qua.";
@@ -10924,9 +11134,9 @@ namespace TTSK_AutoDim_Plates
                 // Không xét REV trước, vì bản delete thường có REV nhưng vẫn cần vẽ dấu X.
                 if (IsAllPartsDeletedChanges(activeChanges))
                 {
-                    lblStatus.Text = "▶  Mark deleted active drawing: " + activeMark;
-                    lblStatus.ForeColor = Blue;
-                    Application.DoEvents();
+                    Ui(() => { lblStatus.Text = "▶  Mark deleted active drawing: " + activeMark; });
+                    Ui(() => { lblStatus.ForeColor = Blue; });
+
 
                     string markerError;
                     if (!TryRunAllPartsDeletedMarker(activeMark, out markerError))
@@ -10940,14 +11150,14 @@ namespace TTSK_AutoDim_Plates
                             "Không save được drawing sau khi tạo dấu X All Parts Deleted."
                         );
 
-                    lblStatus.Text = "✓  All Parts Deleted marked";
-                    lblStatus.ForeColor = Color.FromArgb(22, 163, 74);
+                    Ui(() => { lblStatus.Text = "✓  All Parts Deleted marked"; });
+                    Ui(() => { lblStatus.ForeColor = Color.FromArgb(22, 163, 74); });
                     return;
                 }
 
-                lblStatus.Text = "▶  Running active drawing...";
-                lblStatus.ForeColor = Blue;
-                Application.DoEvents();
+                Ui(() => { lblStatus.Text = "▶  Running active drawing..."; });
+                Ui(() => { lblStatus.ForeColor = Blue; });
+
 
                 if (_dataCenterModeEnabled)
                 {
@@ -10990,13 +11200,13 @@ namespace TTSK_AutoDim_Plates
 
                 if (execution == null && holeResult == 1)
                 {
-                    lblStatus.Text = "⚠ TOP/BOTTOM KHÁC LỖ";
-                    lblStatus.ForeColor = Color.DarkOrange;
+                    Ui(() => { lblStatus.Text = "⚠ TOP/BOTTOM KHÁC LỖ"; });
+                    Ui(() => { lblStatus.ForeColor = Color.DarkOrange; });
                 }
                 else if (execution == null)
                 {
-                    lblStatus.Text = "✓  Done active drawing";
-                    lblStatus.ForeColor = Color.FromArgb(22, 163, 74);
+                    Ui(() => { lblStatus.Text = "✓  Done active drawing"; });
+                    Ui(() => { lblStatus.ForeColor = Color.FromArgb(22, 163, 74); });
                 }
             }
             catch (Exception ex)
@@ -11137,10 +11347,10 @@ namespace TTSK_AutoDim_Plates
             ApplyAutoSectionSwitchUi();
             ApplyDataCenterModeUi();
 
-            btnRun.Enabled = true;
-            btnRun.Text = "■  STOP";
-            btnLoad.Enabled = false;
-            btnCheckScale.Enabled = false;
+            Ui(() => { btnRun.Enabled = true; });
+            Ui(() => { btnRun.Text = "■  STOP"; });
+            Ui(() => { btnLoad.Enabled = false; });
+            Ui(() => { btnCheckScale.Enabled = false; });
             SetManualScaleInputEnabled(false);
 
             DrawingHandler dh = new DrawingHandler();
@@ -11173,14 +11383,14 @@ namespace TTSK_AutoDim_Plates
                     {
                         try
                         {
-                            lblStatus.Text =
+                            Ui(() => { lblStatus.Text =
                                 "▶  Mark deleted drawing "
                                 + (i + 1)
                                 + "/"
                                 + _selectedDrawings.Count
                                 + " : "
-                                + name;
-                            lblStatus.ForeColor = Blue;
+                                + name; });
+                            Ui(() => { lblStatus.ForeColor = Blue; });
 
                             SetGridStatusAndResult(
                                 i,
@@ -11190,7 +11400,7 @@ namespace TTSK_AutoDim_Plates
                                 Color.FromArgb(59, 130, 246)
                             );
 
-                            Application.DoEvents();
+
 
                             SetActiveDrawingSafe(dh, dr);
                             WaitForUiDelay(100);
@@ -11274,11 +11484,11 @@ namespace TTSK_AutoDim_Plates
                     DataCenterExecutionResult dataCenterExecution = null;
                     try
                     {
-                        lblStatus.Text =
-                            "▶  Running " + (i + 1) + "/" + _selectedDrawings.Count + " : " + name;
-                        lblStatus.ForeColor = Blue;
+                        Ui(() => { lblStatus.Text =
+                            "▶  Running " + (i + 1) + "/" + _selectedDrawings.Count + " : " + name; });
+                        Ui(() => { lblStatus.ForeColor = Blue; });
                         SetGridResult(i, "RUNNING", Color.FromArgb(59, 130, 246));
-                        Application.DoEvents();
+
 
                         SetActiveDrawingSafe(dh, dr);
                         WaitForUiDelay(100);
@@ -11479,24 +11689,24 @@ namespace TTSK_AutoDim_Plates
                 _isBatchRunning = false;
                 _stopRequested = false;
 
-                btnRun.Enabled = true;
-                btnRun.Text = "▶  CREATE DRAWING";
-                btnCheckScale.Enabled = true;
+                Ui(() => { btnRun.Enabled = true; });
+                Ui(() => { btnRun.Text = "▶  CREATE DRAWING"; });
+                Ui(() => { btnCheckScale.Enabled = true; });
                 UpdateModeUi();
                 ApplyDataCenterModeUi();
 
-                dgvDrawings.ClearSelection();
+                Ui(() => dgvDrawings.ClearSelection());
             }
 
             if (paused)
             {
-                lblStatus.Text =
+                Ui(() => { lblStatus.Text =
                     "■  Paused at "
                     + _resumeIndex
                     + "/"
                     + _selectedDrawings.Count
-                    + " | Bấm CREATE DRAWING để chạy tiếp";
-                lblStatus.ForeColor = Color.DarkOrange;
+                    + " | Bấm CREATE DRAWING để chạy tiếp"; });
+                Ui(() => { lblStatus.ForeColor = Color.DarkOrange; });
 
                 return;
             }
@@ -11512,7 +11722,7 @@ namespace TTSK_AutoDim_Plates
             _batchManualScaleSnapshotCaptured = false;
             _batchDataCenterModeSnapshot = null;
 
-            lblStatus.Text =
+            Ui(() => { lblStatus.Text =
                 "✓  Batch done: "
                 + ok
                 + " OK, Revision skipped: "
@@ -11523,8 +11733,8 @@ namespace TTSK_AutoDim_Plates
                         : ""
                 )
                 + ", Error: "
-                + fail;
-            lblStatus.ForeColor = fail == 0 ? Color.FromArgb(22, 163, 74) : Color.DarkOrange;
+                + fail; });
+            Ui(() => { lblStatus.ForeColor = fail == 0 ? Color.FromArgb(22, 163, 74) : Color.DarkOrange; });
         }
 
         private static string SafeDrawingMark(Drawing dr)

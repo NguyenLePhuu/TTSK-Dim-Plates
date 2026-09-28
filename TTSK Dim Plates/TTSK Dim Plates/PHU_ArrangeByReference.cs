@@ -11,6 +11,7 @@ namespace Tekla.Technology.Akit.UserScript
     {
         public sealed class ArrangeReferenceView
         {
+            public int Id;
             public string Name, Type;
             public SnapshotView Presentation;
             public RevisionPartBounds Part;
@@ -18,6 +19,8 @@ namespace Tekla.Technology.Akit.UserScript
             public G.Point Origin;
             public double Scale;
             public double[] LocalAxes;
+            public double LongitudinalCoverage;
+            public int LongitudinalAxisIndex;
         }
         public sealed class ArrangeReference
         {
@@ -25,6 +28,51 @@ namespace Tekla.Technology.Akit.UserScript
             public string ModelPath;
             public double Width, Height;
             public List<ArrangeReferenceView> Views = new List<ArrangeReferenceView>();
+            public List<ArrangeReferenceView> PreservedViews = new List<ArrangeReferenceView>();
+        }
+
+        // Explicit projections are main views; section views need geometric evidence.
+        public static bool IsArrangeMainView(string type)
+        {
+            return type == "FrontView" || type == "TopView" || type == "BackView"
+                || type == "BottomView" || type == "EndView" || type == "ModelView" || type == "_3DView";
+        }
+
+        public static bool IsArrangeMainView(ArrangeReferenceView view)
+        {
+            if (view == null) return false;
+            if (IsArrangeMainView(view.Type)) return true;
+            if (view.Type != "SectionView" || view.LocalAxes == null || view.LocalAxes.Length != 6
+                || !view.LocalAxes.All(Finite) || !Finite(view.LongitudinalCoverage)
+                || view.LongitudinalAxisIndex < 0 || view.LongitudinalAxisIndex > 2) return false;
+            // The main-part longitudinal axis must lie in the display plane. A transverse A-A
+            // has no longitudinal projection, regardless of its name or paper scale.
+            int axis = view.LongitudinalAxisIndex;
+            double lengthProjection = view.LocalAxes[axis] * view.LocalAxes[axis]
+                + view.LocalAxes[3 + axis] * view.LocalAxes[3 + axis];
+            return Math.Abs(lengthProjection - 1) < .001 && view.LongitudinalCoverage >= .55;
+        }
+
+        static double SectionLongitudinalCoverage(D.View view, IList<G.Point> mainVertices, G.Point origin, G.Vector axis)
+        {
+            if (mainVertices.Count == 0) throw new InvalidOperationException("Không đọc được solid main part để phân loại mặt cắt.");
+            Func<G.Point, double> project = p => G.Vector.Dot(new G.Vector(p - origin), axis);
+            var main = mainVertices.Select(project).ToArray();
+            var box = view.RestrictionBox;
+            if (box == null || box.MinPoint == null || box.MaxPoint == null
+                || box.MaxPoint.X < box.MinPoint.X || box.MaxPoint.Y < box.MinPoint.Y || box.MaxPoint.Z < box.MinPoint.Z)
+                throw new InvalidOperationException("Không đọc được vùng cắt của view " + view.Name);
+            var toGlobal = G.MatrixFactory.FromCoordinateSystem(view.ViewCoordinateSystem);
+            var clipped = new List<double>();
+            foreach (double x in new[] { box.MinPoint.X, box.MaxPoint.X })
+                foreach (double y in new[] { box.MinPoint.Y, box.MaxPoint.Y })
+                    foreach (double z in new[] { box.MinPoint.Z, box.MaxPoint.Z })
+                        clipped.Add(project(toGlobal.Transform(new G.Point(x, y, z))));
+            if (!main.All(Finite) || !clipped.All(Finite))
+                throw new InvalidOperationException("Hình học phân loại mặt cắt không hữu hạn: " + view.Name);
+            double length = main.Max() - main.Min();
+            if (length <= .001) throw new InvalidOperationException("Không xác định được chiều dài main part.");
+            return Math.Max(0, Math.Min(main.Max(), clipped.Max()) - Math.Max(main.Min(), clipped.Min())) / length;
         }
 
         // Read the same paper-space main-part primitives as Revision; never use DIM/frame extents.
@@ -50,11 +98,56 @@ namespace Tekla.Technology.Akit.UserScript
             var result = new ArrangeReference { Drawing = drawing, ModelPath = model.GetInfo().ModelPath,
                 Width = sheet.Width, Height = sheet.Height };
             var views = sheet.GetAllViews();
+            List<G.Point> mainVertices = null;
+            int longitudinalAxisIndex = 0;
+            G.Vector longitudinalAxis = partX;
             while (views.MoveNext())
             {
                 var view = views.Current as D.View; if (view == null) continue;
+                var candidate = new ArrangeReferenceView { Id = Id(view), Name = view.Name,
+                    Type = view.ViewType.ToString(), Origin = new G.Point(view.Origin), Scale = view.Attributes.Scale,
+                    LocalAxes = LocalArrangeAxes(view.DisplayCoordinateSystem, partX, partY, partZ) };
+                if (candidate.Type == "SectionView")
+                {
+                    if (mainVertices == null)
+                    {
+                        mainVertices = new List<G.Point>();
+                        try
+                        {
+                            var edges = main.GetSolid().GetEdgeEnumerator();
+                            while (edges.MoveNext())
+                            {
+                                var edge = edges.Current as Tekla.Structures.Solid.Edge;
+                                if (edge == null) continue;
+                                mainVertices.Add(global.Transform(edge.StartPoint));
+                                mainVertices.Add(global.Transform(edge.EndPoint));
+                            }
+                            var axes = new[] { partX, partY, partZ };
+                            var axisOrigin = partOrigin;
+                            var lengths = axes.Select(axis =>
+                            {
+                                var values = mainVertices.Select(p => G.Vector.Dot(new G.Vector(p - axisOrigin), axis)).ToArray();
+                                return values.Length == 0 ? 0 : values.Max() - values.Min();
+                            }).ToArray();
+                            longitudinalAxisIndex = Enumerable.Range(0, axes.Length).OrderByDescending(i => lengths[i]).First();
+                            longitudinalAxis = axes[longitudinalAxisIndex];
+                        }
+                        catch (Exception ex) { throw new InvalidOperationException("Không xác định được hình học main part để phân loại view; chưa căn bản vẽ.", ex); }
+                    }
+                    candidate.LongitudinalAxisIndex = longitudinalAxisIndex;
+                    candidate.LongitudinalCoverage = SectionLongitudinalCoverage(view, mainVertices, partOrigin, longitudinalAxis);
+                }
+                if (!IsArrangeMainView(candidate))
+                {
+                    // Once classified as preserved, do not require presentation/main-part
+                    // mapping and never include the view in the Modify/rollback loop.
+                    result.PreservedViews.Add(candidate);
+                    continue;
+                }
                 var presentation = current.SingleOrDefault(v => v.Id == Id(view));
-                var parts = new List<D.Part>(); var objects = view.GetAllObjects();
+                // Ask Tekla for this model part directly; drawings can contain
+                // hundreds of neighbors, dimensions and marks in every view.
+                var parts = new List<D.Part>(); var objects = view.GetModelObjects(main.Identifier);
                 while (objects.MoveNext())
                 {
                     var part = objects.Current as D.Part;
@@ -69,12 +162,13 @@ namespace Tekla.Technology.Akit.UserScript
                     || bounds.MaxX < bounds.MinX || bounds.MaxY < bounds.MinY || scale <= 0
                     || Math.Abs(origin.X - presentation.X) > .01 || Math.Abs(origin.Y - presentation.Y) > .01)
                     throw new InvalidOperationException("View " + view.Name + " có hình học chưa đồng bộ.");
-                result.Views.Add(new ArrangeReferenceView { Name = (view.Name ?? "").Trim().ToUpperInvariant(),
+                result.Views.Add(new ArrangeReferenceView { Id = Id(view), Name = (view.Name ?? "").Trim().ToUpperInvariant(),
                     Type = view.ViewType.ToString(), View = view, Origin = new G.Point(origin),
                     Scale = scale, Presentation = presentation, Part = bounds,
-                    LocalAxes = LocalArrangeAxes(view.DisplayCoordinateSystem, partX, partY, partZ) });
+                    LocalAxes = candidate.LocalAxes, LongitudinalCoverage = candidate.LongitudinalCoverage,
+                    LongitudinalAxisIndex = candidate.LongitudinalAxisIndex });
             }
-            if (result.Views.Count == 0) throw new InvalidOperationException("Không có view để căn.");
+            if (result.Views.Count == 0) throw new InvalidOperationException("Không có view chính để căn; giữ nguyên các view mặt cắt/chi tiết.");
             return result;
         }
 
@@ -95,8 +189,10 @@ namespace Tekla.Technology.Akit.UserScript
         // Cross-drawing IDs have no semantic meaning. Require a unique type/name bijection.
         public static List<int> MatchArrangeViews(IList<ArrangeReferenceView> reference, IList<ArrangeReferenceView> target)
         {
+            if (reference.Concat(target).Any(v => !IsArrangeMainView(v)))
+                throw new InvalidOperationException("Chỉ được ghép view chính; không căn mặt cắt phụ/chi tiết.");
             if (reference.Count == 0 || reference.Count != target.Count)
-                throw new InvalidOperationException("Số view khác bản chuẩn; bỏ qua toàn bộ bản vẽ.");
+                throw new InvalidOperationException("Số view chính khác bản chuẩn; bỏ qua toàn bộ bản vẽ.");
             var matches = new List<int>();
             foreach (var view in target)
             {
@@ -107,8 +203,8 @@ namespace Tekla.Technology.Akit.UserScript
                     candidates = Enumerable.Range(0, reference.Count).Where(i => reference[i].Type == view.Type).ToList();
                 candidates = candidates.Where(i => reference[i].LocalAxes == null || view.LocalAxes == null
                     || SameArrangeOrientation(reference[i], view)).ToList();
-                // Section A/B can represent the same projection as Top/Front on a different member.
-                // Compare view axes in the main part's local frame, never global axes or A/B ordering.
+                // Longitudinal Section A/B may serve as Front/Top. Transverse and
+                // locally cropped sections have already been excluded by role.
                 if (candidates.Count != 1)
                     candidates = Enumerable.Range(0, reference.Count)
                         .Where(i => SameArrangeOrientation(reference[i], view)).ToList();
@@ -156,6 +252,7 @@ namespace Tekla.Technology.Akit.UserScript
                 || !String.Equals(after.ModelPath, before.ModelPath, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("Model/bản vẽ đã thay đổi khi xác minh vị trí.");
             var targets = PlanArrangeReference(reference, after);
+            VerifyPreservedArrangeViews(before.PreservedViews, after.PreservedViews);
             var previous = before.Views.ToDictionary(v => v.Presentation.Id);
             if (after.Views.Count != previous.Count) throw new InvalidOperationException("Số view đã thay đổi.");
             for (int i = 0; i < after.Views.Count; i++)
@@ -168,12 +265,40 @@ namespace Tekla.Technology.Akit.UserScript
             }
         }
 
+        public static void VerifyPreservedArrangeViews(IList<ArrangeReferenceView> before, IList<ArrangeReferenceView> after)
+        {
+            var previous = before.ToDictionary(v => v.Id);
+            if (after.Count != previous.Count || after.Select(v => v.Id).Distinct().Count() != after.Count)
+                throw new InvalidOperationException("Số view mặt cắt/chi tiết đã thay đổi.");
+            foreach (var v in after)
+            {
+                ArrangeReferenceView old;
+                if (!previous.TryGetValue(v.Id, out old) || v.Type != old.Type
+                    || !new[] { v.Origin.X, v.Origin.Y, v.Origin.Z, v.Scale,
+                        old.Origin.X, old.Origin.Y, old.Origin.Z, old.Scale }.All(Finite)
+                    || RevisionPositionDiffers(v.Origin, old.Origin) || Math.Abs(v.Scale - old.Scale) > .000001)
+                    throw new InvalidOperationException("View mặt cắt/chi tiết " + v.Name + " đã đổi vị trí hoặc scale.");
+            }
+        }
+
         public static string ApplyArrangeReference(ArrangeReference reference)
         {
-            var current = CaptureArrangeReference();
+            int moved;
+            return ApplyArrangeReference(reference, CaptureArrangeReference(), out moved);
+        }
+
+        // Batch already captured this drawing immediately before applying. Reuse
+        // that fresh snapshot instead of fetching its presentation/solid twice.
+        public static string ApplyArrangeReference(ArrangeReference reference, ArrangeReference current, out int moved)
+        {
+            moved = 0;
+            var activeDrawing = new D.DrawingHandler().GetActiveDrawing();
+            if (activeDrawing == null || !activeDrawing.IsSameDatabaseObject(current.Drawing))
+                throw new InvalidOperationException("Bản vẽ đã thay đổi trước khi căn view.");
             if (current.Drawing.IsSameDatabaseObject(reference.Drawing)) return "REFERENCE · giữ nguyên";
             var targets = PlanArrangeReference(reference, current);
-            int moved = 0;
+            if (!current.Views.Where((v, i) => RevisionPositionDiffers(v.Origin, targets[i])).Any())
+                return ArrangeReferenceResult(0, current.PreservedViews.Count);
             try
             {
                 for (int i = 0; i < targets.Count; i++)
@@ -190,7 +315,7 @@ namespace Tekla.Technology.Akit.UserScript
                         || Math.Abs(current.Views[i].View.Attributes.Scale - current.Views[i].Scale) > .000001)
                         throw new InvalidOperationException("View/scale chưa khớp sau khi đọc lại.");
                 VerifyArrangeReference(reference, current);
-                return moved == 0 ? "OK · đã thẳng hàng" : "OK · căn " + moved + " view, giữ scale";
+                return ArrangeReferenceResult(moved, current.PreservedViews.Count);
             }
             catch (Exception error)
             {
@@ -205,6 +330,12 @@ namespace Tekla.Technology.Akit.UserScript
                 if (!current.Drawing.CommitChanges()) throw new InvalidOperationException("Commit hoàn tác thất bại. " + error.Message);
                 throw;
             }
+        }
+
+        static string ArrangeReferenceResult(int moved, int preserved)
+        {
+            return (moved == 0 ? "OK · view chính đã thẳng hàng" : "OK · căn " + moved + " view chính, giữ scale")
+                + " · giữ nguyên " + preserved + " view mặt cắt/chi tiết";
         }
     }
 }

@@ -35,7 +35,32 @@ function Get-DriveAccessToken([string]$CredentialPath = (Get-DriveCredentialPath
         $script:TtskDriveToken = [string]$token.access_token
         $script:TtskDriveTokenExpiry = [DateTime]::UtcNow.AddSeconds([Math]::Max(0, [int]$token.expires_in - 60))
         return $script:TtskDriveToken
-    } catch { throw 'Khong lam moi duoc dang nhap Google. Chay lai Connect-GoogleDrivePublisher.ps1 (hoac kiem tra Internet). Credentials chi dung duoc voi tai khoan Windows da luu.' }
+    } catch {
+        # Inspect only the OAuth error code; never print response bodies or credentials.
+        $oauthCode = ''
+        try { $oauthCode = [string](($_.ErrorDetails.Message | ConvertFrom-Json).error) } catch { }
+        if ($oauthCode -eq 'invalid_grant') {
+            $failure = New-Object InvalidOperationException 'Google tu choi phien dang nhap da luu (invalid_grant). Can dang nhap lai Google.'
+            $failure.Data['DriveOAuthError'] = 'invalid_grant'
+            throw $failure
+        }
+        if ($oauthCode -in @('invalid_client','unauthorized_client','deleted_client')) {
+            throw 'Cau hinh OAuth client khong con hop le. Chay Connect-GoogleDrivePublisher.ps1 -ClientJson voi OAuth Desktop client JSON hop le.'
+        }
+        throw 'Khong lam moi duoc dang nhap Google. Kiem tra Internet hoac dang nhap lai bang Connect-GoogleDrivePublisher.ps1. Credentials chi dung duoc voi tai khoan Windows da luu.'
+    }
+}
+
+function Connect-DriveForSourceBackup([switch]$NonInteractive) {
+    try { $null = Get-DriveAccessToken; return }
+    catch {
+        if ($_.Exception.Data['DriveOAuthError'] -ne 'invalid_grant' -or $NonInteractive) { throw }
+    }
+    Write-Host 'Phien Google khong con hop le. Dang mo dang nhap lai; sau khi xac nhan, luu tru se tu tiep tuc.' -ForegroundColor Yellow
+    & (Join-Path $PSScriptRoot 'Connect-GoogleDrivePublisher.ps1')
+    $script:TtskDriveToken = $null
+    $script:TtskDriveTokenExpiry = [DateTime]::MinValue
+    $null = Get-DriveAccessToken
 }
 
 function Get-DriveUpdateSettings {

@@ -637,8 +637,8 @@ namespace TTSK_AutoDim_Plates
             list.Add(
                 new ShortcutActionDefinition(
                     ActionSlot09,
-                    "Slot 09 · Dự phòng",
-                    "Chưa có chức năng được gắn",
+                    "Slot 09 · Keyplan",
+                    "Kiểm tra hướng nhìn và đề xuất góc Local",
                     "9",
                     Keys.D9
                 )

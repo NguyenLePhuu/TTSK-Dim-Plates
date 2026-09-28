@@ -15,6 +15,8 @@ namespace Tekla.Technology.Akit.UserScript
         FlowLayoutPanel revisionCards;
         Panel revisionViewport;
         RevisionScroll revisionScroll;
+        Control revisionSuccessCheck;
+        bool revisionCompleted;
         Label revisionStatus, revisionSource, revisionDetail;
         Label revisionSnapshot;
         TableLayoutPanel revisionLayout;
@@ -50,8 +52,20 @@ namespace Tekla.Technology.Akit.UserScript
         {
             if (checking || revisionPanel == null) return;
             if (revisionOnly) { Close(); return; }
+            LeaveRevision();
+        }
+        void CheckCurrentDimensions()
+        {
+            if(checking)return;
+            LeaveRevision();
+            Recheck(recheckButton);
+        }
+        void LeaveRevision()
+        {
+            if(revisionPanel==null)return;
             if(revisionFilterMenu!=null){revisionFilterMenu.Dispose();revisionFilterMenu=null;}
             revisionPanel.Dispose(); revisionPanel = null; reportContent.Show();
+            revisionSuccessCheck=null;revisionCompleted=false;revisionResult=null;
             revisionChoices.Clear(); revisionChoicesPath=null; revisionChoicesHash=null; revisionSelected=0;
         }
         void OpenRevision()
@@ -69,8 +83,8 @@ namespace Tekla.Technology.Akit.UserScript
             layout.RowStyles[5].Height=0;
             layout.RowStyles[6].SizeType=SizeType.AutoSize;
             var heading=new Panel { Dock=DockStyle.Fill };
-            var back=Button(revisionOnly?"Đóng":"←  Check DIM",false); back.Dock=DockStyle.Right; back.Width=100;
-            back.Click+=(s,e)=>CloseRevision();
+            var back=Button("←  Check DIM · C",false); back.Dock=DockStyle.Right; back.Width=175;
+            back.Click+=(s,e)=>CheckCurrentDimensions();
             heading.Controls.Add(TextLabel("Revision  /  Thay đổi bản vẽ",20,ink,true)); heading.Controls.Add(back);
             layout.Controls.Add(heading,0,0);
             var metadata=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=2,RowCount=1,Margin=Padding.Empty};
@@ -119,6 +133,10 @@ namespace Tekla.Technology.Akit.UserScript
             revisionViewport.Controls.Add(revisionCards);
             revisionViewport.SizeChanged+=(s,e)=>ResizeRevisionCards();
             listHost.Controls.Add(revisionViewport);listHost.Controls.Add(revisionScroll);
+            revisionSuccessCheck=new SuccessCheck {Name="RevisionSuccessCheck",Dock=DockStyle.Fill,
+                ForeColor=Green,BackColor=BackColor,Font=new Font(Font.FontFamily,14),
+                Text="Không có thay đổi",AccessibleName="Revision: không có thay đổi",Visible=false};
+            listHost.Controls.Add(revisionSuccessCheck);revisionSuccessCheck.BringToFront();
             layout.Controls.Add(listHost,0,4);
             revisionDetail=TextLabel("",10,muted); revisionDetail.Visible=false; layout.Controls.Add(revisionDetail,0,5);
             // AutoSize accounts for the actual DPI-scaled button height, margins and shadow.
@@ -128,7 +146,7 @@ namespace Tekla.Technology.Akit.UserScript
             actions.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));actions.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));actions.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             actions.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            var refresh=Button("▶  Bắt đầu · F5",true); refresh.Name="revisionStart"; refresh.Size=new Size(165,44);refresh.Margin=new Padding(0,0,10,0); refresh.Click+=(s,e)=>RefreshRevision();
+            var refresh=Button("▶  Bắt đầu · R / F5",true); refresh.Name="revisionStart"; refresh.Size=new Size(190,44);refresh.Margin=new Padding(0,0,10,0); refresh.Click+=(s,e)=>RefreshRevision();
             var create=Button("Create drawing",false); create.Name="revisionCreate"; create.Size=new Size(175,44);create.Margin=Padding.Empty;
             create.Enabled=createRevisionDrawing!=null; create.Click+=(s,e)=>CreateRevisionDrawing();
             var delete=Button("Delete REV",false);delete.Name="revisionDelete";delete.Size=new Size(155,44);delete.Margin=Padding.Empty;
@@ -154,6 +172,7 @@ namespace Tekla.Technology.Akit.UserScript
         }
         void ShowRevisionError(string message)
         {
+            if(!String.IsNullOrEmpty(message)){revisionCompleted=false;UpdateRevisionSuccess();}
             revisionDetail.Text=message;
             revisionDetail.Visible=!String.IsNullOrEmpty(message);
             tips.SetToolTip(revisionDetail,message);
@@ -200,6 +219,7 @@ namespace Tekla.Technology.Akit.UserScript
         void RefreshRevision()
         {
             if(checking)return;
+            revisionCompleted=false;UpdateRevisionSuccess();
             checking=true;UseWaitCursor=true;
             try
             {
@@ -231,6 +251,7 @@ namespace Tekla.Technology.Akit.UserScript
                 RenderRevisionCards();
                 UpdateRevisionSummary();
                 ShowRevisionError("");
+                revisionCompleted=true;UpdateRevisionSuccess();
             }
             catch(Exception ex)
             {
@@ -273,6 +294,16 @@ namespace Tekla.Technology.Akit.UserScript
                 (revisionResult.Warnings.Count>0?"   ·   "+revisionResult.Warnings.Count+" lưu ý":"");
             tips.SetToolTip(revisionStatus,String.Join("\r\n",revisionResult.Warnings));
             UpdateRevisionNavigation();
+            UpdateRevisionSuccess();
+        }
+        void UpdateRevisionSuccess()
+        {
+            if(revisionSuccessCheck==null)return;
+            bool clean=revisionCompleted&&revisionResult!=null&&revisionResult.Compared>0&&
+                revisionResult.Items.Count==0&&revisionResult.Warnings.Count==0;
+            revisionSuccessCheck.Visible=clean;
+            revisionViewport.Visible=revisionScroll.Visible=!clean;
+            if(clean)revisionSuccessCheck.BringToFront();
         }
         List<PHU_DimensionRevision.Item> PendingRevisionItems()
         {return revisionResult.Items.Where(i=>!i.ReadOnly&&i.Review&&!i.AlreadyRed&&
@@ -402,7 +433,7 @@ namespace Tekla.Technology.Akit.UserScript
             }
             if(visible.Count==0)
             {
-                var empty=TextLabel(revisionResult.Items.Count==0?"✓  Không phát hiện thay đổi\r\nDIM và nội dung đã đối chiếu trùng với snapshot.":
+                var empty=TextLabel(revisionResult.Items.Count==0?"Không có thay đổi trong dữ liệu đã đối chiếu.\r\nXem trạng thái và lưu ý để biết phạm vi kiểm tra.":
                     "Không có DIM trong bộ lọc này\r\nChọn Tất cả thay đổi để xem toàn bộ kết quả.",16,muted,true);
                 empty.Dock=DockStyle.None;empty.Height=160;revisionCards.Controls.Add(empty);
             }

@@ -21,6 +21,35 @@ namespace Tekla.Technology.Akit.UserScript
         public const string GeneralSystemKey = "GENERAL_SYSTEM";
         public const string InzaiDataCenterKey = "INZAI_DATA_CENTER";
 
+        [ThreadStatic]
+        private static int _selectedInjaiDepth;
+
+        /// <summary>
+        /// Slot 07 explicitly chooses the Inzai strategy for this operation.
+        /// It does not rename the model, alter settings, or relax geometry checks.
+        /// Keep the scope on the synchronous Tekla execution thread.
+        /// </summary>
+        public static IDisposable BeginInjaiSelection()
+        {
+            _selectedInjaiDepth++;
+            return new SelectedInjaiScope();
+        }
+
+        private sealed class SelectedInjaiScope : IDisposable
+        {
+            private readonly int _threadId = System.Threading.Thread.CurrentThread.ManagedThreadId;
+            private bool _disposed;
+
+            public void Dispose()
+            {
+                if (_disposed) return;
+                if (_threadId != System.Threading.Thread.CurrentThread.ManagedThreadId)
+                    throw new InvalidOperationException("Inzai selection must end on its execution thread.");
+                _disposed = true;
+                _selectedInjaiDepth--;
+            }
+        }
+
         private sealed class ProjectIdentity
         {
             public string ModelPath;
@@ -47,8 +76,8 @@ namespace Tekla.Technology.Akit.UserScript
                     return false;
 
                 // Known production model root: 27-011)ATTOKPJ(Data_Center).
-                // Both tokens are required so another project's H/C/L column
-                // cannot enter this non-company-standard dimension flow.
+                // Automatic recognition only. Explicit Slot 07 selection below
+                // takes precedence over the model's name/path.
                 return identity.Normalized.Contains("ATTOKPJ")
                     && identity.Normalized.Contains("DATACENTER");
             }
@@ -69,6 +98,13 @@ namespace Tekla.Technology.Akit.UserScript
                 {
                     message = "Column project routing failed: Model is unavailable.";
                     return false;
+                }
+
+                if (_selectedInjaiDepth > 0)
+                {
+                    projectKey = InzaiDataCenterKey;
+                    message = "Inzai strategy explicitly selected by Slot 07; project identity is not required.";
+                    return true;
                 }
 
                 ProjectIdentity identity = ReadIdentity(model);

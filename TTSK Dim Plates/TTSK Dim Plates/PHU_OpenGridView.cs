@@ -23,7 +23,7 @@ using Tekla.Structures.Drawing;
 using Tekla.Structures.Geometry3d;
 using static Tekla.Structures.Drawing.Text;
 
-public static class PHU_OpenGridView
+public static partial class PHU_OpenGridView
 {
     // ================= USER CONFIG =================
 
@@ -61,11 +61,11 @@ public static class PHU_OpenGridView
         new Dictionary<string, ViewSheetBox>();
 
     // Lưu RestrictionBox gốc trước khi Open Grid bung view.
-    // Fit View sẽ restore đúng RestrictionBox ban đầu này.
+    // Fit uses this as a minimum envelope; connected geometry can extend free sides.
     private static readonly Dictionary<string, AABB> FIT_ORIGINAL_RESTRICTION_BOXES =
         new Dictionary<string, AABB>();
 
-    // Session prerequisite for Fit.  A view is Fit-ready only after the
+    // Selects the legacy Open Grid fit route. A view uses that route only after the
     // current Open Grid pass has completed ProcessView successfully and both
     // original snapshots are present for the same Drawing + View pair.
     private static readonly HashSet<string> OPEN_GRID_READY_VIEW_KEYS = new HashSet<string>(
@@ -75,7 +75,7 @@ public static class PHU_OpenGridView
     private static string OPEN_GRID_READY_DRAWING_KEY = "";
 
     private const string FIT_PREREQUISITE_MESSAGE =
-        "FIT chưa được thực thi. Hãy chạy OPEN GRID trước khi FIT.";
+        "Không thể Fit: cần bản vẽ đang mở và view có restriction box hợp lệ.";
 
     private const double FIT_GRID_TOP_FRONT_GAP = 20.0;
     private const double FIT_GRID_TOP_FRONT_HORIZONTAL_GAP = 20.0;
@@ -93,6 +93,7 @@ public static class PHU_OpenGridView
         public int GridAxesExpectedCount;
         public int GridAxisPartialViewCount;
         public int GridAxisNoGridViewCount;
+        public int GeometryOnlyViewCount;
         public string SelectedGridAxes;
         public string Message;
 
@@ -1095,7 +1096,9 @@ public static class PHU_OpenGridView
             if (views == null || views.Count == 0)
                 return false;
 
-            return ValidateFitTargets(drawing, views, out message);
+            bool ready = ValidateFitTargets(drawing, views, out message);
+            if (ready) CaptureFitEntryBoxes(views);
+            return ready;
         }
         catch
         {
@@ -1113,40 +1116,20 @@ public static class PHU_OpenGridView
 
         EnsureOpenGridSessionForDrawing(drawing);
 
-        List<string> missingViews = new List<string>();
-
         foreach (View view in views)
         {
-            string readyKey = GetOpenGridReadyViewKey(drawing, view);
-            string snapshotKey = GetSessionViewKey(view);
-
-            bool ready =
-                !string.IsNullOrEmpty(readyKey) && OPEN_GRID_READY_VIEW_KEYS.Contains(readyKey);
-            bool hasSheetSnapshot =
-                !string.IsNullOrEmpty(snapshotKey)
-                && FIT_ORIGINAL_SHEET_BOXES.ContainsKey(snapshotKey);
-            bool hasRestrictionSnapshot =
-                !string.IsNullOrEmpty(snapshotKey)
-                && FIT_ORIGINAL_RESTRICTION_BOXES.ContainsKey(snapshotKey);
-
-            if (!ready || !hasSheetSnapshot || !hasRestrictionSnapshot)
+            AABB box;
+            if (!TryGetRestrictionBoxClone(view, out box)
+                || !FitFinitePoint(box.MinPoint) || !FitFinitePoint(box.MaxPoint)
+                || box.MaxPoint.X <= box.MinPoint.X || box.MaxPoint.Y <= box.MinPoint.Y
+                || box.MaxPoint.Z < box.MinPoint.Z)
             {
-                string name = SafeViewName(view);
-                if (string.IsNullOrEmpty(name))
-                    name = "View";
-                missingViews.Add(name);
+                message = "Restriction box không hợp lệ: " + SafeViewName(view);
+                return false;
             }
         }
-
-        if (missingViews.Count == 0)
-        {
-            message = "";
-            return true;
-        }
-
-        message = FIT_PREREQUISITE_MESSAGE;
-        message += "\nView chưa Open Grid: " + string.Join(", ", missingViews.ToArray());
-        return false;
+        message = "";
+        return true;
     }
 
     private static List<View> GetTargetViews(DrawingHandler dh, Drawing drawing)
@@ -1629,6 +1612,8 @@ public static class PHU_OpenGridView
             OPEN_GRID_READY_VIEW_KEYS.Clear();
             FIT_ORIGINAL_SHEET_BOXES.Clear();
             FIT_ORIGINAL_RESTRICTION_BOXES.Clear();
+            FINAL_FIT_BOXES.Clear();
+            FIT_ENTRY_BOXES.Clear();
             OPEN_GRID_READY_DRAWING_KEY = "";
             return;
         }
@@ -1638,6 +1623,8 @@ public static class PHU_OpenGridView
             OPEN_GRID_READY_VIEW_KEYS.Clear();
             FIT_ORIGINAL_SHEET_BOXES.Clear();
             FIT_ORIGINAL_RESTRICTION_BOXES.Clear();
+            FINAL_FIT_BOXES.Clear();
+            FIT_ENTRY_BOXES.Clear();
             OPEN_GRID_READY_DRAWING_KEY = drawingKey;
         }
     }
@@ -2460,11 +2447,7 @@ public static class PHU_OpenGridView
     }
 
     // =================================================
-    // PHU FIT MODEL PADDING 20
-    // Sau khi dùng Open Grid View để kiểm trục thủ công,
-    // chạy hàm này để thu RestrictionBox lại quanh model chính trong View.
-    // Dùng Solid thật của Model Part theo hệ tọa độ View, padding 20 giống ResizeViewBoundary.
-    // Không lấy Dimension / Mark / Text / Grid.
+    // Fit main/connection geometry after Open Grid; original box is a floor, not a crop target.
     // =================================================
 
     private const double FIT_PADDING_DEFAULT = 20.0;
@@ -2511,58 +2494,49 @@ public static class PHU_OpenGridView
             if (!ValidateFitTargets(drawing, views, out prerequisiteMessage))
             {
                 result.FailedCount = Math.Max(1, views.Count);
-                result.Message = FIT_PREREQUISITE_MESSAGE;
+                result.Message = prerequisiteMessage;
                 return result;
             }
 
+            CaptureFitEntryBoxes(views);
+            var fitContext = new FitEnvelopeContext(drawing, new Tekla.Structures.Model.Model());
+            var fitBoxes = new Dictionary<View, AABB>();
+            var entryBoxes = new Dictionary<View, AABB>();
+            var entryOrigins = new Dictionary<View, Point>();
+            // Preflight every view before changing any boundary.
             foreach (View v in views)
             {
-                try
-                {
-                    AABB originalRestrictionBox;
-                    bool hasOriginalRestrictionBox = TryGetFitOriginalRestrictionBox(
-                        v,
-                        out originalRestrictionBox
-                    );
-
-                    ViewSheetBox originalSheetBox;
-                    bool hasOriginalSheetBox = TryGetFitOriginalSheetBox(v, out originalSheetBox);
-
-                    if (!hasOriginalRestrictionBox)
-                    {
-                        result.FailedCount++;
-                        continue;
-                    }
-
-                    v.RestrictionBox = originalRestrictionBox;
-                    SafeModify(v, "restore original restriction box");
-
-                    if (hasOriginalSheetBox)
-                    {
-                        try
-                        {
-                            drawing.CommitChanges();
-                        }
-                        catch { }
-
-                        KeepViewAtOriginalCenter(v, originalSheetBox);
-                    }
-
-                    result.SuccessCount++;
-                }
-                catch
-                {
-                    result.FailedCount++;
-                }
+                AABB entry;
+                if (!TryGetRestrictionBoxClone(v, out entry))
+                    throw new InvalidOperationException("Thiếu snapshot Fit.");
+                fitBoxes.Add(v, PlanFitTarget(drawing, fitContext, v, padding));
+                if (!HasOpenGridFitSnapshot(drawing, v)) result.GeometryOnlyViewCount++;
+                entryBoxes.Add(v, entry);
+                entryOrigins.Add(v, new Point(v.Origin));
             }
-
             try
             {
-                drawing.CommitChanges();
+                foreach (View v in views)
+                    if (!TryApplyRestrictionBox(v, fitBoxes[v])) throw new InvalidOperationException("Tekla từ chối biên Fit.");
+                if (!drawing.CommitChanges()) throw new InvalidOperationException("Không commit được biên Fit.");
+                foreach (View v in views)
+                {
+                    if (!v.Select() || !RestrictionBoxMatches(v, fitBoxes[v]))
+                        throw new InvalidOperationException("Tekla không giữ biên bao neighbor.");
+                    ViewSheetBox originalSheetBox;
+                    if (HasOpenGridFitSnapshot(drawing, v) && TryGetFitOriginalSheetBox(v, out originalSheetBox)) KeepViewAtOriginalCenter(v, originalSheetBox);
+                }
+                if (!drawing.CommitChanges()) throw new InvalidOperationException("Không commit được vị trí Fit.");
+                RememberFinalFitBoxes(drawing, fitBoxes);
+                result.SuccessCount = views.Count;
+                result.Message = "Fit bao đủ main part, plate liên kết và tiết diện neighbor.";
             }
-            catch { }
-
-            result.Message = "Restore original RestrictionBox done.";
+            catch
+            {
+                foreach (View v in views) { RestoreRestrictionBoxWithoutMoving(v, entryBoxes[v]); v.Origin=entryOrigins[v]; v.Modify(); }
+                drawing.CommitChanges();
+                throw;
+            }
             return result;
         }
         catch (Exception ex)
@@ -2576,6 +2550,7 @@ public static class PHU_OpenGridView
     public static Result RunFitKeepNearestGridAxes(int nearestGridCount, double padding)
     {
         Result result = new Result();
+        bool fitEntryCaptured = false;
         int expectedGridCount = Math.Max(1, Math.Min(3, nearestGridCount));
         result.GridAxesExpectedCount = expectedGridCount;
         result.GridAxesFoundCount = expectedGridCount;
@@ -2617,7 +2592,7 @@ public static class PHU_OpenGridView
             {
                 result.FailedCount = Math.Max(1, views.Count);
                 result.GridAxesFoundCount = 0;
-                result.Message = FIT_PREREQUISITE_MESSAGE;
+                result.Message = prerequisiteMessage;
                 return result;
             }
 
@@ -2633,10 +2608,38 @@ public static class PHU_OpenGridView
                 model = null;
             }
 
+            CaptureFitEntryBoxes(views);
+            fitEntryCaptured = true;
+            var fitContext = new FitEnvelopeContext(drawing, model);
+            var protectedBoxes = new Dictionary<View, AABB>();
+            foreach (View view in views)
+            {
+                protectedBoxes.Add(view, PlanFitTarget(drawing, fitContext, view, padding));
+            }
+            var finalFitBoxes = new Dictionary<View, AABB>();
             List<string> selectedDetails = new List<string>();
 
             foreach (View view in views)
             {
+                // Never expand an unopened view to search for grids. Its target is
+                // the tight main/connection envelope, independent of the UI grid mode.
+                if (!HasOpenGridFitSnapshot(drawing, view))
+                {
+                    AABB planned = protectedBoxes[view];
+                    if (!TryApplyRestrictionBox(view, planned) || !drawing.CommitChanges()
+                        || !view.Select() || !RestrictionBoxMatches(view, planned))
+                    {
+                        RestoreFitKeepGridRestrictionBoxes();
+                        result.FailedCount++;
+                        result.SuccessCount = 0;
+                        result.Message = "Không giữ được biên Fit trực tiếp; đã yêu cầu khôi phục.";
+                        return result;
+                    }
+                    result.GeometryOnlyViewCount++;
+                    result.SuccessCount++;
+                    finalFitBoxes[view] = planned;
+                    continue;
+                }
                 AABB originalRestrictionBox;
                 if (!TryGetFitOriginalRestrictionBox(view, out originalRestrictionBox))
                 {
@@ -2656,6 +2659,7 @@ public static class PHU_OpenGridView
                         drawing,
                         model,
                         originalRestrictionBox,
+                        protectedBoxes[view],
                         expectedGridCount,
                         padding,
                         out selection
@@ -2668,6 +2672,8 @@ public static class PHU_OpenGridView
                     if (found == 0)
                     {
                         result.GridAxisNoGridViewCount++;
+                        if (applied) { result.SuccessCount++; finalFitBoxes[view] = view.RestrictionBox; }
+                        else result.FailedCount++;
                         continue;
                     }
 
@@ -2678,6 +2684,7 @@ public static class PHU_OpenGridView
                     }
 
                     result.SuccessCount++;
+                    finalFitBoxes[view] = view.RestrictionBox;
                     if (found < expectedGridCount)
                         result.GridAxisPartialViewCount++;
 
@@ -2701,17 +2708,21 @@ public static class PHU_OpenGridView
             catch { }
 
             result.SelectedGridAxes = string.Join(" | ", selectedDetails.ToArray());
+            if (result.FailedCount == 0) RememberFinalFitBoxes(drawing, finalFitBoxes);
+            else { RestoreFitKeepGridRestrictionBoxes(); result.SuccessCount = 0; }
 
-            if (result.GridAxisNoGridViewCount == result.ViewCount)
+            if (result.FailedCount > 0)
             {
-                result.Message =
-                    expectedGridCount == 1
-                        ? "Không tìm thấy grid phù hợp với hướng của View để chạy chế độ giữ 1 trục."
-                        : "Không tìm thấy grid để chạy chế độ Có trục.";
+                result.Message = "Fit có trục lỗi, đã yêu cầu khôi phục biên trước Fit.";
             }
-            else if (result.FailedCount > 0)
+            else if (result.GeometryOnlyViewCount == result.ViewCount)
             {
-                result.Message = "Fit có trục lỗi, view đã được restore.";
+                result.GridAxesFoundCount = 0;
+                result.Message = "Fit trực tiếp theo main part và liên kết, gap " + padding + " mm; không cần Open Grid.";
+            }
+            else if (result.GridAxisNoGridViewCount == result.ViewCount)
+            {
+                result.Message = "Không có trục phù hợp; đã Fit bao main part, plate và neighbor.";
             }
             else if (result.GridAxesFoundCount < expectedGridCount)
             {
@@ -2734,6 +2745,8 @@ public static class PHU_OpenGridView
         }
         catch (Exception ex)
         {
+            if (fitEntryCaptured) RestoreFitKeepGridRestrictionBoxes();
+            result.SuccessCount = 0;
             result.FailedCount++;
             result.GridAxesFoundCount = 0;
             result.Message = "Fatal error: " + ex.Message;
@@ -2764,10 +2777,11 @@ public static class PHU_OpenGridView
             foreach (View view in views)
             {
                 AABB originalRestrictionBox;
-                if (TryGetFitOriginalRestrictionBox(view, out originalRestrictionBox))
+                if (FIT_ENTRY_BOXES.TryGetValue(GetSessionViewKey(view), out originalRestrictionBox))
                 {
-                    RestoreRestrictionBoxWithoutMoving(view, originalRestrictionBox);
-                    result.SuccessCount++;
+                    if (TryApplyRestrictionBox(view, originalRestrictionBox) && view.Select()
+                        && RestrictionBoxMatches(view, originalRestrictionBox)) result.SuccessCount++;
+                    else result.FailedCount++;
                 }
                 else
                 {
@@ -2781,6 +2795,7 @@ public static class PHU_OpenGridView
             }
             catch { }
 
+            FINAL_FIT_BOXES.Clear();
             result.Message =
                 result.FailedCount == 0 ? "View đã được restore." : "Có view không restore được.";
             return result;
@@ -2798,6 +2813,7 @@ public static class PHU_OpenGridView
         Drawing drawing,
         Tekla.Structures.Model.Model model,
         AABB originalRestrictionBox,
+        AABB protectedRestrictionBox,
         int expectedGridCount,
         double padding,
         out NearestGridSelection selection
@@ -2814,6 +2830,9 @@ public static class PHU_OpenGridView
         {
             return false;
         }
+
+        AABB rollbackBox;
+        if (!TryGetRestrictionBoxClone(view, out rollbackBox)) return false;
 
         double originalMinX = Math.Min(
             originalRestrictionBox.MinPoint.X,
@@ -2932,16 +2951,12 @@ public static class PHU_OpenGridView
             }
         }
 
-        if (selection == null || selection.Count == 0)
-        {
-            RestoreRestrictionBoxWithoutMoving(view, originalRestrictionBox);
-            return false;
-        }
-
-        double finalMinX = Math.Min(originalMinX, contentMinX);
-        double finalMaxX = Math.Max(originalMaxX, contentMaxX);
-        double finalMinY = Math.Min(originalMinY, contentMinY);
-        double finalMaxY = Math.Max(originalMaxY, contentMaxY);
+        // Legacy grid selection above is unchanged. Only free sides use the new envelope.
+        if (selection == null) selection = new NearestGridSelection();
+        double finalMinX = originalMinX;
+        double finalMaxX = originalMaxX;
+        double finalMinY = originalMinY;
+        double finalMaxY = originalMaxY;
 
         if (selection.Vertical != null)
         {
@@ -2969,36 +2984,39 @@ public static class PHU_OpenGridView
             || finalMaxY <= finalMinY + 1.0
         )
         {
-            RestoreRestrictionBoxWithoutMoving(view, originalRestrictionBox);
+            RestoreRestrictionBoxWithoutMoving(view, rollbackBox);
             return false;
         }
 
         try
         {
-            AABB finalBox = new AABB(finalMin, finalMax);
+            AABB finalBox = MergeFitEnvelope(new AABB(finalMin, finalMax), protectedRestrictionBox, 0.0,
+                selection.Vertical != null && selection.VerticalIsLeft,
+                selection.Vertical != null && !selection.VerticalIsLeft,
+                selection.Bottom != null, selection.Top != null);
             if (!TryApplyRestrictionBox(view, finalBox))
             {
-                RestoreRestrictionBoxWithoutMoving(view, originalRestrictionBox);
+                RestoreRestrictionBoxWithoutMoving(view, rollbackBox);
                 return false;
             }
 
             try
             {
-                if (drawing != null)
-                    drawing.CommitChanges();
+                if (drawing != null && !drawing.CommitChanges())
+                    throw new InvalidOperationException("Không commit được Fit có trục.");
             }
             catch
             {
-                RestoreRestrictionBoxWithoutMoving(view, originalRestrictionBox);
+                RestoreRestrictionBoxWithoutMoving(view, rollbackBox);
                 return false;
             }
 
             if (
-                !RestrictionBoxMatches(view, finalBox)
-                || !SelectedGridAxesRemainVisible(view, selection)
+                !view.Select() || !RestrictionBoxMatches(view, finalBox)
+                || (selection.Count > 0 && !SelectedGridAxesRemainVisible(view, selection))
             )
             {
-                RestoreRestrictionBoxWithoutMoving(view, originalRestrictionBox);
+                RestoreRestrictionBoxWithoutMoving(view, rollbackBox);
                 try
                 {
                     if (drawing != null)
@@ -3013,7 +3031,7 @@ public static class PHU_OpenGridView
         }
         catch
         {
-            RestoreRestrictionBoxWithoutMoving(view, originalRestrictionBox);
+            RestoreRestrictionBoxWithoutMoving(view, rollbackBox);
             return false;
         }
     }
@@ -3879,7 +3897,9 @@ public static class PHU_OpenGridView
             return Math.Abs(actual.MinPoint.X - expected.MinPoint.X) <= tolerance
                 && Math.Abs(actual.MinPoint.Y - expected.MinPoint.Y) <= tolerance
                 && Math.Abs(actual.MaxPoint.X - expected.MaxPoint.X) <= tolerance
-                && Math.Abs(actual.MaxPoint.Y - expected.MaxPoint.Y) <= tolerance;
+                && Math.Abs(actual.MaxPoint.Y - expected.MaxPoint.Y) <= tolerance
+                && Math.Abs(actual.MinPoint.Z - expected.MinPoint.Z) <= tolerance
+                && Math.Abs(actual.MaxPoint.Z - expected.MaxPoint.Z) <= tolerance;
         }
         catch
         {

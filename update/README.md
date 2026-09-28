@@ -20,7 +20,11 @@ Bấm `Luu_Tru_Code.bat`, chọn GitHub hoặc Google Drive. Công cụ commit c
 - Google Drive: tự lưu vào [thư mục lưu trữ code đã chọn](https://drive.google.com/drive/folders/1PKjvRjjE3yJQo1rbxN-O3XCE9O77fuNF), không cần nhập lại ID. Dùng tài khoản đã đăng nhập bằng `Cai_Dat_Google_Drive.bat` và có quyền ghi vào thư mục này. ZIP chứa snapshot của commit (bao gồm những file portable đã có trong commit), không chứa lịch sử `.git`, file ignored hay thay đổi chưa commit. Không dùng thư mục release công khai. Công cụ kiểm tra kích thước/checksum sau upload và không sửa chỉ mục cập nhật người dùng.
 
 Ví dụ: `Luu_Tru_Code.bat -Destination GitHub -CommitMessage "Luu tien do" -NoPause`.
-Drive: `Luu_Tru_Code.bat -Destination GoogleDrive -NoPause`.
+Khi chọn Google Drive, nhập tên tệp lưu trữ theo ý muốn (hỗ trợ tiếng Việt và khoảng trắng). Công cụ tự thêm `.zip` nếu chưa có; bấm Enter để giữ tên tự động gồm thời gian và mã commit. Chỉ nhập tên tệp, không nhập đường dẫn.
+Drive với tên tùy chọn: `Luu_Tru_Code.bat -Destination GoogleDrive -ArchiveName "Ban luu tru hom nay" -NoPause`.
+Với `-NoPause`, công cụ không hỏi tên; nếu không truyền `-ArchiveName` thì dùng tên tự động.
+
+Nếu Google từ chối phiên đã lưu (`invalid_grant`), chạy BAT tương tác sẽ tự mở đăng nhập lại bằng OAuth client đã lưu. Xác nhận trên trang Google rồi công cụ tiếp tục lưu trữ. Chế độ `-NoPause` báo lỗi và dừng, không mở trình duyệt; có thể chạy `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Connect-GoogleDrivePublisher.ps1` để đăng nhập lại trước. Lỗi mạng hoặc OAuth client không hợp lệ được báo riêng, không tự lặp đăng nhập.
 Nếu muốn lưu vào thư mục khác cho một lần chạy, thêm `-DriveFolderId "ID_THU_MUC_KHAC"`.
 
 Lưu code **không cần chỉ mục `latest.json`**, không cần thiết lập bản release và không cần chia sẻ công khai thư mục. Thư mục rỗng vẫn lưu được. Trước khi commit/upload, công cụ kiểm tra thư mục tồn tại, không nằm trong thùng rác và tài khoản Google có quyền thêm file. Sau upload, công cụ đối chiếu kích thước và checksum ZIP rồi mới báo thành công.

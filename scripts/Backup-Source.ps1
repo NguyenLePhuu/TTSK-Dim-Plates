@@ -2,6 +2,7 @@
 param(
     [ValidateSet('GitHub','GoogleDrive')][string]$Destination,
     [string]$CommitMessage,
+    [string]$ArchiveName,
     [string]$DriveFolderId = '1PKjvRjjE3yJQo1rbxN-O3XCE9O77fuNF',
     [switch]$NoPause
 )
@@ -25,14 +26,36 @@ try {
     $branch = Invoke-SourceGit @('symbolic-ref','--quiet','--short','HEAD')
     if (Invoke-SourceGit @('ls-files','--unmerged')) { throw 'Hay giai quyet Git conflict truoc.' }
     $gitDir = Invoke-SourceGit @('rev-parse','--absolute-git-dir')
+    $indexLock = Invoke-SourceGit @('rev-parse','--git-path','index.lock')
+    # A concurrent Git operation can release its lock shortly; never delete its lock automatically.
+    for ($attempt = 0; (Test-Path -LiteralPath $indexLock) -and $attempt -lt 5; $attempt++) {
+        if ($attempt -eq 0) { Write-Host 'Dang cho thao tac Git khac ket thuc (index.lock)...' -ForegroundColor Yellow }
+        Start-Sleep -Seconds 1
+    }
+    if (Test-Path -LiteralPath $indexLock) {
+        throw 'Git dang bi khoa boi index.lock. Hay dong thao tac Git dang chay va thu lai. Neu van loi, can kiem tra khoa cu truoc khi di chuyen; cong cu khong tu xoa khoa Git. Chua commit hay tai source len Drive.'
+    }
     foreach ($state in @('MERGE_HEAD','rebase-merge','rebase-apply','CHERRY_PICK_HEAD')) {
         if (Test-Path -LiteralPath (Join-Path $gitDir $state)) { throw 'Hay hoan tat merge/rebase/cherry-pick truoc.' }
     }
     if ($Destination -eq 'GoogleDrive') {
+        if (!$PSBoundParameters.ContainsKey('ArchiveName') -and !$NoPause) {
+            $ArchiveName = Read-Host 'Ten tep luu tru (Enter = ten tu dong, tu them .zip)'
+        }
+        $ArchiveName = $ArchiveName.Trim()
+        if ($ArchiveName) {
+            if ($ArchiveName.IndexOfAny([IO.Path]::GetInvalidFileNameChars()) -ge 0 -or
+                $ArchiveName.EndsWith('.') -or $ArchiveName -match '^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(?:\.|$)') {
+                throw 'Ten tep khong hop le. Chi nhap ten tep, khong nhap duong dan hay cac ky tu \ / : * ? " < > |.'
+            }
+            if (!$ArchiveName.EndsWith('.zip', [StringComparison]::OrdinalIgnoreCase)) { $ArchiveName += '.zip' }
+            if ($ArchiveName.Length -gt 120) { throw 'Ten tep qua dai (toi da 120 ky tu, gom .zip).' }
+        }
         . (Join-Path $PSScriptRoot 'GoogleDrive-ReleaseApi.ps1')
         if (!$DriveFolderId) { $DriveFolderId = Read-Host 'ID thu muc Google Drive RIENG de luu source (tai khoan Google da dang nhap phai co quyen ghi)' }
         Assert-DriveId $DriveFolderId
         Write-Host "Thu muc luu source: https://drive.google.com/drive/folders/$DriveFolderId"
+        Connect-DriveForSourceBackup -NonInteractive:$NoPause
         & (Join-Path $PSScriptRoot 'Test-SourceDriveFolder.ps1') -DriveFolderId $DriveFolderId
     }
     if (!$CommitMessage) { $CommitMessage = 'Luu tru source ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') }
@@ -55,6 +78,7 @@ try {
         Write-Host "[THANH CONG] Da luu code len GitHub backup/$branch ($head). Khong tao release."
     } else {
         $name = 'TTSK-Source-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + $head.Substring(0,12) + '.zip'
+        if ($ArchiveName) { $name = $ArchiveName }
         $zip = Join-Path $work $name
         Invoke-SourceGit @('archive','--format=zip',"--output=$zip",$head) | Out-Host
         $id = Send-DriveFile -Path $zip -FolderId $DriveFolderId -Name $name
@@ -62,7 +86,7 @@ try {
         if ([long]$metadata.size -ne (Get-Item -LiteralPath $zip).Length -or $metadata.md5Checksum -ne (Get-FileHash -LiteralPath $zip -Algorithm MD5).Hash) {
             throw "Ban sao Drive khong khop. File ID: $id"
         }
-        Write-Host "[THANH CONG] Da luu ZIP commit $head len Drive, ID: $id. Khong cap nhat latest.json."
+        Write-Host "[THANH CONG] Da luu $name (commit $head) len Drive, ID: $id. Khong cap nhat latest.json."
     }
 } catch {
     Write-Host "[THAT BAI] $($_.Exception.Message)" -ForegroundColor Red

@@ -18,6 +18,10 @@ class Program
     static void Main(string[] args)
     {
         if (args.Length == 1 && args[0] == "--live-main") { LiveTests.Run(); return; }
+        if (args.Length == 1 && args[0] == "--review-selected") { LiveTests.Run(true); return; }
+        if (args.Length == 1 && args[0] == "--benchmark-main") { LiveTests.Benchmark(); return; }
+        if (args.Length == 1 && args[0] == "--profile-main") { LiveTests.ProfileRead(); return; }
+        if (args.Length == 2 && args[0] == "--restore-main-origins") { LiveTests.RestoreMainOrigins(args[1]); return; }
         if (args.Length == 1 && (args[0] == "--audit-selected" || args[0] == "--audit-layout-selected"))
         {
             var model = new Tekla.Structures.Model.Model();
@@ -93,14 +97,61 @@ class Program
         var frontAxes = new double[] {1,0,0,0,0,1};
         baseline[0].LocalAxes = frontAxes; baseline[1].LocalAxes = topAxes;
         var sections = new[] { V("B", "SectionView"), V("A", "SectionView") };
-        sections[0].LocalAxes = frontAxes; sections[1].LocalAxes = topAxes;
-        Check(R.MatchArrangeViews(baseline, sections).SequenceEqual(new[] {0,1}), "real B-C150 Section B/A maps to Front/Top");
-        Check(R.MatchArrangeViews(baseline, sections.Reverse().ToArray()).SequenceEqual(new[] {1,0}), "section order is irrelevant");
-        Check(R.MatchArrangeViews(sections, baseline).SequenceEqual(new[] {0,1}), "Section drawing can be reference");
+        sections[0].LocalAxes = frontAxes; sections[0].LongitudinalCoverage = .90;
+        sections[1].LocalAxes = topAxes; sections[1].LongitudinalCoverage = .90; sections[1].LongitudinalAxisIndex = 1;
+        Check(R.IsArrangeMainView(sections[0]) && R.IsArrangeMainView(sections[1]),
+            "longitudinal section views are eligible main views");
+        Check(R.MatchArrangeViews(baseline, sections).SequenceEqual(new[] {0,1}),
+            "longitudinal sections can replace matching main views");
+        Check(R.MatchArrangeViews(sections, baseline).SequenceEqual(new[] {0,1}),
+            "longitudinal sections can serve as reference main views");
+        Check(R.MatchArrangeViews(baseline, sections.Reverse().ToArray()).SequenceEqual(new[] {1,0}),
+            "longitudinal section mapping independent of enumeration order");
+        var verticalMainSection = V("RENAMED", "SectionView");
+        verticalMainSection.LocalAxes = new double[] {0,1,0,-1,0,0}; verticalMainSection.LongitudinalCoverage = 1;
+        Check(R.IsArrangeMainView(verticalMainSection), "main section can be vertical/mirrored on sheet");
+        verticalMainSection.LongitudinalAxisIndex = 3;
+        Check(!R.IsArrangeMainView(verticalMainSection), "invalid longitudinal axis is never guessed");
+        verticalMainSection.LongitudinalAxisIndex = 0; verticalMainSection.LongitudinalCoverage = double.NaN;
+        Check(!R.IsArrangeMainView(verticalMainSection), "invalid coverage is never movable");
+        var transverseSection = V("A", "SectionView");
+        transverseSection.LocalAxes = new double[] {0,1,0,0,0,1};
+        transverseSection.LongitudinalCoverage = .99;
+        Reject(() => R.MatchArrangeViews(new[] { sections[0] }, new[] { transverseSection }),
+            "transverse section cannot replace a main view");
+        var shortSection = V("A", "SectionView");
+        shortSection.LocalAxes = frontAxes; shortSection.LongitudinalCoverage = .25;
+        Reject(() => R.MatchArrangeViews(new[] { sections[0] }, new[] { shortSection }),
+            "small cropped section cannot replace a main view");
+        foreach (var type in new[] { "FrontView", "TopView", "BackView", "BottomView", "EndView", "ModelView", "_3DView" })
+            Check(R.IsArrangeMainView(type), "main view eligible: " + type);
+        foreach (var type in new[] { "DetailView", "UnknownViewType", "", null })
+            Check(!R.IsArrangeMainView(type), "non-main view preserved: " + type);
+        var mixedReference = baseline;
+        var extraSection = V("C", "SectionView");
+        extraSection.LocalAxes = frontAxes; extraSection.LongitudinalCoverage = .12;
+        var mixedTarget = new[] { sections[0], baseline[1], extraSection };
+        Check(R.MatchArrangeViews(mixedReference.Where(R.IsArrangeMainView).ToArray(),
+            mixedTarget.Where(R.IsArrangeMainView).ToArray()).SequenceEqual(new[] { 0, 1 }),
+            "different section counts and names do not affect main-view mapping");
+        var preserved = V("A", "SectionView"); preserved.Id = 501;
+        preserved.LocalAxes = new double[] {0,1,0,0,0,1}; preserved.LongitudinalCoverage = .99;
+        preserved.Origin = new Tekla.Structures.Geometry3d.Point(100, 200, 3); preserved.Scale = 10;
+        var preservedDetail = V("DETAIL", "DetailView"); preservedDetail.Id = 502;
+        preservedDetail.Origin = new Tekla.Structures.Geometry3d.Point(400, 250, 0); preservedDetail.Scale = 5;
+        R.VerifyPreservedArrangeViews(new[] { preserved, preservedDetail }, new[] { preservedDetail, preserved });
+        Check(true, "preserved views can be verified without main-part geometry or presentation");
+        var changedSection = V("A", "SectionView"); changedSection.Id = preserved.Id; changedSection.Scale = preserved.Scale;
+        changedSection.Origin = new Tekla.Structures.Geometry3d.Point(101, 200, 3);
+        Reject(() => R.VerifyPreservedArrangeViews(new[] { preserved }, new[] { changedSection }), "detect section displacement");
+        changedSection.Origin = new Tekla.Structures.Geometry3d.Point(preserved.Origin); changedSection.Scale = 20;
+        Reject(() => R.VerifyPreservedArrangeViews(new[] { preserved }, new[] { changedSection }), "detect section scale change");
+        Reject(() => R.VerifyPreservedArrangeViews(new[] { preserved }, new R.ArrangeReferenceView[0]), "detect missing section");
+        Reject(() => R.VerifyPreservedArrangeViews(new[] { preserved, preservedDetail }, new[] { preserved, preserved }), "detect duplicated preserved IDs");
         var mirrored = V("FRONT", "FrontView"); mirrored.LocalAxes = new double[] {-1,0,0,0,0,1};
         Reject(() => R.MatchArrangeViews(new[] { baseline[0] }, new[] { mirrored }), "same name/type cannot override incompatible orientation");
-        Reject(() => R.MatchArrangeViews(new[] { baseline[0],baseline[0] }, new[] { sections[0],sections[0] }), "ambiguous orientation rejected");
-        var invalidAxes = V("A","SectionView"); invalidAxes.LocalAxes = new double[] {double.NaN,0,0,0,1,0};
+        Reject(() => R.MatchArrangeViews(new[] { baseline[0],baseline[0] }, new[] { baseline[0],baseline[0] }), "ambiguous orientation rejected");
+        var invalidAxes = V("TOP","TopView"); invalidAxes.LocalAxes = new double[] {double.NaN,0,0,0,1,0};
         Reject(() => R.MatchArrangeViews(new[] { baseline[1] }, new[] { invalidAxes }), "nonfinite orientation rejected");
         var old = new R.SnapshotView { X=120, Y=80 };
         var before = new R.RevisionPartBounds { MinX=-30, MaxX=30, MinY=-10, MaxY=10 };

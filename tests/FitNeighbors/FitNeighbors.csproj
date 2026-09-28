@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework><OutputType>Exe</OutputType><PlatformTarget>x64</PlatformTarget>
+    <LangVersion>7.3</LangVersion>
+    <TeklaBinPath Condition="'$(TeklaBinPath)' == ''">C:/Program Files/Tekla Structures/2025.0/bin</TeklaBinPath>
+    <TeklaStructuresInstallationPath>$(TeklaBinPath)</TeklaStructuresInstallationPath>
+    <OutputPath>../../.codex-artifacts/fit-neighbors/bin/</OutputPath><AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Update="grid-baseline.txt" CopyToOutputDirectory="PreserveNewest" />
+    <PackageReference Include="TSAppConfigPatcherTask" Version="2.1.3" />
+    <Reference Include="Tekla.Structures"><HintPath>$(TeklaBinPath)/Tekla.Structures.dll</HintPath></Reference>
+    <Reference Include="Tekla.Structures.Model"><HintPath>$(TeklaBinPath)/Tekla.Structures.Model.dll</HintPath></Reference>
+    <Reference Include="Tekla.Structures.Drawing"><HintPath>$(TeklaBinPath)/Tekla.Structures.Drawing.dll</HintPath></Reference>
+    <Reference Include="Tekla.Structures.Geometry3d.Compatibility"><HintPath>$(TeklaBinPath)/Tekla.Structures.Geometry3d.Compatibility.dll</HintPath></Reference>
+  </ItemGroup>
+</Project>

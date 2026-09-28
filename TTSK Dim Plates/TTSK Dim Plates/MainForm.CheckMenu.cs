@@ -86,6 +86,7 @@ namespace TTSK_AutoDim_Plates
 
         private void RunDimensionCheck()
         {
+            if (operationRunning) return;
             HideCheckMenu();
             if (dimensionCheckOpen || _snapshotExportRunning || _isBatchRunning || _fitAndCleanupRunning
                 || btnCheckScale == null || !btnCheckScale.Enabled) return;
@@ -108,6 +109,7 @@ namespace TTSK_AutoDim_Plates
 
         private void RunRevisionCheck()
         {
+            if (operationRunning) return;
             HideCheckMenu();
             if (dimensionCheckOpen || _snapshotExportRunning || _isBatchRunning || _fitAndCleanupRunning
                 || !btnCheckScale.Enabled) return;

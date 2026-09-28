@@ -1,11 +1,18 @@
 [CmdletBinding()]
-param([Parameter(Mandatory=$true)][string]$ClientJson)
+param([string]$ClientJson)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'GoogleDrive-ReleaseApi.ps1')
 Add-Type -AssemblyName System.Web
-$configuration = Get-Content -LiteralPath $ClientJson -Raw | ConvertFrom-Json
-if (!$configuration.PSObject.Properties['installed']) { throw 'Can OAuth client loai Desktop app (installed), khong phai Web app.' }
-$client = $configuration.installed
+if ($ClientJson) {
+    $configuration = Get-Content -LiteralPath $ClientJson -Raw | ConvertFrom-Json
+    if (!$configuration.PSObject.Properties['installed']) { throw 'Can OAuth client loai Desktop app (installed), khong phai Web app.' }
+    $client = $configuration.installed
+} else {
+    try {
+        $saved = Import-Clixml -LiteralPath (Get-DriveCredentialPath)
+        $client = [pscustomobject]@{client_id=$saved.ClientId;client_secret=[Net.NetworkCredential]::new('', $saved.ClientSecret).Password}
+    } catch { throw 'Khong doc duoc OAuth client da luu. Chay lai voi -ClientJson va duong dan OAuth Desktop client JSON.' }
+}
 if (!$client.client_id -or !$client.client_secret) { throw 'OAuth client JSON thieu client_id/client_secret.' }
 function New-OAuthRandom {
     $bytes = New-Object byte[] 32
@@ -28,7 +35,7 @@ try {
         state=$state;code_challenge=$challenge;code_challenge_method='S256'}
     $query = ($parameters.GetEnumerator() | ForEach-Object { $_.Key + '=' + [Uri]::EscapeDataString($_.Value) }) -join '&'
     $authUrl = 'https://accounts.google.com/o/oauth2/v2/auth?' + $query
-    Write-Host 'Dang mo trinh duyet dang nhap Google. Chon tai khoan co quyen ghi thu muc RELEASE va xem quyen tren trang Google.'
+    Write-Host 'Dang mo trinh duyet dang nhap Google. Chon tai khoan co quyen ghi thu muc can luu va xem quyen tren trang Google.'
     Write-Host '----------------------------------------------------------------------------------' -ForegroundColor Cyan
     Write-Host 'MEO: Neu trinh duyet bao "This site can''t be reached" hoac "Connection refused":' -ForegroundColor Yellow
     Write-Host 'Ban chi can COPY toan bo duong link tren thanh dia chi cua trinh duyet' -ForegroundColor Yellow
@@ -42,13 +49,16 @@ try {
         try {
             if ([Console]::KeyAvailable) {
                 $line = [Console]::ReadLine()
-                if ($line -match '[?&]code=([^&\s]+)') {
-                    $code = [Uri]::UnescapeDataString($Matches[1])
+                $manualUri = $null
+                if ([Uri]::TryCreate($line.Trim(),[UriKind]::Absolute,[ref]$manualUri) -and
+                    $manualUri.GetLeftPart([UriPartial]::Path) -ceq $redirect) {
+                    $manualQuery = [Web.HttpUtility]::ParseQueryString($manualUri.Query)
+                    if ($manualQuery.Get('state') -cne $state -or !$manualQuery.Get('code')) {
+                        Write-Host 'Link khong thuoc phien dang nhap nay. Hay dung trang Google vua mo.' -ForegroundColor Yellow
+                        continue
+                    }
+                    $code = $manualQuery.Get('code')
                     Write-Host 'Da nhan ma tu duong link ban dan vao! Dang xac thuc...' -ForegroundColor Green
-                    break
-                } elseif ($line.Trim().StartsWith('4/')) {
-                    $code = $line.Trim()
-                    Write-Host 'Da nhan ma xac thuc! Dang xu ly...' -ForegroundColor Green
                     break
                 }
             }

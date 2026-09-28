@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
   <PropertyGroup>
@@ -176,6 +176,10 @@
     <Compile Include="MainForm.CheckMenu.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="MainForm.Operations.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="TeklaOperationDispatcher.cs" />
     <Compile Include="MainForm.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -240,11 +244,15 @@
     <Compile Include="PHU_InzaiColumnSectionDimensionEngine.cs" />
     <Compile Include="PHU_VerticalShapeViewLayoutContext.cs" />
     <Compile Include="PHU_Slot07_DataCenterContext.cs" />
+    <Compile Include="PHU_Slot07_ColumnConnections.cs" />
+    <Compile Include="PHU_Slot07_ColumnGrid.cs" />
+    <Compile Include="PHU_Slot07_DrawingRoute.cs" />
     <Compile Include="PHU_Slot07_DataCenterBeamType2Context.cs" />
     <Compile Include="PHU_Slot07_DataCenterBeamType1SectionDimensionEngine.cs" />
     <Compile Include="PHU_Slot07_DataCenterBeamType2DimensionEngine.cs" />
     <Compile Include="PHU_LineDistance.cs" />
     <Compile Include="PHU_OpenGridView.cs" />
+    <Compile Include="PHU_FitNeighborEnvelope.cs" />
     <Compile Include="PHU_Slot02_NeighborReferencePlateDim.cs" />
     <Compile Include="PHU_Slot01_SelectedMainPartAutoDim.cs" />
     <Compile Include="PHU_Shape.cs" />
@@ -256,6 +264,9 @@
     <Compile Include="PHU_Shape_L.cs" />
     <Compile Include="PHU_Shape_Unknown.cs" />
     <Compile Include="PHU_MainPartResolver.cs" />
+    <Compile Include="MainForm.Keyplan.cs" />
+    <Compile Include="PHU_Keyplan.cs" />
+    <Compile Include="PHU_KeyplanForm.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Program.TeklaStartup.cs" />
     <Compile Include="MainForm.Updater.cs">
