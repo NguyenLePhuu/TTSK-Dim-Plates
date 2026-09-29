@@ -6,6 +6,8 @@
     <TeklaStructuresInstallationPath>$(TeklaBinPath)</TeklaStructuresInstallationPath>
   </PropertyGroup>
   <ItemGroup>
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
     <Compile Include="../../TTSK Dim Plates/TTSK Dim Plates/PHU_ArrangeView.cs" Link="PHU_ArrangeView.cs" />
     <Compile Include="../../TTSK Dim Plates/TTSK Dim Plates/PHU_SectionLayoutPlanner.cs" Link="PHU_SectionLayoutPlanner.cs" />
     <Compile Include="../../TTSK Dim Plates/TTSK Dim Plates/PHU_ArrangePresentation.cs" Link="PHU_ArrangePresentation.cs" />

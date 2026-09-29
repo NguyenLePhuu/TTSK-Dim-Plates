@@ -37,6 +37,14 @@ static class PresentationTests
         var wholePageKeyplan=Box(0,0,400,300);wholePageKeyplan.Id=42;
         var keyplan=PHU_ArrangePresentation.Parse(new[]{new FakeView{Id=-1,Position=new XY(),Primitives=new List<object>{wholePageKeyplan}}},new int[0],400,300,new[]{42});
         check(keyplan.Obstacles.Count==1&&keyplan.Obstacles[0].Contains(new Rect(1,1,399,299)),"keyplan filling the paper is never treated as a frame");
+        var target=Box(50,60,250,220);target.Id=77;
+        var other=Box(90,90,110,110);other.Id=78;
+        var raw=new[]{new FakeView{Id=-1,Position=new XY(),Primitives=new List<object>{target,other}}};
+        var normal=PHU_ArrangePresentation.Parse(raw,new int[0],400,300);
+        var region=PHU_ArrangePresentation.Parse(raw,new int[0],400,300,null,77);
+        check(normal.Obstacles.Any(b=>b.Contains(new Rect(50,60,250,220))),"unselected rectangle remains an obstacle");
+        check(region.Obstacles.Count==1&&region.Obstacles[0].Contains(new Rect(90,90,110,110))
+            &&!region.Obstacles[0].Contains(new Rect(50,60,250,220)),"exclude only chosen rectangle by identity; preserve interior obstacles");
         bool rejected=false;
         try{Read(new Segment{ObjectType=263,Primitives=new List<object>{new object()}});}catch(NotSupportedException){rejected=true;}
         check(rejected,"unknown visible geometry fails closed");

@@ -22,7 +22,7 @@ namespace TTSK_AutoDim_Plates
             public List<int> ViewIds = new List<int>();
             public List<double> ViewX = new List<double>(), ViewY = new List<double>();
         }
-        internal static Data Read(int[] viewIds, double width, double height)
+        internal static Data Read(int[] viewIds, double width, double height,int? ignoredRectangle=null)
         {
             var protectedTables=new List<int>();
             foreach(int id in Tekla.Structures.DrawingInternal.TableLayout.GetCurrentTables())
@@ -38,7 +38,7 @@ namespace TTSK_AutoDim_Plates
             {
                 var reader=(PHU_ArrangePresentationReader)domain.CreateInstanceFromAndUnwrap(
                     typeof(PHU_ArrangePresentationReader).Assembly.Location,typeof(PHU_ArrangePresentationReader).FullName);
-                return (Data)reader.ReadCurrent(viewIds,width,height,protectedTables.ToArray());
+                return (Data)reader.ReadCurrent(viewIds,width,height,protectedTables.ToArray(),ignoredRectangle);
             }
             finally { AppDomain.Unload(domain); }
         }
@@ -57,7 +57,7 @@ namespace TTSK_AutoDim_Plates
         static IEnumerable<object> Children(object o,string name="Primitives")
         { var e=Member(o,name) as IEnumerable;return e==null?Enumerable.Empty<object>():e.Cast<object>(); }
 
-        internal static Data Parse(IEnumerable raw,int[] viewIds,double width,double height,int[] protectedTableIds=null)
+        internal static Data Parse(IEnumerable raw,int[] viewIds,double width,double height,int[] protectedTableIds=null,int? ignoredRectangle=null)
         {
             var result=new Data();var known=new HashSet<int>(viewIds);
             var protectedTables=new HashSet<int>(protectedTableIds??new int[0]);
@@ -76,6 +76,7 @@ namespace TTSK_AutoDim_Plates
                 }
                 foreach(var group in Children(view))
                 {
+                    if(ignoredRectangle.HasValue && Convert.ToInt32(Member(group,"Id")??0)==ignoredRectangle.Value)continue;
                     var pieces=new List<Rect>(); Collect(group,x,y,pieces);
                     if(pieces.Count==0)continue;
                     var bounds=Union(pieces);
@@ -211,7 +212,7 @@ namespace TTSK_AutoDim_Plates
             [DllImport("wtsapi32.dll",SetLastError=true,CharSet=CharSet.Unicode)]
             static extern bool WTSQuerySessionInformation(IntPtr server,int session,int info,out IntPtr buffer,out int bytes);
             [DllImport("wtsapi32.dll")] static extern void WTSFreeMemory(IntPtr buffer);
-            public object ReadCurrent(int[] drawingViewIds, double paperWidth, double paperHeight,int[] protectedTableIds)
+            public object ReadCurrent(int[] drawingViewIds, double paperWidth, double paperHeight,int[] protectedTableIds,int? ignoredRectangle)
             {
                 string bin=Path.GetDirectoryName(typeof(D.Drawing).Assembly.Location);
                 // Use Tekla's presentation RPC directly: DrawingHandler remoting is not initialized in this AppDomain.
@@ -245,7 +246,7 @@ namespace TTSK_AutoDim_Plates
                         var convert=convertor.GetType("Tekla.Structures.DrawingPresentationModelConvertor.GrpcMessageConvertor",true).GetMethod("GetViews");
                         var raw=convert.Invoke(null,new[]{Member(response,"Views")}) as IEnumerable;
                         if(raw==null)throw new InvalidDataException("Không đọc được vùng né trên bản vẽ hiện hành. Chưa di chuyển view.");
-                        return PHU_ArrangePresentation.Parse(raw, drawingViewIds, paperWidth, paperHeight,protectedTableIds);
+                        return PHU_ArrangePresentation.Parse(raw, drawingViewIds, paperWidth, paperHeight,protectedTableIds,ignoredRectangle);
                     }
                     finally { channelType.GetMethod("ShutdownAsync").Invoke(channel,null); }
                 }

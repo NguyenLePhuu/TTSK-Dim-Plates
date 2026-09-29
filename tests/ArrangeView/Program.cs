@@ -9,8 +9,17 @@ class Program
     static int count;
     static void Check(bool ok,string name){if(!ok)throw new Exception(name);count++;}
     static P.Item Item(double w,double h) {return new P.Item{Width=w,Height=h};}
+    [STAThread]
     static void Main(string[] args)
     {
+        if(args.Length==3 && args[0]=="--ui-layout") { UiLayoutSmoke.Run(args[1],args[2]);return; }
+        if(args.Length>0 && args[0]=="--inspect") { SelectionAudit.Run(); return; }
+        if(args.Length==2 && args[0]=="--rectangle-live") { RectangleTests.Live(args[1]);return; }
+        if(args.Length>0 && args[0]=="--grid-audit") {
+            foreach(bool up in new[]{false,true})Console.WriteLine(PHU_ArrangeView.AuditCurrentLayoutWithMode(false,15,up,true));return;
+        }
+        if(args.Length==4 && args[0]=="--live-selection") { SelectionLive.Run(args[1],args[2],args[3]); return; }
+        if(args.Length==4 && args[0]=="--live-vertical-rows") { VerticalRowLive.Run(args[1],args[2],args[3]); return; }
         if((args.Length==2||args.Length==3) && args[0]=="--portable-audit")
         {
             var asm=System.Reflection.Assembly.LoadFrom(System.IO.Path.GetFullPath(args[1]));
@@ -33,6 +42,10 @@ class Program
             return;
         }
         var paper=new P.Rect(15,15,826,579);
+        SelectionTests.Run(Check);
+        VerticalRowTests.Run(Check);
+        AlignedGridTests.Run(Check);
+        RectangleTests.Run(Check);
         PresentationTests.Run(Check);
         GapTests.Run(Check);
         ReadingOrderTests.Run(Check);

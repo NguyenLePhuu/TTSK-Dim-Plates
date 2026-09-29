@@ -22,6 +22,8 @@ namespace TTSK_AutoDim_Plates
             public bool GapAdjusted;
             public double RequestedGap, EffectiveGap, RightGap;
             public string GapNotice;
+            public bool SelectionMode;
+            public int ProtectedSelectionCount;
 
             public string ToDisplayText()
             {
@@ -63,6 +65,12 @@ namespace TTSK_AutoDim_Plates
             bool verticalBottomUp
         )
         {
+            return Run(mainHorizontal, sectionHorizontal, gap, verticalBottomUp, false);
+        }
+
+        public static Result Run(bool mainHorizontal, bool sectionHorizontal, double gap,
+            bool verticalBottomUp, bool alignedGrid)
+        {
             Result result = new Result();
 
             try
@@ -92,7 +100,10 @@ namespace TTSK_AutoDim_Plates
 
                 List<View> mainViews;
                 List<View> regularSectionViews;
-                ClassifyViews(allViews, out mainViews, out regularSectionViews);
+                List<View> anchorViews;
+                Tekla.Structures.Drawing.Rectangle targetRectangle;
+                ResolveTargets(dh, allViews, out mainViews, out regularSectionViews,
+                    out anchorViews, out result.SelectionMode, out result.ProtectedSelectionCount, out targetRectangle);
 
                 // SECTION ONLY: không move Main View / Top / Bottom / Front / special section.
                 var plan=ArrangeRegularSectionViews(
@@ -101,10 +112,14 @@ namespace TTSK_AutoDim_Plates
                     regularSectionViews,
                     sectionHorizontal,
                     gap,
-                    verticalBottomUp
+                    verticalBottomUp,
+                    anchorViews,
+                    alignedGrid,
+                    targetRectangle
                 );
 
                 SelectViews(dh, regularSectionViews);
+                if(targetRectangle!=null)dh.GetDrawingObjectSelector().SelectObjects(new ArrayList { targetRectangle }, true);
 
                 result.Success = true;
                 result.MainCount = mainViews.Count;
@@ -116,9 +131,11 @@ namespace TTSK_AutoDim_Plates
                 result.GapNotice=plan.GapNotice;
                 result.Message =
                     result.SectionCount > 0
-                        ? "Đã arrange " + result.SectionCount + " section view."
-                        : "Không tìm thấy section thường để arrange.";
+                        ? "Đã arrange " + result.SectionCount + (result.SelectionMode ? " section đã chọn." : " section view (tự động).")
+                        : (result.SelectionMode ? "Selection không có section được phép di chuyển. Hãy chọn khung view mặt cắt." : "Không tìm thấy section thường để arrange.");
+                if(result.ProtectedSelectionCount>0)result.Message += " Giữ nguyên " + result.ProtectedSelectionCount + " view chính/Top/Bottom được chọn.";
                 if(result.GapAdjusted)result.Message += " " + result.GapNotice;
+                if(targetRectangle!=null)result.Message += " Trong vùng Rectangle đã chọn.";
                 return result;
             }
             catch (Exception ex)
@@ -152,6 +169,105 @@ namespace TTSK_AutoDim_Plates
             catch (Exception ex) { throw new InvalidOperationException("Không đọc đủ danh sách view.",ex); }
 
             return views;
+        }
+
+        private static void ResolveTargets(DrawingHandler handler, List<View> all,
+            out List<View> fixedViews, out List<View> movable, out List<View> anchors,
+            out bool selectionMode, out int protectedCount, out Tekla.Structures.Drawing.Rectangle targetRectangle)
+        {
+            List<View> automaticMain, automaticSections;
+            ClassifyViews(all, out automaticMain, out automaticSections);
+            var selected = new HashSet<int>();
+            selectionMode = false;
+            targetRectangle = null;
+            var objects = handler.GetDrawingObjectSelector().GetSelected();
+            while(objects.MoveNext())
+            {
+                selectionMode = true;
+                var view = objects.Current as View;
+                if(view != null)selected.Add(ViewId(view));
+                var rectangle = objects.Current as Tekla.Structures.Drawing.Rectangle;
+                if(rectangle!=null) {
+                    if(targetRectangle!=null && !targetRectangle.IsSameDatabaseObject(rectangle))
+                        throw new InvalidOperationException("Chỉ chọn một Rectangle làm vùng sắp xếp.");
+                    targetRectangle=rectangle;
+                }
+            }
+            if(targetRectangle!=null)selectionMode=selected.Count>0;
+            var front = FindFrontView(all);
+            if(front == null)front = FindWidestView(automaticMain);
+            var protectedIds = new HashSet<int>(all.Where(v => IsProtectedMainView(v, front)).Select(ViewId));
+            var movableIds = ResolveMovableIds(all.Select(ViewId), automaticSections.Select(ViewId),
+                selected, protectedIds, selectionMode);
+            movable = all.Where(v => movableIds.Contains(ViewId(v))).ToList();
+            fixedViews = all.Where(v => !movableIds.Contains(ViewId(v))).ToList();
+            // Unselected sections are obstacles, but must not expand the main
+            // cluster that determines the preferred lower row / right column.
+            anchors = automaticMain.Where(v => !movableIds.Contains(ViewId(v))).ToList();
+            protectedCount = selected.Count(id => protectedIds.Contains(id));
+            movable.Sort(CompareSectionViewsByNameThenPosition);
+            var rectangleOwner=targetRectangle==null?null:targetRectangle.GetView();
+            if(rectangleOwner!=null && movable.Any(v=>v.IsSameDatabaseObject(rectangleOwner)))
+                throw new InvalidOperationException("Rectangle nằm trong view đang được sắp xếp. Hãy vẽ Rectangle trên sheet hoặc view cố định.");
+        }
+
+        internal static PHU_SectionLayoutPlanner.Rect RestrictToRectangle(PHU_SectionLayoutPlanner.Rect paper,
+            Point start,Point end,double angle)
+        {
+            if(start==null||end==null||!PHU_SectionLayoutPlanner.Finite(angle)||Math.Abs(angle/90-Math.Round(angle/90))>0.000001)
+                throw new InvalidOperationException("Vùng sắp xếp cần là Rectangle có cạnh ngang/dọc.");
+            var region=new PHU_SectionLayoutPlanner.Rect(Math.Min(start.X,end.X)+2,
+                Math.Min(start.Y,end.Y)+2,Math.Max(start.X,end.X)-2,Math.Max(start.Y,end.Y)-2);
+            if(!region.Valid)throw new InvalidOperationException("Rectangle quá nhỏ hoặc tọa độ không hợp lệ.");
+            return region;
+        }
+
+        internal static HashSet<int> ResolveMovableIds(IEnumerable<int> all, IEnumerable<int> automatic,
+            IEnumerable<int> selected, IEnumerable<int> protectedIds, bool selectionMode)
+        {
+            var result = new HashSet<int>(selectionMode ? selected : automatic);
+            result.IntersectWith(all);
+            result.ExceptWith(protectedIds);
+            return result;
+        }
+
+        private static bool IsProtectedMainView(View view, View front)
+        {
+            if(IsKnownMainView(view) || (front != null && view.IsSameDatabaseObject(front)))return true;
+            if(front == null)return false;
+            return IsLongitudinalMainSection(view.DisplayCoordinateSystem, view.RestrictionBox,
+                front.DisplayCoordinateSystem, front.RestrictionBox);
+        }
+
+        // Model-coordinate orientation + model-space coverage, independent of
+        // section letters, sheet position, view scale and annotation extents.
+        internal static bool IsLongitudinalMainSection(CoordinateSystem section, AABB sectionBox,
+            CoordinateSystem front, AABB frontBox)
+        {
+            if(section == null || front == null || sectionBox == null || frontBox == null)return false;
+            Vector sx=Unit(section.AxisX), sy=Unit(section.AxisY), fx=Unit(front.AxisX), fy=Unit(front.AxisY);
+            if(sx==null||sy==null||fx==null||fy==null)return false;
+            Vector sn=Unit(Vector.Cross(sx,sy)), fn=Unit(Vector.Cross(fx,fy));
+            if(sn==null||fn==null)return false;
+            double width=Math.Abs(frontBox.MaxPoint.X-frontBox.MinPoint.X);
+            double height=Math.Abs(frontBox.MaxPoint.Y-frontBox.MinPoint.Y);
+            double length=Math.Max(width,height);
+            if(!PHU_SectionLayoutPlanner.Finite(length)||length<=1)return false;
+            Vector longitudinal=width>=height?fx:fy;
+            // Top/Bottom-type planes contain the main longitudinal axis and
+            // are perpendicular to the front plane. Transverse sections fail.
+            if(Math.Abs(Vector.Dot(sn,longitudinal))>.1 || Math.Abs(Vector.Dot(sn,fn))>.1)return false;
+            double span=Math.Abs(Vector.Dot(sx,longitudinal))*Math.Abs(sectionBox.MaxPoint.X-sectionBox.MinPoint.X)
+                +Math.Abs(Vector.Dot(sy,longitudinal))*Math.Abs(sectionBox.MaxPoint.Y-sectionBox.MinPoint.Y);
+            return PHU_SectionLayoutPlanner.Finite(span) && span>=length*.55;
+        }
+
+        private static Vector Unit(Vector vector)
+        {
+            if(vector==null)return null;
+            double length=vector.GetLength();
+            if(!PHU_SectionLayoutPlanner.Finite(length)||length<1e-9)return null;
+            return new Vector(vector.X/length,vector.Y/length,vector.Z/length);
         }
 
         private static void ClassifyViews(
@@ -192,7 +308,9 @@ namespace TTSK_AutoDim_Plates
             {
                 // View tên A/B/C... hoặc A-A/B-B... là section thường chắc chắn.
                 // Không cho rule hình học nhận nhầm I/J hoặc các section rộng thành special/main.
-                if (IsNamedSectionView(section))
+                if (IsProtectedMainView(section, frontView))
+                    AddUniqueView(mainViews, section);
+                else if (IsNamedSectionView(section))
                     AddUniqueView(regularSectionViews, section);
                 else if (IsSpecialTopBottomSection(section, frontView, frontWidth))
                     AddUniqueView(mainViews, section);
@@ -255,7 +373,7 @@ namespace TTSK_AutoDim_Plates
                     if (v == null)
                         continue;
 
-                    if (IsKnownMainView(v))
+                    if (IsProtectedMainView(v, frontView))
                         continue;
 
                     ViewBox b;
@@ -343,7 +461,8 @@ namespace TTSK_AutoDim_Plates
         private static PHU_SectionLayoutPlanner.Rect Rectangle(ViewBox b)
         { return new PHU_SectionLayoutPlanner.Rect(b.MinX,b.MinY,b.MaxX,b.MaxY); }
 
-        private static LayoutSnapshot CaptureLayout(Drawing drawing,List<View> mainViews,List<View> sectionViews)
+        private static LayoutSnapshot CaptureLayout(Drawing drawing,List<View> mainViews,List<View> sectionViews,List<View> anchorViews=null,
+            Tekla.Structures.Drawing.Rectangle targetRectangle=null)
         {
             var sheet=drawing.GetSheet();double width=sheet.Width,height=sheet.Height;
             if(!PHU_SectionLayoutPlanner.Finite(width)||!PHU_SectionLayoutPlanner.Finite(height)||width<=30||height<=30)
@@ -354,7 +473,17 @@ namespace TTSK_AutoDim_Plates
             sections.Sort(CompareSectionBoxesByNameThenPosition);
             var all=mainViews.Concat(sectionViews).ToList();
             var ids=all.Select(ViewId).ToArray();
-            var rendered=PHU_ArrangePresentation.Read(ids,width,height);
+            var paper=new PHU_SectionLayoutPlanner.Rect(MIN_EDGE_SAFE,MIN_EDGE_SAFE,width-MIN_EDGE_SAFE,height-MIN_EDGE_SAFE);
+            int? ignoredRectangle=null;
+            if(targetRectangle!=null) {
+                if(!targetRectangle.Select())throw new InvalidOperationException("Không đọc lại được Rectangle đã chọn.");
+                var owner=targetRectangle.GetView();
+                var start=Tekla.Structures.Drawing.Tools.DrawingCoordinateConverter.Convert(owner,sheet,targetRectangle.StartPoint);
+                var end=Tekla.Structures.Drawing.Tools.DrawingCoordinateConverter.Convert(owner,sheet,targetRectangle.EndPoint);
+                paper=RestrictToRectangle(paper,start,end,targetRectangle.Angle);
+                ignoredRectangle=ObjectId(targetRectangle);
+            }
+            var rendered=PHU_ArrangePresentation.Read(ids,width,height,ignoredRectangle);
             for(int i=0;i<all.Count;i++)
             {
                 int index=rendered.ViewIds.IndexOf(ids[i]);var origin=all[i].Origin;
@@ -362,27 +491,32 @@ namespace TTSK_AutoDim_Plates
                     throw new InvalidOperationException("Dữ liệu hiển thị chưa khớp vị trí view. Hãy refresh bản vẽ rồi chạy lại.");
             }
             var obstacles=fixedViews.Select(Rectangle).ToList();
+            var anchors=anchorViews==null?fixedViews:fixedViews.Where(b=>anchorViews.Any(v=>v.IsSameDatabaseObject(b.View))).ToList();
             // The fixed clearance is only a small drawing stroke/rounding allowance;
             // obstacle widths and heights always come from current presentation data.
             obstacles.AddRange(rendered.Obstacles.Select(r=>r.Inflate(2)));
             return new LayoutSnapshot {
-                Sections=sections,Fixed=fixedViews,Paper=new PHU_SectionLayoutPlanner.Rect(MIN_EDGE_SAFE,MIN_EDGE_SAFE,width-MIN_EDGE_SAFE,height-MIN_EDGE_SAFE),
-                Obstacles=obstacles,Main=fixedViews.Count==0?null:Rectangle(GetClusterBoxFromBoxes(fixedViews)),
-                Items=sections.Select(b=>new PHU_SectionLayoutPlanner.Item{Key=b.SortKey,Width=b.Width,Height=b.Height}).ToList()
+                Sections=sections,Fixed=fixedViews,Paper=paper,
+                Obstacles=obstacles,Main=targetRectangle!=null||anchors.Count==0?null:Rectangle(GetClusterBoxFromBoxes(anchors)),
+                Items=sections.Select(b=>new PHU_SectionLayoutPlanner.Item{Key=b.SortKey,Width=b.Width,Height=b.Height,AnchorX=b.View.Origin.X-b.MinX}).ToList()
             };
         }
         private static int ViewId(View view)
+        { return ObjectId(view); }
+        private static int ObjectId(DatabaseObject view)
         {
-            var property=typeof(View).GetProperty("Identifier",BindingFlags.Instance|BindingFlags.Public|BindingFlags.NonPublic);
+            var property=view.GetType().GetProperty("Identifier",BindingFlags.Instance|BindingFlags.Public|BindingFlags.NonPublic);
             var id=property==null?null:property.GetValue(view,null) as Tekla.Structures.Identifier;
             if(id==null||id.ID<=0)throw new InvalidOperationException("Không đọc được định danh view.");return id.ID;
         }
         private static PHU_SectionLayoutPlanner.Plan ArrangeRegularSectionViews(Drawing drawing,List<View> mainViews,List<View> sectionViews,
-            bool horizontal,double gap,bool verticalBottomUp)
+            bool horizontal,double gap,bool verticalBottomUp,List<View> anchorViews=null,bool alignedGrid=false,
+            Tekla.Structures.Drawing.Rectangle targetRectangle=null)
         {
             if(sectionViews.Count==0)return new PHU_SectionLayoutPlanner.Plan{RequestedGap=gap,GlobalGap=gap,RightGap=gap};
-            var snapshot=CaptureLayout(drawing,mainViews,sectionViews);
-            var plan=PHU_SectionLayoutPlanner.Build(snapshot.Paper,snapshot.Items,snapshot.Obstacles,snapshot.Main,gap,horizontal,verticalBottomUp);
+            var snapshot=CaptureLayout(drawing,mainViews,sectionViews,anchorViews,targetRectangle);
+            var plan=PHU_SectionLayoutPlanner.Build(snapshot.Paper,snapshot.Items,snapshot.Obstacles,snapshot.Main,gap,horizontal,verticalBottomUp,
+                alignedGrid?PHU_SectionLayoutPlanner.VerticalLayout.AlignedGrid:PHU_SectionLayoutPlanner.VerticalLayout.LegacyColumns);
             if(!plan.Success)throw new InvalidOperationException(plan.Error);
             var originals=snapshot.Sections.Select(b=>new Point(b.View.Origin)).ToList();
             var fixedOrigins=snapshot.Fixed.Select(b=>new Point(b.View.Origin)).ToList();
@@ -402,7 +536,7 @@ namespace TTSK_AutoDim_Plates
                 VerifyApplied(snapshot,plan,gap,fixedOrigins);
                 drawing.CommitChanges();
                 VerifyApplied(snapshot,plan,gap,fixedOrigins);
-                var refreshed=CaptureLayout(drawing,mainViews,sectionViews);
+                var refreshed=CaptureLayout(drawing,mainViews,sectionViews,anchorViews,targetRectangle);
                 if(!PHU_SectionLayoutPlanner.ValidatePlan(refreshed.Paper,refreshed.Items,refreshed.Obstacles,
                     refreshed.Main,plan,refreshed.Sections.Select(Rectangle).ToList()))
                     throw new InvalidOperationException("Layout bảng/keyplan sau cập nhật không còn đủ khoảng trống.");
@@ -445,11 +579,22 @@ namespace TTSK_AutoDim_Plates
         // Explicitly read-only entry point for diagnostics and regression on the open drawing.
         public static string AuditCurrentLayout(bool horizontal,double gap,bool bottomUp)
         {
+            return AuditCurrentLayoutWithMode(horizontal,gap,bottomUp,false);
+        }
+
+        public static string AuditCurrentLayoutWithMode(bool horizontal,double gap,bool bottomUp,bool alignedGrid)
+        {
             var handler=new DrawingHandler();if(!handler.GetConnectionStatus())throw new InvalidOperationException("No Drawing API connection");
             var drawing=handler.GetActiveDrawing();if(drawing==null)throw new InvalidOperationException("No active drawing");
-            List<View> main,sections;ClassifyViews(GetAllViews(drawing),out main,out sections);
-            var s=CaptureLayout(drawing,main,sections);var p=PHU_SectionLayoutPlanner.Build(s.Paper,s.Items,s.Obstacles,s.Main,gap,horizontal,bottomUp);
+            List<View> main,sections,anchors;bool selectionMode;int protectedCount;
+            Tekla.Structures.Drawing.Rectangle targetRectangle;
+            ResolveTargets(handler,GetAllViews(drawing),out main,out sections,out anchors,out selectionMode,out protectedCount,out targetRectangle);
+            var s=CaptureLayout(drawing,main,sections,anchors,targetRectangle);var p=PHU_SectionLayoutPlanner.Build(s.Paper,s.Items,s.Obstacles,s.Main,gap,horizontal,bottomUp,
+                alignedGrid?PHU_SectionLayoutPlanner.VerticalLayout.AlignedGrid:PHU_SectionLayoutPlanner.VerticalLayout.LegacyColumns);
             var text=new System.Text.StringBuilder("ARRANGE READ ONLY "+drawing.Mark+"\r\nPaper="+s.Paper+" Gap="+gap+"\r\n");
+            text.AppendLine("SelectionMode="+selectionMode+" ProtectedSelected="+protectedCount);
+            text.AppendLine("Layout="+(alignedGrid?"AlignedGrid":"Legacy")+" Columns="+p.GridColumns);
+            foreach(var b in s.Fixed)text.AppendLine("FIXED id="+ViewId(b.View)+" name="+SafeViewName(b.View)+" origin="+b.View.Origin);
             foreach(var obstacle in s.Obstacles)text.AppendLine("OBSTACLE "+obstacle);
             for(int i=0;i<s.Sections.Count;i++)text.AppendLine("VIEW "+s.Sections[i].SortKey+" "+Rectangle(s.Sections[i])+(p.Success?" => "+p.Places[i]:""));
             text.AppendLine(p.Success?"PLAN PASS":p.Error);

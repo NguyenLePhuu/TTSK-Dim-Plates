@@ -332,8 +332,8 @@ namespace Tekla.Technology.Akit.UserScript
                 }
                 else
                 {
-                    // Legacy selection flow giu nguyen cach ghep plate voi
-                    // neighbor gan nhat trong tap neighbor da resolve.
+                    // Keep each plate's assembly/bolt ownership separate. A pooled
+                    // nearest-center search can cross to an unrelated opposite beam.
                     for (int i = 0; i < plates.Count; i++)
                     {
                         ModelPart plate = plates[i];
@@ -354,13 +354,21 @@ namespace Tekla.Technology.Akit.UserScript
                         Bounds2D nearestNeighborBox;
                         if (
                             !FindNearestNeighborBeam(
+                                plate,
+                                mainBeam,
                                 plateCenterForSelection,
+                                mainReferenceStart,
+                                mainReferenceEnd,
                                 neighborBeams,
                                 out nearestNeighbor,
                                 out nearestNeighborBox
                             )
                         )
-                            continue;
+                        {
+                            Msg("Slot02: Không xác định chắc chắn neighbor cùng cụm cho một plate đã chọn. "
+                                + "Kiểm tra quan hệ assembly/bolt và hướng của plate. Chưa tạo DIM mới.");
+                            return count;
+                        }
 
                         Slot02AutomaticConnection legacyConnection =
                             new Slot02AutomaticConnection();
@@ -1238,7 +1246,11 @@ namespace Tekla.Technology.Akit.UserScript
         }
 
         private static bool FindNearestNeighborBeam(
+            ModelPart plate,
+            ModelPart mainBeam,
             Point plateCenter,
+            Point mainReferenceStart,
+            Point mainReferenceEnd,
             List<ModelPart> neighborBeams,
             out ModelPart neighborBeam,
             out Bounds2D neighborBox
@@ -1251,34 +1263,79 @@ namespace Tekla.Technology.Akit.UserScript
             if (plateCenter == null || neighborBeams == null || neighborBeams.Count == 0)
                 return false;
 
-            double bestDistance = 999999999.0;
+            List<ModelPart> related = new List<ModelPart>();
+            AddSemanticNeighborBeamsForPlate(plate, mainBeam, related);
+            List<Bounds2D> boxes = new List<Bounds2D>();
+            List<bool> ownership = new List<bool>();
 
             for (int i = 0; i < neighborBeams.Count; i++)
             {
                 ModelPart candidate = neighborBeams[i];
-                if (candidate == null)
-                    continue;
-
-                Bounds2D box = GetPartBounds2D(candidate);
-                if (!box.Valid)
-                    continue;
-
-                Point center = new Point(
-                    (box.MinX + box.MaxX) / 2.0,
-                    (box.MinY + box.MaxY) / 2.0,
-                    0
-                );
-
-                double d = Distance2D(plateCenter, center);
-                if (d < bestDistance)
-                {
-                    bestDistance = d;
-                    neighborBeam = candidate;
-                    neighborBox = box;
-                }
+                boxes.Add(candidate == null ? new Bounds2D() : GetPartBounds2D(candidate));
+                ownership.Add(candidate != null && ContainsModelPart(related, candidate.Identifier));
             }
 
-            return neighborBeam != null && neighborBox.Valid;
+            int index = ResolveSelectedNeighborIndex(
+                plateCenter, mainReferenceStart, mainReferenceEnd, boxes, ownership,
+                related.Count > 0
+            );
+            if (index < 0)
+                return false;
+
+            neighborBeam = neighborBeams[index];
+            neighborBox = boxes[index];
+            return true;
+        }
+
+        // Pure view-coordinate selector. Preserve legacy center-distance ranking
+        // within the eligible pool; never fall back across known model ownership.
+        private static int ResolveSelectedNeighborIndex(
+            Point plateCenter,
+            Point mainStart,
+            Point mainEnd,
+            List<Bounds2D> boxes,
+            List<bool> ownership,
+            bool hasKnownOwnership
+        )
+        {
+            if (!IsFinitePoint2D(plateCenter)
+                || !IsReferenceAxisAligned(mainStart, mainEnd, true)
+                || boxes == null || ownership == null || boxes.Count != ownership.Count)
+                return -1;
+
+            double slope = (mainEnd.Y - mainStart.Y) / (mainEnd.X - mainStart.X);
+            double plateSide = plateCenter.Y - (mainStart.Y + slope * (plateCenter.X - mainStart.X));
+            int best = -1;
+            double bestDistance = Double.MaxValue;
+            bool ambiguous = false;
+            for (int i = 0; i < boxes.Count; i++)
+            {
+                Bounds2D box = boxes[i];
+                if (!box.Valid || (hasKnownOwnership && !ownership[i]))
+                    continue;
+                Point center = new Point((box.MinX + box.MaxX) / 2.0, (box.MinY + box.MaxY) / 2.0, 0);
+                if (!IsFinitePoint2D(center))
+                    continue;
+                if (!hasKnownOwnership)
+                {
+                    double side = center.Y - (mainStart.Y + slope * (center.X - mainStart.X));
+                    // Without topology, a center on the main axis cannot prove
+                    // which outward branch owns the plate. Do not guess.
+                    if (Math.Abs(plateSide) <= TOL || Math.Abs(side) <= TOL
+                        || (plateSide > 0) != (side > 0))
+                        continue;
+                }
+                double distance = Distance2D(plateCenter, center);
+                if (distance < bestDistance)
+                {
+                    ambiguous = best >= 0 && bestDistance - distance <= TOL;
+                    bestDistance = distance;
+                    best = i;
+                }
+                else if (distance - bestDistance <= TOL)
+                    ambiguous = true;
+            }
+            return ambiguous ? -1 : best;
         }
 
         private static int ComparePointByXThenY(Point a, Point b)

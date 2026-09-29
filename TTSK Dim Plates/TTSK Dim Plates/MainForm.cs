@@ -135,6 +135,7 @@ namespace TTSK_AutoDim_Plates
         private BorderNumericUpDown nudNeighborGridY;
         private BorderNumericUpDown nudArrangeGap;
         private BorderComboBox cboDimScope;
+        private ArrangeLayoutSwitch cboArrangeLayout;
         private Panel arrangeMainHorizontalBox;
         private Panel arrangeMainVerticalBox;
         private Panel arrangeSectionHorizontalBox;
@@ -1376,6 +1377,14 @@ namespace TTSK_AutoDim_Plates
             slideArrangePanel.Controls[7].SetBounds(20, 358, 274, 44);
             BuildArrangeReferenceControls();
             slideArrangePanel.Controls[slideArrangePanel.Controls.Count - 1].SetBounds(20, 414, 274, 44);
+            cboArrangeLayout = new ArrangeLayoutSwitch();
+            cboArrangeLayout.SelectedIndex = 0;
+            cboArrangeLayout.AccessibleName = "Kiểu sắp xếp dọc";
+            cboArrangeLayout.SetBounds(47, 305, 220, 46);
+            cboArrangeLayout.Enabled = !arrangeSectionHorizontal;
+            slideArrangePanel.Controls.Add(cboArrangeLayout);
+            // Existing theme code keeps the reference-layout action last.
+            slideArrangePanel.Controls.SetChildIndex(cboArrangeLayout, slideArrangePanel.Controls.Count - 2);
             slideArrangePanel.Height = 478;
 
             slideGridPanel.Height = 268;
@@ -1598,22 +1607,31 @@ namespace TTSK_AutoDim_Plates
         {
             Control illustration = panel.Controls[0];
             illustration.Text = "";
-            illustration.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+            illustration.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
             illustration.SetBounds(1, 1, panel.Width - 2, panel.Height - 2);
             illustration.Paint += delegate(object sender, PaintEventArgs e)
             {
                 bool selected = horizontal == arrangeSectionHorizontal;
                 Color color = selected ? (_darkMode ? Color.FromArgb(224, 156, 96) : BrightBlue)
                     : (_darkMode ? Color.FromArgb(160, 170, 184) : Color.FromArgb(110, 121, 137));
-                using (Pen pen = new Pen(color, 1.6F))
+                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                using (Pen pen = new Pen(color, 1.8F))
+                using (SolidBrush fill = new SolidBrush(Color.FromArgb(selected ? 35 : 14, color)))
                 {
                     if (horizontal)
-                        for (int i = 0; i < 3; i++) e.Graphics.DrawRectangle(pen, 18 + i * 33, 38, 26, 30);
+                        for (int i = 0; i < 3; i++) {
+                            var r = new RectangleF(18 + i * 33, 36, 26, 34);
+                            using(var path=ArrangeLayoutSwitch.Outline(r,3)){e.Graphics.FillPath(fill,path);e.Graphics.DrawPath(pen,path);}
+                        }
                     else
-                        for (int i = 0; i < 3; i++) e.Graphics.DrawRectangle(pen, 42, 23 + i * 20, 46, 14);
+                        for (int i = 0; i < 3; i++) {
+                            var r = new RectangleF(40, 22 + i * 22, 50, 16);
+                            using(var path=ArrangeLayoutSwitch.Outline(r,3)){e.Graphics.FillPath(fill,path);e.Graphics.DrawPath(pen,path);}
+                        }
                 }
                 TextRenderer.DrawText(e.Graphics, horizontal ? "Xếp ngang" : "Xếp dọc",
-                    illustration.Font, new System.Drawing.Rectangle(0, 98, illustration.Width, 24), color,
+                    illustration.Font, new System.Drawing.Rectangle(0, 98, illustration.Width, 24),
+                    _darkMode ? Color.FromArgb(233,236,242) : Color.FromArgb(40,51,70),
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             };
         }
@@ -3764,6 +3782,14 @@ namespace TTSK_AutoDim_Plates
             StyleArrangeOption(arrangeSectionVerticalBox, !arrangeSectionHorizontal);
 
             bool showVerticalSwitch = !arrangeSectionHorizontal;
+            if(cboArrangeLayout != null)
+            {
+                cboArrangeLayout.Enabled = showVerticalSwitch;
+                cboArrangeLayout.DarkMode = _darkMode;
+                cboArrangeLayout.AccentColor = PrimaryButtonColor;
+                cboArrangeLayout.BackColor = _darkMode ? Color.FromArgb(22,22,22) : Color.White;
+                cboArrangeLayout.Invalidate();
+            }
 
             if (arrangeVerticalOrderBox != null)
             {
@@ -5552,40 +5578,8 @@ namespace TTSK_AutoDim_Plates
             bool verticalBottomUp
         )
         {
-            try
-            {
-                if (!sectionHorizontal)
-                {
-                    Type arrangeType = typeof(PHU_ArrangeView);
-
-                    MethodInfo run3 = arrangeType.GetMethod(
-                        "Run",
-                        new Type[] { typeof(bool), typeof(double), typeof(bool) }
-                    );
-
-                    if (run3 != null)
-                        return (PHU_ArrangeView.Result)
-                            run3.Invoke(
-                                null,
-                                new object[] { sectionHorizontal, gap, verticalBottomUp }
-                            );
-
-                    MethodInfo run4 = arrangeType.GetMethod(
-                        "Run",
-                        new Type[] { typeof(bool), typeof(bool), typeof(double), typeof(bool) }
-                    );
-
-                    if (run4 != null)
-                        return (PHU_ArrangeView.Result)
-                            run4.Invoke(
-                                null,
-                                new object[] { false, sectionHorizontal, gap, verticalBottomUp }
-                            );
-                }
-            }
-            catch { }
-
-            return PHU_ArrangeView.Run(sectionHorizontal, gap);
+            bool alignedGrid = ReadUi(() => cboArrangeLayout != null && cboArrangeLayout.SelectedIndex == 1);
+            return PHU_ArrangeView.Run(false, sectionHorizontal, gap, verticalBottomUp, alignedGrid);
         }
 
         private void RunArrangeView()
@@ -13969,6 +13963,105 @@ namespace TTSK_AutoDim_Plates
                     {
                         e.Graphics.DrawString("2", f, brush, rightTextRect, sf);
                     }
+                }
+            }
+        }
+
+        private sealed class ArrangeLayoutSwitch : Control
+        {
+            private int selectedIndex, hoverIndex = -1;
+            public bool DarkMode { get; set; }
+            public Color AccentColor { get; set; }
+            public int SelectedIndex
+            {
+                get { return selectedIndex; }
+                set {
+                    selectedIndex = value == 1 ? 1 : 0;
+                    AccessibleName = selectedIndex == 0 ? "Xếp theo cột (kiểu cũ)" : "Xếp theo hàng, căn cột";
+                    Invalidate();
+                    AccessibilityNotifyClients(AccessibleEvents.ValueChange, -1);
+                }
+            }
+            public ArrangeLayoutSwitch()
+            {
+                SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                    ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
+                TabStop = true; Cursor = Cursors.Hand;
+                AccessibleRole = AccessibleRole.List;
+                AccessibleDescription = "Hai lựa chọn: theo cột hoặc theo hàng. Dùng phím trái/phải để chọn.";
+                AccentColor = Color.FromArgb(37,99,235);
+                SelectedIndex = 0;
+            }
+            protected override bool IsInputKey(Keys keyData)
+            { return (keyData & Keys.KeyCode) == Keys.Left || (keyData & Keys.KeyCode) == Keys.Right || base.IsInputKey(keyData); }
+            protected override void OnKeyDown(KeyEventArgs e)
+            {
+                if(Enabled && (e.KeyCode == Keys.Left || e.KeyCode == Keys.Right || e.KeyCode == Keys.Space))
+                { SelectedIndex = e.KeyCode == Keys.Left ? 0 : e.KeyCode == Keys.Right ? 1 : 1-SelectedIndex; e.Handled = true; e.SuppressKeyPress = true; }
+                base.OnKeyDown(e);
+            }
+            protected override void OnMouseDown(MouseEventArgs e)
+            {
+                if(Enabled && e.Button == MouseButtons.Left) { Focus(); SelectedIndex = e.X < Width/2 ? 0 : 1; }
+                base.OnMouseDown(e);
+            }
+            protected override void OnMouseMove(MouseEventArgs e)
+            {
+                int index = e.X < Width/2 ? 0 : 1;
+                if(hoverIndex != index) {
+                    hoverIndex = index;
+                    Invalidate();
+                }
+                base.OnMouseMove(e);
+            }
+            protected override void OnMouseLeave(EventArgs e) { hoverIndex = -1; Invalidate(); base.OnMouseLeave(e); }
+            protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
+            protected override void OnLostFocus(EventArgs e) { Invalidate(); base.OnLostFocus(e); }
+            protected override void OnEnabledChanged(EventArgs e) { Invalidate(); base.OnEnabledChanged(e); }
+            public static GraphicsPath Outline(RectangleF r, float radius)
+            {
+                var p = new GraphicsPath(); float d = radius*2;
+                p.AddArc(r.Left,r.Top,d,d,180,90); p.AddArc(r.Right-d,r.Top,d,d,270,90);
+                p.AddArc(r.Right-d,r.Bottom-d,d,d,0,90); p.AddArc(r.Left,r.Bottom-d,d,d,90,90); p.CloseFigure();return p;
+            }
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                base.OnPaint(e); var g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
+                Color muted = DarkMode ? Color.FromArgb(174,182,195) : Color.FromArgb(89,102,125);
+                Color edge = DarkMode ? Color.FromArgb(53,55,60) : Color.FromArgb(224,230,239);
+                using(var path=Outline(new RectangleF(.5f,.5f,Width-1,Height-1),10))
+                using(var brush=new SolidBrush(DarkMode?Color.FromArgb(28,28,28):Color.FromArgb(245,247,251)))
+                using(var pen=new Pen(edge)) {g.FillPath(brush,path);g.DrawPath(pen,path);}
+                for(int index=0;index<2;index++)
+                {
+                    float half=Width/2f; var box=new RectangleF(index*half+3,3,half-6,Height-6);
+                    bool active=Enabled && index==SelectedIndex;
+                    if(active || (Enabled && hoverIndex==index))
+                        using(var path=Outline(box,7))
+                        using(var brush=new SolidBrush(active ? (DarkMode?Color.FromArgb(53,55,62):Color.White)
+                            : (DarkMode?Color.FromArgb(38,38,38):Color.FromArgb(234,239,248))))
+                        {g.FillPath(brush,path);}
+                    Color ink=Enabled?(active?(DarkMode?Color.FromArgb(248,249,252):Color.FromArgb(30,47,81)):muted):(DarkMode?Color.FromArgb(80,80,80):Color.FromArgb(184,191,203));
+                    float x=box.Left+24,y=(Height-34)/2f;
+                    using(var font=new Font("Segoe UI",10f,FontStyle.Bold))
+                    using(var pen=new Pen(active?AccentColor:ink,1.8f))
+                    using(var fill=new SolidBrush(Color.FromArgb(active?40:12,active?AccentColor:ink)))
+                    using(var sf=new StringFormat{Alignment=StringAlignment.Center,LineAlignment=StringAlignment.Center})
+                    using(var text=new SolidBrush(ink))
+                    {
+                        for(int row=0;row<2;row++)for(int col=0;col<2;col++) {
+                            var cell=new RectangleF(x+col*20,y+row*18,17,16);
+                            if(index==0?col==0:row==0)
+                                using(var cellPath=Outline(cell,3))g.FillPath(fill,cellPath);
+                            string number=(index==0?col*2+row+1:row*2+col+1).ToString();
+                            g.DrawString(number,font,text,cell,sf);
+                        }
+                        float ax=x+55,ay=Height/2f;
+                        if(index==0){g.DrawLine(pen,ax,ay-6,ax,ay+6);g.DrawLine(pen,ax-3,ay+3,ax,ay+6);g.DrawLine(pen,ax+3,ay+3,ax,ay+6);}
+                        else {g.DrawLine(pen,ax-6,ay,ax+6,ay);g.DrawLine(pen,ax+3,ay-3,ax+6,ay);g.DrawLine(pen,ax+3,ay+3,ax+6,ay);}
+                    }
+                    if(Focused && ShowFocusCues && index==SelectedIndex)
+                        ControlPaint.DrawFocusRectangle(g,System.Drawing.Rectangle.Round(new RectangleF(box.X+3,box.Y+3,box.Width-6,box.Height-6)),ink,BackColor);
                 }
             }
         }
