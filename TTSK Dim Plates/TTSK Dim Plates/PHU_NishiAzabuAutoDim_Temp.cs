@@ -1,20 +1,30 @@
+﻿// DIM Nishi Azabu: hai topology dùng chung đọc hình học và bộ ghi DIM.
+// LUỒNG: Run/RunSlot07 → AnalyzeDrawing → BuildAllPlans* → ValidateReady* → tạo/kiểm tra DIM → xóa nền → commit.
+// ĐIỂM SỬA: topology đầu ở BuildAllPlans; topology hai ở BuildAllPlansSlot07. Tên RunSlot07 ở đây là tên nội bộ lịch sử.
+// THAM SỐ: GeometryTolerance/AxisAlignmentTolerance là mm view; TierStep lấy theo scale tại ReadViewGeometry.
+// LƯU Ý: BaseDimensionSetCount/MaximumOffsetDimensionCount kiểm tra số DIM hợp lệ; không đổi để bỏ qua lỗi thiếu hình học.
+// TRA CỨU: PROJECT_MAP.md ở gốc repo; chỉ mục kiểu/hàm và điểm chỉnh thông số.
+// Mục lục:
+//   PHU_NishiAzabuAutoDim_Temp.cs
+//   PHU_NishiAzabuTopology2AutoDim_Temp.cs
+
+#region PHU_NishiAzabuAutoDim_Temp - Engine DIM Nishi Azabu
 #pragma warning disable 1633
-
-using System;
-using System.Collections;
-using System.Collections.Generic;
-using System.Globalization;
-using System.Reflection;
-using System.Runtime.CompilerServices;
-using System.Text;
-using System.Windows.Forms;
-
-using TSD = Tekla.Structures.Drawing;
-using TSG = Tekla.Structures.Geometry3d;
-using TSM = Tekla.Structures.Model;
 
 namespace Tekla.Technology.Akit.UserScript
 {
+    using System;
+    using System.Collections;
+    using System.Collections.Generic;
+    using System.Globalization;
+    using System.Reflection;
+    using System.Runtime.CompilerServices;
+    using System.Text;
+    using System.Windows.Forms;
+    using TSD = Tekla.Structures.Drawing;
+    using TSG = Tekla.Structures.Geometry3d;
+    using TSM = Tekla.Structures.Model;
+
     /// <summary>
     /// Nishi Azabu one-click dimensioning. This implementation is isolated from
     /// every existing Auto Dimension slot.
@@ -45,9 +55,11 @@ namespace Tekla.Technology.Akit.UserScript
 
     internal static class PHU_NishiAzabuDimensionEngine
     {
+        // KIỂM CHỨNG TOPOLOGY ĐẦU: 31 DIM nền, thêm tối đa 3 DIM lệch trục; topology hai dùng ValidateReadySlot07.
         private const int BaseDimensionSetCount = 31;
         private const int MaximumOffsetDimensionCount = 3;
         private const double GeometryTolerance = 0.05;
+        // CHỈNH NGƯỠNG (mm view): lệch trục vượt mức này mới tạo DIM offset; tăng làm bớt DIM offset nhỏ.
         private const double AxisAlignmentTolerance = 0.5;
 
         private enum DimSide
@@ -3141,3 +3153,43 @@ namespace Tekla.Technology.Akit.UserScript
         }
     }
 }
+#pragma warning restore
+#endregion
+
+#region PHU_NishiAzabuTopology2AutoDim_Temp - Điểm gọi topology thứ hai Nishi Azabu
+#pragma warning disable 1633
+
+namespace Tekla.Technology.Akit.UserScript
+{
+
+
+    /// <summary>
+    /// Nishi Azabu topology 2.  The implementation has its own plan builders;
+    /// slot 06 continues to use the original topology 1 entry point.
+    /// </summary>
+    public class PHU_NishiAzabuTopology2AutoDim_Temp
+    {
+        public static bool LastRunSucceeded { get; private set; }
+        public static string LastRunMessage { get; private set; }
+
+        public static void Run()
+        {
+            LastRunSucceeded = false;
+            LastRunMessage = string.Empty;
+            string message = PHU_NishiAzabuDimensionEngine.RunSlot07();
+            if (!string.IsNullOrEmpty(message))
+            {
+                LastRunSucceeded = true;
+                LastRunMessage = message;
+            }
+        }
+
+        // Read-only entry point for validating a live drawing before mutation.
+        public static string AuditPlan()
+        {
+            return PHU_NishiAzabuDimensionEngine.AuditPlanSlot07();
+        }
+    }
+}
+#pragma warning restore
+#endregion

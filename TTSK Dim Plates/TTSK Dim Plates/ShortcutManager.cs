@@ -25,6 +25,7 @@ namespace TTSK_AutoDim_Plates
         public const string ActionArrangeReference = "ArrangeReference";
         public const string ActionLoadSelected = "LoadSelected";
         public const string ActionPrintMenu = "PrintMenu";
+        public const string ActionPrintPdf = "PrintPdf";
         public const string ActionSnapshot = "Snapshot";
         public const string ActionDictionary = "Dictionary";
         public const string ActionWorkJournal = "WorkJournal";
@@ -160,6 +161,7 @@ namespace TTSK_AutoDim_Plates
 
                 string[] lines = File.ReadAllLines(_filePath, Encoding.UTF8);
                 bool currentSchema = Array.Exists(lines, line => line.Trim() == "# ShortcutSchema=2");
+                bool journalShortcutCurrent = Array.Exists(lines, line => line.Trim() == "# JournalShortcutVersion=1");
                 var loadedActions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 bool hasBatchCreateSetting = false;
                 bool hasArrangeViewSetting = false;
@@ -307,7 +309,14 @@ namespace TTSK_AutoDim_Plates
                     if (candidate != Keys.None && occupied.Add(candidate))
                         _shortcuts[def.ActionId] = candidate;
                 }
-                if (migratedDefaults || pending.Count > 0 || !currentSchema)
+                if (!journalShortcutCurrent
+                    && GetShortcut(ActionWorkJournal) == (Keys.Control | Keys.Shift | Keys.J)
+                    && !_shortcuts.ContainsValue(Keys.Control | Keys.H))
+                {
+                    _shortcuts[ActionWorkJournal] = Keys.Control | Keys.H;
+                    migratedDefaults = true;
+                }
+                if (migratedDefaults || pending.Count > 0 || !currentSchema || !journalShortcutCurrent)
                     Save();
             }
             catch
@@ -323,6 +332,7 @@ namespace TTSK_AutoDim_Plates
                 List<string> lines = new List<string>();
                 lines.Add("# TTSK AutoDim shortcut configuration");
                 lines.Add("# ShortcutSchema=2");
+                lines.Add("# JournalShortcutVersion=1");
                 lines.Add("# Edit from Shortcut Settings popup when possible.");
 
                 foreach (ShortcutActionDefinition def in _definitions)
@@ -482,7 +492,7 @@ namespace TTSK_AutoDim_Plates
             );
             list.Add(
                 new ShortcutActionDefinition(
-                    ActionCheckDim, "CheckDim", "Kiểm tra chân DIM trên bản vẽ đang mở", "C", Keys.C
+                    ActionCheckDim, "Check DIM", "Active: bản đang mở · Batch: dòng chọn / Document Manager; hỗ trợ 1 hoặc nhiều bản", "C", Keys.C
                 )
             );
             list.Add(
@@ -494,7 +504,7 @@ namespace TTSK_AutoDim_Plates
                 new ShortcutActionDefinition(
                     ActionCheckScale,
                     "Check Scale",
-                    "Batch load selected + check scale",
+                    "Kiểm tra bản đang mở hoặc 1/nhiều bản được chọn",
                     "S",
                     Keys.Tab
                 )
@@ -729,10 +739,12 @@ namespace TTSK_AutoDim_Plates
             list.Add(new ShortcutActionDefinition(ActionLineByLength, "Line · theo chiều dài", "Vẽ line theo chiều dài đang đặt", "↔", Keys.Shift | Keys.L));
             list.Add(new ShortcutActionDefinition(ActionArrangeReference, "Arrange · theo bản mẫu", "Căn danh sách theo bản đầu được chọn", "V", Keys.Shift | Keys.A));
             list.Add(new ShortcutActionDefinition(ActionLoadSelected, "Load Selected", "Nạp bản vẽ đang chọn trong Document Manager", "↓", Keys.Control | Keys.L));
-            list.Add(new ShortcutActionDefinition(ActionPrintMenu, "Print / PDF", "Mở các lựa chọn in và xuất PDF", "P", Keys.Control | Keys.P));
-            list.Add(new ShortcutActionDefinition(ActionSnapshot, "Snapshot", "Xuất ảnh bản vẽ", "S", Keys.Control | Keys.Shift | Keys.P));
+            // Keep the saved action ID so customized shortcuts are preserved.
+            list.Add(new ShortcutActionDefinition(ActionPrintMenu, "Merge PDF", "Gộp PDF từ bản đang mở hoặc 1/nhiều bản được chọn", "P", Keys.Control | Keys.P));
+            list.Add(new ShortcutActionDefinition(ActionPrintPdf, "Print PDF", "In PDF riêng từ bản đang mở hoặc 1/nhiều bản được chọn", "P", Keys.None));
+            list.Add(new ShortcutActionDefinition(ActionSnapshot, "Snapshot", "Xuất ảnh bản đang mở hoặc 1/nhiều bản được chọn", "S", Keys.Control | Keys.Shift | Keys.P));
             list.Add(new ShortcutActionDefinition(ActionDictionary, "Từ điển", "Mở / đóng từ điển tiếng Nhật", "字", Keys.Control | Keys.J));
-            list.Add(new ShortcutActionDefinition(ActionWorkJournal, "Nhật ký làm việc", "Xem nhật ký dự án và giờ làm", "J", Keys.Control | Keys.Shift | Keys.J));
+            list.Add(new ShortcutActionDefinition(ActionWorkJournal, "Nhật ký làm việc", "Xem nhật ký dự án và giờ làm", "H", Keys.Control | Keys.H));
             list.Add(new ShortcutActionDefinition(ActionShortcutSettings, "Shortcut Settings", "Chỉnh phím tắt", "⌨", Keys.Control | Keys.K));
             list.Add(new ShortcutActionDefinition(ActionDrawingTools, "Drawing Tools", "Mở / đóng bảng công cụ", "T", Keys.Control | Keys.T));
             list.Add(new ShortcutActionDefinition(ActionClearLog, "Clear Log", "Xóa nội dung log đang hiển thị", "×", Keys.Control | Keys.Shift | Keys.Delete));

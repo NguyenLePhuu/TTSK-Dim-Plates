@@ -1,3 +1,8 @@
+﻿// DIM thép hộp: phân loại lỗ và biên dạng theo từng view; tên helper CShape được giữ do lịch sử dùng chung.
+// ĐIỂM SỬA: Run điều phối; CreateDimsFor*View đặt chân; nhóm BOX_CHAMFER_* điều khiển DIM góc cạnh vát.
+// THAM SỐ: DIM_TIER_SCALE_* là mm view; BOX_CHAMFER_ANGLE_DISTANCE_PAPER là mm giấy. Không dùng CHAMFER_DIM_EXTRA_OFFSET cũ.
+// TRA CỨU: PROJECT_MAP.md ở gốc repo; chỉ mục kiểu/hàm và điểm chỉnh thông số.
+
 #pragma warning disable 1633
 
 using System;
@@ -24,19 +29,24 @@ namespace Tekla.Technology.Akit.UserScript
     public class ShapeBoxScript
     {
         private const double TOL = 1.0;
+        // CHỈNH BIÊN (mm view): khoảng đệm khi đọc/fit RestrictionBox; không phải khoảng cách giấy giữa hai view.
         private const double VIEW_PADDING = 20.0;
 
         // CENTER VÙNG VÀNG - ÉP GIỚI HẠN THEO 2 BLOCK TRÊN/DƯỚI.
         // Dùng khi API không đọc được template block nên center vẫn ăn theo margin cũ.
         // Giá trị là % chiều cao giấy, tự chạy cho A1/A3 ngang/dọc.
-        private const bool FORCE_CENTER_BY_TOP_BOTTOM_BLOCKS = true;
+        // CỜ CENTER: true giới hạn vùng đặt view theo block trên/dưới, false bỏ giới hạn bổ sung này.
+        private static readonly bool FORCE_CENTER_BY_TOP_BOTTOM_BLOCKS = true;
+        // CHỈNH VÙNG CENTER: tỷ lệ 0..1 theo chiều cao giấy; EXTRA_GAP là mm giấy. Tăng làm vùng đặt view nhỏ lại.
         private const double CENTER_BOTTOM_BLOCK_HEIGHT_RATIO = 0.18;
         private const double CENTER_TOP_BLOCK_HEIGHT_RATIO = 0.08;
         private const double CENTER_BLOCK_EXTRA_GAP = 5.0;
 
-        // DIM TIER SPACING BY DRAWING SCALE:
+        // HỆ TẦNG DIM THEO SCALE BẢN VẼ:
         // Tất cả view của drawing dùng chung một scale.
         // Hệ tầng được khởi tạo một lần sau Auto Scale và trước khi tạo DIM.
+        // CHỈNH TẦNG THEO SCALE (mm view): BASE là gốc, STEP là bước, MIDDLE là offset riêng của DIM giữa.
+        // Xem GetSteelDimOffsetByTier để biết chỉ số tầng; InitializeCurrentDimTierSpacing chọn bảng theo scale thực.
         private const double DIM_TIER_SCALE_5_BASE = 50.0;
         private const double DIM_TIER_SCALE_5_STEP = 50.0;
         private const double DIM_TIER_SCALE_5_MIDDLE = 66.6666667;
@@ -82,8 +92,8 @@ namespace Tekla.Technology.Akit.UserScript
         // TOP VIEW - GIỚI HẠN HÌNH CHIẾU THEO COORDINATE:
         // Chỉ dùng cho biên dạng chiếu TOP để dim tổng/chamfer/rãnh.
         // Không dùng độ sâu cố định 20mm nữa.
-        // Rule mới: Có thể tủy chỉnh mặt trên xuống gần hết chiều sâu dầm,
-        // Có thể tùy chỉnh vùng XXmm sâu đáy để tránh rãnh/cạnh đáy bị dim nhầm ở TOP.
+        // TOP_PROJECTED_BOTTOM_EXCLUDE (mm) loại vùng sát đáy khỏi contour chiếu Top;
+        // tăng để loại thêm cạnh/rãnh dưới đáy; không dùng như dung sai gom lỗ.
         private const double TOP_PROJECTED_BOTTOM_EXCLUDE = 0.0;
         private const double FRONT_END_HOLE_ZONE = 300.0;
         private const double C_HORIZONTAL_HOLE_CLUSTER_GAP = 200.0;
@@ -92,18 +102,21 @@ namespace Tekla.Technology.Akit.UserScript
         // - 1 cụm hoặc 2 cụm lỗ ở mép: giữ DIM cũ, không tạo DIM giữa.
         // - Từ 3 cụm trở lên: cụm đầu + cụm cuối giữ DIM mép như cũ,
         //   các cụm nằm giữa mới tạo thêm DIM riêng phía dưới.
+        // CỜ NHÁNH TOP: chamfer và notch có cờ riêng; nhánh chuyên biệt vẫn theo điều kiện tại nơi gọi.
         private const bool ENABLE_TOP_VIEW_CHAMFER_DIM = true;
 
-        // TOP VIEW: thiết kế hiện tại không DIM rãnh/notch ở mặt Top.
-        // Chamfer ngoài vẫn giữ nguyên. Front/Bottom vẫn DIM rãnh/notch như cũ.
+        // TOP VIEW: cờ dưới đây tắt nhánh notch có kiểm ENABLE_TOP_VIEW_NOTCH_DIM.
+        // Các nhánh contour/chuỗi chuyên biệt có điều kiện riêng; tra nơi dùng cờ trước khi thay đổi.
         private const bool ENABLE_TOP_VIEW_NOTCH_DIM = false;
 
         // TOP VIEW CHAMFER DIM
         // Chân DIM chamfer bắt đúng 2 đầu cạnh xiên thật.
-        // Offset DIM chamfer = kích thước chamfer + 200.
+        // Offset chamfer lấy theo bộ đặt tầng của nhánh tạo DIM; không suy ra từ hằng EXTRA_OFFSET cũ.
+        // KHÔNG CÓ NƠI ĐỌC TRỰC TIẾP: hằng được giữ từ luồng cũ; không dùng để chỉnh chức năng hiện tại.
         private const double CHAMFER_DIM_EXTRA_OFFSET = 200.0;
 
         // Dump 20260713_230526: khoảng đặt dấu góc theo mm trên giấy.
+        // CHỈNH DIM GÓC HỘP: Distance là mm giấy (quy đổi theo scale); RAY_MIN_LENGTH là mm view, không đổi góc đo.
         private const double BOX_CHAMFER_ANGLE_DISTANCE_PAPER = 0.7324647523;
         private const double BOX_CHAMFER_ANGLE_RAY_MIN_LENGTH = 25.0;
         private const double NOTCH_MIN_SIZE = 5.0;
@@ -111,11 +124,13 @@ namespace Tekla.Technology.Akit.UserScript
 
         // Chỉ chặn các DIM rãnh quá nhỏ do fillet sinh ra.
         // Không dùng ratio để tránh lọc mất rãnh thật.
+        // CHỈNH LỌC RÃNH (mm view): bỏ DIM rãnh dưới ngưỡng này; tăng có thể bỏ cả rãnh thật nhỏ.
         private const double NOTCH_MIN_DIM_TO_CREATE = 15.0;
 
         // CHECK TOP/BOTTOM HOLES
         // So sánh lỗ cánh trên và cánh dưới. Nếu khác thì báo popup, không đánh dấu trên drawing.
         private const bool ENABLE_TOP_BOTTOM_HOLE_CHECK = true;
+        // CHỈNH SO SÁNH LỖ (mm): dung sai vị trí và kích thước; tăng làm Top/Bottom dễ được coi là giống nhau hơn.
         private const double TOP_BOTTOM_HOLE_POSITION_TOL = 2.0;
         private const double TOP_BOTTOM_HOLE_SIZE_TOL = 1.0;
 
@@ -123,11 +138,14 @@ namespace Tekla.Technology.Akit.UserScript
         // Chạy trước khi tạo DIM.
         // A3: trừ margin 20mm. A1/khổ khác: trừ margin 30mm.
         // Thép C dùng reserve 300mm để chừa vùng DIM dọc.
+        // CỜ SCALE: cho phép tự chọn scale theo khổ giấy; manual override có nhánh ưu tiên riêng trong hàm áp dụng scale.
         private const bool AUTO_SCALE_BY_PART_LENGTH = true;
         private const double AUTO_SCALE_RESERVE = 200.0;
         private const double A3_SHEET_WIDTH = 420.0;
         private const double A3_SHEET_HEIGHT = 297.0;
+        // KHÔNG CÓ NƠI ĐỌC TRỰC TIẾP: hằng được giữ từ luồng cũ; không dùng để chỉnh chức năng hiện tại.
         private const double A1_SHEET_WIDTH = 841.0;
+        // KHÔNG CÓ NƠI ĐỌC TRỰC TIẾP: hằng được giữ từ luồng cũ; không dùng để chỉnh chức năng hiện tại.
         private const double A1_SHEET_HEIGHT = 594.0;
         private const double A3_SHEET_MARGIN = 20.0;
         private const double DEFAULT_SHEET_MARGIN = 30.0;
@@ -135,7 +153,8 @@ namespace Tekla.Technology.Akit.UserScript
 
         // DEBUG TẠM - kiểm tra lỗ bị mất ở bước nào.
         // Sau khi tìm được lỗi có thể đổi false.
-        private const bool DEBUG_C_SHAPE_HOLE_COUNT = false;
+        // CỜ DEBUG: true mở popup đếm lỗ/nhóm ở nhánh có gọi; có thể ngắt thao tác batch, mặc định false.
+        private static readonly bool DEBUG_C_SHAPE_HOLE_COUNT = false;
 
         // Check lỗ Top//bottom có khác nhau ko
         public static int TopBottomHoleCheckResult = 0;
@@ -152,7 +171,6 @@ namespace Tekla.Technology.Akit.UserScript
         // Có pick Drawing.Part: dùng part được pick và lọc bolt/lỗ đúng part đó.
         private static bool UseSelectedMainPartMode = false;
         private static bool AllowViewBoundaryResizeForCurrentDrawing = false;
-        private static ModelPart SelectedMainPartForBoltFilter = null;
         private static ModelPart CurrentCShapeHolePartForLocalClassify = null;
         private static View CurrentCShapeTopViewForHoleClassify = null;
         private static View CurrentCShapeFrontViewForHoleClassify = null;
@@ -174,7 +192,6 @@ namespace Tekla.Technology.Akit.UserScript
             CurrentMiddleVerticalDimOffset = DIM_TIER_SCALE_15_MIDDLE;
             UseSelectedMainPartMode = false;
             AllowViewBoundaryResizeForCurrentDrawing = false;
-            SelectedMainPartForBoltFilter = null;
             CurrentCShapeHolePartForLocalClassify = null;
             CurrentCShapeTopViewForHoleClassify = null;
             CurrentCShapeFrontViewForHoleClassify = null;
@@ -1750,6 +1767,7 @@ namespace Tekla.Technology.Akit.UserScript
             return 1.0;
         }
 
+        // CÔNG THỨC ĐANG CHẠY: BASE + max(0, tier) × STEP (mm view); tier=0 đã có BASE.
         private static double GetSteelDimOffsetByTier(int tier)
         {
             int safeTier = Math.Max(0, tier);
@@ -10623,7 +10641,7 @@ namespace Tekla.Technology.Akit.UserScript
             if (PHU_RevisionDimensionScope.IsActive) return;
             try
             {
-                if (view == null)
+                if (view == null || view.ViewType != View.ViewTypes.SectionView)
                     return;
 
                 DrawingObjectEnumerator parts = view.GetAllObjects(typeof(DrawingPart));

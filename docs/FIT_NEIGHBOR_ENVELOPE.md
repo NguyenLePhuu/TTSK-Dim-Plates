@@ -1,5 +1,19 @@
 # Fit View: neighbor and connection envelope
 
+## Direct Fit without View Property (2026-10-01)
+
+The Fit button preflight checks the same per-view Open Grid snapshots used by the
+geometry planner. When none of the target views has a completed Open Grid
+snapshot, both `None` and `Grid` Fit modes skip the Grid Visibility attribute
+macros. Those macros opened View Property to change grid visibility and neighbor
+`Collect By`; they were not part of the geometry calculation. Direct Fit now
+keeps the existing grid/neighbor attributes without opening that dialog.
+
+Target selection, geometry planning, 20 mm padding, preserved Z depth, final
+restriction-box verification and the existing neighbor cleanup still run.
+Selections containing an Open Grid target retain the full previous macro flow,
+including mixed selections. Open Grid and Data Center commands are unchanged.
+
 ## Direct Fit without Open Grid (2026-09-26)
 
 Fit no longer requires an Open Grid snapshot. Routing is per view, so a mixed

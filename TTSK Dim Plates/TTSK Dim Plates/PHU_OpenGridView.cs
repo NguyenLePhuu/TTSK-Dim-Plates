@@ -1,4 +1,4 @@
-// PHU_OpenGridView.cs
+﻿// PHU_OpenGridView.cs
 // Tool độc lập: mở RestrictionBox của View tới Grid gần nhất ở 4 hướng.
 // Dùng cho MainForm gọi:
 //     PHU_OpenGridView.Result result = PHU_OpenGridView.Run();
@@ -254,7 +254,7 @@ public static partial class PHU_OpenGridView
                         result.FailedCount++;
                     }
                 }
-                catch (Exception exView)
+                catch (Exception)
                 {
                     InvalidateOpenGridReady(drawing, v, true);
                     result.FailedCount++;
@@ -267,7 +267,7 @@ public static partial class PHU_OpenGridView
                 {
                     drawing.CommitChanges();
                 }
-                catch (Exception exCommit)
+                catch (Exception)
                 {
                     ;
                 }
@@ -279,7 +279,7 @@ public static partial class PHU_OpenGridView
             {
                 drawing.CommitChanges();
             }
-            catch (Exception exCommit)
+            catch (Exception)
             {
                 ;
             }
@@ -576,7 +576,7 @@ public static partial class PHU_OpenGridView
                     drawing.CommitChanges();
                 }
             }
-            catch (Exception exCommit) { }
+            catch (Exception) { }
 
             List<GridSeg> segs = ReadGridSegments(view);
             DirectionStatus st = AnalyzeDirections(segs, oldMinX, oldMaxX, oldMinY, oldMaxY);
@@ -727,7 +727,7 @@ public static partial class PHU_OpenGridView
                 }
             }
         }
-        catch (Exception ex) { }
+        catch (Exception) { }
 
         try
         {
@@ -761,7 +761,7 @@ public static partial class PHU_OpenGridView
                 }
             }
         }
-        catch (Exception ex) { }
+        catch (Exception) { }
 
         return list;
     }
@@ -1078,7 +1078,14 @@ public static partial class PHU_OpenGridView
 
     public static bool CanRunFitForCurrentTargets(out string message)
     {
+        bool requiresGridVisibilityMacro;
+        return CanRunFitForCurrentTargets(out message, out requiresGridVisibilityMacro);
+    }
+
+    public static bool CanRunFitForCurrentTargets(out string message, out bool requiresGridVisibilityMacro)
+    {
         message = FIT_PREREQUISITE_MESSAGE;
+        requiresGridVisibilityMacro = true;
 
         try
         {
@@ -1097,7 +1104,13 @@ public static partial class PHU_OpenGridView
                 return false;
 
             bool ready = ValidateFitTargets(drawing, views, out message);
-            if (ready) CaptureFitEntryBoxes(views);
+            if (ready)
+            {
+                CaptureFitEntryBoxes(views);
+                // Direct Fit uses geometry only. Keep the attribute macro for legacy
+                // Open Grid targets, including mixed selections, in the same session.
+                requiresGridVisibilityMacro = views.Exists(view => HasOpenGridFitSnapshot(drawing, view));
+            }
             return ready;
         }
         catch
@@ -1308,7 +1321,7 @@ public static partial class PHU_OpenGridView
         {
             bool ok = view.Modify();
         }
-        catch (Exception ex) { }
+        catch (Exception) { }
     }
 
     private static object GetProp(object obj, string name)
@@ -1357,7 +1370,7 @@ public static partial class PHU_OpenGridView
                 return null;
             return m.Invoke(obj, null);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             return null;
         }

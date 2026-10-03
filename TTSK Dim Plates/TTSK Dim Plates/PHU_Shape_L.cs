@@ -1,3 +1,8 @@
+﻿// DIM thép L: luồng chính dùng Top/Front; section nhỏ phục vụ hiển thị, không DIM theo nhánh chính.
+// ĐIỂM SỬA: Run điều phối; CreateDimsFor*View đặt chân; InitializeCurrentDimTierSpacing đặt khoảng tầng.
+// THAM SỐ: ENABLE_TOP_VIEW_NOTCH_DIM và ENABLE_TOP_BOTTOM_HOLE_CHECK đang false; bật lại sẽ mở nhánh dự phòng cần kiểm chứng.
+// TRA CỨU: PROJECT_MAP.md ở gốc repo; chỉ mục kiểu/hàm và điểm chỉnh thông số.
+
 #pragma warning disable 1633
 
 using System;
@@ -20,11 +25,14 @@ namespace Tekla.Technology.Akit.UserScript
     public class ShapeLScript
     {
         private const double TOL = 1.0;
+        // CHỈNH BIÊN (mm view): khoảng đệm khi đọc/fit RestrictionBox; không phải khoảng cách giấy giữa hai view.
         private const double VIEW_PADDING = 20.0;
 
-        // DIM TIER SPACING BY DRAWING SCALE:
+        // HỆ TẦNG DIM THEO SCALE BẢN VẼ:
         // Tất cả view của drawing dùng chung một scale.
         // Hệ tầng được khởi tạo một lần sau Auto Scale và trước khi tạo DIM.
+        // CHỈNH TẦNG THEO SCALE (mm view): BASE là gốc, STEP là bước, MIDDLE là offset riêng của DIM giữa.
+        // Xem GetSteelDimOffsetByTier để biết chỉ số tầng; InitializeCurrentDimTierSpacing chọn bảng theo scale thực.
         private const double DIM_TIER_SCALE_5_BASE = 50.0;
         private const double DIM_TIER_SCALE_5_STEP = 50.0;
         private const double DIM_TIER_SCALE_5_MIDDLE = 66.6666667;
@@ -65,35 +73,40 @@ namespace Tekla.Technology.Akit.UserScript
         // TOP VIEW - GIỚI HẠN HÌNH CHIẾU THEO COORDINATE:
         // Chỉ dùng cho biên dạng chiếu TOP để dim tổng/chamfer/rãnh.
         // Không dùng độ sâu cố định 20mm nữa.
-        // Rule mới: Có thể tủy chỉnh mặt trên xuống gần hết chiều sâu dầm,
-        // Có thể tùy chỉnh vùng XXmm sâu đáy để tránh rãnh/cạnh đáy bị dim nhầm ở TOP.
+        // TOP_PROJECTED_BOTTOM_EXCLUDE (mm) loại vùng sát đáy khỏi contour chiếu Top;
+        // tăng để loại thêm cạnh/rãnh dưới đáy; không dùng như dung sai gom lỗ.
         private const double TOP_PROJECTED_BOTTOM_EXCLUDE = 0.0;
         private const double FRONT_END_HOLE_ZONE = 300.0;
 
+        // CỜ NHÁNH TOP: chamfer và notch có cờ riêng; nhánh chuyên biệt vẫn theo điều kiện tại nơi gọi.
         private const bool ENABLE_TOP_VIEW_CHAMFER_DIM = true;
 
-        // TOP VIEW: thiết kế hiện tại không DIM rãnh/notch ở mặt Top.
-        // Chamfer ngoài vẫn giữ nguyên. Front/Bottom vẫn DIM rãnh/notch như cũ.
-        private const bool ENABLE_TOP_VIEW_NOTCH_DIM = false;
+        // TOP VIEW: cờ dưới đây tắt nhánh notch có kiểm ENABLE_TOP_VIEW_NOTCH_DIM.
+        // Các nhánh contour/chuỗi chuyên biệt có điều kiện riêng; tra nơi dùng cờ trước khi thay đổi.
+        // Cờ cố định lúc chạy; giữ nhánh dự phòng mà không tạo cảnh báo unreachable code.
+        private static readonly bool ENABLE_TOP_VIEW_NOTCH_DIM = false;
 
         // TOP VIEW CHAMFER DIM
         // Chân DIM chamfer bắt đúng 2 đầu cạnh xiên thật.
-        // Offset DIM chamfer = kích thước chamfer + 200.
+        // Offset chamfer lấy theo bộ đặt tầng của nhánh tạo DIM; không suy ra từ hằng EXTRA_OFFSET cũ.
         private const double CHAMFER_MIN_SIZE = 5.0;
         private const double CHAMFER_MAX_SIZE = 250.0;
         private const double CHAMFER_MIN_RATIO = 0.20;
         private const double CHAMFER_MAX_RATIO = 5.00;
+        // CHỈNH NHÁNH RÃNH (mm view): còn được truyền cho các helper notch; tên CHAMFER là lịch sử.
         private const double CHAMFER_DIM_EXTRA_OFFSET = 200.0;
         private const double NOTCH_MIN_SIZE = 5.0;
         private const double NOTCH_MAX_SIZE = 250.0;
 
         // Chỉ chặn các DIM rãnh quá nhỏ do fillet sinh ra.
         // Không dùng ratio để tránh lọc mất rãnh thật.
+        // CHỈNH LỌC RÃNH (mm view): bỏ DIM rãnh dưới ngưỡng này; tăng có thể bỏ cả rãnh thật nhỏ.
         private const double NOTCH_MIN_DIM_TO_CREATE = 15.0;
 
         // CHECK TOP/BOTTOM HOLES
         // So sánh lỗ cánh trên và cánh dưới. Nếu khác thì báo popup, không đánh dấu trên drawing.
-        private const bool ENABLE_TOP_BOTTOM_HOLE_CHECK = false;
+        private static readonly bool ENABLE_TOP_BOTTOM_HOLE_CHECK = false;
+        // CHỈNH SO SÁNH LỖ (mm): dung sai vị trí và kích thước; tăng làm Top/Bottom dễ được coi là giống nhau hơn.
         private const double TOP_BOTTOM_HOLE_POSITION_TOL = 2.0;
         private const double TOP_BOTTOM_HOLE_SIZE_TOL = 1.0;
 
@@ -101,11 +114,14 @@ namespace Tekla.Technology.Akit.UserScript
         // Chạy trước khi tạo DIM.
         // A3: trừ margin 20mm. A1/khổ khác: trừ margin 30mm.
         // Thép L dùng reserve 300mm để chừa vùng DIM dọc.
+        // CỜ SCALE: cho phép tự chọn scale theo khổ giấy; manual override có nhánh ưu tiên riêng trong hàm áp dụng scale.
         private const bool AUTO_SCALE_BY_PART_LENGTH = true;
         private const double AUTO_SCALE_RESERVE = 200.0;
         private const double A3_SHEET_WIDTH = 420.0;
         private const double A3_SHEET_HEIGHT = 297.0;
+        // KHÔNG CÓ NƠI ĐỌC TRỰC TIẾP: hằng được giữ từ luồng cũ; không dùng để chỉnh chức năng hiện tại.
         private const double A1_SHEET_WIDTH = 841.0;
+        // KHÔNG CÓ NƠI ĐỌC TRỰC TIẾP: hằng được giữ từ luồng cũ; không dùng để chỉnh chức năng hiện tại.
         private const double A1_SHEET_HEIGHT = 594.0;
         private const double A3_SHEET_MARGIN = 20.0;
         private const double DEFAULT_SHEET_MARGIN = 30.0;
@@ -2007,6 +2023,7 @@ namespace Tekla.Technology.Akit.UserScript
             return 1.0;
         }
 
+        // CÔNG THỨC ĐANG CHẠY: BASE + max(0, tier) × STEP (mm view); tier=0 đã có BASE.
         private static double GetSteelDimOffsetByTier(int tier)
         {
             int safeTier = Math.Max(0, tier);
@@ -11703,7 +11720,7 @@ namespace Tekla.Technology.Akit.UserScript
             // FIX DELETE DIM SHAPE:
             // Không dùng GetAllObjects() không filter nữa, vì một số drawing có object
             // LeaderLinePlacing bị lỗi deserialize làm macro dừng trước khi xóa DIM.
-            // Chỉ quét đúng các loại DIM cần xóa, giữ nguyên AngleDimension.
+            // Clear DIM ban đầu gồm cả DIM góc; vẫn chỉ quét đúng loại object.
             try
             {
                 if (drawing == null)
@@ -11726,7 +11743,8 @@ namespace Tekla.Technology.Akit.UserScript
                     typeof(StraightDimension),
                     typeof(CurvedDimensionSetRadial),
                     typeof(CurvedDimensionSetOrthogonal),
-                    typeof(RadiusDimension)
+                    typeof(RadiusDimension),
+                    typeof(AngleDimension)
                 };
 
                 // Xóa DIM ở sheet theo từng loại object, tránh Tekla phải deserialize toàn bộ object.

@@ -1,5 +1,66 @@
 # Arrange View: dynamic occupied regions and centered section packing
 
+## Independent selection keys, 2026-10-02
+
+The Cột/Hàng choices are two independent raised keys with four separate numbered
+cells each. The selected key has a low-saturation warm surface in dark mode or
+a pale-blue surface in light mode, with a contrasting arrow. There is no check
+mark: the brighter raised surface indicates selection. Its leading pair (1–2)
+uses a gentle tinted fill while the remaining pair stays neutral. The idle key
+is neutral, and hover does not adopt the selected color. Selected surfaces are
+blended from MainForm's panel background, PrimaryButtonColor and BrightBlue;
+they follow the same theme palette instead of using a separate saturated palette.
+A thin lower shadow adds depth without
+an enclosing capsule. Existing spacing, direction-dependent numbering, control
+sizes, input behavior and algorithm routing are unchanged.
+
+The visible Cột/Hàng labels are removed. Each arrow is centered in their former
+area, with a 26 px shaft and rounded 2.4 px stroke at the standard size. Accessible
+names still identify the mode and direction. Number cells and the approved soft
+theme colors are unchanged.
+
+Native UI validation covers all eight theme/direction/layout states and renders
+at 100/125/150/200 percent. The change is confined to switch painting.
+
+## Switch spacing refinement, 2026-10-01
+
+The switch now shares the 274 px alignment of the GAP input and action buttons.
+Its 58 px height leaves 5.5 px of breathing room between the cells and the selected
+segment border at the standard size. Both external gaps are exactly 8 px and
+derived from the adjacent controls. The GAP field and orientation cards are
+rebalanced within the same 478 px panel, preserving clearance to Shortcut Settings.
+
+Short `Cột`/`Hàng` labels sit under their arrows. Rounded arrow caps, cell geometry,
+labels and font sizes scale together. Validation covers all eight theme/direction/
+layout states and 32 renders at 100/125/150/200 percent. Numbering, direction binding,
+algorithm routing and existing click/keyboard/disabled behavior remain unchanged.
+
+## Direction-aware switch presentation, 2026-10-01
+
+The existing compact switch keeps its default and algorithm routing.
+All four numbers now have individual rounded cells. The first column or first
+row has a clear accent border and fill; the selected segment uses a warm brown
+surface in dark mode and a pale blue surface in light mode instead of gray.
+
+The existing up/down switch updates both mode diagrams immediately:
+
+| Direction | Column-first diagram | Row-first diagram |
+|---|---|---|
+| Down | `1 3 / 2 4`, arrow down | `1 2 / 3 4`, arrow right |
+| Up | `2 4 / 1 3`, arrow up | `3 4 / 1 2`, arrow right |
+
+The row arrow still describes left-to-right filling within a row. Its numbering
+and highlighted row describe the selected vertical progression. Accessible
+names also include the current direction. Mouse, keyboard and disabled-state
+behavior, horizontal mode and all arrangement algorithms remain unchanged.
+
+Validation: native UI checks against the rebuilt portable cover all eight
+theme/direction/layout combinations, direction-switch clicks, numbering,
+selection preservation across themes, accessible names, unchanged bounds,
+non-overlap, keyboard/mouse operation and disabled states. Each render was
+captured and reviewed. Release x64 and 39 portable runtime hashes passed.
+No drawing command was executed for this presentation-only change.
+
 The command keeps the existing UI overloads and moves regular section views only. Main/special views remain fixed. No view scale, paper size, drawing attribute or DIM geometry is changed.
 
 ## Data and geometry

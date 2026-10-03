@@ -280,7 +280,9 @@ namespace Tekla.Technology.Akit.UserScript
                         new TSM.TransformationPlane(view.DisplayCoordinateSystem)
                     );
 
-                Bounds2D mainBox = GetPartBounds2D(mainBeam);
+                // Never share view-coordinate bounds between views or runs.
+                var boundsCache = new Dictionary<int, Bounds2D>();
+                Bounds2D mainBox = GetCachedPartBounds2D(mainBeam, boundsCache);
                 if (!mainBox.Valid)
                     return count;
 
@@ -313,7 +315,7 @@ namespace Tekla.Technology.Akit.UserScript
 
                 for (int i = 0; i < neighborBeams.Count; i++)
                 {
-                    Bounds2D nb = GetPartBounds2D(neighborBeams[i]);
+                    Bounds2D nb = GetCachedPartBounds2D(neighborBeams[i], boundsCache);
                     if (!nb.Valid)
                         continue;
 
@@ -340,7 +342,7 @@ namespace Tekla.Technology.Akit.UserScript
                         if (plate == null)
                             continue;
 
-                        Bounds2D plateBoxForSelection = GetPartBounds2D(plate);
+                        Bounds2D plateBoxForSelection = GetCachedPartBounds2D(plate, boundsCache);
                         if (!plateBoxForSelection.Valid)
                             continue;
 
@@ -360,6 +362,7 @@ namespace Tekla.Technology.Akit.UserScript
                                 mainReferenceStart,
                                 mainReferenceEnd,
                                 neighborBeams,
+                                boundsCache,
                                 out nearestNeighbor,
                                 out nearestNeighborBox
                             )
@@ -386,8 +389,8 @@ namespace Tekla.Technology.Akit.UserScript
                     if (plate == null || neighborBeam == null)
                         continue;
 
-                    Bounds2D plateBox = GetPartBounds2D(plate);
-                    Bounds2D neighborBox = GetPartBounds2D(neighborBeam);
+                    Bounds2D plateBox = GetCachedPartBounds2D(plate, boundsCache);
+                    Bounds2D neighborBox = GetCachedPartBounds2D(neighborBeam, boundsCache);
                     if (!plateBox.Valid || !neighborBox.Valid)
                         continue;
 
@@ -450,40 +453,69 @@ namespace Tekla.Technology.Akit.UserScript
 
                 List<Point> topRefs = new List<Point>();
                 List<Point> bottomRefs = new List<Point>();
+                var sideMarkPlans = new List<PHU_Slot02PlateSideMarks.Plan>();
+                var smallDimensions = new List<TSD.StraightDimensionSet>();
 
-                for (int i = 0; i < groups.Count; i++)
+                // Both automatic and selected-plate routes reach this same writer.
+                // Validate every plate-side relationship before creating any small DIM.
+                foreach (NeighborPlateGroup group in groups)
+                    PHU_Slot02PlateSideMarks.ResolveSymbols(
+                        group.NeighborRef, group.PlateEdge, group.PlateBox.MinX, group.PlateBox.MaxX);
+
+                try
                 {
-                    NeighborPlateGroup g = groups[i];
-                    if (g == null)
-                        continue;
-
-                    // DIM nội bộ từng cụm: Reference/tâm neighbor -> mép trên plate.
-                    double distanceNeighborToPlate = GetHorizontalDistanceFromOuterBoundary(
-                        g.Direction,
-                        g.NeighborRef,
-                        allMinY,
-                        allMaxY,
-                        NEIGHBOR_TO_PLATE_TIER
-                    );
-
-                    if (
-                        CreateDimChain(
-                            handler,
-                            view,
-                            new Point[] { g.NeighborRef, g.PlateEdge },
-                            g.Direction,
-                            distanceNeighborToPlate,
-                            g.AttributeName
-                        )
-                    )
+                    for (int i = 0; i < groups.Count; i++)
                     {
-                        count++;
-                    }
+                        NeighborPlateGroup g = groups[i];
+                        if (g == null)
+                            continue;
 
-                    if (g.IsTop)
-                        AddUniquePoint2D(topRefs, g.NeighborRef, 0.5);
-                    else
-                        AddUniquePoint2D(bottomRefs, g.NeighborRef, 0.5);
+                        // DIM nội bộ từng cụm: Reference/tâm neighbor -> mép trên plate.
+                        double distanceNeighborToPlate = GetHorizontalDistanceFromOuterBoundary(
+                            g.Direction,
+                            g.NeighborRef,
+                            allMinY,
+                            allMaxY,
+                            NEIGHBOR_TO_PLATE_TIER
+                        );
+
+                        TSD.StraightDimensionSet smallDimension = CreateDimChain(
+                                handler,
+                                view,
+                                new Point[] { g.NeighborRef, g.PlateEdge },
+                                g.Direction,
+                                distanceNeighborToPlate,
+                                g.AttributeName
+                            );
+                        if (smallDimension != null)
+                        {
+                            smallDimensions.Add(smallDimension);
+                            sideMarkPlans.Add(PHU_Slot02PlateSideMarks.Capture(
+                                smallDimension, g.NeighborRef, g.PlateEdge,
+                                g.PlateBox.MinX, g.PlateBox.MaxX));
+                            count++;
+                        }
+
+                        if (g.IsTop)
+                            AddUniquePoint2D(topRefs, g.NeighborRef, 0.5);
+                        else
+                            AddUniquePoint2D(bottomRefs, g.NeighborRef, 0.5);
+                    }
+                    // Load HIGE first, then correct only the native side-mark properties.
+                    // Never call set.Modify() after this step: it can reset child marks.
+                    PHU_Slot02PlateSideMarks.Apply(sideMarkPlans);
+                }
+                catch (Exception sideMarkError)
+                {
+                    count = 0;
+                    // A timed-out native request may still be rolling back. Do not
+                    // delete objects while its final state is unknown.
+                    if (!(sideMarkError is PHU_Slot02PlateSideMarks.PendingRequestException))
+                        foreach (TSD.StraightDimensionSet created in smallDimensions)
+                            if (!created.Delete())
+                                throw new InvalidOperationException(
+                                    "Không xóa được DIM nhỏ chưa kiểm chứng side mark; kiểm tra bản vẽ.", sideMarkError);
+                    throw;
                 }
 
                 topRefs.Sort(ComparePointByXThenY);
@@ -678,6 +710,7 @@ namespace Tekla.Technology.Akit.UserScript
         )
         {
             List<Slot02AutomaticViewTarget> result = new List<Slot02AutomaticViewTarget>();
+            var topology = new Slot02BoltTopologyCache();
 
             if (
                 model == null
@@ -712,17 +745,23 @@ namespace Tekla.Technology.Akit.UserScript
                                 new TSM.TransformationPlane(view.DisplayCoordinateSystem)
                             );
 
-                        List<ModelPart> viewParts = GetModelPartsInView(model, view);
-                        if (!ContainsModelPart(viewParts, authoritativeMain.Identifier))
-                            continue;
-
                         ModelPart mainInView =
                             model.SelectModelObject(authoritativeMain.Identifier) as ModelPart;
+                        // Same axis guard as the writer. Reject unusable views
+                        // before requesting solids for their many visible parts.
+                        Point mainAxisStart, mainAxisEnd;
+                        if (!TryGetStraightReferenceAxis(mainInView, out mainAxisStart, out mainAxisEnd)
+                            || !IsReferenceAxisAligned(mainAxisStart, mainAxisEnd, true))
+                            continue;
                         Bounds2D mainBox = GetPartBounds2D(mainInView);
 
                         // Writer Slot02 hien tai co semantic main ngang -> neighbor H doc.
                         // View dau thanh/section khong duoc dua vao auto flow.
                         if (!IsHorizontallyElongated(mainBox))
+                            continue;
+
+                        List<ModelPart> viewParts = GetModelPartsInView(model, view);
+                        if (!ContainsModelPart(viewParts, authoritativeMain.Identifier))
                             continue;
 
                         List<ModelPart> plateCandidates = new List<ModelPart>();
@@ -740,23 +779,33 @@ namespace Tekla.Technology.Akit.UserScript
                             )
                                 continue;
 
-                            Bounds2D partBox = GetPartBounds2D(part);
-                            boundsByPartId[part.Identifier.ID] = partBox;
-
                             if (IsPlatePart(part))
                             {
-                                plateCandidates.Add(part);
+                                // This is the SAME assembly requirement used by
+                                // IsExactAutomaticSlot02Topology; evaluate it once
+                                // per plate, not once for every neighbor pair.
+                                if (IsPartInSameAssembly(part, authoritativeMain))
+                                    plateCandidates.Add(part);
                             }
                             else if (
                                 IsHProfilePart(part)
                                 && IsAssemblyMainPart(part)
                                 && IsNeighborShownOnFlangeFace(part)
-                                && IsVerticallyElongated(partBox)
                             )
                             {
-                                neighborCandidates.Add(part);
+                                Bounds2D partBox = GetPartBounds2D(part);
+                                if (IsVerticallyElongated(partBox))
+                                {
+                                    boundsByPartId[part.Identifier.ID] = partBox;
+                                    neighborCandidates.Add(part);
+                                }
                             }
                         }
+
+                        // Most other views have no eligible flange-face neighbor.
+                        // They need no plate solids or bolt-pair scans at all.
+                        if (neighborCandidates.Count == 0 || plateCandidates.Count == 0)
+                            continue;
 
                         Slot02AutomaticViewTarget target = new Slot02AutomaticViewTarget();
                         target.View = view;
@@ -764,9 +813,8 @@ namespace Tekla.Technology.Akit.UserScript
                         for (int plateIndex = 0; plateIndex < plateCandidates.Count; plateIndex++)
                         {
                             ModelPart plate = plateCandidates[plateIndex];
-                            Bounds2D plateBox = boundsByPartId[plate.Identifier.ID];
-                            if (!plateBox.Valid)
-                                continue;
+                            Bounds2D plateBox = new Bounds2D();
+                            bool plateBoxRead = false;
 
                             for (
                                 int neighborIndex = 0;
@@ -777,14 +825,17 @@ namespace Tekla.Technology.Akit.UserScript
                                 ModelPart neighbor = neighborCandidates[neighborIndex];
                                 Bounds2D neighborBox = boundsByPartId[neighbor.Identifier.ID];
 
-                                if (
-                                    !IsExactAutomaticSlot02Topology(
-                                        authoritativeMain,
-                                        plate,
-                                        neighbor
-                                    )
-                                )
+                                // Assembly membership was verified above; keep
+                                // the existing bidirectional direct-bolt check.
+                                if (!topology.AreConnected(plate, neighbor))
                                     continue;
+
+                                if (!plateBoxRead)
+                                {
+                                    plateBox = GetPartBounds2D(plate);
+                                    plateBoxRead = true;
+                                }
+                                if (!plateBox.Valid) break;
 
                                 if (!IsAtMainNeighborInterface(mainBox, plateBox, neighborBox))
                                     continue;
@@ -1026,6 +1077,56 @@ namespace Tekla.Technology.Akit.UserScript
                 || PartBoltCollectionReferencesPart(second, first);
         }
 
+        // Connection IDs are independent of the view plane. Cache only for one
+        // discovery call; never retain topology after the user's model changes.
+        private sealed class Slot02BoltTopologyCache
+        {
+            private readonly Dictionary<int, HashSet<int>> references =
+                new Dictionary<int, HashSet<int>>();
+
+            public bool AreConnected(ModelPart first, ModelPart second)
+            {
+                if (first == null || second == null) return false;
+                HashSet<int> firstIds = Read(first);
+                if (firstIds == null)
+                    return ArePartsDirectlyBoltConnected(first, second);
+                if (firstIds.Contains(second.Identifier.ID)) return true;
+                HashSet<int> secondIds = Read(second);
+                return secondIds == null
+                    ? PartBoltCollectionReferencesPart(second, first)
+                    : secondIds.Contains(first.Identifier.ID);
+            }
+
+            private HashSet<int> Read(ModelPart part)
+            {
+                HashSet<int> ids;
+                if (references.TryGetValue(part.Identifier.ID, out ids)) return ids;
+                try
+                {
+                    ids = new HashSet<int>();
+                    var bolts = part.GetBolts();
+                    while (bolts != null && bolts.MoveNext())
+                    {
+                        Add(GetPropertyValue(bolts.Current, "PartToBoltTo"), ids);
+                        Add(GetPropertyValue(bolts.Current, "PartToBeBolted"), ids);
+                        Add(GetPropertyValue(bolts.Current, "OtherPartsToBolt"), ids);
+                    }
+                }
+                catch { ids = null; } // Fall back to the original resolver on API failure.
+                references[part.Identifier.ID] = ids;
+                return ids;
+            }
+
+            private static void Add(object value, HashSet<int> ids)
+            {
+                ModelObject obj = value as ModelObject;
+                if (obj != null && obj.Identifier != null) ids.Add(obj.Identifier.ID);
+                var items = value as IEnumerable;
+                if (items != null && !(value is string))
+                    foreach (object item in items) Add(item, ids);
+            }
+        }
+
         private static bool PartBoltCollectionReferencesPart(ModelPart owner, ModelPart other)
         {
             try
@@ -1252,6 +1353,7 @@ namespace Tekla.Technology.Akit.UserScript
             Point mainReferenceStart,
             Point mainReferenceEnd,
             List<ModelPart> neighborBeams,
+            Dictionary<int, Bounds2D> boundsCache,
             out ModelPart neighborBeam,
             out Bounds2D neighborBox
         )
@@ -1271,7 +1373,7 @@ namespace Tekla.Technology.Akit.UserScript
             for (int i = 0; i < neighborBeams.Count; i++)
             {
                 ModelPart candidate = neighborBeams[i];
-                boxes.Add(candidate == null ? new Bounds2D() : GetPartBounds2D(candidate));
+                boxes.Add(GetCachedPartBounds2D(candidate, boundsCache));
                 ownership.Add(candidate != null && ContainsModelPart(related, candidate.Identifier));
             }
 
@@ -1565,6 +1667,18 @@ namespace Tekla.Technology.Akit.UserScript
             public double MaxY;
         }
 
+        private static Bounds2D GetCachedPartBounds2D(ModelPart part, Dictionary<int, Bounds2D> cache)
+        {
+            if (part == null || part.Identifier == null) return new Bounds2D();
+            Bounds2D bounds;
+            if (!cache.TryGetValue(part.Identifier.ID, out bounds))
+            {
+                bounds = GetPartBounds2D(part);
+                cache.Add(part.Identifier.ID, bounds);
+            }
+            return bounds;
+        }
+
         private static Bounds2D GetPartBounds2D(ModelPart part)
         {
             Bounds2D b = new Bounds2D();
@@ -1769,10 +1883,10 @@ namespace Tekla.Technology.Akit.UserScript
             double distance
         )
         {
-            return CreateDimChain(handler, view, points, direction, distance, null);
+            return CreateDimChain(handler, view, points, direction, distance, null) != null;
         }
 
-        private static bool CreateDimChain(
+        private static TSD.StraightDimensionSet CreateDimChain(
             TSD.StraightDimensionSetHandler handler,
             TSD.View view,
             Point[] points,
@@ -1782,7 +1896,7 @@ namespace Tekla.Technology.Akit.UserScript
         )
         {
             if (handler == null || view == null || points == null || points.Length < 2)
-                return false;
+                return null;
 
             PointList list = new PointList();
 
@@ -1807,7 +1921,7 @@ namespace Tekla.Technology.Akit.UserScript
             }
 
             if (list.Count < 2)
-                return false;
+                return null;
 
             TSD.StraightDimensionSet dim = handler.CreateDimensionSet(
                 view,
@@ -1819,7 +1933,7 @@ namespace Tekla.Technology.Akit.UserScript
             if (dim != null && !string.IsNullOrEmpty(attributeName))
                 TryApplyStraightDimAttributes(dim, attributeName);
 
-            return dim != null;
+            return dim;
         }
 
         private static void TryApplyStraightDimAttributes(
@@ -2207,6 +2321,355 @@ namespace Tekla.Technology.Akit.UserScript
                 );
             }
             catch { }
+        }
+    }
+}
+
+// Slot02 native side-mark writer (kept in this file for a single maintenance unit).
+namespace Tekla.Technology.Akit.UserScript
+{
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
+using System.Threading;
+using System.Web.Script.Serialization;
+using D = Tekla.Structures.Drawing;
+using G = Tekla.Structures.Geometry3d;
+using M = Tekla.Structures.Model;
+
+    // Slot02 only. HIGE controls exaggeration; the plate BODY at the measured
+    // edge controls the side mark. No attribute file is written by this class.
+    public static class PHU_Slot02PlateSideMarks
+    {
+        const double EdgeTolerance = 0.01;
+        const double MinimumSpan = EdgeTolerance;
+        static readonly string[] MarkKeys = {
+            "proSideMarkType", "proSideMarkSymbol1", "proSideMarkSymbol2" };
+
+        public sealed class Plan
+        {
+            public int SetId, ChildId, ViewId, Symbol1, Symbol2;
+            public string Geometry;
+        }
+
+        public sealed class Request
+        {
+            public string ModelPath, DrawingGuid;
+            public long Deadline;
+            public List<Plan> Plans;
+        }
+
+        public sealed class PendingRequestException : InvalidOperationException
+        { public PendingRequestException(string message) : base(message) { } }
+
+        // Native values verified in Tekla 2025: blank=-1, left=0, right=2.
+        // Native Symbol1/2 follow view left/right, including downward dimensions.
+        internal static int[] ResolveSymbols(G.Point reference, G.Point edge, double minX, double maxX)
+        {
+            if (reference == null || edge == null ||
+                !Finite(reference.X) || !Finite(reference.Y) || !Finite(edge.X) || !Finite(edge.Y) ||
+                !Finite(minX) || !Finite(maxX) || maxX - minX <= EdgeTolerance ||
+                Math.Abs(edge.X - reference.X) <= MinimumSpan)
+                throw new InvalidOperationException("Slot02: Không đủ hình học để xác định chân side mark.");
+
+            bool bodyRight = Math.Abs(edge.X - minX) <= EdgeTolerance;
+            bool bodyLeft = Math.Abs(edge.X - maxX) <= EdgeTolerance;
+            if (bodyRight == bodyLeft || (bodyRight && reference.X >= minX) ||
+                (bodyLeft && reference.X <= maxX))
+                throw new InvalidOperationException("Slot02: Chân DIM không nằm ở mép plate hướng về reference; chưa tạo DIM.");
+
+            int symbol = bodyRight ? 2 : 0;
+            return edge.X < reference.X ? new[] { symbol, -1 } : new[] { -1, symbol };
+        }
+
+        internal static Plan Capture(D.StraightDimensionSet set, G.Point reference, G.Point edge,
+            double minX, double maxX)
+        {
+            int[] symbols = ResolveSymbols(reference, edge, minX, maxX);
+            // HIGE is loaded through set.Modify(), which can replace the native
+            // child. Discard the creation-time buffer before capturing its ID.
+            if (!set.Select()) throw new InvalidOperationException("Slot02: Không đọc lại được DIM sau khi nạp HIGE.");
+            var children = Children(set);
+            if (children.Count != 1 || !MatchesFeet(children[0], reference, edge) ||
+                !Finite(children[0].Distance) || Math.Abs(children[0].UpDirection.X) > EdgeTolerance ||
+                Math.Abs(children[0].UpDirection.Y) < 0.99)
+                throw new InvalidOperationException("Slot02: DIM nhỏ không có đúng hai chân reference và mép plate.");
+            var child = children[0];
+            return new Plan { SetId = Id(set), ChildId = Id(child), ViewId = Id(set.GetView()), Geometry = Geometry(child),
+                Symbol1 = symbols[0], Symbol2 = symbols[1] };
+        }
+
+        internal static void Apply(List<Plan> plans)
+        {
+            if (plans.Count == 0) return;
+            var model = new M.Model();
+            var drawing = new D.DrawingHandler().GetActiveDrawing();
+            if (!model.GetConnectionStatus() || drawing == null)
+                throw new InvalidOperationException("Slot02: Mất kết nối trước khi chỉnh side mark.");
+            using (var mutex = new Mutex(false, "Local\\TTSK_Slot02SideMarks"))
+            {
+                bool locked;
+                try { locked = mutex.WaitOne(0); }
+                catch (AbandonedMutexException) { locked = true; }
+                if (!locked) throw new PendingRequestException("Slot02: Một yêu cầu side mark khác đang chạy.");
+                try
+                {
+                    string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                        "TTSK Dim Plates", "Slot02SideMarkJobs");
+                    Directory.CreateDirectory(root);
+                    string pending = Path.Combine(root, "pending.txt");
+                    if (File.Exists(pending) && !File.Exists(Path.Combine(File.ReadAllText(pending), "result.txt")))
+                        throw new PendingRequestException("Slot02: Yêu cầu side mark trước chưa kết thúc; kiểm tra Tekla trước khi chạy lại.");
+                    string folder = Path.Combine(root, Guid.NewGuid().ToString("N"));
+                    Directory.CreateDirectory(folder);
+                    var request = new Request { ModelPath = model.GetInfo().ModelPath,
+                        DrawingGuid = Identifier(drawing).GUID.ToString(),
+                        Deadline = DateTime.UtcNow.AddSeconds(30).Ticks, Plans = plans };
+                    string requestPath = Path.Combine(folder, "request.json");
+                    File.WriteAllText(requestPath, new JavaScriptSerializer().Serialize(request), Encoding.UTF8);
+                    string assembly = typeof(PHU_Slot02PlateSideMarks).Assembly.Location;
+                    string hash = Hash(assembly), writer = Path.Combine(root, "writer-" + hash + ".dll");
+                    if (!File.Exists(writer)) File.Copy(assembly, writer);
+                    if (Hash(writer) != hash) throw new IOException("Slot02: Writer không đúng bản build.");
+                    string macro = Path.Combine(folder, "SideMarks.cs");
+                    File.WriteAllText(macro, Bootstrap(writer, requestPath), Encoding.UTF8);
+                    File.WriteAllText(pending, folder);
+                    // Only a bootstrap: no UI selection, clicks, or property-dialog macro.
+                    // Native Properties must run inside Tekla on its main thread.
+                    try { M.Operations.Operation.RunMacro(macro); }
+                    catch { File.WriteAllText(Path.Combine(folder, "cancel"), ""); }
+                    string response = Path.Combine(folder, "result.txt");
+                    var timer = Stopwatch.StartNew();
+                    while (!File.Exists(response) && timer.ElapsedMilliseconds < 30000) Thread.Sleep(50);
+                    if (!File.Exists(response))
+                    {
+                        File.WriteAllText(Path.Combine(folder, "cancel"), "");
+                        // Cancellation is checked before each write; retain the objects
+                        // until the worker has acknowledged completion/rollback.
+                        while (!File.Exists(response) && timer.ElapsedMilliseconds < 45000) Thread.Sleep(50);
+                        if (!File.Exists(response))
+                            throw new PendingRequestException("Slot02: Tekla chưa xác nhận side mark. Không chạy lại/xóa DIM đang chờ. Log: " + folder);
+                    }
+                    string status = File.ReadAllText(response);
+                    if (status.StartsWith("UNSAFE:", StringComparison.Ordinal))
+                        throw new PendingRequestException(status);
+                    if (status != "DONE") throw new InvalidOperationException(status);
+                    EnsureDrawing(request);
+                }
+                finally { mutex.ReleaseMutex(); }
+            }
+        }
+
+        sealed class State
+        {
+            internal Plan Plan;
+            internal D.StraightDimension Child;
+            internal D.StraightDimension.StraightDimensionAttributes Attributes;
+            internal Dictionary<string, object> Before;
+            internal bool Touched;
+        }
+
+        // Called only by the bootstrap in the Tekla macro worker. Public Drawing
+        // API stays off the native main thread to avoid remoting deadlocks.
+        public static void RunNativeRequest(string requestPath)
+        {
+            string folder = Path.GetDirectoryName(requestPath);
+            var states = new List<State>();
+            string status = "DONE";
+            try
+            {
+                if (!String.Equals(Process.GetCurrentProcess().ProcessName, "TeklaStructures", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Side mark native chỉ được ghi trong Tekla.");
+                var request = new JavaScriptSerializer().Deserialize<Request>(File.ReadAllText(requestPath));
+                CheckDeadline(folder, request.Deadline);
+                var drawing = EnsureDrawing(request);
+                if (request.Plans == null || request.Plans.Count == 0 ||
+                    request.Plans.Select(p => p.SetId).Distinct().Count() != request.Plans.Count)
+                    throw new InvalidDataException("Slot02: Danh sách DIM không hợp lệ.");
+                var wanted = request.Plans.ToDictionary(p => p.SetId);
+                var wantedViews = new HashSet<int>(request.Plans.Select(p => p.ViewId));
+                var views = drawing.GetSheet().GetAllViews();
+                while (views.MoveNext())
+                {
+                    var view = views.Current as D.View;
+                    if (view == null || !wantedViews.Contains(Id(view))) continue;
+                    var sets = view.GetAllObjects(typeof(D.StraightDimensionSet));
+                    while (sets.MoveNext())
+                    {
+                        var set = sets.Current as D.StraightDimensionSet;
+                        Plan plan;
+                        if (set == null || !wanted.TryGetValue(Id(set), out plan)) continue;
+                        var children = Children(set);
+                        if (Id(view) != plan.ViewId || children.Count != 1 || Id(children[0]) != plan.ChildId || Geometry(children[0]) != plan.Geometry ||
+                            !((plan.Symbol1 == -1 && plan.Symbol2 == 2) || (plan.Symbol1 == 0 && plan.Symbol2 == -1)))
+                            throw new InvalidOperationException("Slot02: DIM đã thay đổi sau khi lập kế hoạch. Set=" + plan.SetId +
+                                "; expected child=" + plan.ChildId + "; actual=" + String.Join("|", children.Select(c => Id(c) + ":" + Geometry(c))) +
+                                "; expected geometry=" + plan.Geometry);
+                        states.Add(new State { Plan = plan, Child = children[0], Attributes = children[0].Attributes });
+                    }
+                    if (states.Count == wanted.Count) break;
+                }
+                if (states.Count != wanted.Count) throw new InvalidOperationException("Slot02: Không tìm đủ DIM trong đúng bản vẽ.");
+                // Reuse the project's proven main-thread property factory. No change
+                // to Revision's colour logic, and no Drawing/Model API in this callback.
+                PHU_DimensionRevision.WithNativeColorFactory((factory, create, update) =>
+                {
+                    foreach (var state in states)
+                    {
+                        state.Before = Read(factory, create, state.Plan.ChildId);
+                        RequireMarkProperties(state.Before);
+                    }
+                    foreach (var state in states)
+                    {
+                        CheckDeadline(folder, request.Deadline);
+                        if (MatchesMarks(state.Before, state.Plan)) continue;
+                        state.Touched = true;
+                        Write(factory, create, update, state.Plan.ChildId,
+                            new[] { 1, state.Plan.Symbol1, state.Plan.Symbol2 });
+                    }
+                    foreach (var state in states) VerifyNative(factory, create, state, false);
+                });
+                CheckDeadline(folder, request.Deadline);
+                EnsureDrawing(request);
+                foreach (var state in states)
+                    if (!state.Child.Select() || Geometry(state.Child) != state.Plan.Geometry ||
+                        !state.Attributes.IsEqual(state.Child.Attributes))
+                        throw new InvalidOperationException("Slot02: Hình học/thuộc tính DIM thay đổi khi chỉnh side mark.");
+                // Caller commits once after its normal Slot02 creation flow completes.
+            }
+            catch (Exception ex)
+            {
+                bool restored = true;
+                if (states.Any(s => s.Touched))
+                    try
+                    {
+                        PHU_DimensionRevision.WithNativeColorFactory((factory, create, update) =>
+                        {
+                            foreach (var state in states.Where(s => s.Touched).Reverse())
+                                Write(factory, create, update, state.Plan.ChildId,
+                                    MarkKeys.Select(k => (int)state.Before[k]).ToArray());
+                            foreach (var state in states.Where(s => s.Before != null)) VerifyNative(factory, create, state, true);
+                        });
+                    }
+                    catch { restored = false; }
+                status = (restored ? "ERROR: " : "UNSAFE: ") + ex.GetBaseException().Message +
+                    (restored ? " Side mark chưa đổi hoặc đã khôi phục." : " Chưa khôi phục đủ side mark; kiểm tra bản vẽ trước khi lưu.");
+            }
+            string response = Path.Combine(folder, "result.txt");
+            File.WriteAllText(response + ".tmp", status, Encoding.UTF8);
+            File.Move(response + ".tmp", response);
+        }
+
+        static Dictionary<string, object> Read(object factory, MethodInfo create, int id)
+        {
+            object proxy = create.Invoke(factory, new object[] { id, String.Empty });
+            if (proxy == null) throw new InvalidOperationException("Không đọc được native DIM properties.");
+            try
+            {
+                var type = proxy.GetType();
+                var get = type.GetMethod("GetProperty");
+                var values = new Dictionary<string, object>();
+                foreach (string key in (IEnumerable)type.GetMethod("GetPropertyNames").Invoke(proxy, null))
+                {
+                    object value = get.Invoke(proxy, new object[] { key });
+                    // These include all native side marks, exaggeration and styling.
+                    if (value == null || value is string || value.GetType().IsPrimitive || value.GetType().IsEnum)
+                        values.Add(key, value);
+                }
+                return values;
+            }
+            finally { ((IDisposable)proxy).Dispose(); }
+        }
+
+        static void Write(object factory, MethodInfo create, MethodInfo update, int id, int[] marks)
+        {
+            object proxy = create.Invoke(factory, new object[] { id, String.Empty });
+            if (proxy == null) throw new InvalidOperationException("Không ghi được native DIM properties.");
+            try
+            {
+                var setter = proxy.GetType().GetMethod("SetProperty");
+                for (int i = 0; i < MarkKeys.Length; i++)
+                    if (!(bool)setter.Invoke(proxy, new object[] { MarkKeys[i], marks[i] }))
+                        throw new InvalidOperationException("Tekla từ chối " + MarkKeys[i]);
+                if (!(bool)update.Invoke(factory, new[] { proxy }))
+                    throw new InvalidOperationException("Tekla không UpdateObject side mark.");
+            }
+            finally { ((IDisposable)proxy).Dispose(); }
+        }
+
+        static void VerifyNative(object factory, MethodInfo create, State state, bool original)
+        {
+            var actual = Read(factory, create, state.Plan.ChildId);
+            RequireMarkProperties(actual);
+            if (!original && !MatchesMarks(actual, state.Plan))
+                throw new InvalidOperationException("Tekla chưa lưu đúng hướng side mark.");
+            if (actual.Count != state.Before.Count || state.Before.Any(p =>
+                (original || !MarkKeys.Contains(p.Key)) && (!actual.ContainsKey(p.Key) || !Object.Equals(p.Value, actual[p.Key]))))
+                throw new InvalidOperationException("Thuộc tính ngoài side mark bị thay đổi; dừng và khôi phục.");
+        }
+
+        static void RequireMarkProperties(Dictionary<string, object> values)
+        {
+            if (MarkKeys.Any(k => !values.ContainsKey(k) || !(values[k] is int)))
+                throw new NotSupportedException("Tekla hiện tại không hỗ trợ native plate side marks.");
+        }
+        static bool MatchesMarks(Dictionary<string, object> values, Plan plan)
+        { return (int)values[MarkKeys[0]] == 1 && (int)values[MarkKeys[1]] == plan.Symbol1 && (int)values[MarkKeys[2]] == plan.Symbol2; }
+        static void CheckDeadline(string folder, long deadline)
+        { if (DateTime.UtcNow.Ticks > deadline || File.Exists(Path.Combine(folder, "cancel"))) throw new TimeoutException("Yêu cầu side mark hết hạn."); }
+        static D.Drawing EnsureDrawing(Request request)
+        {
+            var model = new M.Model();
+            var drawing = new D.DrawingHandler().GetActiveDrawing();
+            if (!model.GetConnectionStatus() || drawing == null ||
+                !String.Equals(model.GetInfo().ModelPath, request.ModelPath, StringComparison.OrdinalIgnoreCase) ||
+                Identifier(drawing).GUID.ToString() != request.DrawingGuid)
+                throw new InvalidOperationException("Model/bản vẽ đã đổi; dừng chỉnh side mark.");
+            return drawing;
+        }
+        static List<D.StraightDimension> Children(D.StraightDimensionSet set)
+        {
+            var list = new List<D.StraightDimension>();
+            var e = set.GetObjects();
+            while (e.MoveNext()) if (e.Current is D.StraightDimension) list.Add((D.StraightDimension)e.Current);
+            return list;
+        }
+        static bool MatchesFeet(D.StraightDimension child, G.Point a, G.Point b)
+        { return (Near(child.StartPoint, a) && Near(child.EndPoint, b)) || (Near(child.StartPoint, b) && Near(child.EndPoint, a)); }
+        static bool Near(G.Point a, G.Point b)
+        { return Math.Abs(a.X - b.X) <= EdgeTolerance && Math.Abs(a.Y - b.Y) <= EdgeTolerance; }
+        static bool Finite(double x) { return !Double.IsNaN(x) && !Double.IsInfinity(x); }
+        static Tekla.Structures.Identifier Identifier(object obj)
+        { return (Tekla.Structures.Identifier)obj.GetType().GetProperty("Identifier", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic).GetValue(obj, null); }
+        static int Id(object obj) { return Identifier(obj).ID; }
+        // Native remoting can round 222.56100000000004 to 222.561. Compare
+        // geometry at 1e-6 drawing units, below the semantic edge tolerance.
+        static string NumberKey(double value)
+        { return Math.Round(value, 6).ToString("F6", CultureInfo.InvariantCulture); }
+        static string PointKey(G.Point p)
+        { return NumberKey(p.X) + "," + NumberKey(p.Y) + "," + NumberKey(p.Z); }
+        static string Geometry(D.StraightDimension c)
+        { return PointKey(c.StartPoint) + ";" + PointKey(c.EndPoint) + ";" + PointKey(c.UpDirection) + ";" + NumberKey(c.Distance); }
+        static string Hash(string path)
+        { using (var sha = SHA256.Create()) using (var stream = File.OpenRead(path)) return BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", ""); }
+        static string Encode(string value) { return Convert.ToBase64String(Encoding.UTF8.GetBytes(value)); }
+        static string Bootstrap(string assembly, string request)
+        {
+            return "#pragma warning disable 1633\n#pragma reference \"Tekla.Macros.Runtime\"\n#pragma warning restore 1633\n" +
+                "using System;using System.IO;using System.Text;using System.Reflection;namespace UserMacros {public sealed class Macro {" +
+                "[Tekla.Macros.Runtime.MacroEntryPointAttribute()]public static void Run(Tekla.Macros.Runtime.IMacroRuntime runtime){" +
+                "string request=Encoding.UTF8.GetString(Convert.FromBase64String(\"" + Encode(request) + "\"));try{" +
+                "Assembly.LoadFile(Encoding.UTF8.GetString(Convert.FromBase64String(\"" + Encode(assembly) + "\")))" +
+                ".GetType(\"Tekla.Technology.Akit.UserScript.PHU_Slot02PlateSideMarks\",true).GetMethod(\"RunNativeRequest\").Invoke(null,new object[]{request});" +
+                "}catch(Exception ex){string p=Path.Combine(Path.GetDirectoryName(request),\"result.txt\");if(!File.Exists(p)){" +
+                "File.WriteAllText(p+\".tmp\",\"UNSAFE: \"+ex.GetBaseException().Message);File.Move(p+\".tmp\",p);}}}}}";
         }
     }
 }

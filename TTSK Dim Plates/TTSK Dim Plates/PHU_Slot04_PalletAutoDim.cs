@@ -1,4 +1,4 @@
-#pragma warning disable 1633
+﻿#pragma warning disable 1633
 
 using System;
 using System.Collections.Generic;
@@ -132,6 +132,7 @@ namespace Tekla.Technology.Akit.UserScript
         private const double DIM_TIER_BASE = 274.0;
         private const double DIM_TIER_STEP = 150.0;
 
+        // KHÔNG CÓ NƠI ĐỌC TRỰC TIẾP: hằng được giữ từ luồng cũ; không dùng để chỉnh chức năng hiện tại.
         private const double BOUND_TOL = 20.0;
         private const double AUTO_CASE_B_CONTACT_TOL = 20.0;
         private const double AUTO_CASE_B_LONGITUDINAL_RATIO = 1.50;

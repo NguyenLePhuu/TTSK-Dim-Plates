@@ -20,7 +20,7 @@ namespace TTSK_AutoDim_Plates
         private ShortcutTextBox txtSearch;
         private Panel rowsPanel;
         private Label lblMessage;
-        private Label lblThemeIcon;
+        private Label lblThemeIcon = null; // Icon tùy chọn; giữ nhánh màu khi được bổ sung sau này.
         private Label lblAutoSectionState;
         private AutoSectionToggleSwitch headerAutoSectionSwitch;
         private AutoSectionToggleSwitch rowAutoSectionSwitch;

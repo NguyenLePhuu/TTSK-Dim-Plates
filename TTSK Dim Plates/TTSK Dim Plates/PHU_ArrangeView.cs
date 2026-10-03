@@ -1,16 +1,32 @@
-using System;
-using System.Collections.Generic;
-using System.Reflection;
-using System.Linq;
-using Tekla.Structures.Drawing;
-using Tekla.Structures.Geometry3d;
-using System.Collections;
-using Tekla.Structures.Drawing.UI;
+﻿// Arrange các section thường; hình học tránh vật cản và ngữ cảnh bố cục Shape đứng.
+// LUỒNG: Run → ResolveTargets → ArrangeRegularSectionViews/PHU_SectionLayoutPlanner.Build → cập nhật vị trí và kiểm tra kết quả.
+// ĐIỂM SỬA: chọn view ở ResolveTargets; xếp hàng/cột ở planner; khung/vật cản ở PHU_ArrangePresentation.Read.
+// THAM SỐ: gap, MIN_EDGE_SAFE tính bằng mm giấy; sectionHorizontal/verticalBottomUp/alignedGrid chọn cách xếp.
+// LƯU Ý: mainHorizontal còn trong chữ ký tương thích; Run hiện chỉ di chuyển section thường, không xếp lại main view.
+// TRA CỨU: PROJECT_MAP.md ở gốc repo; chỉ mục kiểu/hàm và điểm chỉnh thông số.
+// Mục lục:
+//   PHU_ArrangeView.cs
+//   PHU_SectionLayoutPlanner.cs
+//   PHU_ArrangePresentation.cs
+//   PHU_VerticalShapeViewLayoutContext.cs
+
+#region PHU_ArrangeView - Chọn và sắp section thường trong vùng giấy
+
 
 namespace TTSK_AutoDim_Plates
 {
+    using System;
+    using System.Collections.Generic;
+    using System.Reflection;
+    using System.Linq;
+    using Tekla.Structures.Drawing;
+    using Tekla.Structures.Geometry3d;
+    using System.Collections;
+    using Tekla.Structures.Drawing.UI;
+
     public static class PHU_ArrangeView
     {
+        // CHỈNH BỐ CỤC (mm giấy): lề an toàn vào trong khổ giấy; tăng làm vùng xếp section nhỏ lại.
         private const double MIN_EDGE_SAFE = 15.0;
 
         public class Result
@@ -105,7 +121,7 @@ namespace TTSK_AutoDim_Plates
                 ResolveTargets(dh, allViews, out mainViews, out regularSectionViews,
                     out anchorViews, out result.SelectionMode, out result.ProtectedSelectionCount, out targetRectangle);
 
-                // SECTION ONLY: không move Main View / Top / Bottom / Front / special section.
+                // CHỈ SECTION THƯỜNG: giữ vị trí Main/Top/Bottom/Front và section đặc biệt.
                 var plan=ArrangeRegularSectionViews(
                     drawing,
                     mainViews,
@@ -1023,3 +1039,1197 @@ namespace TTSK_AutoDim_Plates
 
     }
 }
+#endregion
+
+#region PHU_SectionLayoutPlanner - Lập kế hoạch vị trí các section
+
+
+namespace TTSK_AutoDim_Plates
+{
+    using System;
+    using System.Collections.Generic;
+    using System.Linq;
+
+    // All dimensions are millimetres on paper. This planner makes no Tekla calls.
+    internal static class PHU_SectionLayoutPlanner
+    {
+        internal enum VerticalLayout { LegacyColumns, AdaptiveRows, AlignedGrid }
+        // DUNG SAI SỐ (mm giấy): so sánh hình chữ nhật trong planner; không phải khoảng hở bố trí.
+        internal const double Epsilon = 0.001;
+        [Serializable]
+        public sealed class Rect
+        {
+            public double Left, Bottom, Right, Top;
+            public Rect(double left, double bottom, double right, double top)
+            { Left = left; Bottom = bottom; Right = right; Top = top; }
+            public double Width { get { return Right - Left; } }
+            public double Height { get { return Top - Bottom; } }
+            public double CenterX { get { return (Left + Right) / 2; } }
+            public Rect Inflate(double d) { return new Rect(Left-d, Bottom-d, Right+d, Top+d); }
+            public bool Valid { get { return Finite(Left) && Finite(Bottom) && Finite(Right) && Finite(Top) && Width > 0 && Height > 0; } }
+            public bool Contains(Rect b) { return b.Left >= Left-Epsilon && b.Right <= Right+Epsilon && b.Bottom >= Bottom-Epsilon && b.Top <= Top+Epsilon; }
+            public bool Overlaps(Rect b) { return Left < b.Right-Epsilon && Right > b.Left+Epsilon && Bottom < b.Top-Epsilon && Top > b.Bottom+Epsilon; }
+            public override string ToString() { return String.Format(System.Globalization.CultureInfo.InvariantCulture,"[{0:F3},{1:F3}..{2:F3},{3:F3}]",Left,Bottom,Right,Top); }
+        }
+        internal sealed class Item
+        {
+            public string Key;
+            public double Width, Height;
+            public double? AnchorX;
+        }
+        internal sealed class Plan
+        {
+            public readonly List<Rect> Places = new List<Rect>();
+            public readonly List<bool> RightGroup = new List<bool>();
+            public readonly List<Band> Bands = new List<Band>();
+            public bool Horizontal;
+            public bool RowsBottomUp;
+            public int GridColumns;
+            public double RequestedGap, GlobalGap, RightGap;
+            public bool TriedZeroGap;
+            public string Error;
+            public bool Success { get { return Error == null; } }
+            public bool GapAdjusted { get { return GlobalGap < RequestedGap-Epsilon || RightGap < RequestedGap-Epsilon; } }
+            public string GapNotice
+            {
+                get
+                {
+                    if(!GapAdjusted)return "";
+                    string target=GlobalGap < RequestedGap-Epsilon ? "toàn bộ" : "cụm phải";
+                    double used=GlobalGap < RequestedGap-Epsilon ? GlobalGap : RightGap;
+                    return "Đã giảm GAP " + target + " " + RequestedGap.ToString("0.##") + " → " + used.ToString("0.##") + " mm để xếp vừa.";
+                }
+            }
+        }
+        internal sealed class Band
+        {
+            public int Start, Count;
+            public bool Column, BottomUp;
+        }
+        internal static bool Finite(double n) { return !Double.IsNaN(n) && !Double.IsInfinity(n); }
+
+        internal static Plan Build(Rect sheet, IList<Item> items, IList<Rect> obstacles,
+            Rect main, double gap, bool horizontal, bool bottomUp, VerticalLayout verticalLayout=VerticalLayout.LegacyColumns)
+        {
+            if (sheet == null || !sheet.Valid || !Finite(gap) || gap < 0 ||
+                items.Any(i => !Finite(i.Width) || !Finite(i.Height) || i.Width <= 0 || i.Height <= 0) ||
+                obstacles.Any(o => o == null || !o.Valid))
+                return new Plan { Error = "Kích thước hoặc khoảng cách Arrange không hợp lệ." };
+            if (items.Count == 0) return new Plan();
+            // Preserve the preferred layout first. When its right cluster is full,
+            // compress that cluster before changing the rest of the drawing.
+            var plan=BuildFixed(sheet,items,obstacles,main,gap,gap,horizontal,bottomUp,true,verticalLayout);
+            if(plan.Success)return plan;
+            if((horizontal || verticalLayout==VerticalLayout.LegacyColumns) && main!=null && gap>0)
+            {
+                plan=FindLargestFittingGap(gap,g=>BuildFixed(sheet,items,obstacles,main,gap,g,horizontal,bottomUp,true,verticalLayout));
+                if(plan.Success)return plan;
+            }
+            // Reduce the preferred, readable layout before trying another topology.
+            // A geometrically valid scatter into leftover pockets is not a layout.
+            if(gap>0)
+            {
+                plan=FindLargestFittingGap(gap,g=>BuildFixed(sheet,items,obstacles,main,g,g,horizontal,bottomUp,true,verticalLayout));
+                plan.RequestedGap=gap;
+                if(plan.Success)return plan;
+            }
+            plan=BuildFixed(sheet,items,obstacles,main,gap,gap,horizontal,bottomUp,false,verticalLayout);
+            if(plan.Success)return plan;
+            if(gap>0)
+            {
+                plan=FindLargestFittingGap(gap,g=>BuildFixed(sheet,items,obstacles,main,g,g,horizontal,bottomUp,false,verticalLayout));
+                plan.RequestedGap=gap;
+                if(plan.Success)return plan;
+            }
+            return new Plan {RequestedGap=gap,GlobalGap=0,RightGap=0,TriedZeroGap=true,Error=
+                "Đã thử giảm GAP toàn bộ đến 0 mm nhưng chưa tìm được bố cục đủ chỗ cho " + items.Count +
+                " mặt cắt. Hãy giảm tỷ lệ hiển thị hoặc tăng khổ giấy; chưa di chuyển view nào."};
+        }
+
+        // Descending probes include zero explicitly. Refinement keeps the best feasible
+        // plan; it does not assume every greedy packing decision is monotonic in GAP.
+        static Plan FindLargestFittingGap(double requested,Func<double,Plan> build)
+        {
+            double high=requested;
+            Plan last=null;
+            for(int step=1;step<=12;step++)
+            {
+                double low=step==12?0:requested*(12-step)/12;
+                last=build(low);
+                if(last.Success)
+                {
+                    var best=last;
+                    for(int refine=0;refine<12 && high-low>.01;refine++)
+                    {
+                        double middle=(low+high)/2;var candidate=build(middle);
+                        if(candidate.Success){best=candidate;low=middle;}else high=middle;
+                    }
+                    return best;
+                }
+                high=low;
+            }
+            last.TriedZeroGap=true;return last;
+        }
+
+        static Plan BuildFixed(Rect sheet,IList<Item> items,IList<Rect> obstacles,Rect main,
+            double gap,double rightGap,bool horizontal,bool bottomUp,bool preferredOnly,VerticalLayout verticalLayout)
+        {
+            if(!horizontal && verticalLayout==VerticalLayout.AlignedGrid)
+                return BuildAlignedGrid(sheet,items,obstacles,main,gap,bottomUp);
+            if(!horizontal && verticalLayout!=VerticalLayout.LegacyColumns)
+                return BuildVerticalRows(sheet,items,obstacles,main,gap,bottomUp,preferredOnly);
+            foreach(int mode in preferredOnly ? new[]{0} : new[]{0,1,2,3,4})
+            {
+                if(horizontal && mode==3)continue; // Horizontal order starts with a row.
+                var plan = new Plan {RequestedGap=gap,GlobalGap=gap,RightGap=rightGap,Horizontal=horizontal};
+                var blocked = Blocked(sheet,main,obstacles,plan,gap,gap);
+                int next = 0;
+                if (horizontal && mode == 0)
+                {
+                    PlaceRow(sheet, items, ref next, blocked, plan, main, gap, true);
+                    var rightBlocked=Blocked(sheet,main,obstacles,plan,rightGap,gap);
+                    PlaceColumns(sheet, items, ref next, rightBlocked, plan, main, rightGap, bottomUp, true);
+                    blocked=Blocked(sheet,main,obstacles,plan,gap,gap);
+                }
+                else if ((!horizontal && mode < 2) || mode == 3)
+                {
+                    var rightBlocked=Blocked(sheet,main,obstacles,plan,rightGap,gap);
+                    PlaceColumns(sheet, items, ref next, rightBlocked, plan, main, rightGap, bottomUp, true);
+                    blocked=Blocked(sheet,main,obstacles,plan,gap,gap);
+                }
+
+                while (next < items.Count)
+                {
+                    int before = next;
+                    if (mode == 2 && !horizontal)
+                        PlaceColumns(sheet, items, ref next, blocked, plan, main, gap, bottomUp, false);
+                    else
+                        PlaceRow(sheet, items, ref next, blocked, plan, main, gap, false, mode == 1, mode == 4, mode == 2);
+                    if (next == before) break;
+                }
+                if (next == items.Count && ValidatePlan(sheet,items,obstacles,main,plan)) return plan;
+            }
+            return new Plan {Error="Không đủ chỗ tại GAP đang thử.",RequestedGap=gap,GlobalGap=gap,RightGap=rightGap};
+        }
+
+        static Rect FlipY(Rect rect)
+        { return rect==null?null:new Rect(rect.Left,-rect.Top,rect.Right,-rect.Bottom); }
+
+        static double Anchor(Item item) { return item.AnchorX??item.Width/2; }
+
+        // Columns share a view-origin X axis, with one pitch for the entire grid.
+        // Rows share a lower-frame baseline. Measure envelopes around these
+        // anchors, rather than centering each row independently.
+        static Plan BuildAlignedGrid(Rect sheet,IList<Item> items,IList<Rect> obstacles,Rect main,double gap,bool bottomUp)
+        {
+            var blocked=Blocked(sheet,main,obstacles,new Plan(),gap,gap);
+            foreach(bool rightOnly in new[]{true,false})
+            {
+                double left=rightOnly&&main!=null?Math.Max(sheet.Left,main.Right+gap):sheet.Left;
+                if(left>=sheet.Right-Epsilon)continue;
+                var region=new Rect(left,sheet.Bottom,sheet.Right,sheet.Top);
+                for(int columns=items.Count;columns>=1;columns--)
+                {
+                    // Necessary first-row width bound avoids building oversized grids.
+                    if(items.Take(columns).Sum(i=>i.Width)+gap*(columns-1)>region.Width+Epsilon)continue;
+                    int rows=(items.Count+columns-1)/columns;
+                    var l=new double[columns];var r=new double[columns];var heights=new double[rows];
+                    for(int i=0;i<items.Count;i++)
+                    {
+                        double a=Anchor(items[i]);
+                        if(!Finite(a))return new Plan{Error="Mốc căn cột không hợp lệ."};
+                        l[i%columns]=Math.Max(l[i%columns],a);
+                        r[i%columns]=Math.Max(r[i%columns],items[i].Width-a);
+                        heights[i/columns]=Math.Max(heights[i/columns],items[i].Height);
+                    }
+                    double pitch=0;
+                    for(int c=1;c<columns;c++)pitch=Math.Max(pitch,r[c-1]+l[c]+gap);
+                    double width=l[0]+pitch*(columns-1)+r[columns-1];
+                    double height=heights.Sum()+gap*(rows-1);
+                    if(width>region.Width+Epsilon||height>region.Height+Epsilon)continue;
+                    var relative=new List<Rect>();double rowY=bottomUp?0:height;
+                    for(int row=0;row<rows;row++)
+                    {
+                        double baseline=bottomUp?rowY:rowY-heights[row];
+                        for(int col=0;col<columns&&row*columns+col<items.Count;col++)
+                        {
+                            var item=items[row*columns+col];double x=l[0]+col*pitch-Anchor(item);
+                            relative.Add(new Rect(x,baseline,x+item.Width,baseline+item.Height));
+                        }
+                        rowY+=bottomUp?heights[row]+gap:-heights[row]-gap;
+                    }
+                    // Critical translation levels come from real obstacle edges.
+                    // Empty cells in the final row do not consume drawing space.
+                    var ys=new List<double>{region.Bottom,region.Top-height};
+                    foreach(var box in relative)foreach(var obstacle in blocked)
+                    {ys.Add(obstacle.Top-box.Bottom);ys.Add(obstacle.Bottom-box.Top);}
+                    var levels=ys.Where(y=>y>=region.Bottom-Epsilon&&y+height<=region.Top+Epsilon).Distinct();
+                    foreach(double y in bottomUp?levels.OrderBy(v=>v):levels.OrderByDescending(v=>v))
+                    {
+                        var forbidden=new List<Tuple<double,double>>();
+                        foreach(var box in relative)foreach(var obstacle in blocked)
+                            if(box.Bottom+y<obstacle.Top-Epsilon&&box.Top+y>obstacle.Bottom+Epsilon)
+                                forbidden.Add(Tuple.Create(obstacle.Left-box.Right,obstacle.Right-box.Left));
+                        double x;
+                        if(!FindGridTranslation(region.Left,region.Right-width,forbidden,out x))continue;
+                        var plan=new Plan{RequestedGap=gap,GlobalGap=gap,RightGap=gap,GridColumns=columns,RowsBottomUp=bottomUp};
+                        plan.Places.AddRange(relative.Select(b=>new Rect(b.Left+x,b.Bottom+y,b.Right+x,b.Top+y)));
+                        plan.RightGroup.AddRange(items.Select(i=>false));
+                        for(int row=0;row<rows;row++)plan.Bands.Add(new Band{Start=row*columns,Count=Math.Min(columns,items.Count-row*columns)});
+                        if(ValidatePlan(sheet,items,obstacles,main,plan))return plan;
+                    }
+                }
+            }
+            return new Plan{Error="Chưa tìm được lưới căn hàng/cột tại GAP đang thử.",RequestedGap=gap,GlobalGap=gap,RightGap=gap};
+        }
+
+        static bool FindGridTranslation(double min,double max,List<Tuple<double,double>> forbidden,out double x)
+        {
+            x=0;double cursor=min,best=Double.MaxValue,target=(min+max)/2;
+            foreach(var range in forbidden.OrderBy(v=>v.Item1))
+            {
+                if(range.Item2<cursor-Epsilon)continue;
+                double end=Math.Min(max,range.Item1);
+                if(end>=cursor-Epsilon)
+                {double candidate=Math.Max(cursor,Math.Min(target,end));double score=Math.Abs(candidate-target);if(score<best){best=score;x=candidate;}}
+                cursor=Math.Max(cursor,range.Item2);
+                if(cursor>max+Epsilon)break;
+            }
+            if(cursor<=max+Epsilon)
+            {double candidate=Math.Max(cursor,Math.Min(target,max));if(Math.Abs(candidate-target)<best){best=Math.Abs(candidate-target);x=candidate;}}
+            return best<Double.MaxValue;
+        }
+
+        // Vertical mode grows by rows: A-B, then C-D, rather than exhausting
+        // one column first. Reflect only the planning coordinates for upward
+        // growth so both directions use the same collision/row solver.
+        static Plan BuildVerticalRows(Rect sheet,IList<Item> items,IList<Rect> obstacles,
+            Rect main,double gap,bool bottomUp,bool preferredOnly)
+        {
+            var space=bottomUp?FlipY(sheet):sheet;
+            var fixedRects=bottomUp?obstacles.Select(FlipY).ToList():obstacles.ToList();
+            var anchor=bottomUp?FlipY(main):main;
+            // First try the right-hand region. If that cannot hold the complete
+            // ordered sequence, use all available row intervals at the same GAP.
+            // Additional capacity-first/compact trials are reserved for fallback.
+            foreach(int strategy in preferredOnly?new[]{0,1}:new[]{0,1,2,3})
+            {
+                var plan=new Plan{RequestedGap=gap,GlobalGap=gap,RightGap=gap,Horizontal=false};
+                var blocked=Blocked(space,anchor,fixedRects,plan,gap,gap);
+                Rect region=space;
+                if(strategy==0 && anchor!=null)
+                {
+                    double left=Math.Max(space.Left,anchor.Right+gap);
+                    if(left>=space.Right-Epsilon)continue;
+                    region=new Rect(left,space.Bottom,space.Right,space.Top);
+                }
+                int next=0;
+                while(next<items.Count)
+                {
+                    int before=next;
+                    // Each row derives its count from summed actual widths,
+                    // maximum height and the free intervals at candidate levels.
+                    PlaceRow(region,items,ref next,blocked,plan,null,gap,false,
+                        strategy==2,strategy==3,true);
+                    if(next==before)break;
+                }
+                if(next!=items.Count)continue;
+                if(bottomUp)
+                    for(int i=0;i<plan.Places.Count;i++)plan.Places[i]=FlipY(plan.Places[i]);
+                plan.RowsBottomUp=bottomUp;
+                if(ValidatePlan(sheet,items,obstacles,main,plan))return plan;
+            }
+            return new Plan{Error="Không đủ chỗ cho các hàng mặt cắt tại GAP đang thử.",RequestedGap=gap,GlobalGap=gap,RightGap=gap};
+        }
+
+        static List<Rect> Blocked(Rect sheet,Rect main,IList<Rect> obstacles,Plan plan,double obstacleGap,double otherGap)
+        {
+            var result=obstacles.Select(o=>o.Inflate(obstacleGap)).ToList();
+            // Never scatter overflow into the left flank of the main views. The row
+            // below them retains its full width and its existing centering behavior.
+            if(main!=null && main.Left>sheet.Left+Epsilon)
+                result.Add(new Rect(sheet.Left,main.Bottom,main.Left,main.Top));
+            result.AddRange(plan.Places.Select(p=>p.Inflate(otherGap)));
+            return result;
+        }
+
+        sealed class Candidate
+        {
+            public List<Rect> Places;
+            public double Score;
+        }
+        static void PlaceRow(Rect sheet, IList<Item> items, ref int next, List<Rect> blocked,
+            Plan plan, Rect main, double gap, bool belowOnly, bool prioritizeCount = false, bool compact = false, bool topFirst=false)
+        {
+            double desiredTop = main == null ? sheet.Top : Math.Min(sheet.Top, main.Bottom-gap);
+            var previousRow=plan.Bands.LastOrDefault(b=>!b.Column);
+            double ceiling=previousRow==null ? sheet.Top : plan.Places.Skip(previousRow.Start).Take(previousRow.Count).Min(p=>p.Bottom)-gap;
+            if(topFirst)desiredTop=ceiling;
+            Candidate best = null;
+            double width = 0, height = 0;
+            for (int count = 1; next+count <= items.Count; count++)
+            {
+                var item = items[next+count-1];
+                width += item.Width + (count == 1 ? 0 : gap);
+                height = Math.Max(height, item.Height);
+                if (width > sheet.Width+Epsilon || height > sheet.Height+Epsilon) break;
+                var levels = new List<double> { desiredTop, ceiling, sheet.Bottom+height };
+                foreach (var b in blocked) { levels.Add(b.Bottom); levels.Add(b.Top+height); }
+                foreach (double top in levels.Distinct().OrderByDescending(v=>v))
+                {
+                    if (top > ceiling+Epsilon || top-height < sheet.Bottom-Epsilon || belowOnly && top > desiredTop+Epsilon) continue;
+                    var intervals = FreeIntervals(sheet.Left, sheet.Right,
+                        blocked.Where(b=>b.Bottom < top-Epsilon && b.Top > top-height+Epsilon), true);
+                    foreach (var interval in intervals)
+                    {
+                        if (interval.Item2-interval.Item1 < width-Epsilon) continue;
+                        double left = Math.Max(interval.Item1, Math.Min(sheet.CenterX-width/2, interval.Item2-width));
+                        if(compact)left=interval.Item1;
+                        // Prefer the next readable row below the main cluster, then above it.
+                        double zone = top <= desiredTop+Epsilon ? 0 : 2;
+                        double score = zone*1e9 + Math.Abs(top-desiredTop)*1e5 - count*1000 + Math.Abs(left+width/2-sheet.CenterX);
+                        if(prioritizeCount)score=-count*1e12+score;
+                        if(compact)score=(ceiling-top)*1e6-count*1000+left;
+                        if (best != null && score >= best.Score) continue;
+                        var places = new List<Rect>(); double x = left;
+                        for (int k=0;k<count;k++)
+                        { var i=items[next+k]; places.Add(new Rect(x,top-height,x+i.Width,top-height+i.Height)); x+=i.Width+gap; }
+                        best = new Candidate { Places=places, Score=score };
+                    }
+                }
+            }
+            Accept(best, ref next, blocked, plan, gap);
+        }
+
+        static void PlaceColumns(Rect sheet, IList<Item> items, ref int next, List<Rect> blocked,
+            Plan plan, Rect main, double gap, bool bottomUp, bool rightOnly)
+        {
+            double nextColumnLeft=rightOnly && main!=null ? Math.Max(sheet.Left,main.Right+gap) : sheet.Left;
+            while(next < items.Count)
+            {
+                Candidate best=null; double height=0,width=0;
+                double startX = nextColumnLeft;
+                double desiredTop=main == null ? sheet.Top : Math.Min(sheet.Top,main.Top);
+                for(int count=1;next+count<=items.Count;count++)
+                {
+                    var item=items[next+count-1]; height+=item.Height+(count==1?0:gap); width=Math.Max(width,item.Width);
+                    if(height>sheet.Height+Epsilon || width>sheet.Right-startX+Epsilon)break;
+                    var xs=new List<double>{startX,sheet.Right-width};
+                    foreach(var b in blocked){xs.Add(b.Right);xs.Add(b.Left-width);}
+                    foreach(double x in xs.Distinct().OrderBy(v=>v))
+                    {
+                        if(x<startX-Epsilon || x+width>sheet.Right+Epsilon)continue;
+                        var intervals=FreeIntervals(sheet.Bottom,sheet.Top,
+                            blocked.Where(b=>b.Left<x+width-Epsilon&&b.Right>x+Epsilon),false);
+                        foreach(var interval in intervals)
+                        {
+                            if(interval.Item2-interval.Item1<height-Epsilon)continue;
+                            double bottom=bottomUp?interval.Item1:Math.Max(interval.Item1,Math.Min(desiredTop-height,interval.Item2-height));
+                            double score=(x-startX)*1e6-count*1000 + (bottomUp?bottom-sheet.Bottom:Math.Abs(bottom+height-desiredTop));
+                            if(best!=null&&score>=best.Score)continue;
+                            var places=new List<Rect>();double y=bottomUp?bottom:bottom+height;
+                            for(int k=0;k<count;k++)
+                            {var i=items[next+k];double left=x+(width-i.Width)/2;double low=bottomUp?y:y-i.Height;
+                                places.Add(new Rect(left,low,left+i.Width,low+i.Height));y+=bottomUp?i.Height+gap:-i.Height-gap;}
+                            best=new Candidate{Places=places,Score=score};
+                        }
+                    }
+                }
+                if(best==null)break;
+                nextColumnLeft=best.Places.Max(p=>p.Right)+gap;
+                Accept(best,ref next,blocked,plan,gap,rightOnly,true,bottomUp);
+            }
+        }
+        static void Accept(Candidate best,ref int next,List<Rect> blocked,Plan plan,double gap,bool rightGroup=false,bool column=false,bool bottomUp=false)
+        {
+            if(best==null)return;
+            plan.Bands.Add(new Band{Start=next,Count=best.Places.Count,Column=column,BottomUp=bottomUp});
+            foreach(var place in best.Places){plan.Places.Add(place);plan.RightGroup.Add(rightGroup);blocked.Add(place.Inflate(gap));}
+            next+=best.Places.Count;
+        }
+        static List<Tuple<double,double>> FreeIntervals(double min,double max,IEnumerable<Rect> obstacles,bool xAxis)
+        {
+            var result=new List<Tuple<double,double>>();double cursor=min;
+            foreach(var b in obstacles.OrderBy(b=>xAxis?b.Left:b.Bottom))
+            {
+                double lo=xAxis?b.Left:b.Bottom,hi=xAxis?b.Right:b.Top;
+                if(hi<=cursor || lo>=max)continue;
+                if(lo>cursor)result.Add(Tuple.Create(cursor,Math.Min(lo,max)));
+                cursor=Math.Max(cursor,hi);if(cursor>=max)break;
+            }
+            if(cursor<max)result.Add(Tuple.Create(cursor,max));return result;
+        }
+        internal static bool Validate(Rect sheet,IList<Item> items,IList<Rect> obstacles,IList<Rect> places,double gap)
+        {
+            if(places.Count!=items.Count)return false;
+            for(int i=0;i<places.Count;i++)
+            {
+                var p=places[i];
+                if(p==null||!p.Valid||!sheet.Contains(p)||Math.Abs(p.Width-items[i].Width)>.05||Math.Abs(p.Height-items[i].Height)>.05)return false;
+                if(obstacles.Any(b=>b.Inflate(gap).Overlaps(p)))return false;
+                for(int j=0;j<i;j++)if(places[j].Inflate(gap).Overlaps(p))return false;
+            }
+            return true;
+        }
+        internal static bool ValidatePlan(Rect sheet,IList<Item> items,IList<Rect> obstacles,Rect main,Plan plan,IList<Rect> actual=null)
+        {
+            var places=actual??plan.Places;
+            if(places.Count!=items.Count || plan.RightGroup.Count!=items.Count || !Finite(plan.GlobalGap) ||
+                !Finite(plan.RightGap) || plan.RightGap<0 || plan.GlobalGap<0)return false;
+            for(int i=0;i<places.Count;i++)
+            {
+                var p=places[i];
+                if(p==null||!p.Valid||!sheet.Contains(p)||Math.Abs(p.Width-items[i].Width)>.05||Math.Abs(p.Height-items[i].Height)>.05)return false;
+                if(main!=null && p.Left<main.Left-Epsilon && p.Bottom<main.Top-Epsilon && p.Top>main.Bottom+Epsilon)return false;
+                double fixedGap=plan.RightGroup[i]?plan.RightGap:plan.GlobalGap;
+                if(obstacles.Any(b=>b.Inflate(fixedGap).Overlaps(p)))return false;
+                for(int j=0;j<i;j++)
+                {
+                    double between=plan.RightGroup[i]&&plan.RightGroup[j]?plan.RightGap:plan.GlobalGap;
+                    if(places[j].Inflate(between).Overlaps(p))return false;
+                }
+            }
+            if(plan.GridColumns>0)
+            {
+                for(int i=plan.GridColumns;i<places.Count;i++)
+                    if(Math.Abs(places[i].Left+Anchor(items[i])-places[i%plan.GridColumns].Left-Anchor(items[i%plan.GridColumns]))>.1)return false;
+                for(int i=2;i<Math.Min(plan.GridColumns,places.Count);i++)
+                    if(Math.Abs((places[i].Left+Anchor(items[i])-places[i-1].Left-Anchor(items[i-1]))
+                        -(places[1].Left+Anchor(items[1])-places[0].Left-Anchor(items[0])))>.1)return false;
+            }
+            return ValidateReadingOrder(plan,places);
+        }
+
+        internal static bool ValidateReadingOrder(Plan plan,IList<Rect> places)
+        {
+            if(plan.GridColumns>0)
+            {
+                int gridNext=0;double previous=plan.RowsBottomUp?Double.NegativeInfinity:Double.PositiveInfinity;
+                foreach(var band in plan.Bands)
+                {
+                    if(band.Column||band.Start!=gridNext||band.Count!=Math.Min(plan.GridColumns,places.Count-gridNext)||band.Count<=0)return false;
+                    var row=places.Skip(gridNext).Take(band.Count).ToList();
+                    if(plan.RowsBottomUp?row.Min(p=>p.Bottom)<previous-Epsilon:row.Max(p=>p.Top)>previous+Epsilon)return false;
+                    previous=plan.RowsBottomUp?row.Max(p=>p.Top):row.Min(p=>p.Bottom);
+                    for(int i=1;i<row.Count;i++)if(row[i].Left<row[i-1].Right-Epsilon||Math.Abs(row[i].Bottom-row[0].Bottom)>.1)return false;
+                    gridNext+=band.Count;
+                }
+                return gridNext==places.Count;
+            }
+            if(plan.RowsBottomUp)
+            {
+                // Vertical rows always read left-to-right. Reflection converts
+                // bottom-to-top band progression back to the common validator.
+                if(plan.Horizontal || plan.Bands.Any(b=>b.Column))return false;
+                var descending=new Plan{Horizontal=false};
+                descending.Bands.AddRange(plan.Bands);
+                return ValidateReadingOrder(descending,places.Select(FlipY).ToList());
+            }
+            int next=0;double previousRowBottom=Double.PositiveInfinity,previousColumnRight=Double.NegativeInfinity;
+            bool columnsEnded=false,seenColumn=false,seenRow=false;
+            foreach(var band in plan.Bands)
+            {
+                if(band.Start!=next || band.Count<=0 || next+band.Count>places.Count)return false;
+                var group=places.Skip(next).Take(band.Count).ToList();
+                if(band.Column)
+                {
+                    if(columnsEnded || (!plan.Horizontal && seenRow))return false;
+                    if(group.Min(p=>p.Left)<previousColumnRight-Epsilon)return false;
+                    previousColumnRight=group.Max(p=>p.Right);seenColumn=true;
+                    for(int i=1;i<group.Count;i++)
+                    {
+                        if(band.BottomUp ? group[i].Bottom<group[i-1].Top-Epsilon : group[i].Top>group[i-1].Bottom+Epsilon)return false;
+                    }
+                }
+                else
+                {
+                    if(group.Max(p=>p.Top)>previousRowBottom+Epsilon)return false;
+                    previousRowBottom=group.Min(p=>p.Bottom);seenRow=true;
+                    if(seenColumn)columnsEnded=true;
+                    for(int i=1;i<group.Count;i++)
+                        if(group[i].Left<group[i-1].Right-Epsilon || Math.Abs(group[i].Bottom-group[0].Bottom)>.1)return false;
+                }
+                next+=band.Count;
+            }
+            return next==places.Count;
+        }
+    }
+}
+#endregion
+
+#region PHU_ArrangePresentation - Đọc khung view, bảng layout và vật cản đang hiển thị
+
+
+namespace TTSK_AutoDim_Plates
+{
+    using System;
+    using System.IO;
+    using System.Linq;
+    using System.Collections;
+    using System.Collections.Generic;
+    using System.Reflection;
+    using System.Runtime.InteropServices;
+    using System.Threading;
+    using D = Tekla.Structures.Drawing;
+    using Rect = TTSK_AutoDim_Plates.PHU_SectionLayoutPlanner.Rect;
+
+    // Đọc sheet đang hiển thị, gồm bảng layout và keyplan liên kết API thường không liệt kê.
+    // Dữ liệu vật cản lấy từ trạng thái hiện tại, không dùng snapshot đã lưu.
+    internal static class PHU_ArrangePresentation
+    {
+        [Serializable]
+        public sealed class Data
+        {
+            public List<Rect> Obstacles = new List<Rect>();
+            public List<int> ViewIds = new List<int>();
+            public List<double> ViewX = new List<double>(), ViewY = new List<double>();
+        }
+        internal static Data Read(int[] viewIds, double width, double height,int? ignoredRectangle=null)
+        {
+            var protectedTables=new List<int>();
+            foreach(int id in Tekla.Structures.DrawingInternal.TableLayout.GetCurrentTables())
+            {
+                var table=new Tekla.Structures.DrawingInternal.LayoutTable{Id=id};
+                if(!table.Select())throw new InvalidOperationException("Không đọc được bảng layout hiện tại.");
+                if(table.IsTableKeyplan() || table.IsTableDwg())protectedTables.Add(id);
+            }
+            string bin = Path.GetDirectoryName(typeof(D.Drawing).Assembly.Location);
+            var domain = AppDomain.CreateDomain("TTSK Arrange geometry " + Guid.NewGuid(), null,
+                new AppDomainSetup { ApplicationBase=bin, ConfigurationFile=Path.Combine(bin,"TeklaStructures.exe.config") });
+            try
+            {
+                var reader=(PHU_ArrangePresentationReader)domain.CreateInstanceFromAndUnwrap(
+                    typeof(PHU_ArrangePresentationReader).Assembly.Location,typeof(PHU_ArrangePresentationReader).FullName);
+                return (Data)reader.ReadCurrent(viewIds,width,height,protectedTables.ToArray(),ignoredRectangle);
+            }
+            finally { AppDomain.Unload(domain); }
+        }
+        internal static object Member(object value,string name)
+        {
+            var p=value.GetType().GetProperty(name);return p==null?null:p.GetValue(value,null);
+        }
+        static double Number(object o,string name)
+        {
+            if(o==null)throw new InvalidDataException("Thiếu tọa độ hiển thị: "+name);
+            var value=Member(o,name);if(value==null)throw new InvalidDataException("Thiếu tọa độ hiển thị: "+name);
+            double number=Convert.ToDouble(value,System.Globalization.CultureInfo.InvariantCulture);
+            if(!PHU_SectionLayoutPlanner.Finite(number))throw new InvalidDataException("Tọa độ hiển thị không hữu hạn: "+name);
+            return number;
+        }
+        static IEnumerable<object> Children(object o,string name="Primitives")
+        { var e=Member(o,name) as IEnumerable;return e==null?Enumerable.Empty<object>():e.Cast<object>(); }
+
+        internal static Data Parse(IEnumerable raw,int[] viewIds,double width,double height,int[] protectedTableIds=null,int? ignoredRectangle=null)
+        {
+            var result=new Data();var known=new HashSet<int>(viewIds);
+            var protectedTables=new HashSet<int>(protectedTableIds??new int[0]);
+            foreach(var view in raw)
+            {
+                int id=(int)Number(view,"Id");var position=Member(view,"Position");
+                double x=Number(position,"X"),y=Number(position,"Y");
+                if(known.Contains(id))
+                {result.ViewIds.Add(id);result.ViewX.Add(x);result.ViewY.Add(y);continue;}
+                if(id>0)
+                {
+                    // A rendered view absent from Drawing API views is linked layout
+                    // content (e.g. keyplan). Protect its whole interior, not each part.
+                    var linked=new List<Rect>();foreach(var group in Children(view))Collect(group,x,y,linked);
+                    if(linked.Count>0)result.Obstacles.Add(Union(linked));continue;
+                }
+                foreach(var group in Children(view))
+                {
+                    if(ignoredRectangle.HasValue && Convert.ToInt32(Member(group,"Id")??0)==ignoredRectangle.Value)continue;
+                    var pieces=new List<Rect>(); Collect(group,x,y,pieces);
+                    if(pieces.Count==0)continue;
+                    var bounds=Union(pieces);
+                    bool nativeFrame=Convert.ToString(Member(group,"ObjectType"))=="266";
+                    bool paperOutline=bounds.Contains(new Rect(.5,.5,width-.5,height-.5));
+                    int groupId=Convert.ToInt32(Member(group,"Id")??0);
+                    if(nativeFrame || paperOutline && !protectedTables.Contains(groupId))
+                    {
+                        // Some title templates include the drawing frame. Retain the frame's
+                        // actual strokes, but do not reserve the whole interior of the sheet.
+                        var interior=new List<Rect>();
+                        foreach(var p in pieces)
+                            if(p.Width>=width*.8 || p.Height>=height*.8)result.Obstacles.Add(p);
+                            else interior.Add(p);
+                        result.Obstacles.AddRange(Components(interior));
+                        result.Obstacles.AddRange(ClosedCells(pieces,width,height));
+                    }
+                    else result.Obstacles.Add(bounds); // Entire table/keyplan, including empty cells.
+                }
+            }
+            if(result.ViewIds.Count!=known.Count)
+                throw new InvalidOperationException("Dữ liệu hiển thị chưa khớp các view hiện tại. Hãy refresh bản vẽ và chạy lại Arrange.");
+            var compact=new List<Rect>();
+            foreach(var obstacle in result.Obstacles.OrderByDescending(b=>b.Width*b.Height).ThenBy(b=>b.Left).ThenBy(b=>b.Bottom))
+            {
+                if(!obstacle.Valid)throw new InvalidOperationException("Biên hiển thị bảng/keyplan không hợp lệ.");
+                if(!compact.Any(b=>b.Contains(obstacle)))compact.Add(obstacle);
+            }
+            result.Obstacles=compact;
+            return result;
+        }
+        static IEnumerable<Rect> ClosedCells(List<Rect> pieces,double width,double height)
+        {
+            // Fill empty table cells, too. Merely avoiding grid strokes could put a
+            // small section inside a large empty cell of a frame-bearing template.
+            var horizontal=pieces.Where(p=>p.Height<=.21&&p.Width>2).ToList();
+            var vertical=pieces.Where(p=>p.Width<=.21&&p.Height>2).ToList();
+            for(int i=0;i<horizontal.Count;i++)for(int j=i+1;j<horizontal.Count;j++)
+            {
+                var a=horizontal[i];var b=horizontal[j];
+                double bottom=Math.Min(a.Bottom,b.Bottom)+.1,top=Math.Max(a.Bottom,b.Bottom)+.1;
+                double left=Math.Max(a.Left,b.Left),right=Math.Min(a.Right,b.Right);
+                if(top-bottom<.5 || right-left<.5)continue;
+                var xs=vertical.Where(v=>v.Bottom<=bottom+.2&&v.Top>=top-.2&&v.CenterX>=left-.2&&v.CenterX<=right+.2)
+                    .Select(v=>v.CenterX).Distinct().OrderBy(x=>x).ToList();
+                for(int k=1;k<xs.Count;k++)
+                {
+                    var cell=new Rect(xs[k-1],bottom,xs[k],top);
+                    if(cell.Width<.5)continue;
+                    // This branch is reached only for a proven paper-frame template.
+                    // An enclosing drawing frame is a border, not a table cell.
+                    if(cell.Width>=width*.8&&cell.Height>=height*.8)continue;
+                    yield return cell;
+                }
+            }
+        }
+        static Rect Union(IEnumerable<Rect> pieces)
+        {return new Rect(pieces.Min(p=>p.Left),pieces.Min(p=>p.Bottom),pieces.Max(p=>p.Right),pieces.Max(p=>p.Top));}
+        static List<Rect> Components(List<Rect> pieces)
+        {
+            // Connected cells of a frame-bearing template become solid occupied regions.
+            var merged=new List<Rect>();
+            foreach(var piece in pieces)
+            {
+                var current=piece;bool changed;
+                do
+                {
+                    changed=false;
+                    for(int i=merged.Count-1;i>=0;i--)
+                        if(current.Inflate(.2).Overlaps(merged[i]))
+                        {current=Union(new[]{current,merged[i]});merged.RemoveAt(i);changed=true;}
+                }while(changed);
+                merged.Add(current);
+            }
+            return merged;
+        }
+        static void PointBox(object p,double x,double y,List<Rect> result,double radius=.1)
+        { double px=Number(p,"X")+x,py=Number(p,"Y")+y;result.Add(new Rect(px-radius,py-radius,px+radius,py+radius)); }
+        static void Collect(object p,double x,double y,List<Rect> result)
+        {
+            string type=p.GetType().Name;
+            if(type=="Segment" || type=="PrimitiveGroup")
+            {foreach(var c in Children(p))Collect(c,x,y,result);return;}
+            if(type=="LinePrimitive")
+            {
+                var a=Member(p,"StartPoint");var b=Member(p,"EndPoint");
+                result.Add(new Rect(Math.Min(Number(a,"X"),Number(b,"X"))+x-.1,Math.Min(Number(a,"Y"),Number(b,"Y"))+y-.1,
+                    Math.Max(Number(a,"X"),Number(b,"X"))+x+.1,Math.Max(Number(a,"Y"),Number(b,"Y"))+y+.1));return;
+            }
+            if(type=="PointPrimitive")return; // Invisible construction/anchor point.
+            if(type=="PathPrimitive" || type=="LoopPrimitive")
+            {foreach(var s in Children(p,"Segments"))Collect(s,x,y,result);return;}
+            if(type=="PolygonPrimitive")
+            {Collect(Member(p,"OuterLoop"),x,y,result);return;}
+            if(type=="CirclePrimitive" || type=="ArcPrimitive")
+            {
+                object center;double radius;
+                if(type=="CirclePrimitive"){center=Member(p,"CenterPoint");radius=Number(p,"Radius");}
+                else
+                {
+                    // Enclose the full circle: safe for any arc sweep and bulge sign.
+                    var a=Member(p,"StartPoint");var b=Member(p,"EndPoint");double bulge=Number(p,"Bulge");
+                    double ax=Number(a,"X"),ay=Number(a,"Y"),bx=Number(b,"X"),by=Number(b,"Y");
+                    if(Math.Abs(bulge)<1e-9){PointBox(a,x,y,result);PointBox(b,x,y,result);return;}
+                    double chord=Math.Sqrt((bx-ax)*(bx-ax)+(by-ay)*(by-ay));
+                    radius=chord*(1+bulge*bulge)/(4*Math.Abs(bulge));
+                    double cx=(ax+bx)/2-(by-ay)*(1-bulge*bulge)/(4*bulge),cy=(ay+by)/2+(bx-ax)*(1-bulge*bulge)/(4*bulge);
+                    result.Add(new Rect(cx+x-radius,cy+y-radius,cx+x+radius,cy+y+radius));return;
+                }
+                PointBox(center,x,y,result,Math.Max(.1,radius));return;
+            }
+            if(type=="TextPrimitive" || type=="SymbolPrimitive" || type=="BitmapPrimitive")
+            {
+                var at=Member(p,"Position");double h=Number(p,"Height"),w;
+                if(type=="TextPrimitive")
+                    w=Convert.ToString(Member(p,"Text")).Length*Math.Max(h,Number(p,"Proportion"))*1.15;
+                else w=Number(p,"Width");
+                object angleValue=Member(p,"Angle");
+                double angle=angleValue is double?(double)angleValue:Number(angleValue,"Radians");
+                double px=Number(at,"X")+x,py=Number(at,"Y")+y;
+                // Text descent and a conservative glyph width protect marks beyond table lines.
+                var corners=new List<Rect>();
+                foreach(double dx in new[]{-.2,w+.2})foreach(double dy in new[]{-h*.3,h*1.2})
+                {double xx=px+dx*Math.Cos(angle)-dy*Math.Sin(angle),yy=py+dx*Math.Sin(angle)+dy*Math.Cos(angle);corners.Add(new Rect(xx-.1,yy-.1,xx+.1,yy+.1));}
+                result.Add(Union(corners));return;
+            }
+            throw new NotSupportedException("Không đọc được vùng né của đối tượng hiển thị " + type + ". Chưa di chuyển view.");
+        }
+    }
+    public sealed class PHU_ArrangePresentationReader : MarshalByRefObject
+    {
+        static object Member(object o,string name) {return PHU_ArrangePresentation.Member(o,name);}
+            [DllImport("wtsapi32.dll",SetLastError=true,CharSet=CharSet.Unicode)]
+            static extern bool WTSQuerySessionInformation(IntPtr server,int session,int info,out IntPtr buffer,out int bytes);
+            [DllImport("wtsapi32.dll")] static extern void WTSFreeMemory(IntPtr buffer);
+            public object ReadCurrent(int[] drawingViewIds, double paperWidth, double paperHeight,int[] protectedTableIds,int? ignoredRectangle)
+            {
+                string bin=Path.GetDirectoryName(typeof(D.Drawing).Assembly.Location);
+                // Use Tekla's presentation RPC directly: DrawingHandler remoting is not initialized in this AppDomain.
+                // Explicit RPC deadline avoids Tekla's default one-day timeout when its service is unavailable.
+                string session=Environment.GetEnvironmentVariable("SESSIONNAME");
+                if(String.IsNullOrEmpty(session))
+                {
+                    IntPtr ptr;int bytes;
+                    if(!WTSQuerySessionInformation(IntPtr.Zero,System.Diagnostics.Process.GetCurrentProcess().SessionId,6,out ptr,out bytes))
+                        throw new InvalidOperationException("Không đọc được phiên Tekla để lấy nội dung hiện hành.");
+                    try { session=Marshal.PtrToStringUni(ptr); } finally { WTSFreeMemory(ptr); }
+                }
+                string version=typeof(D.Drawing).Assembly.GetName().Version.Major+".0";
+                using(var key=Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Trimble\Tekla Structures\"+version+@"\Drawings\PresentationPlugin\"+session))
+                {
+                    int port=key==null?0:Convert.ToInt32(key.GetValue("GrpcServerPort",0));
+                    if(port<=0)throw new InvalidOperationException("Không tìm thấy dịch vụ nội dung bản vẽ trong phiên Tekla hiện tại.");
+                    var grpc=Assembly.LoadFrom(Path.Combine(bin,"Grpc.Core.dll"));
+                    var api=Assembly.LoadFrom(Path.Combine(bin,"Tekla.Structures.DrawingPresentationModelConvertor.dll"));
+                    var channelType=grpc.GetType("Grpc.Core.Channel",true);
+                    var credentialsType=grpc.GetType("Grpc.Core.ChannelCredentials",true);
+                    var channel=Activator.CreateInstance(channelType,new object[]{"localhost",port,credentialsType.GetProperty("Insecure").GetValue(null,null)});
+                    try
+                    {
+                        var clientType=api.GetType("Tekla.Structures.DrawingPresentationModelInterface.DrawingPresentationModelService+DrawingPresentationModelServiceClient",true);
+                        var client=Activator.CreateInstance(clientType,new[]{channel});
+                        var request=Activator.CreateInstance(Assembly.LoadFrom(Path.Combine(bin,"Tekla.Structures.GrpcContracts.dll")).GetType("Tekla.Structures.DrawingPresentationModelInterface.GetCurrentPresentationModelRequest",true));
+                        var method=clientType.GetMethods().Single(m=>m.Name=="GetCurrentPresentationModel"&&m.GetParameters().Length==4);
+                        var response=method.Invoke(client,new object[]{request,null,(DateTime?)DateTime.UtcNow.AddSeconds(15),CancellationToken.None});
+                        var convertor=Assembly.LoadFrom(Path.Combine(bin,"Tekla.Structures.DrawingPresentationModelConvertor.dll"));
+                        var convert=convertor.GetType("Tekla.Structures.DrawingPresentationModelConvertor.GrpcMessageConvertor",true).GetMethod("GetViews");
+                        var raw=convert.Invoke(null,new[]{Member(response,"Views")}) as IEnumerable;
+                        if(raw==null)throw new InvalidDataException("Không đọc được vùng né trên bản vẽ hiện hành. Chưa di chuyển view.");
+                        return PHU_ArrangePresentation.Parse(raw, drawingViewIds, paperWidth, paperHeight,protectedTableIds,ignoredRectangle);
+                    }
+                    finally { channelType.GetMethod("ShutdownAsync").Invoke(channel,null); }
+                }
+            }
+
+
+    }
+}
+#endregion
+
+#region PHU_VerticalShapeViewLayoutContext - Giữ ngữ cảnh bố cục Shape đứng
+#pragma warning disable 1633
+
+namespace Tekla.Technology.Akit.UserScript
+{
+    using System;
+    using System.Collections;
+    using System.Collections.Generic;
+    using System.Globalization;
+    using System.Reflection;
+    using TSD = Tekla.Structures.Drawing;
+    using TSG = Tekla.Structures.Geometry3d;
+    using TSM = Tekla.Structures.Model;
+
+    /// <summary>
+    /// Shared H/C/L vertical-member layout policy.  It is project-independent:
+    /// remember the user's two sheet positions before Shape, suppress legacy
+    /// ViewType-based arranging, then preserve both X positions/order and align
+    /// the RIGHT view Y to the LEFT view Y exactly once after Shape.
+    /// </summary>
+    public static class PHU_VerticalShapeViewLayoutContext
+    {
+        // NGƯỠNG GIỮ BỐ CỤC: Tolerance là mm hình học; cosine gần 1 đòi hướng trục khớp chặt hơn.
+        private const double Tolerance = 0.20;
+        private const double DirectionCosineTolerance = 0.985;
+
+        private sealed class Snapshot
+        {
+            public int Identifier;
+            public TSD.View View;
+            public TSG.Point Origin;
+        }
+
+        private sealed class Context
+        {
+            public TSD.Drawing Drawing;
+            public Snapshot Left;
+            public Snapshot Right;
+        }
+
+        private static Context _context;
+
+        public static bool ShouldPreserveUserViewLayout
+        {
+            get { return _context != null; }
+        }
+
+        public static bool LastAlignmentApplied { get; private set; }
+        public static string LastMessage { get; private set; }
+
+        public static void Reset()
+        {
+            _context = null;
+            LastAlignmentApplied = false;
+            LastMessage = String.Empty;
+        }
+
+        /// <summary>
+        /// Read-only.  A horizontal H/C/L main member does not match this
+        /// topology and therefore keeps its existing company arrangement.
+        /// </summary>
+        public static bool Begin(TSM.Model model, TSD.Drawing drawing, TSM.Part mainPart)
+        {
+            Reset();
+            try
+            {
+                if (
+                    model == null
+                    || drawing == null
+                    || mainPart == null
+                    || !model.GetConnectionStatus()
+                )
+                    return false;
+
+                TSG.Matrix currentToGlobal = model
+                    .GetWorkPlaneHandler()
+                    .GetCurrentTransformationPlane()
+                    .TransformationMatrixToGlobal;
+                List<Snapshot> candidates = FindVerticalMainViews(
+                    drawing,
+                    mainPart,
+                    currentToGlobal
+                );
+                if (candidates.Count != 2)
+                {
+                    LastMessage =
+                        "Vertical H/C/L user-layout capture skipped: expected 2 full views, found "
+                        + candidates.Count.ToString(CultureInfo.InvariantCulture)
+                        + ".";
+                    return false;
+                }
+
+                candidates.Sort(
+                    delegate(Snapshot a, Snapshot b)
+                    {
+                        double dx = a.Origin.X - b.Origin.X;
+                        if (Math.Abs(dx) > Tolerance)
+                            return dx < 0.0 ? -1 : 1;
+                        return a.Identifier.CompareTo(b.Identifier);
+                    }
+                );
+                if (Math.Abs(candidates[0].Origin.X - candidates[1].Origin.X) <= Tolerance)
+                {
+                    LastMessage =
+                        "Vertical H/C/L user-layout capture skipped: left/right X order is ambiguous.";
+                    return false;
+                }
+
+                Context context = new Context();
+                context.Drawing = drawing;
+                context.Left = candidates[0];
+                context.Right = candidates[1];
+                _context = context;
+                LastMessage =
+                    "Vertical H/C/L user layout captured LEFT="
+                    + context.Left.Identifier.ToString(CultureInfo.InvariantCulture)
+                    + ", RIGHT="
+                    + context.Right.Identifier.ToString(CultureInfo.InvariantCulture)
+                    + ".";
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _context = null;
+                LastMessage = "Vertical H/C/L user-layout capture skipped. " + ex.Message;
+                return false;
+            }
+        }
+
+        public static bool TryGetCapturedViewOrder(
+            out int leftIdentifier,
+            out int rightIdentifier,
+            out TSG.Point leftOrigin,
+            out TSG.Point rightOrigin
+        )
+        {
+            leftIdentifier = 0;
+            rightIdentifier = 0;
+            leftOrigin = null;
+            rightOrigin = null;
+            if (_context == null || _context.Left == null || _context.Right == null)
+                return false;
+            leftIdentifier = _context.Left.Identifier;
+            rightIdentifier = _context.Right.Identifier;
+            leftOrigin = ClonePoint(_context.Left.Origin);
+            rightOrigin = ClonePoint(_context.Right.Origin);
+            return leftIdentifier != 0
+                && rightIdentifier != 0
+                && leftOrigin != null
+                && rightOrigin != null;
+        }
+
+        public static bool AlignOnceAfterShape()
+        {
+            LastAlignmentApplied = false;
+            if (_context == null)
+                return false;
+
+            try
+            {
+                RebindViews(_context);
+                TSG.Point leftTarget = ClonePoint(_context.Left.Origin);
+                TSG.Point rightTarget = new TSG.Point(
+                    _context.Right.Origin.X,
+                    _context.Left.Origin.Y,
+                    _context.Right.Origin.Z
+                );
+
+                if (
+                    !SetOrigin(_context.Left.View, leftTarget)
+                    || !SetOrigin(_context.Right.View, rightTarget)
+                )
+                    throw new InvalidOperationException("Tekla rejected a captured view Origin.");
+                _context.Drawing.CommitChanges();
+
+                TSG.Point leftRead = _context.Left.View.Origin;
+                TSG.Point rightRead = _context.Right.View.Origin;
+                if (
+                    Distance3(leftRead, leftTarget) > 0.05
+                    || Distance3(rightRead, rightTarget) > 0.05
+                    || rightRead.X <= leftRead.X + 0.05
+                )
+                    throw new InvalidOperationException("Origin read-back verification failed.");
+
+                LastAlignmentApplied = true;
+                LastMessage =
+                    "Vertical H/C/L aligned once: original X/order preserved, RIGHT Y aligned to LEFT.";
+                return true;
+            }
+            catch (Exception ex)
+            {
+                RestoreOriginalOrigins();
+                TryCommit(_context.Drawing);
+                LastMessage =
+                    "Vertical H/C/L alignment failed; original origins restored. " + ex.Message;
+                return false;
+            }
+        }
+
+        private static List<Snapshot> FindVerticalMainViews(
+            TSD.Drawing drawing,
+            TSM.Part mainPart,
+            TSG.Matrix currentToGlobal
+        )
+        {
+            List<Snapshot> result = new List<Snapshot>();
+            TSD.ContainerView sheet = drawing.GetSheet();
+            TSD.DrawingObjectEnumerator views = sheet == null ? null : sheet.GetAllViews();
+            while (views != null && views.MoveNext())
+            {
+                TSD.View view = views.Current as TSD.View;
+                if (view == null || IsSectionView(view) || !ViewContainsPart(view, mainPart))
+                    continue;
+                TSG.Matrix globalToView = TSG.MatrixFactory.ToCoordinateSystem(
+                    view.DisplayCoordinateSystem
+                );
+                if (!HasVerticalReferenceLine(mainPart, currentToGlobal, globalToView))
+                    continue;
+                int identifier = ReadIdentifier(view);
+                TSG.Point origin = ClonePoint(view.Origin);
+                if (identifier == 0 || origin == null)
+                    continue;
+                Snapshot snapshot = new Snapshot();
+                snapshot.Identifier = identifier;
+                snapshot.View = view;
+                snapshot.Origin = origin;
+                result.Add(snapshot);
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Section views can contain the MainPart and expose a vertical REF,
+        /// but they are not one of the two user-positioned full column views.
+        /// Keep this classification shared by layout, Grid, and Neighbor
+        /// preflight so an added B/C/D section cannot become a third candidate.
+        /// </summary>
+        internal static bool IsSectionView(TSD.View view)
+        {
+            if (view == null)
+                return false;
+
+            string runtimeName = view.GetType().Name ?? String.Empty;
+            if (runtimeName.IndexOf("Section", StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+
+            try
+            {
+                string viewType = Convert.ToString(
+                    view.ViewType,
+                    CultureInfo.InvariantCulture
+                ) ?? String.Empty;
+                return viewType.IndexOf("Section", StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool HasVerticalReferenceLine(
+            TSM.Part part,
+            TSG.Matrix currentToGlobal,
+            TSG.Matrix globalToView
+        )
+        {
+            List<TSG.Point> points = new List<TSG.Point>();
+            try
+            {
+                ArrayList line = part.GetReferenceLine(false);
+                if (line != null)
+                {
+                    foreach (object value in line)
+                    {
+                        TSG.Point point = value as TSG.Point;
+                        if (point == null)
+                            continue;
+                        TSG.Point global = currentToGlobal.Transform(point);
+                        points.Add(globalToView.Transform(global));
+                    }
+                }
+            }
+            catch
+            {
+                return false;
+            }
+
+            double bestLength = 0.0;
+            double bestVerticalCosine = 0.0;
+            for (int i = 0; i < points.Count; i++)
+            {
+                for (int j = i + 1; j < points.Count; j++)
+                {
+                    double dx = points[j].X - points[i].X;
+                    double dy = points[j].Y - points[i].Y;
+                    double length = Math.Sqrt((dx * dx) + (dy * dy));
+                    if (length <= bestLength)
+                        continue;
+                    bestLength = length;
+                    bestVerticalCosine = length <= Tolerance ? 0.0 : Math.Abs(dy / length);
+                }
+            }
+            return bestLength > Tolerance && bestVerticalCosine >= DirectionCosineTolerance;
+        }
+
+        private static bool ViewContainsPart(TSD.View view, TSM.Part mainPart)
+        {
+            TSD.DrawingObjectEnumerator parts = view.GetAllObjects(typeof(TSD.Part));
+            while (parts != null && parts.MoveNext())
+            {
+                TSD.Part part = parts.Current as TSD.Part;
+                if (
+                    part != null
+                    && part.ModelIdentifier != null
+                    && mainPart.Identifier != null
+                    && part.ModelIdentifier.ID == mainPart.Identifier.ID
+                )
+                    return true;
+            }
+            return false;
+        }
+
+        private static void RebindViews(Context context)
+        {
+            TSD.ContainerView sheet = context.Drawing.GetSheet();
+            TSD.DrawingObjectEnumerator views = sheet == null ? null : sheet.GetAllViews();
+            TSD.View left = null;
+            TSD.View right = null;
+            while (views != null && views.MoveNext())
+            {
+                TSD.View view = views.Current as TSD.View;
+                int identifier = ReadIdentifier(view);
+                if (identifier == context.Left.Identifier)
+                    left = view;
+                if (identifier == context.Right.Identifier)
+                    right = view;
+            }
+            if (left == null || right == null)
+                throw new InvalidOperationException("A captured vertical Shape view disappeared.");
+            context.Left.View = left;
+            context.Right.View = right;
+        }
+
+        private static void RestoreOriginalOrigins()
+        {
+            if (_context == null)
+                return;
+            SetOrigin(_context.Left.View, ClonePoint(_context.Left.Origin));
+            SetOrigin(_context.Right.View, ClonePoint(_context.Right.Origin));
+        }
+
+        private static bool SetOrigin(TSD.View view, TSG.Point origin)
+        {
+            if (view == null || origin == null)
+                return false;
+            if (Distance3(view.Origin, origin) <= 0.01)
+                return true;
+            view.Origin = ClonePoint(origin);
+            return view.Modify();
+        }
+
+        private static int ReadIdentifier(object value)
+        {
+            try
+            {
+                PropertyInfo property =
+                    value == null
+                        ? null
+                        : value
+                            .GetType()
+                            .GetProperty(
+                                "Identifier",
+                                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                            );
+                Tekla.Structures.Identifier identifier =
+                    property == null
+                        ? null
+                        : property.GetValue(value, null) as Tekla.Structures.Identifier;
+                return identifier == null ? 0 : identifier.ID;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        private static TSG.Point ClonePoint(TSG.Point point)
+        {
+            return point == null ? null : new TSG.Point(point.X, point.Y, point.Z);
+        }
+
+        private static double Distance3(TSG.Point first, TSG.Point second)
+        {
+            if (first == null || second == null)
+                return Double.PositiveInfinity;
+            double dx = first.X - second.X;
+            double dy = first.Y - second.Y;
+            double dz = first.Z - second.Z;
+            return Math.Sqrt((dx * dx) + (dy * dy) + (dz * dz));
+        }
+
+        private static void TryCommit(TSD.Drawing drawing)
+        {
+            try
+            {
+                if (drawing != null)
+                    drawing.CommitChanges();
+            }
+            catch { }
+        }
+    }
+}
+#pragma warning restore
+#endregion

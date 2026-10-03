@@ -1,3 +1,8 @@
+﻿// DIM dự phòng cho profile không thuộc Plate/H/C/L/Box đã nhận dạng.
+// ĐIỂM SỬA: RunSafe là điểm gọi trả trạng thái cho MainForm; planner theo view quyết định chân và phía DIM.
+// THAM SỐ: các ngưỡng hình học và khoảng tầng ở đầu lớp; không ép route profile cụ thể vào đây để bỏ qua lỗi nhận dạng.
+// TRA CỨU: PROJECT_MAP.md ở gốc repo; chỉ mục kiểu/hàm và điểm chỉnh thông số.
+
 #pragma warning disable 1633
 
 using System;
@@ -214,19 +219,6 @@ namespace Tekla.Technology.Akit.UserScript
 
                 foreach (ViewDimensionPlan plan in plans)
                 {
-                    if (!PHU_RevisionDimensionScope.IsActive && !ApplyExactToTargetPart(plan.View, part.Identifier))
-                    {
-                        return Fail(
-                            result,
-                            "Khong dat duoc Exact cho part trong view "
-                                + plan.Name
-                                + ". Khong xoa dim cu."
-                        );
-                    }
-                }
-
-                foreach (ViewDimensionPlan plan in plans)
-                {
                     string deleteError;
                     if (!PHU_RevisionDimensionScope.IsActive && !DeleteDimensionsInView(plan.View, out deleteError))
                     {
@@ -257,7 +249,8 @@ namespace Tekla.Technology.Akit.UserScript
                 foreach (ViewDimensionPlan plan in plans)
                 {
                     double horizontalOffset = GetSteelDimOffsetByTier(0);
-                    double verticalOffset = GetSteelDimOffsetByTier(0);
+                    double verticalOffset = GetLeftOverallDimensionOffset(
+                        plan, GetSteelDimOffsetByTier(0));
                     // Report geometry thật trước khi quyết định takeover Vertical.
                     bool reported = false;
                     if (PHU_BeamGridDimensionEngine.IsViewPrepared(plan.View))
@@ -662,6 +655,14 @@ namespace Tekla.Technology.Akit.UserScript
             return offset;
         }
 
+        private static double GetLeftOverallDimensionOffset(ViewDimensionPlan plan, double tierOffset)
+        {
+            // Tekla measures Distance from the FIRST foot (TopPoint), not MinX.
+            // Preserve the real feet and place the line at MinX - tierOffset,
+            // even when a chamfer makes the selected top foot lie at the right end.
+            return plan.TopPoint.X - plan.MinX + tierOffset;
+        }
+
         private static StraightDimensionSet CreateDimension(
             StraightDimensionSetHandler handler,
             View view,
@@ -793,39 +794,12 @@ namespace Tekla.Technology.Akit.UserScript
             return null;
         }
 
-        private static bool ApplyExactToTargetPart(View view, Identifier partIdentifier)
-        {
-            if (view == null || partIdentifier == null)
-                return false;
-
-            DrawingObjectEnumerator parts = view.GetAllObjects(typeof(DrawingPart));
-            while (parts != null && parts.MoveNext())
-            {
-                DrawingPart drawingPart = parts.Current as DrawingPart;
-                if (drawingPart == null || drawingPart.ModelIdentifier == null)
-                    continue;
-
-                if (drawingPart.ModelIdentifier.ID != partIdentifier.ID)
-                    continue;
-
-                DrawingPart.PartAttributes attributes = drawingPart.Attributes;
-                if (attributes == null)
-                    return false;
-
-                attributes.Representation = DrawingPart.Representation.Exact;
-                drawingPart.Attributes = attributes;
-                return drawingPart.Modify();
-            }
-
-            return false;
-        }
-
         private static void ApplyExactRepresentationToViewUnknown(View view)
         {
             if (PHU_RevisionDimensionScope.IsActive) return;
             try
             {
-                if (view == null)
+                if (view == null || view.ViewType != View.ViewTypes.SectionView)
                     return;
 
                 DrawingObjectEnumerator parts = view.GetAllObjects(typeof(DrawingPart));

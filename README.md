@@ -79,6 +79,14 @@ The portable package includes this application's executable, NuGet dependencies,
 
 ## Repository structure
 
+**Dọn thư mục:** `tests/` và `.codex-artifacts/` không phải phụ thuộc để build hoặc chạy ứng dụng. Có thể dọn test, log, cache, dump và bản sao bản vẽ trước chạy thử sau khi các lệnh đang chạy đã kết thúc. Công cụ tra cứu tự tạo lại cache; muốn chạy lại một bộ test đã xóa thì cần lấy lại source test. Giữ thư mục source `TTSK Dim Plates/` cùng tài nguyên/thư viện để build, `portable/` để chạy và các cấu hình cá nhân để giữ thiết lập. Không đặt file sản phẩm bắt buộc vào hai vùng dọn rác.
+
+For code changes, start with [PROJECT_MAP.md](PROJECT_MAP.md): a compact Vietnamese map of workflows, files and settings. Find declarations on demand with `pwsh -NoProfile -File scripts/Update-CodeMap.ps1 -Find MethodName -Kind Method`; narrow with `-File` (12 results by default). Use `-Check` to verify map freshness, or omit arguments to refresh it. The complete searchable catalogue stays in a disposable local cache, outside the map and AI context.
+
+The source was consolidated by function on 2026-10-03: 95 production C# compile items became 53. See [the source map](docs/SOURCE_ORGANIZATION.md) for each former file's destination and [validation results](docs/REFACTOR_VALIDATION_2026-10-03.md).
+
+Keep related helpers, contexts, planners and partial implementations in the existing functional file, with a descriptive comment and `#region`. Add a separate source file only for a substantial independent responsibility. The large Shape H/C/L/Box engines remain separate for navigation.
+
 ```text
 TTSK_Dim_Plates/
 |-- README.md
@@ -89,9 +97,10 @@ TTSK_Dim_Plates/
         |-- PHU_AutoDim_OK-V3.cs        # Core automatic dimension workflow
         |-- PHU_Slot*.cs                # Specialized dimension tools
         |-- PHU_Shape*.cs               # Plate-shape classification and rules
-        |-- PHU_Section*.cs             # Section creation and attributes
+        |-- PHU_Section.cs              # Section creation and attributes
         |-- PHU_ArrangeView.cs          # Drawing-view arrangement
         |-- PHU_DimSpacing.cs           # Dimension-spacing normalization
+        |-- Updater/                    # Four functional update modules
         |-- JapaneseDictionary.cs       # Dictionary UI and search
         |-- Data/                        # Dictionary data
         `-- Resources/                   # Application and tool artwork

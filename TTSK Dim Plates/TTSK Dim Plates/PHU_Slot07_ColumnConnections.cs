@@ -1,19 +1,531 @@
-using System;
-using System.Collections.Generic;
-using System.Globalization;
-using System.Linq;
-using System.Reflection;
-using System.Text;
-using D = Tekla.Structures.Drawing;
-using G = Tekla.Structures.Geometry3d;
-using M = Tekla.Structures.Model;
+﻿// Slot 07: scope Data Center, liên kết cột hộp và DIM grid cột hộp.
+// LUỒNG: MainForm.RunDataCenterCurrentDrawing phân tuyến; nhánh cột hộp dùng Read → Build/BuildColumnGrid → Execute.
+// ĐIỂM SỬA: nhận cột ở IsColumnRoute; chân liên kết ở Build; chân grid ở BuildColumnGrid; DIM trùng ở Matches.
+// THAM SỐ: GeometryTolerance/DimensionTolerance là mm view; BELOW_GRID_TOP_FRONT_GAP là mm giấy.
+// TRẠNG THÁI: PHU_Slot07_DataCenterContext và PHU_Slot07_DrawingRoute chỉ có hiệu lực trong scope; phải kết thúc cùng lần chạy.
+// TRA CỨU: PROJECT_MAP.md ở gốc repo; chỉ mục kiểu/hàm và điểm chỉnh thông số.
+// Mục lục:
+//   PHU_Slot07_DataCenterContext.cs
+//   PHU_Slot07_ColumnConnections.cs
+//   PHU_Slot07_ColumnGrid.cs
+//   PHU_Slot07_DrawingRoute.cs
+
+#region PHU_Slot07_DataCenterContext - Ngữ cảnh lần chạy Data Center
+#pragma warning disable 1633
 
 namespace Tekla.Technology.Akit.UserScript
 {
+    using System;
+    using System.Collections.Generic;
+    using System.Reflection;
+    using TSD = Tekla.Structures.Drawing;
+    using TSG = Tekla.Structures.Geometry3d;
+
+    /// <summary>
+    /// Scoped execution options for Slot09 Data Center. The scope never writes
+    /// MainForm controls or persistent user settings and is always released by
+    /// IDisposable/finally.
+    /// </summary>
+    public static class PHU_Slot07_DataCenterContext
+    {
+        // CHỈNH BỐ CỤC (mm giấy): khoảng Top/Front khi cross-grid ở dưới dầm theo ResolveTopFrontGap.
+        private const double BELOW_GRID_TOP_FRONT_GAP = 50.0;
+
+        [ThreadStatic]
+        private static int _depth;
+
+        [ThreadStatic]
+        private static TSD.View _registeredTopView;
+
+        [ThreadStatic]
+        private static TSD.View _registeredFrontView;
+
+        [ThreadStatic]
+        private static double _registeredTopFrontGap;
+
+        [ThreadStatic]
+        private static bool _hasRegisteredTopFront;
+
+        [ThreadStatic]
+        private static bool _reserveFrontSlot04Tier;
+
+        [ThreadStatic]
+        private static bool _preservePreparedDrawingLayout;
+
+        [ThreadStatic]
+        private static TSD.View _registeredSlot04FrontView;
+
+        [ThreadStatic]
+        private static int _registeredSlot04FrontViewId;
+
+        [ThreadStatic]
+        private static double _registeredSlot04AbsoluteLine;
+
+        [ThreadStatic]
+        private static double _registeredSlot04DirectionX;
+
+        [ThreadStatic]
+        private static double _registeredSlot04DirectionY;
+
+        [ThreadStatic]
+        private static bool _hasRegisteredSlot04Tier;
+
+        public static bool IsActive
+        {
+            get { return _depth > 0; }
+        }
+
+        public static IDisposable Begin()
+        {
+            return Begin(false, false);
+        }
+
+        public static IDisposable Begin(bool reserveFrontSlot04Tier)
+        {
+            return Begin(reserveFrontSlot04Tier, false);
+        }
+
+        public static IDisposable Begin(
+            bool reserveFrontSlot04Tier,
+            bool preservePreparedDrawingLayout
+        )
+        {
+            if (_depth == 0)
+            {
+                _registeredTopView = null;
+                _registeredFrontView = null;
+                _registeredTopFrontGap = 0.0;
+                _hasRegisteredTopFront = false;
+                _reserveFrontSlot04Tier = reserveFrontSlot04Tier;
+                _preservePreparedDrawingLayout = preservePreparedDrawingLayout;
+                _registeredSlot04FrontView = null;
+                _registeredSlot04FrontViewId = int.MaxValue;
+                _registeredSlot04AbsoluteLine = 0.0;
+                _registeredSlot04DirectionX = 0.0;
+                _registeredSlot04DirectionY = 0.0;
+                _hasRegisteredSlot04Tier = false;
+            }
+            else
+            {
+                _reserveFrontSlot04Tier =
+                    _reserveFrontSlot04Tier || reserveFrontSlot04Tier;
+                _preservePreparedDrawingLayout =
+                    _preservePreparedDrawingLayout || preservePreparedDrawingLayout;
+            }
+
+            _depth++;
+            return new Scope();
+        }
+
+        public static bool ReserveFrontSlot04Tier
+        {
+            get { return IsActive && _reserveFrontSlot04Tier; }
+        }
+
+        /// <summary>
+        /// ACTIVE Data Center uses the prepared drawing layout for both Type1
+        /// and Type2.  Shape/Grid consumers must create dimensions and owned
+        /// REF lines without changing scale, view origin, restriction boxes,
+        /// selection, or Neighbor Grid marks.
+        /// </summary>
+        public static bool PreservePreparedDrawingLayout
+        {
+            get { return IsActive && _preservePreparedDrawingLayout; }
+        }
+
+        public static string AuditExecutionPolicy()
+        {
+            bool preserve = PreservePreparedDrawingLayout;
+            return "SLOT09 DATA CENTER ACTIVE POLICY: active=" + IsActive
+                + ", preserveLayout=" + preserve
+                + ", DIM=True, REF-lines=True, OpenGrid=" + (!preserve)
+                + ", FitGrid=" + (!preserve)
+                + ", ArrangeViews=" + (!preserve)
+                + ", NeighborGridMark=" + (!preserve) + ".";
+        }
+
+        public static void RegisterFrontSlot04Tier(
+            TSD.View frontView,
+            double absoluteLine,
+            double directionX,
+            double directionY
+        )
+        {
+            if (
+                !ReserveFrontSlot04Tier
+                || frontView == null
+                || !IsFinite(absoluteLine)
+                || !IsFinite(directionX)
+                || !IsFinite(directionY)
+            )
+                return;
+
+            double length = Math.Sqrt((directionX * directionX) + (directionY * directionY));
+            if (!IsFinite(length) || length <= 0.0001)
+                return;
+
+            _registeredSlot04FrontView = frontView;
+            _registeredSlot04FrontViewId = GetViewIdentifier(frontView);
+            _registeredSlot04AbsoluteLine = absoluteLine;
+            _registeredSlot04DirectionX = directionX / length;
+            _registeredSlot04DirectionY = directionY / length;
+            _hasRegisteredSlot04Tier = true;
+        }
+
+        public static bool TryResolveFrontSlot04Placement(
+            TSD.View frontView,
+            TSG.Point firstPoint,
+            out TSG.Vector direction,
+            out double distance
+        )
+        {
+            direction = null;
+            distance = 0.0;
+            if (
+                !_hasRegisteredSlot04Tier
+                || frontView == null
+                || firstPoint == null
+                || !SameView(frontView)
+            )
+                return false;
+
+            double pointLine =
+                (firstPoint.X * _registeredSlot04DirectionX)
+                + (firstPoint.Y * _registeredSlot04DirectionY);
+            distance = _registeredSlot04AbsoluteLine - pointLine;
+            if (!IsFinite(distance) || distance <= 0.0001)
+                return false;
+
+            direction = new TSG.Vector(
+                _registeredSlot04DirectionX,
+                _registeredSlot04DirectionY,
+                0.0
+            );
+            return true;
+        }
+
+        public static double ResolveTopFrontGap(TSD.View frontView, double safeDefaultGap)
+        {
+            if (!IsActive || frontView == null)
+                return safeDefaultGap;
+
+            PHU_BeamGridDimensionEngine.FrontCrossGridPosition position =
+                PHU_BeamGridDimensionEngine.GetPreparedFrontCrossGridPosition(frontView);
+
+            return position == PHU_BeamGridDimensionEngine.FrontCrossGridPosition.BelowBeam
+                ? BELOW_GRID_TOP_FRONT_GAP
+                : safeDefaultGap;
+        }
+
+        public static void RegisterFinalTopFrontArrangement(
+            TSD.View topView,
+            TSD.View frontView,
+            double expectedGap
+        )
+        {
+            if (!IsActive || topView == null || frontView == null)
+                return;
+
+            _registeredTopView = topView;
+            _registeredFrontView = frontView;
+            _registeredTopFrontGap = expectedGap;
+            _hasRegisteredTopFront = true;
+        }
+
+        public static bool VerifyRegisteredTopFrontArrangement(out string message)
+        {
+            message = string.Empty;
+            if (
+                !_hasRegisteredTopFront
+                || _registeredTopView == null
+                || _registeredFrontView == null
+            )
+            {
+                message = "DIM không đăng ký được cặp TOP/FRONT cuối cùng.";
+                return false;
+            }
+
+            global::PHU_OpenGridView.FitGridOriginArrangeResult verification =
+                global::PHU_OpenGridView.VerifyTopFrontGreenBoxGap(
+                    _registeredTopView,
+                    _registeredFrontView,
+                    _registeredTopFrontGap
+                );
+            message =
+                verification == null
+                    ? "Không có kết quả verify TOP/FRONT sau DIM."
+                    : verification.Message;
+            return verification != null && verification.Success;
+        }
+
+        /// <summary>
+        /// Slot09-only automation helper. It replaces the current selection
+        /// with the single semantic TopView (the green view frame). The
+        /// Neighbor Grid writer itself remains unchanged in PHU_OpenGridView.
+        /// </summary>
+        public static bool TrySelectSingleTopViewForNeighborGrid(out string message)
+        {
+            message = string.Empty;
+
+            try
+            {
+                TSD.DrawingHandler drawingHandler = new TSD.DrawingHandler();
+                if (!drawingHandler.GetConnectionStatus())
+                {
+                    message = "DrawingHandler chưa kết nối.";
+                    return false;
+                }
+
+                TSD.Drawing drawing = drawingHandler.GetActiveDrawing();
+                if (drawing == null)
+                {
+                    message = "Không có active drawing.";
+                    return false;
+                }
+
+                List<TSD.View> topViews = GetTopViews(drawing);
+                if (topViews.Count != 1)
+                {
+                    message =
+                        "Slot09 Neighbor Grid yêu cầu đúng 1 TopView; tìm thấy "
+                        + topViews.Count
+                        + ".";
+                    return false;
+                }
+
+                System.Collections.ArrayList selection = new System.Collections.ArrayList();
+                selection.Add(topViews[0]);
+                drawingHandler.GetDrawingObjectSelector().SelectObjects(selection, false);
+
+                return VerifySingleTopViewSelection(drawingHandler, topViews[0], out message);
+            }
+            catch (Exception ex)
+            {
+                message = "Slot09 chọn TopView lỗi: " + ex.Message;
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Slot09 read-back guard used immediately before calling the original
+        /// PHU_OpenGridView.RunNeighborGrid overload.
+        /// </summary>
+        public static bool VerifySingleTopViewSelectionForNeighborGrid(out string message)
+        {
+            message = string.Empty;
+
+            try
+            {
+                TSD.DrawingHandler drawingHandler = new TSD.DrawingHandler();
+                if (!drawingHandler.GetConnectionStatus())
+                {
+                    message = "DrawingHandler chưa kết nối.";
+                    return false;
+                }
+
+                return VerifySingleTopViewSelection(drawingHandler, null, out message);
+            }
+            catch (Exception ex)
+            {
+                message = "Slot09 kiểm tra TopView selection lỗi: " + ex.Message;
+                return false;
+            }
+        }
+
+        private static bool VerifySingleTopViewSelection(
+            TSD.DrawingHandler drawingHandler,
+            TSD.View expectedTopView,
+            out string message
+        )
+        {
+            message = string.Empty;
+            if (drawingHandler == null)
+            {
+                message = "DrawingHandler không hợp lệ.";
+                return false;
+            }
+
+            List<TSD.View> selectedViews = GetSelectedViews(drawingHandler);
+            if (selectedViews.Count != 1 || !IsTopView(selectedViews[0]))
+            {
+                message = "Slot09 Neighbor Grid bị chặn: selection không phải đúng 1 TopView.";
+                return false;
+            }
+
+            if (expectedTopView != null && !SameDrawingView(selectedViews[0], expectedTopView))
+            {
+                message = "Slot09 Neighbor Grid bị chặn: TopView được chọn không đúng mục tiêu.";
+                return false;
+            }
+
+            message = "Đã xác nhận selection chỉ chứa đúng 1 TopView.";
+            return true;
+        }
+
+        private static List<TSD.View> GetTopViews(TSD.Drawing drawing)
+        {
+            List<TSD.View> result = new List<TSD.View>();
+            if (drawing == null)
+                return result;
+
+            try
+            {
+                TSD.ContainerView sheet = drawing.GetSheet();
+                TSD.DrawingObjectEnumerator views = sheet == null ? null : sheet.GetAllViews();
+                while (views != null && views.MoveNext())
+                {
+                    TSD.View view = views.Current as TSD.View;
+                    if (!IsTopView(view))
+                        continue;
+
+                    bool duplicate = false;
+                    for (int i = 0; i < result.Count; i++)
+                    {
+                        if (SameDrawingView(result[i], view))
+                        {
+                            duplicate = true;
+                            break;
+                        }
+                    }
+
+                    if (!duplicate)
+                        result.Add(view);
+                }
+            }
+            catch { }
+
+            return result;
+        }
+
+        private static List<TSD.View> GetSelectedViews(TSD.DrawingHandler drawingHandler)
+        {
+            List<TSD.View> result = new List<TSD.View>();
+
+            try
+            {
+                TSD.DrawingObjectEnumerator selected = drawingHandler
+                    .GetDrawingObjectSelector()
+                    .GetSelected();
+                while (selected != null && selected.MoveNext())
+                {
+                    TSD.View view = selected.Current as TSD.View;
+                    if (view != null)
+                        result.Add(view);
+                }
+            }
+            catch { }
+
+            return result;
+        }
+
+        private static bool IsTopView(TSD.View view)
+        {
+            try
+            {
+                if (view == null)
+                    return false;
+
+                string viewType = view.ViewType.ToString();
+                return string.Equals(viewType, "TopView", StringComparison.OrdinalIgnoreCase)
+                    || viewType.IndexOf("Top", StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool SameDrawingView(TSD.View first, TSD.View second)
+        {
+            if (Object.ReferenceEquals(first, second))
+                return true;
+
+            int firstId = GetViewIdentifier(first);
+            int secondId = GetViewIdentifier(second);
+            return firstId != int.MaxValue && secondId != int.MaxValue && firstId == secondId;
+        }
+
+        private static bool SameView(TSD.View view)
+        {
+            if (Object.ReferenceEquals(view, _registeredSlot04FrontView))
+                return true;
+
+            int id = GetViewIdentifier(view);
+            return id != int.MaxValue
+                && _registeredSlot04FrontViewId != int.MaxValue
+                && id == _registeredSlot04FrontViewId;
+        }
+
+        private static int GetViewIdentifier(TSD.View view)
+        {
+            try
+            {
+                if (view == null)
+                    return int.MaxValue;
+
+                PropertyInfo identifierProperty = view.GetType()
+                    .GetProperty(
+                        "Identifier",
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    );
+                object identifier =
+                    identifierProperty == null ? null : identifierProperty.GetValue(view, null);
+                PropertyInfo idProperty =
+                    identifier == null ? null : identifier.GetType().GetProperty("ID");
+                object id = idProperty == null ? null : idProperty.GetValue(identifier, null);
+                return id == null ? int.MaxValue : Convert.ToInt32(id);
+            }
+            catch
+            {
+                return int.MaxValue;
+            }
+        }
+
+        private static bool IsFinite(double value)
+        {
+            return !Double.IsNaN(value) && !Double.IsInfinity(value);
+        }
+
+        private sealed class Scope : IDisposable
+        {
+            private bool _disposed;
+
+            public void Dispose()
+            {
+                if (_disposed)
+                    return;
+
+                _disposed = true;
+                if (_depth > 0)
+                    _depth--;
+            }
+        }
+    }
+}
+#pragma warning restore
+#endregion
+
+#region PHU_Slot07_ColumnConnections - Điểm gọi và điều phối liên kết cột
+
+
+namespace Tekla.Technology.Akit.UserScript
+{
+    using System;
+    using System.Collections.Generic;
+    using System.Globalization;
+    using System.Linq;
+    using System.Reflection;
+    using System.Text;
+    using D = Tekla.Structures.Drawing;
+    using G = Tekla.Structures.Geometry3d;
+    using M = Tekla.Structures.Model;
+
     /// <summary>Slot 07 connection plans for vertical hollow-column assemblies.
     /// Beam and legacy Inzai shape routes retain their own geometry contracts.</summary>
     internal static partial class PHU_Slot07_ColumnConnections
     {
+        // CHỈNH NGƯỠNG (mm view): GeometryTolerance nhận liên kết; DimensionTolerance khớp chân/chuỗi và trục grid.
+        // Tăng DimensionTolerance có thể coi DIM đang lệch là đã đủ, khiến Execute bỏ qua tạo bổ sung.
         internal const double GeometryTolerance = 0.75;
         internal const double DimensionTolerance = 0.04;
 
@@ -516,3 +1028,237 @@ namespace Tekla.Technology.Akit.UserScript
         }
     }
 }
+#endregion
+
+#region PHU_Slot07_ColumnGrid - Lập kế hoạch chuỗi DIM grid và tấm nối cột hộp
+
+
+namespace Tekla.Technology.Akit.UserScript
+{
+    using System;
+    using System.Collections.Generic;
+    using System.Linq;
+    using D = Tekla.Structures.Drawing;
+    using G = Tekla.Structures.Geometry3d;
+
+    internal static partial class PHU_Slot07_ColumnConnections
+    {
+        internal sealed class Grid
+        {
+            public G.Point Start, End;
+        }
+
+        private static void ReadGrids(View view)
+        {
+            var objects = view.Object.GetAllObjects(typeof(D.GridLine));
+            while (objects.MoveNext())
+            {
+                var line = objects.Current as D.GridLine;
+                // GridPoint is already in view coordinates, as in the legacy Grid reader.
+                if (line?.StartLabel?.GridPoint == null || line.EndLabel?.GridPoint == null) continue;
+                view.Grids.Add(new Grid { Start = line.StartLabel.GridPoint, End = line.EndLabel.GridPoint });
+            }
+        }
+
+        internal static List<Plan> BuildColumnGrid(View view, List<Plan> connections)
+        {
+            var plans = new List<Plan>();
+            var main = view.Main;
+            if (main == null || main.Reference.Count != 2) throw new InvalidOperationException("Column REF unavailable.");
+            double axis = main.Reference[0].X, depth = main.Reference[0].Z;
+            // This adapter is for the existing upright X-X/Y-Y views only.
+            if (Math.Abs(main.Reference[1].X-axis) > GeometryTolerance
+                || Math.Abs(main.Reference[1].Z-depth) > GeometryTolerance)
+                throw new InvalidOperationException("Column Grid cần hình chiếu cột đứng, không xiên.");
+            var columns = view.Parts.Where(p => !p.Plate && p.Assembly == main.Assembly
+                && IsHollowProfile(p.Profile)
+                && p.Reference.Count == 2 && p.Vertices.Count > 0
+                && p.Reference.All(r => Math.Abs(r.X-axis) <= GeometryTolerance && Math.Abs(r.Z-depth) <= GeometryTolerance))
+                .OrderBy(p => p.Reference.Min(r=>r.Y)).ToList();
+            if (!columns.Contains(main)) throw new InvalidOperationException("MainPart không thuộc chuỗi cột.");
+            for (int i=1; i<columns.Count; i++)
+                if (Math.Abs(columns[i-1].Reference.Max(r=>r.Y)-columns[i].Reference.Min(r=>r.Y)) > GeometryTolerance)
+                    throw new InvalidOperationException("Các đoạn REF cột không nối tiếp duy nhất; dừng trước khi tạo DIM.");
+            var nodes = Stations(columns.SelectMany(p=>p.Reference), new G.Vector(0,1,0));
+            if (nodes.Count<2) throw new InvalidOperationException("Column REF has no span.");
+            var plateFeet=ResolveColumnPlateFeet(view, columns, nodes, axis, depth);
+            double bottom=plateFeet.First().Point.Y, top=plateFeet.Last().Point.Y;
+            var bottomAxis=new G.Point(axis,bottom,0);
+            var topPlate=plateFeet.Last().Point;
+            var vertical = view.Grids.Where(g => Valid(g.Start) && Valid(g.End)
+                && Math.Abs(g.End.X-g.Start.X)<=DimensionTolerance
+                && Math.Min(g.Start.Y,g.End.Y)<top && Math.Max(g.Start.Y,g.End.Y)>bottom).ToList();
+            var axes=Stations(vertical.Select(g=>g.Start),new G.Vector(1,0,0));
+            axes=axes.OrderBy(x=>Math.Abs(x-axis)).ToList();
+            if (axes.Count==0 || (axes.Count>1 && Math.Abs(Math.Abs(axes[0]-axis)-Math.Abs(axes[1]-axis))<=DimensionTolerance))
+                throw new InvalidOperationException("Không có trục đứng gần cột duy nhất; không tự chọn trục mơ hồ.");
+            var floors=Stations(view.Grids.Where(g => Valid(g.Start) && Valid(g.End)
+                && Math.Abs(g.End.Y-g.Start.Y)<=DimensionTolerance
+                && Math.Min(g.Start.X,g.End.X)<=axis && Math.Max(g.Start.X,g.End.X)>=axis)
+                .Select(g=>g.Start),new G.Vector(0,1,0));
+            if (floors.Count!=2) throw new InvalidOperationException("Column Grid cần hai cao độ tầng rõ ràng; có " + floors.Count + ".");
+
+            var left=new G.Vector(-1,0,0); var up=new G.Vector(0,1,0);
+            Add(plans,view,"COLUMN-PLATE-CHAIN",String.Join(" -> ",plateFeet.Select(f=>f.Evidence)),left,10,plateFeet.Select(f=>f.Point).ToArray());
+            Add(plans,view,"COLUMN-PLATE-TOTAL","base underside on column axis -> " + plateFeet.Last().Evidence,left,20,bottomAxis,topPlate);
+            var levels=Stations(new[] { new G.Point(0,floors[0],0),new G.Point(0,floors[1],0),new G.Point(0,bottom,0),new G.Point(0,top,0) },new G.Vector(0,1,0));
+            Add(plans,view,"COLUMN-FLOOR-CHAIN","floor grids, base underside and terminal plate outside face",left,30,
+                levels.Select(y=>Math.Abs(y-top)<=DimensionTolerance?topPlate:new G.Point(axis,y,0)).ToArray());
+            Add(plans,view,"FLOOR-TOTAL","lower floor grid -> upper floor grid",left,40,new G.Point(axis,floors[0],0),new G.Point(axis,floors[1],0));
+            var terminal=columns.Last();
+            double terminalTop=terminal.Vertices.Max(p=>p.Y);
+            // Upper bevels expose the inner wall at the very highest Y. Resolve
+            // actual OUTER side vertices first, then their highest exact point.
+            double minX=terminal.Vertices.Min(p=>p.X), maxX=terminal.Vertices.Max(p=>p.X);
+            var edgeLeft=terminal.Vertices.Where(p=>Math.Abs(p.X-minX)<=DimensionTolerance).OrderByDescending(p=>p.Y).First();
+            var edgeRight=terminal.Vertices.Where(p=>Math.Abs(p.X-maxX)<=DimensionTolerance).OrderByDescending(p=>p.Y).First();
+            if (edgeLeft.X>=axis-DimensionTolerance || edgeRight.X<=axis+DimensionTolerance)
+                throw new InvalidOperationException("REF không nằm giữa hai mép đầu cột.");
+            if (Math.Abs(axes[0]-axis)<=DimensionTolerance)
+                Add(plans,view,"COLUMN-EDGE-AXIS-EDGE","terminal solid edges -> coincident column/grid axis",up,10,edgeLeft,new G.Point(axis,terminalTop,0),edgeRight);
+            else
+                Add(plans,view,"COLUMN-REF-GRID","column REF -> actual vertical grid",up,10,new G.Point(axis,terminalTop,0),new G.Point(axes[0],terminalTop,0));
+            // Continue outside the connection envelope; model geometry never gets a display offset.
+            double leftLine=Math.Min(view.Parts.SelectMany(p=>p.Vertices).Min(p=>p.X),axis);
+            double topLine=Math.Max(view.Parts.SelectMany(p=>p.Vertices).Max(p=>p.Y),top);
+            foreach(var p in connections)
+            {
+                double line=Dot(p.Feet[0],p.Normal)+p.Distance;
+                if(p.Normal.X < -0.99) leftLine=Math.Min(leftLine,-line);
+                if(p.Normal.Y > 0.99) topLine=Math.Max(topLine,line);
+            }
+            foreach(var p in plans)
+            {
+                double paper=p.Kind=="COLUMN-PLATE-CHAIN"?10:p.Kind=="COLUMN-PLATE-TOTAL"?20:p.Kind=="COLUMN-FLOOR-CHAIN"?30:p.Kind=="FLOOR-TOTAL"?40:10;
+                double line=p.Normal.X<0?-leftLine+paper*view.Scale:topLine+paper*view.Scale;
+                p.Distance=line-Dot(p.Feet[0],p.Normal);
+                p.RequireExactFeet=p.Kind=="COLUMN-PLATE-CHAIN" || p.Kind=="COLUMN-PLATE-TOTAL" || p.Kind=="COLUMN-FLOOR-CHAIN";
+                p.Satisfied=view.Dimensions.Any(d=>Matches(p,d));
+            }
+            // Older builds left no ownership tag. Recognize their exact REF
+            // footprints only to STOP, never delete an unowned/manual object.
+            var old=new List<Plan>();
+            Add(old,view,"OLD-REF-CHAIN","",left,10,nodes.Select(y=>new G.Point(axis,y,0)).ToArray());
+            Add(old,view,"OLD-REF-TOTAL","",left,20,new G.Point(axis,nodes.First(),0),new G.Point(axis,nodes.Last(),0));
+            var oldLevels=Stations(new[] { new G.Point(0,floors[0],0),new G.Point(0,floors[1],0),new G.Point(0,nodes.First(),0),new G.Point(0,nodes.Last(),0) },new G.Vector(0,1,0));
+            Add(old,view,"OLD-FLOOR-CHAIN","",left,30,oldLevels.Select(y=>new G.Point(axis,y,0)).ToArray());
+            foreach(var prior in old)
+            {
+                prior.RequireExactFeet=true;
+                if(view.Dimensions.Any(d=>Matches(prior,d) && !plans.Any(p=>Matches(p,d))))
+                    throw new InvalidOperationException("VIEW="+view.Id+" còn DIM chuỗi cũ bám REF ("+prior.Kind+"). Cần thay DIM này bằng chân mép plate; dừng để tránh chồng DIM hoặc xóa DIM thủ công.");
+            }
+            return plans;
+        }
+
+        private sealed class PlateFoot
+        {
+            public G.Point Point;
+            public string Evidence;
+        }
+
+        // REF identifies connection stations only. The measured feet belong to
+        // actual base/diaphragm plate faces, including for an end-on child beam.
+        private static List<PlateFoot> ResolveColumnPlateFeet(View view, List<Part> columns,
+            List<double> nodes, double axis, double depth)
+        {
+            var roles=new Dictionary<int,bool>(); // true = upper outside face
+            Action<double,bool> register=(station,upper)=>
+            {
+                int index=nodes.FindIndex(y=>Math.Abs(y-station)<=GeometryTolerance);
+                if(index<0) throw new InvalidOperationException("Mép nhánh không khớp node cột; chưa đủ bằng chứng chọn plate.");
+                bool previous;
+                if(roles.TryGetValue(index,out previous) && previous!=upper)
+                    throw new InvalidOperationException("Một node có hai vai trò mép plate trái ngược; dừng trước khi DIM.");
+                roles[index]=upper;
+            };
+            foreach(var beam in view.Parts)
+            {
+                string profile=(beam.Profile??"").Trim().ToUpperInvariant();
+                if(beam.Plate || beam.Assembly!=view.Main.Assembly || beam.Reference.Count!=2
+                    || beam.Vertices.Count==0 || !(profile.StartsWith("H") || profile.StartsWith("I") || profile.StartsWith("BH"))) continue;
+                var ends=beam.Reference.OrderBy(p=>(p.X-axis)*(p.X-axis)+(p.Z-depth)*(p.Z-depth)).ToArray();
+                var node=ends[0]; var end=ends[1];
+                if(Math.Abs(node.X-axis)>GeometryTolerance || Math.Abs(node.Z-depth)>GeometryTolerance
+                    || Math.Abs(node.Y-end.Y)>GeometryTolerance || !Between(node.Y,nodes.First(),nodes.Last())) continue;
+                double dx=end.X-node.X, dz=end.Z-node.Z, length=Math.Sqrt(dx*dx+dz*dz);
+                if(length<100) continue;
+                dx/=length; dz/=length;
+                Func<G.Point,double> projection=p=>(p.X-node.X)*dx+(p.Z-node.Z)*dz;
+                double terminal=beam.Vertices.Max(projection);
+                if(terminal<100) continue;
+                var face=beam.Vertices.Where(p=>Math.Abs(projection(p)-terminal)<=GeometryTolerance).ToList();
+                double low=face.Min(p=>p.Y), high=face.Max(p=>p.Y);
+                if(high-low<=GeometryTolerance) continue;
+                if(Math.Min(Math.Abs(node.Y-low),Math.Abs(node.Y-high))>GeometryTolerance)
+                    throw new InvalidOperationException("REF nhánh P"+beam.Id+" không trùng mép tiết diện; cần quy tắc hình học riêng.");
+                register(low,false); register(high,true);
+            }
+            if(roles.Count==0) throw new InvalidOperationException("Không chứng minh được cặp diaphragm trên/dưới của liên kết.");
+            if(roles.ContainsKey(0) && roles[0]) throw new InvalidOperationException("Base plate role conflicts with connection.");
+            roles[0]=false;
+            if(!roles.ContainsKey(nodes.Count-1)) roles[nodes.Count-1]=true;
+            var result=new List<PlateFoot>(); var owners=new HashSet<int>();
+            for(int i=0;i<nodes.Count;i++)
+            {
+                bool upper;
+                if(!roles.TryGetValue(i,out upper)) throw new InvalidOperationException("Node cột chưa có vai trò diaphragm rõ ràng: "+F(nodes[i]));
+                var adjacent=columns.Where(c=>Between(nodes[i],c.Reference.Min(p=>p.Y),c.Reference.Max(p=>p.Y))).ToList();
+                double colMinX=adjacent.Min(c=>c.Vertices.Min(p=>p.X)), colMaxX=adjacent.Max(c=>c.Vertices.Max(p=>p.X));
+                double colMinZ=adjacent.Min(c=>c.Vertices.Min(p=>p.Z)), colMaxZ=adjacent.Max(c=>c.Vertices.Max(p=>p.Z));
+                var candidates=view.Parts.Where(p=>p.Plate && p.Assembly==view.Main.Assembly && p.Vertices.Count>0)
+                    .Where(p=>
+                    {
+                        double lo=p.Vertices.Min(v=>v.Y), hi=p.Vertices.Max(v=>v.Y);
+                        double x0=p.Vertices.Min(v=>v.X), x1=p.Vertices.Max(v=>v.X);
+                        double z0=p.Vertices.Min(v=>v.Z), z1=p.Vertices.Max(v=>v.Z);
+                        return Between(nodes[i],lo,hi) && hi-lo>DimensionTolerance
+                            && hi-lo<0.5*Math.Min(x1-x0,z1-z0)
+                            && x0<=colMinX+GeometryTolerance && x1>=colMaxX-GeometryTolerance
+                            && z0<=colMinZ+GeometryTolerance && z1>=colMaxZ-GeometryTolerance;
+                    }).ToList();
+                if(candidates.Count!=1) throw new InvalidOperationException("Node "+F(nodes[i])+" cần đúng một plate ngang bao cột; tìm thấy "+candidates.Count+".");
+                var plate=candidates[0];
+                if(!owners.Add(plate.Id)) throw new InvalidOperationException("Hai node cùng chọn một plate; dừng DIM chuỗi.");
+                double y=upper?plate.Vertices.Max(p=>p.Y):plate.Vertices.Min(p=>p.Y);
+                var foot=plate.Vertices.Where(p=>Math.Abs(p.Y-y)<=DimensionTolerance)
+                    .OrderBy(p=>p.X).ThenBy(p=>Math.Abs(p.Z-depth)).ThenBy(p=>p.Z).First();
+                if(result.Count>0 && foot.Y-result.Last().Point.Y<=GeometryTolerance)
+                    throw new InvalidOperationException("Các mép plate không theo thứ tự tăng dọc cột.");
+                result.Add(new PlateFoot { Point=new G.Point(foot.X,foot.Y,0),
+                    Evidence="P"+plate.Id+" "+(i==0?"base underside":upper?"upper outside face":"lower outside face") });
+            }
+            return result;
+        }
+    }
+}
+#endregion
+
+#region PHU_Slot07_DrawingRoute - Kiểu tuyến và scope phân tuyến bản vẽ
+namespace Tekla.Technology.Akit.UserScript
+{
+
+
+    internal enum Slot07DrawingRoute
+    {
+        Beam,
+        LegacyColumn,
+        HollowColumn,
+        UnsupportedColumn
+    }
+
+    /// <summary>Single Slot 07 decision made before any beam context or writer.
+    /// Orientation comes from authoritative MainPart REF in global coordinates;
+    /// profile families come from the existing product profile classifier.</summary>
+    internal static class PHU_Slot07_DrawingRoute
+    {
+        internal static Slot07DrawingRoute Resolve(bool vertical, bool legacyShape, bool hollow)
+        {
+            if (!vertical) return Slot07DrawingRoute.Beam;
+            if (legacyShape) return Slot07DrawingRoute.LegacyColumn;
+            if (hollow) return Slot07DrawingRoute.HollowColumn;
+            return Slot07DrawingRoute.UnsupportedColumn;
+        }
+    }
+}
+#endregion

@@ -1,4 +1,4 @@
-#pragma warning disable 1633
+﻿#pragma warning disable 1633
 
 using System;
 using System.Collections;
@@ -58,12 +58,15 @@ namespace Tekla.Technology.Akit.UserScript
 
         // Theo dump mẫu:
         // Chain ngang: lỗ plate trái -> ref main -> lỗ plate phải.
+        // KHÔNG CÓ NƠI ĐỌC TRỰC TIẾP: hằng được giữ từ luồng cũ; không dùng để chỉnh chức năng hiện tại.
         private const double HORIZONTAL_REF_TO_HOLE_TIER = 150.0;
 
         // Dim đứng ngoài: mép dầm main trái/phải -> mép dưới neighbor.
+        // KHÔNG CÓ NƠI ĐỌC TRỰC TIẾP: hằng được giữ từ luồng cũ; không dùng để chỉnh chức năng hiện tại.
         private const double MAIN_TO_NEIGHBOR_SIDE_TIER = 360.0;
 
         // Dim đứng trong: mép trên neighbor -> lỗ plate.
+        // KHÔNG CÓ NƠI ĐỌC TRỰC TIẾP: hằng được giữ từ luồng cũ; không dùng để chỉnh chức năng hiện tại.
         private const double NEIGHBOR_TO_PLATE_HOLE_SIDE_TIER = 220.0;
 
         private const double POINT_DUP_TOL = 0.5;
@@ -4103,8 +4106,11 @@ namespace Tekla.Technology.Akit.UserScript
             catch { }
         }
 
+        // KHÔNG CÓ NƠI ĐỌC TRỰC TIẾP: hằng được giữ từ luồng cũ; không dùng để chỉnh chức năng hiện tại.
         private const double MAIN_PLATE_HORIZONTAL_REF_TO_HOLE_TIER = 220.0;
+        // KHÔNG CÓ NƠI ĐỌC TRỰC TIẾP: hằng được giữ từ luồng cũ; không dùng để chỉnh chức năng hiện tại.
         private const double MAIN_PLATE_HOLE_SIDE_TIER = 205.0;
+        // KHÔNG CÓ NƠI ĐỌC TRỰC TIẾP: hằng được giữ từ luồng cũ; không dùng để chỉnh chức năng hiện tại.
         private const double MAIN_PLATE_TOTAL_SIDE_TIER = 287.0;
 
         private static int CreateSectionMainPlateOnlyDims(

@@ -1,3 +1,8 @@
+﻿// Kiểm tra chân DIM thẳng theo bằng chứng hình học; Analyze/Audit không ghi bản vẽ.
+// LUỒNG: Analyze đọc DIM và feature → phân loại chân → Result; Run mở PHU_DimensionReportForm.
+// THAM SỐ: Tolerance tính mm model/view, không nhân scale. CandidateOwners là ứng viên hình học, không khẳng định associativity đã lưu.
+// TRA CỨU: PROJECT_MAP.md ở gốc repo; chỉ mục kiểu/hàm và điểm chỉnh thông số.
+
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -37,10 +42,11 @@ namespace Tekla.Technology.Akit.UserScript
         }
     }
 
-    // Read-only adapter and pure feature classifier. No work-plane change or drawing writes.
+    // Đọc và phân loại feature; không đổi work plane, không ghi bản vẽ.
     public static partial class PHU_DimensionCheck
     {
-        // Model millimetres, independent of drawing scale. A 1 mm wrong pick must remain visible.
+        // Dung sai mm hình học, độc lập scale; vẫn phải phát hiện chân DIM lệch 1 mm.
+        // CHỈNH KẾT LUẬN (mm model/view): tăng có thể bỏ qua sai lệch chân nhỏ; không nhân mẫu số scale.
         public const double Tolerance = 0.04;
         public sealed class Feature
         {
@@ -58,7 +64,7 @@ namespace Tekla.Technology.Akit.UserScript
             public G.Point Point;
             public G.Vector Normal;
             public string ViewLabel, DimensionLabel, Location;
-            // Geometric evidence only; a candidate owner is not saved Tekla associativity.
+            // Chỉ là bằng chứng hình học; owner ứng viên không chứng minh associativity Tekla đã lưu.
             public string EvidenceKind;
             public int[] CandidateOwners = new int[0];
             public double MeasurementResidual = Double.NaN;

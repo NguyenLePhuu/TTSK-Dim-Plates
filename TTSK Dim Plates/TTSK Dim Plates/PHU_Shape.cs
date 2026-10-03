@@ -1,22 +1,32 @@
+﻿// DIM thép H/I và xử lý cánh lõm bevel; không phải engine tổng quát cho mọi Shape.
+// LUỒNG: ShapeScript.Run → phân vai Top/Front/Bottom → kiểm tra bevel → xóa DIM đích → scale/tầng → DIM từng view → bố trí.
+// ĐIỂM SỬA: vai view ở ResolveHShapeSemanticDimensionViews; chân DIM ở CreateDimsFor*View; cánh lõm ở region PHU_Shape_RecessedFlangeBevel.
+// THAM SỐ: DIM_TIER_SCALE_* là mm view theo scale; *_PAPER là mm giấy; *_TOL là dung sai hình học theo nơi dùng.
+// TRẠNG THÁI: Current*/Last*/Pending* là dữ liệu lần chạy, không phải thiết lập mặc định; xem Configure/Prepare/Reset trước khi sửa.
+// TRA CỨU: PROJECT_MAP.md ở gốc repo; chỉ mục kiểu/hàm và điểm chỉnh thông số.
+// Mục lục:
+//   PHU_Shape.cs
+//   PHU_Shape_RecessedFlangeBevel.cs
+
+#region PHU_Shape - DIM H/I, phân vai view, nhóm lỗ và bố trí tầng
 #pragma warning disable 1633
-
-using System;
-using System.Collections;
-using System.Collections.Generic;
-using System.Reflection;
-using Tekla.Structures;
-using Tekla.Structures.Model;
-using Tekla.Structures.Drawing;
-using Tekla.Structures.Geometry3d;
-using Tekla.Structures.Drawing.UI;
-
-using ModelPart = Tekla.Structures.Model.Part;
-using ModelObject = Tekla.Structures.Model.ModelObject;
-using DrawingPart = Tekla.Structures.Drawing.Part;
-using ModelBoltGroup = Tekla.Structures.Model.BoltGroup;
 
 namespace Tekla.Technology.Akit.UserScript
 {
+    using System;
+    using System.Collections;
+    using System.Collections.Generic;
+    using System.Reflection;
+    using Tekla.Structures;
+    using Tekla.Structures.Model;
+    using Tekla.Structures.Drawing;
+    using Tekla.Structures.Geometry3d;
+    using Tekla.Structures.Drawing.UI;
+    using ModelPart = Tekla.Structures.Model.Part;
+    using ModelObject = Tekla.Structures.Model.ModelObject;
+    using DrawingPart = Tekla.Structures.Drawing.Part;
+    using ModelBoltGroup = Tekla.Structures.Model.BoltGroup;
+
     public class HShapeAutoSectionPrecheckResult
     {
         public int HoleResult = -1;
@@ -38,19 +48,24 @@ namespace Tekla.Technology.Akit.UserScript
     public partial class ShapeScript
     {
         private const double TOL = 1.0;
+        // CHỈNH BIÊN (mm view): khoảng đệm khi đọc/fit RestrictionBox; không phải khoảng cách giấy giữa hai view.
         private const double VIEW_PADDING = 20.0;
 
         // CENTER VÙNG VÀNG - ÉP GIỚI HẠN THEO 2 BLOCK TRÊN/DƯỚI.
         // Dùng khi API không đọc được template block nên center vẫn ăn theo margin cũ.
         // Giá trị là % chiều cao giấy, tự chạy cho A1/A3 ngang/dọc.
-        private const bool FORCE_CENTER_BY_TOP_BOTTOM_BLOCKS = true;
+        // CỜ CENTER: true giới hạn vùng đặt view theo block trên/dưới, false bỏ giới hạn bổ sung này.
+        private static readonly bool FORCE_CENTER_BY_TOP_BOTTOM_BLOCKS = true;
+        // CHỈNH VÙNG CENTER: tỷ lệ 0..1 theo chiều cao giấy; EXTRA_GAP là mm giấy. Tăng làm vùng đặt view nhỏ lại.
         private const double CENTER_BOTTOM_BLOCK_HEIGHT_RATIO = 0.18;
         private const double CENTER_TOP_BLOCK_HEIGHT_RATIO = 0.08;
         private const double CENTER_BLOCK_EXTRA_GAP = 5.0;
 
-        // DIM TIER SPACING BY DRAWING SCALE:
+        // HỆ TẦNG DIM THEO SCALE BẢN VẼ:
         // Tất cả view của drawing dùng chung một scale.
         // Hệ tầng được khởi tạo một lần sau Auto Scale và trước khi tạo DIM.
+        // CHỈNH TẦNG THEO SCALE (mm view): BASE là gốc, STEP là bước, MIDDLE là offset riêng của DIM giữa.
+        // Xem GetSteelDimOffsetByTier để biết chỉ số tầng; InitializeCurrentDimTierSpacing chọn bảng theo scale thực.
         private const double DIM_TIER_SCALE_5_BASE = 50.0;
         private const double DIM_TIER_SCALE_5_STEP = 50.0;
         private const double DIM_TIER_SCALE_5_MIDDLE = 66.6666667;
@@ -87,27 +102,25 @@ namespace Tekla.Technology.Akit.UserScript
 
         private const double TOP_FLANGE_DEPTH_TOL = 3.0;
 
-        // H-SHAPE HOLE FACE CLASSIFICATION:
-        // Face names belong to the drawing views, not to a fixed part-local Y/Z axis.
-        // Direction is the primary signal; position is used only to split Top and Bottom.
+        // PHÂN MẶT LỖ H/I: so hướng với mặt view trước; vị trí chỉ tách Top/Bottom.
+        // Tên mặt theo view, không cố định vào trục Y/Z cục bộ của part.
         private const double H_HOLE_DIRECTION_TIE_TOL = 0.02;
         private const double H_HOLE_CENTER_SIDE_TOL = 0.5;
 
-        // H/I SEMANTIC VIEW ROLE CLASSIFICATION:
-        // Tekla's ViewType describes the drawing camera, not necessarily the
-        // physical H/I face after the member has been rolled around its length.
-        // Only swap Top/Front algorithms when both view normals prove the
-        // opposite physical roles against the part-local profile axes.
+        // PHÂN VAI VIEW H/I: ViewType có thể khác mặt vật lý khi thanh bị xoay quanh trục dọc.
+        // Chỉ đổi thuật toán Top/Front khi cả hai pháp tuyến đủ bằng chứng so với trục profile.
+        // CHỈNH PHÂN VAI H/I: alignment/margin là điểm so hướng không đơn vị; tăng đòi bằng chứng đổi Top/Front rõ hơn.
         private const double H_VIEW_ROLE_MIN_ALIGNMENT = 0.75;
         private const double H_VIEW_ROLE_MIN_MARGIN = 0.20;
 
         // TOP VIEW - GIỚI HẠN HÌNH CHIẾU THEO COORDINATE:
         // Chỉ dùng cho biên dạng chiếu TOP để dim tổng/chamfer/rãnh.
         // Không dùng độ sâu cố định 20mm nữa.
-        // Rule mới: Có thể tủy chỉnh mặt trên xuống gần hết chiều sâu dầm,
-        // Có thể tùy chỉnh vùng XXmm sâu đáy để tránh rãnh/cạnh đáy bị dim nhầm ở TOP.
+        // TOP_PROJECTED_BOTTOM_EXCLUDE (mm) loại vùng sát đáy khỏi contour chiếu Top;
+        // tăng để loại thêm cạnh/rãnh dưới đáy; không dùng như dung sai gom lỗ.
         private const double TOP_PROJECTED_BOTTOM_EXCLUDE = 0.0;
 
+        // KHÔNG CÓ NƠI ĐỌC TRỰC TIẾP: hằng được giữ từ luồng cũ; không dùng để chỉnh chức năng hiện tại.
         private const double FRONT_WEB_DEPTH_TOL = 3.0;
         private const double FRONT_END_HOLE_ZONE = 300.0;
 
@@ -124,33 +137,39 @@ namespace Tekla.Technology.Akit.UserScript
         private const double TOP_BOTTOM_HOLE_EDGE_PRIORITY_DISTANCE = 200.0;
 
         // Chỉ dùng khi tách cụm phục vụ DIM dọc. DIM ngang vẫn giữ nguyên chain toàn hàng.
+        // CHỈNH TÁCH CỤM DIM DỌC: gap là mm, ratio không đơn vị; giảm ngưỡng dễ tách thêm cụm.
+        // Không áp dụng quy tắc này cho chuỗi DIM ngang toàn hàng.
         private const double TOP_BOTTOM_VERTICAL_CLUSTER_MIN_SPLIT_GAP = 300.0;
         private const double TOP_BOTTOM_VERTICAL_CLUSTER_GAP_RATIO = 2.5;
 
+        // CỜ NHÁNH TOP: chamfer và notch có cờ riêng; nhánh chuyên biệt vẫn theo điều kiện tại nơi gọi.
         private const bool ENABLE_TOP_VIEW_CHAMFER_DIM = true;
 
-        // TOP VIEW: thiết kế hiện tại không DIM rãnh/notch ở mặt Top.
-        // Chamfer ngoài vẫn giữ nguyên. Front/Bottom vẫn DIM rãnh/notch như cũ.
+        // TOP VIEW: cờ dưới đây tắt nhánh notch có kiểm ENABLE_TOP_VIEW_NOTCH_DIM.
+        // Các nhánh contour/chuỗi chuyên biệt có điều kiện riêng; tra nơi dùng cờ trước khi thay đổi.
         private const bool ENABLE_TOP_VIEW_NOTCH_DIM = false;
 
         // TOP VIEW CHAMFER DIM
         // Chân DIM chamfer bắt đúng 2 đầu cạnh xiên thật.
-        // Offset DIM chamfer = kích thước chamfer + 200.
+        // Offset chamfer lấy theo bộ đặt tầng của nhánh tạo DIM; không suy ra từ hằng EXTRA_OFFSET cũ.
         private const double CHAMFER_MIN_SIZE = 5.0;
         private const double CHAMFER_MAX_SIZE = 250.0;
         private const double CHAMFER_MIN_RATIO = 0.20;
         private const double CHAMFER_MAX_RATIO = 5.00;
+        // KHÔNG CÓ NƠI ĐỌC TRỰC TIẾP: hằng được giữ từ luồng cũ; không dùng để chỉnh chức năng hiện tại.
         private const double CHAMFER_DIM_EXTRA_OFFSET = 200.0;
         private const double NOTCH_MIN_SIZE = 5.0;
         private const double NOTCH_MAX_SIZE = 250.0;
 
         // Chỉ chặn các DIM rãnh quá nhỏ do fillet sinh ra.
         // Không dùng ratio để tránh lọc mất rãnh thật.
+        // CHỈNH LỌC RÃNH (mm view): bỏ DIM rãnh dưới ngưỡng này; tăng có thể bỏ cả rãnh thật nhỏ.
         private const double NOTCH_MIN_DIM_TO_CREATE = 15.0;
 
         // CHECK TOP/BOTTOM HOLES
         // So sánh lỗ cánh trên và cánh dưới. Nếu khác thì báo popup, không đánh dấu trên drawing.
         private const bool ENABLE_TOP_BOTTOM_HOLE_CHECK = true;
+        // CHỈNH SO SÁNH LỖ (mm): dung sai vị trí và kích thước; tăng làm Top/Bottom dễ được coi là giống nhau hơn.
         private const double TOP_BOTTOM_HOLE_POSITION_TOL = 2.0;
         private const double TOP_BOTTOM_HOLE_SIZE_TOL = 1.0;
         private const double TOP_BOTTOM_CROSS_FACE_SYMMETRY_EDGE_TOL = 5.0;
@@ -159,10 +178,13 @@ namespace Tekla.Technology.Akit.UserScript
         // AUTO SCALE THEO KHỔ GIẤY + CHIỀU DÀI DẦM
         // Chạy trước khi tạo DIM.
         // Scale chọn theo: (chiều dài dầm + reserve dim) / vùng giấy hữu dụng.
+        // CỜ SCALE: cho phép tự chọn scale theo khổ giấy; manual override có nhánh ưu tiên riêng trong hàm áp dụng scale.
         private const bool AUTO_SCALE_BY_PART_LENGTH = true;
         private const double A3_SHEET_WIDTH = 420.0;
         private const double A3_SHEET_HEIGHT = 297.0;
+        // KHÔNG CÓ NƠI ĐỌC TRỰC TIẾP: hằng được giữ từ luồng cũ; không dùng để chỉnh chức năng hiện tại.
         private const double A1_SHEET_WIDTH = 841.0;
+        // KHÔNG CÓ NƠI ĐỌC TRỰC TIẾP: hằng được giữ từ luồng cũ; không dùng để chỉnh chức năng hiện tại.
         private const double A1_SHEET_HEIGHT = 594.0;
         private const double SHEET_SIZE_TOLERANCE = 2.0;
         private const double AUTO_SCALE_DIM_RESERVE = 500.0;
@@ -3300,12 +3322,7 @@ namespace Tekla.Technology.Akit.UserScript
                 // TOP VIEW: không DIM rãnh/notch để tránh bắt nhầm rãnh mặt Front chiếu lên Top.
                 // Chamfer ngoài vẫn giữ nguyên vì đã chạy ở CreateTopViewChamferDims phía trên.
                 TopBottomFrontNotchChain topFrontNotchChain = null;
-                if (frontNotchInfluence.RecessedBevels != null)
-                {
-                    topFrontNotchChain = BuildRecessedFlangeFaceChain(
-                        frontNotchInfluence.RecessedBevels, view, solid, true);
-                }
-                else if (frontNotchInfluence.Top)
+                if (frontNotchInfluence.Top)
                 {
                     TryDetectTopBottomFrontNotchChain(
                         part,
@@ -3320,6 +3337,11 @@ namespace Tekla.Technology.Akit.UserScript
                         out topFrontNotchChain
                     );
                 }
+
+                if (frontNotchInfluence.RecessedBevels != null)
+                    topFrontNotchChain = MergeRecessedFaceChain(
+                        topFrontNotchChain, BuildRecessedFlangeFaceChain(
+                            frontNotchInfluence.RecessedBevels, view, solid, true));
 
                 if (topFrontNotchChain != null)
                 {
@@ -3690,12 +3712,7 @@ namespace Tekla.Technology.Akit.UserScript
                 ChamferInfluence notchInfluence = new ChamferInfluence();
                 int notchCount = 0;
                 TopBottomFrontNotchChain bottomFrontNotchChain = null;
-                if (frontNotchInfluence.RecessedBevels != null)
-                {
-                    bottomFrontNotchChain = BuildRecessedFlangeFaceChain(
-                        frontNotchInfluence.RecessedBevels, view, solid, false);
-                }
-                else if (frontNotchInfluence.Bottom)
+                if (frontNotchInfluence.Bottom)
                 {
                     TryDetectTopBottomFrontNotchChain(
                         part,
@@ -3710,6 +3727,11 @@ namespace Tekla.Technology.Akit.UserScript
                         out bottomFrontNotchChain
                     );
                 }
+
+                if (frontNotchInfluence.RecessedBevels != null)
+                    bottomFrontNotchChain = MergeRecessedFaceChain(
+                        bottomFrontNotchChain, BuildRecessedFlangeFaceChain(
+                            frontNotchInfluence.RecessedBevels, view, solid, false));
 
                 if (bottomFrontNotchChain != null)
                 {
@@ -4014,6 +4036,7 @@ namespace Tekla.Technology.Akit.UserScript
             return 1.0;
         }
 
+        // CÔNG THỨC ĐANG CHẠY: BASE + max(0, tier) × STEP (mm view); tier=0 đã có BASE.
         private static double GetSteelDimOffsetByTier(int tier)
         {
             int safeTier = Math.Max(0, tier);
@@ -6529,7 +6552,8 @@ namespace Tekla.Technology.Akit.UserScript
             double minY,
             double maxY,
             double beamLength,
-            out ChamferInfluence influence
+            out ChamferInfluence influence,
+            List<RecessedFlangeBevel> excludedRecessed = null
         )
         {
             // PHU CLEAN FRONT NOTCH DEBUG - RULE CHẮC CHẮN ĐỂ PORT VÀO FILE CHÍNH
@@ -6614,7 +6638,7 @@ namespace Tekla.Technology.Akit.UserScript
                     }
                 }
 
-                if (outer != null && inner != null)
+                if (!IsRecessedCorner(excludedRecessed, false, true) && outer != null && inner != null)
                 {
                     width = Math.Abs(inner.X - minX);
                     depth = Math.Abs(maxY - outer.Y);
@@ -6707,7 +6731,7 @@ namespace Tekla.Technology.Akit.UserScript
                     }
                 }
 
-                if (outer != null && inner != null)
+                if (!IsRecessedCorner(excludedRecessed, true, true) && outer != null && inner != null)
                 {
                     width = Math.Abs(maxX - inner.X);
                     depth = Math.Abs(maxY - outer.Y);
@@ -6800,7 +6824,7 @@ namespace Tekla.Technology.Akit.UserScript
                     }
                 }
 
-                if (outer != null && inner != null)
+                if (!IsRecessedCorner(excludedRecessed, false, false) && outer != null && inner != null)
                 {
                     width = Math.Abs(inner.X - minX);
                     depth = Math.Abs(outer.Y - minY);
@@ -6893,7 +6917,7 @@ namespace Tekla.Technology.Akit.UserScript
                     }
                 }
 
-                if (outer != null && inner != null)
+                if (!IsRecessedCorner(excludedRecessed, true, false) && outer != null && inner != null)
                 {
                     width = Math.Abs(maxX - inner.X);
                     depth = Math.Abs(outer.Y - minY);
@@ -6968,11 +6992,10 @@ namespace Tekla.Technology.Akit.UserScript
             if (model == null || part == null || view == null)
                 return influence;
 
+            List<RecessedFlangeBevel> detectedRecessed = null;
             if (new DrawingHandler().GetActiveDrawing() is SinglePartDrawing)
             {
-                List<RecessedFlangeBevel> bevels = ReadRecessedFlangeBevels(model, part, view);
-                if (bevels.Count > 0)
-                    return RecessedFlangeInfluence(bevels);
+                detectedRecessed = ReadRecessedFlangeBevels(model, part, view);
             }
 
             TransformationPlane oldPlane = model
@@ -7008,7 +7031,7 @@ namespace Tekla.Technology.Akit.UserScript
                         ? frontProjectedSolidPoints
                         : frontPolygon;
 
-                return DetectFrontAxisAlignedNotchInfluence(
+                influence = DetectFrontAxisAlignedNotchInfluence(
                     frontNotchProfile,
                     frontProjectedSolidPoints,
                     minX,
@@ -7016,6 +7039,12 @@ namespace Tekla.Technology.Akit.UserScript
                     minY,
                     maxY
                 );
+                if (detectedRecessed != null && detectedRecessed.Count > 0)
+                {
+                    MergeInfluence(ref influence, RecessedFlangeInfluence(detectedRecessed));
+                    influence.RecessedBevels = detectedRecessed;
+                }
+                return influence;
             }
             catch
             {
@@ -9119,7 +9148,8 @@ namespace Tekla.Technology.Akit.UserScript
             double minY,
             double maxY,
             double beamLength,
-            out ChamferInfluence influence
+            out ChamferInfluence influence,
+            List<RecessedFlangeBevel> excludedRecessed = null
         )
         {
             influence = new ChamferInfluence();
@@ -9151,6 +9181,7 @@ namespace Tekla.Technology.Akit.UserScript
 
                     bool topSide = midY >= centerY;
                     bool rightSide = midX >= centerX;
+                    if (IsRecessedCorner(excludedRecessed, rightSide, topSide)) continue;
 
                     bool nearLeftEnd = Math.Abs(midX - minX) <= CHAMFER_MAX_SIZE;
                     bool nearRightEnd = Math.Abs(midX - maxX) <= CHAMFER_MAX_SIZE;
@@ -16764,7 +16795,7 @@ namespace Tekla.Technology.Akit.UserScript
                     ? new List<RecessedFlangeBevel>()
                     : ReadRecessedFlangeBevels(model, part, view);
 
-                if (ENABLE_TOP_VIEW_CHAMFER_DIM && recessedBevels.Count == 0)
+                if (ENABLE_TOP_VIEW_CHAMFER_DIM)
                 {
                     frontChamferCount = CreateTopViewChamferDims(
                         handler,
@@ -16775,7 +16806,8 @@ namespace Tekla.Technology.Akit.UserScript
                         minY,
                         maxY,
                         beamLength,
-                        out frontChamferInfluence
+                        out frontChamferInfluence,
+                        recessedBevels
                     );
 
                     if (frontChamferCount > 0)
@@ -16806,6 +16838,12 @@ namespace Tekla.Technology.Akit.UserScript
                     frontNotchInfluence = RecessedFlangeInfluence(recessedBevels);
                     frontNotchCount = CreateRecessedFlangeBevelDetails(
                         handler, view, recessedBevels, offsetAnchors);
+                    ChamferInfluence remainingNotches;
+                    frontNotchCount += CreateFrontAxisAlignedNotchDims(
+                        handler, view, frontNotchProfile, frontProjectedSolidPoints,
+                        offsetAnchors, minX, maxX, minY, maxY, beamLength,
+                        out remainingNotches, recessedBevels);
+                    MergeInfluence(ref frontNotchInfluence, remainingNotches);
                 }
                 else if (isVerticalHMember)
                 {
@@ -19936,7 +19974,7 @@ namespace Tekla.Technology.Akit.UserScript
             // FIX DELETE DIM SHAPE:
             // Không dùng GetAllObjects() không filter nữa, vì một số drawing có object
             // LeaderLinePlacing bị lỗi deserialize làm macro dừng trước khi xóa DIM.
-            // Chỉ quét đúng các loại DIM cần xóa, giữ nguyên AngleDimension.
+            // Clear DIM ban đầu gồm cả DIM góc; vẫn chỉ quét đúng loại object.
             try
             {
                 if (drawing == null)
@@ -19959,7 +19997,8 @@ namespace Tekla.Technology.Akit.UserScript
                     typeof(StraightDimension),
                     typeof(CurvedDimensionSetRadial),
                     typeof(CurvedDimensionSetOrthogonal),
-                    typeof(RadiusDimension)
+                    typeof(RadiusDimension),
+                    typeof(AngleDimension)
                 };
 
                 // Xóa DIM ở sheet theo từng loại object, tránh Tekla phải deserialize toàn bộ object.
@@ -20155,3 +20194,582 @@ namespace Tekla.Technology.Akit.UserScript
         }
     }
 }
+#pragma warning restore
+#endregion
+
+#region PHU_Shape_RecessedFlangeBevel - Nhận diện và DIM cánh lõm bevel
+
+
+namespace Tekla.Technology.Akit.UserScript
+{
+    using System;
+    using System.Collections.Generic;
+    using System.Globalization;
+    using System.Text;
+    using Tekla.Structures.Model;
+    using Tekla.Structures.Drawing;
+    using Tekla.Structures.Geometry3d;
+    using ModelPart = Tekla.Structures.Model.Part;
+    using DrawingLine = Tekla.Structures.Drawing.Line;
+
+    public partial class ShapeScript
+    {
+        private const double RecessedBevelTolerance = 0.05;
+        private const string RecessedBevelOwnerField = "TTSK_AUTODIM_OWNER";
+        private const string RecessedBevelOwner = "H_RECESSED_FLANGE_BEVEL_V1";
+
+        private sealed class RecessedFlangeException : InvalidOperationException
+        {
+            public RecessedFlangeException(string message) : base(message) { }
+            public RecessedFlangeException(string message, Exception inner) : base(message,inner) { }
+        }
+
+        private sealed class RecessedBevelEdge
+        {
+            public Point A, B;
+            public RecessedBevelEdge(Point a, Point b) { A = a; B = b; }
+        }
+
+        private sealed class RecessedFlangeBevel
+        {
+            public Point Outer, Shoulder, End, Corner, ClosureEnd;
+            public Point GlobalShoulder, GlobalEnd;
+            public bool Top, Right, TopFlange;
+        }
+
+        // Read-only adapter. Solid points are in the CURRENT model plane, then
+        // normalized through global into the requested web-view coordinates.
+        private static List<RecessedFlangeBevel> ReadRecessedFlangeBevels(
+            Model model, ModelPart part, View view)
+        {
+            string reason;
+            return ReadRecessedFlangeBevelsWithReason(model,part,view,out reason);
+        }
+
+        private static List<RecessedFlangeBevel> ReadRecessedFlangeBevelsWithReason(
+            Model model, ModelPart part, View view,out string reason)
+        {
+            var empty = new List<RecessedFlangeBevel>();
+            reason="Missing model, part or view.";
+            if (model == null || part == null || view == null) return empty;
+            string profile = (part.Profile.ProfileString ?? "").Trim().ToUpperInvariant();
+            reason="Not an H/I profile.";
+            if (!(profile.StartsWith("H") || profile.StartsWith("BH") || profile.StartsWith("I")))
+                return empty;
+            double thickness = 0;
+            // Catalog profiles (IPE/HEA/etc.) need not encode four dimensions.
+            if (!part.GetReportProperty("PROFILE.FLANGE_THICKNESS", ref thickness)
+                || !IsFiniteRecessed(thickness) || thickness <= RecessedBevelTolerance)
+                thickness = GetFlangeThicknessFromProfile(part);
+            reason="Flange thickness unavailable.";
+            if (!IsFiniteRecessed(thickness) || thickness <= RecessedBevelTolerance) return empty;
+            Matrix toGlobal = model.GetWorkPlaneHandler().GetCurrentTransformationPlane()
+                .TransformationMatrixToGlobal;
+            Matrix toView = MatrixFactory.ToCoordinateSystem(view.DisplayCoordinateSystem);
+            Func<Point, Point> project = p => toView.Transform(toGlobal.Transform(p));
+            CoordinateSystem cs = part.GetCoordinateSystem();
+            Point o = project(cs.Origin);
+            Point x = project(new Point(cs.Origin.X + cs.AxisX.X,
+                cs.Origin.Y + cs.AxisX.Y, cs.Origin.Z + cs.AxisX.Z));
+            Point y = project(new Point(cs.Origin.X + cs.AxisY.X,
+                cs.Origin.Y + cs.AxisY.Y, cs.Origin.Z + cs.AxisY.Z));
+            // Only longitudinal, orthogonal web views; flange/end/skew views
+            // must never enter this new rule even if their bounds look similar.
+            reason="Not a horizontal orthogonal web view; legacy route.";
+            if (Math.Abs(x.X-o.X) < 0.001 || Math.Abs(y.Y-o.Y) < 0.001
+                || Math.Abs(x.Y-o.Y) + Math.Abs(x.Z-o.Z) > Math.Abs(x.X-o.X)*0.00001
+                || Math.Abs(y.X-o.X) + Math.Abs(y.Z-o.Z) > Math.Abs(y.Y-o.Y)*0.00001)
+                return empty;
+            var edges = new List<RecessedBevelEdge>();
+            var enumerator = part.GetSolid().GetEdgeEnumerator();
+            while (enumerator.MoveNext())
+            {
+                var edge = enumerator.Current as Tekla.Structures.Solid.Edge;
+                if (edge == null) continue;
+                Point a = project(edge.StartPoint), b = project(edge.EndPoint);
+                // No diagonal may be fabricated by projecting a depth edge.
+                if (Math.Abs(a.Z-b.Z) > RecessedBevelTolerance) continue;
+                a = Clone2D(a); b = Clone2D(b);
+                if (Distance2D(a,b) <= RecessedBevelTolerance) continue;
+                bool duplicate = edges.Exists(e => SameRecessedPoint(e.A,a) && SameRecessedPoint(e.B,b)
+                    || SameRecessedPoint(e.A,b) && SameRecessedPoint(e.B,a));
+                if (!duplicate) edges.Add(new RecessedBevelEdge(a,b));
+            }
+            var result = ResolveRecessedFlangeBevels(edges, thickness);
+            reason=result.Count>0 ? "Exact bevel, shelf and connected web boundary."
+                : "No unique full-thickness bevel -> shelf -> web boundary; legacy route.";
+            Matrix fromView = MatrixFactory.FromCoordinateSystem(view.DisplayCoordinateSystem);
+            foreach (var bevel in result)
+            {
+                bevel.GlobalShoulder = fromView.Transform(bevel.Shoulder);
+                bevel.GlobalEnd = fromView.Transform(bevel.End);
+                bevel.TopFlange = bevel.Top == (y.Y > o.Y);
+            }
+            return result;
+        }
+
+        private static bool SameRecessedPoint(Point a, Point b)
+        {
+            return Distance2D(a,b) <= RecessedBevelTolerance;
+        }
+
+        // Resolve each corner independently: outer edge -> full-thickness bevel
+        // -> shelf -> connected end boundary toward the web centre. The web end
+        // can contain steps/chamfers and need not share the shelf's X station.
+        // Every segment is evidenced by real edges (including split edges).
+        private static List<RecessedFlangeBevel> ResolveRecessedFlangeBevels(
+            List<RecessedBevelEdge> edges, double thickness)
+        {
+            var result = new List<RecessedFlangeBevel>();
+            if (edges == null || edges.Count < 6 || !IsFiniteRecessed(thickness)
+                || thickness <= RecessedBevelTolerance) return result;
+            double minX=double.MaxValue, maxX=double.MinValue;
+            double minY=double.MaxValue, maxY=double.MinValue;
+            foreach (var edge in edges)
+            {
+                if(edge==null || edge.A==null || edge.B==null) return result;
+                foreach (Point p in new[] {edge.A,edge.B})
+                {
+                    if (!IsValidDimOffsetAnchorPoint(p)) return result;
+                    minX=Math.Min(minX,p.X); maxX=Math.Max(maxX,p.X);
+                    minY=Math.Min(minY,p.Y); maxY=Math.Max(maxY,p.Y);
+                }
+            }
+            double tol = RecessedBevelTolerance;
+            if (maxY-minY <= 2*thickness+tol) return result;
+            foreach (bool right in new[] {false,true})
+            {
+                double endX = right ? maxX : minX;
+                double sign = right ? 1 : -1;
+                foreach (bool top in new[] {true,false})
+                {
+                    double outerY=top ? maxY : minY;
+                    double innerY=outerY+(top ? -thickness : thickness);
+                    var candidates = new List<RecessedFlangeBevel>();
+                    var outerPoints = new List<Point>();
+                    var innerPoints = new List<Point>();
+                    foreach (var edge in edges)
+                        foreach (var p in new[] {edge.A,edge.B})
+                        {
+                            if (Math.Abs(p.Y-outerY)<=tol && !outerPoints.Exists(q=>SameRecessedPoint(p,q))) outerPoints.Add(p);
+                            if (Math.Abs(p.Y-innerY)<=tol && !innerPoints.Exists(q=>SameRecessedPoint(p,q))) innerPoints.Add(p);
+                        }
+                    foreach (var outer in outerPoints)
+                    foreach (var shoulder in innerPoints)
+                    {
+                        if (sign*(shoulder.X-outer.X)<=tol
+                            || sign*(endX-shoulder.X)<=tol
+                            || Math.Abs(endX-outer.X)>=(maxX-minX)*0.5
+                            || !HasCoveredRecessedSegment(edges,outer,shoulder)) continue;
+                        bool outerEdge = edges.Exists(e =>
+                            SameRecessedPoint(e.A,outer) && Math.Abs(e.B.Y-outerY)<=tol && sign*(outer.X-e.B.X)>tol
+                            || SameRecessedPoint(e.B,outer) && Math.Abs(e.A.Y-outerY)<=tol && sign*(outer.X-e.A.X)>tol);
+                        if (!outerEdge) continue;
+                        var ends = new List<Point>();
+                        foreach (var end in innerPoints)
+                            if (sign*(end.X-shoulder.X)>tol
+                                && HasCoveredRecessedSegment(edges,shoulder,end)
+                                && HasRecessedWebBoundary(edges,end,shoulder.X,sign,top,(minY+maxY)/2)
+                                && !ends.Exists(p=>SameRecessedPoint(p,end))) ends.Add(end);
+                        // Competing shelf endpoints are not interchangeable feet.
+                        if (ends.Count!=1) continue;
+                        Point shelfEnd=ends[0];
+                        Point closureEnd=ResolveRecessedClosureEnd(edges,shelfEnd,shoulder.X,
+                            sign,top,(minY+maxY)/2,endX);
+                        if(closureEnd==null) continue;
+                        if (!candidates.Exists(c => SameRecessedPoint(c.Outer,outer)
+                            && SameRecessedPoint(c.Shoulder,shoulder)))
+                            candidates.Add(new RecessedFlangeBevel {Outer=Clone2D(outer),
+                                Shoulder=Clone2D(shoulder), End=Clone2D(shelfEnd),
+                                Corner=new Point(endX,outerY,0), ClosureEnd=closureEnd,
+                                Top=top, Right=right, TopFlange=top});
+                    }
+                    if (candidates.Count==1) result.Add(candidates[0]);
+                }
+            }
+            return result;
+        }
+
+        // Union collinear intervals; never bridge a missing edge or a corner.
+        private static bool HasCoveredRecessedSegment(List<RecessedBevelEdge> edges,Point a,Point b)
+        {
+            double dx=b.X-a.X,dy=b.Y-a.Y,length=Distance2D(a,b),tol=RecessedBevelTolerance;
+            if (length<=tol) return false;
+            dx/=length; dy/=length;
+            var intervals=new List<double[]>();
+            foreach(var edge in edges)
+            {
+                if (Math.Abs((edge.A.X-a.X)*dy-(edge.A.Y-a.Y)*dx)>tol
+                    || Math.Abs((edge.B.X-a.X)*dy-(edge.B.Y-a.Y)*dx)>tol) continue;
+                double u=(edge.A.X-a.X)*dx+(edge.A.Y-a.Y)*dy;
+                double v=(edge.B.X-a.X)*dx+(edge.B.Y-a.Y)*dy;
+                if (Math.Abs(u-v)>tol) intervals.Add(new[]{Math.Min(u,v),Math.Max(u,v)});
+            }
+            intervals.Sort((u,v)=>u[0].CompareTo(v[0]));
+            double covered=0;
+            foreach(var interval in intervals)
+            {
+                if(interval[1]<-tol) continue;
+                if(interval[0]>covered+tol) break;
+                covered=Math.Max(covered,interval[1]);
+                if(covered>=length-tol) return true;
+            }
+            return false;
+        }
+
+        private static bool HasRecessedWebBoundary(List<RecessedBevelEdge> edges,Point start,
+            double shoulderX,double outward,bool top,double centreY)
+        {
+            double inward=top?-1:1,tol=RecessedBevelTolerance;
+            var pending=new Queue<Point>(); var visited=new List<Point>();
+            pending.Enqueue(start); visited.Add(start);
+            while(pending.Count>0)
+            {
+                Point p=pending.Dequeue();
+                foreach(var edge in edges)
+                {
+                    Point q=SameRecessedPoint(p,edge.A)?edge.B:SameRecessedPoint(p,edge.B)?edge.A:null;
+                    if(q==null || outward*(q.X-shoulderX)<=tol
+                        || inward*(q.Y-p.Y)<-tol || inward*(q.Y-start.Y)<-tol) continue;
+                    // The shelf must turn inward here, not continue to a guessed
+                    // bounding-box station farther along the same horizontal.
+                    if(SameRecessedPoint(p,start) && inward*(q.Y-p.Y)<=tol) continue;
+                    if(inward*(q.Y-centreY)>=-tol) return true;
+                    if(!visited.Exists(v=>SameRecessedPoint(v,q))) {visited.Add(q);pending.Enqueue(q);}
+                }
+            }
+            return false;
+        }
+
+        private static bool IsFiniteRecessed(double v) { return !double.IsNaN(v) && !double.IsInfinity(v); }
+
+        // Close the WHOLE cut to the actual member end, not only the first shelf.
+        // Follow the connected boundary and choose its first contact with the
+        // extreme end station. A disconnected bounding-box point is not valid.
+        private static Point ResolveRecessedClosureEnd(List<RecessedBevelEdge> edges,Point start,
+            double shoulderX,double outward,bool top,double centreY,double endX)
+        {
+            double inward=top?-1:1,tol=RecessedBevelTolerance;
+            var pending=new Queue<Point>();var visited=new List<Point>();Point result=null;
+            pending.Enqueue(start);visited.Add(start);
+            while(pending.Count>0)
+            {
+                Point p=pending.Dequeue();
+                if(Math.Abs(p.X-endX)<=tol)
+                {
+                    if(result==null || inward*(p.Y-result.Y)<0)result=Clone2D(p);
+                    continue;
+                }
+                foreach(var edge in edges)
+                {
+                    Point q=SameRecessedPoint(p,edge.A)?edge.B:SameRecessedPoint(p,edge.B)?edge.A:null;
+                    if(q==null || outward*(q.X-shoulderX)<=tol || inward*(q.Y-p.Y)<-tol
+                        || inward*(q.Y-centreY)>tol || visited.Exists(v=>SameRecessedPoint(v,q)))continue;
+                    pending.Enqueue(q);visited.Add(q);
+                }
+            }
+            return result;
+        }
+
+        private static bool IsRecessedCorner(List<RecessedFlangeBevel> bevels,bool right,bool top)
+        {
+            return bevels!=null && bevels.Exists(b=>b.Right==right && b.Top==top);
+        }
+
+        private static TopBottomFrontNotchChain MergeRecessedFaceChain(
+            TopBottomFrontNotchChain legacy, TopBottomFrontNotchChain recessed)
+        {
+            if(recessed==null) return legacy;
+            if(legacy==null) return recessed;
+            if(recessed.HasLeft)
+            {legacy.HasLeft=true;legacy.LeftInner=recessed.LeftInner;legacy.LeftOuter=recessed.LeftOuter;}
+            if(recessed.HasRight)
+            {legacy.HasRight=true;legacy.RightInner=recessed.RightInner;legacy.RightOuter=recessed.RightOuter;}
+            return legacy;
+        }
+
+        private static ChamferInfluence RecessedFlangeInfluence(List<RecessedFlangeBevel> bevels)
+        {
+            var influence = new ChamferInfluence {Any=bevels.Count>0,RecessedBevels=bevels};
+            foreach (var b in bevels)
+            {
+                if (b.Right) influence.Right=true; else influence.Left=true;
+                if (b.TopFlange) influence.Top=true; else influence.Bottom=true;
+            }
+            return influence;
+        }
+
+        // The top/bottom consumer uses the shoulder station, NOT the further
+        // recessed outer tip of the diagonal. Feet are selected from actual solid
+        // vertices in the consumer view. Outer means the FULL member extreme,
+        // never the shelf end: the legacy consumer also uses it for total DIM.
+        // Internal web steps are not face-chain feet: shoulder -> complete end.
+        private static TopBottomFrontNotchChain BuildRecessedFlangeFaceChain(
+            List<RecessedFlangeBevel> bevels, View view, Solid solid, bool top)
+        {
+            var points = GetProjectedSolidPointsForFrontNotchDims(solid);
+            Matrix toView = MatrixFactory.ToCoordinateSystem(view.DisplayCoordinateSystem);
+            return ResolveRecessedFlangeFaceChain(bevels,points,toView,top);
+        }
+
+        private static TopBottomFrontNotchChain ResolveRecessedFlangeFaceChain(
+            List<RecessedFlangeBevel> bevels,List<Point> points,Matrix toView,bool top)
+        {
+            var chain = new TopBottomFrontNotchChain();
+            foreach (var bevel in bevels)
+            {
+                if (bevel.TopFlange!=top) continue;
+                Point shoulder = toView.Transform(bevel.GlobalShoulder);
+                Point end = toView.Transform(bevel.GlobalEnd);
+                if (Math.Abs(end.X-shoulder.X)<=RecessedBevelTolerance)
+                    throw new RecessedFlangeException("Recessed flange: face view has no longitudinal span.");
+                bool right=end.X>shoulder.X;
+                Point inner=null, outer=null,shelf=null;
+                foreach (Point p in points)
+                {
+                    if (Math.Abs(p.X-shoulder.X)<=RecessedBevelTolerance && (inner==null || p.Y>inner.Y)) inner=Clone2D(p);
+                    if (Math.Abs(p.X-end.X)<=RecessedBevelTolerance && (shelf==null || p.Y>shelf.Y)) shelf=Clone2D(p);
+                    if(outer==null || (right ? p.X>outer.X+RecessedBevelTolerance : p.X<outer.X-RecessedBevelTolerance)
+                        || Math.Abs(p.X-outer.X)<=RecessedBevelTolerance && p.Y>outer.Y) outer=Clone2D(p);
+                }
+                if (inner==null || outer==null || shelf==null)
+                    throw new RecessedFlangeException("Recessed flange: missing exact face-chain vertex.");
+                if((right?1:-1)*(outer.X-shelf.X)<-RecessedBevelTolerance)
+                    throw new RecessedFlangeException("Recessed flange: full member end lies inside the shelf.");
+                if (right)
+                { chain.HasRight=true; chain.RightInner=inner; chain.RightOuter=outer; }
+                else { chain.HasLeft=true; chain.LeftInner=inner; chain.LeftOuter=outer; }
+            }
+            return chain.HasLeft || chain.HasRight ? chain : null;
+        }
+
+        private static int CreateRecessedFlangeBevelDetails(StraightDimensionSetHandler handler,
+            View view, List<RecessedFlangeBevel> bevels, DimOffsetAnchor4 anchors)
+        {
+            var created = new List<DrawingObject>();
+            int dimensions=0;
+            try
+            {
+                var staleOwned = FindStaleRecessedBevelObjects(view,bevels);
+                foreach (var b in bevels)
+                {
+                    var horizontal = new PointList {Clone2D(b.Shoulder),Clone2D(b.End)};
+                    var vertical = b.Top
+                        ? new PointList {Clone2D(b.End),Clone2D(b.Outer)}
+                        : new PointList {Clone2D(b.Outer),Clone2D(b.End)};
+                    var directions = new[] {new Vector(0,b.Top?1:-1,0),new Vector(b.Right?1:-1,0,0)};
+                    var lists = new[] {horizontal,vertical};
+                    for (int i=0;i<2;i++)
+                    {
+                        double distance=ResolveDimDistanceByAnchor4(lists[i],directions[i],anchors,GetSteelDimOffsetByTier(0));
+                        var dim=handler.CreateDimensionSet(view,lists[i],directions[i],distance);
+                        if (dim==null) throw new InvalidOperationException("Recessed flange: dimension creation failed.");
+                        created.Add(dim); dimensions++;
+                    }
+                    Point ray = new Point(b.Shoulder.X,b.Shoulder.Y+(b.Top?1:-1)*Math.Abs(b.Outer.Y-b.Shoulder.Y)*3,0);
+                    if (!HasRecessedBevelAngle(view,b.Shoulder,b.Outer,ray))
+                    {
+                        var attr=new AngleDimensionAttributes {Type=AngleTypes.AngleAtVertex};
+                        var angle=new AngleDimension(view,Clone2D(b.Shoulder),
+                            b.Top?Clone2D(b.Outer):ray,b.Top?ray:Clone2D(b.Outer),8.0,attr);
+                        if (!angle.Insert()) throw new InvalidOperationException("Recessed flange: angle creation failed.");
+                        created.Add(angle); dimensions++;
+                        TagRecessedBevelObject(angle);
+                    }
+                    foreach (Point start in new[] {b.Outer,b.ClosureEnd})
+                    {
+                        if (HasEquivalentRecessedBevelLine(view,start,b.Corner)) continue;
+                        DrawingLine line;
+                        bool inserted=TTSK_AutoDim_Plates.PHU_LineDistance.InsertLineWithLineDistanceAttributes(
+                            view,Clone2D(start),Clone2D(b.Corner),out line);
+                        if (line!=null) created.Add(line);
+                        if (!inserted || line==null) throw new InvalidOperationException("Recessed flange: extension line creation failed.");
+                        TagRecessedBevelObject(line);
+                        if (!TTSK_AutoDim_Plates.PHU_LineDistance.VerifyLineDistanceAttributes(line))
+                            throw new InvalidOperationException("Recessed flange: line style read-back failed.");
+                    }
+                }
+                // Only this rule's stale auxiliary objects may be removed.
+                // Unowned/manual lines and angles are never cleanup targets.
+                foreach(var obj in staleOwned)
+                    if(!obj.Delete()) throw new InvalidOperationException("Recessed flange: owned-object cleanup failed.");
+                return dimensions;
+            }
+            catch (Exception ex)
+            {
+                foreach (var obj in created) { try { obj.Delete(); } catch { } }
+                throw new RecessedFlangeException("Recessed flange details rolled back: " + ex.Message,ex);
+            }
+        }
+
+        private static void TagRecessedBevelObject(DrawingObject obj)
+        {
+            if (!((DatabaseObject)obj).SetUserProperty(RecessedBevelOwnerField,RecessedBevelOwner))
+                throw new InvalidOperationException("Recessed flange: cannot record auxiliary-object ownership.");
+        }
+
+        private static List<DrawingObject> FindStaleRecessedBevelObjects(View view,List<RecessedFlangeBevel> bevels)
+        {
+            var result=new List<DrawingObject>();
+            // AutoFetch may remain enabled after the full DIM command. Fetching
+            // unrelated marks can fail their Tekla serialization and silently
+            // abort all Front dimensions on a second run in the same process.
+            var objects=view.GetAllObjects(new[]{typeof(DrawingLine),typeof(AngleDimension)});
+            while(objects.MoveNext())
+            {
+                var obj=objects.Current as DrawingObject;
+                var line=obj as DrawingLine;
+                var angle=obj as AngleDimension;
+                if(line==null && angle==null) continue;
+                string owner="";
+                if(!((DatabaseObject)obj).GetUserProperty(RecessedBevelOwnerField,ref owner)
+                    || owner!=RecessedBevelOwner) continue;
+                bool match=false;
+                foreach(var b in bevels)
+                {
+                    if(line!=null)
+                    {
+                        foreach(Point start in new[] {b.Outer,b.ClosureEnd})
+                            match |= SameRecessedPoint(line.StartPoint,start) && SameRecessedPoint(line.EndPoint,b.Corner)
+                                || SameRecessedPoint(line.EndPoint,start) && SameRecessedPoint(line.StartPoint,b.Corner);
+                    }
+                    else
+                    {
+                        Point ray=new Point(b.Shoulder.X,b.Outer.Y,0);
+                        match |= SameRecessedPoint(angle.Origin,b.Shoulder)
+                            && (SameRecessedRay(b.Shoulder,angle.Point1,b.Outer) && SameRecessedRay(b.Shoulder,angle.Point2,ray)
+                            || SameRecessedRay(b.Shoulder,angle.Point2,b.Outer) && SameRecessedRay(b.Shoulder,angle.Point1,ray));
+                    }
+                }
+                if(!match) result.Add(obj);
+            }
+            return result;
+        }
+
+        private static bool HasEquivalentRecessedBevelLine(View view,Point a,Point b)
+        {
+            var objects=view.GetAllObjects(typeof(DrawingLine));
+            while(objects.MoveNext())
+            {
+                var line=objects.Current as DrawingLine;
+                if(line!=null && (SameRecessedPoint(line.StartPoint,a) && SameRecessedPoint(line.EndPoint,b)
+                    || SameRecessedPoint(line.StartPoint,b) && SameRecessedPoint(line.EndPoint,a))) return true;
+            }
+            return false;
+        }
+
+        private static bool SameRecessedRay(Point origin,Point a,Point b)
+        {
+            double ax=a.X-origin.X,ay=a.Y-origin.Y,bx=b.X-origin.X,by=b.Y-origin.Y;
+            double lengths=Math.Sqrt((ax*ax+ay*ay)*(bx*bx+by*by));
+            return lengths>0.0001 && ax*bx+ay*by>0 && Math.Abs(ax*by-ay*bx)/lengths<0.0001;
+        }
+
+        private static bool HasRecessedBevelAngle(View view,Point origin,Point first,Point second)
+        {
+            var objects=view.GetAllObjects(typeof(AngleDimension));
+            while(objects.MoveNext())
+            {
+                var a=objects.Current as AngleDimension;
+                if(a!=null && SameRecessedPoint(a.Origin,origin)
+                    && (SameRecessedRay(origin,a.Point1,first) && SameRecessedRay(origin,a.Point2,second)
+                        || SameRecessedRay(origin,a.Point2,first) && SameRecessedRay(origin,a.Point1,second))) return true;
+            }
+            return false;
+        }
+
+        public static string AuditRecessedFlangeBevels()
+        {
+            var model=new Model();
+            var drawing=new DrawingHandler().GetActiveDrawing();
+            if (!(drawing is SinglePartDrawing)) return "Recessed flange: SinglePartDrawing only; legacy route.";
+            ModelPart part=PHU_MainPartResolver.Resolve(model,drawing);
+            if(part==null) return "Recessed flange: main part unresolved.";
+            var text=new StringBuilder("RECESSED FLANGE BEVEL - READ ONLY\n");
+            text.AppendLine("Drawing="+drawing.Mark+" Profile="+part.Profile.ProfileString);
+            var approvedBevels=new List<RecessedFlangeBevel>();
+            var faceViews=new List<View>();
+            var views=drawing.GetSheet().GetAllViews();
+            while(views.MoveNext())
+            {
+                View view=views.Current as View;
+                if(view==null) continue;
+                string reason;
+                var bevels=ReadRecessedFlangeBevelsWithReason(model,part,view,out reason);
+                if (bevels.Count > 0) approvedBevels.AddRange(bevels);
+                else faceViews.Add(view);
+                text.AppendLine("View="+view.ViewType+"/"+view.Name+" features="+bevels.Count+" reason="+reason);
+                foreach(var b in bevels)
+                    text.AppendLine(string.Format(CultureInfo.InvariantCulture,
+                        "{0}/{1} Outer=({2:F3},{3:F3}) Shoulder=({4:F3},{5:F3}) End=({6:F3},{7:F3}) Corner=({8:F3},{9:F3}) width={10:F3} depth={11:F3} angle={12:F3}",
+                        b.Right?"right":"left",b.Top?"top":"bottom",b.Outer.X,b.Outer.Y,b.Shoulder.X,b.Shoulder.Y,
+                        b.End.X,b.End.Y,b.Corner.X,b.Corner.Y,Math.Abs(b.End.X-b.Shoulder.X),Math.Abs(b.Outer.Y-b.End.Y),
+                        Math.Atan2(Math.Abs(b.Outer.X-b.Shoulder.X),Math.Abs(b.Outer.Y-b.Shoulder.Y))*180/Math.PI));
+            }
+            if (approvedBevels.Count>0)
+            {
+                foreach (var view in faceViews)
+                {
+                    Matrix transform=MatrixFactory.ToCoordinateSystem(view.DisplayCoordinateSystem);
+                    Point a=transform.Transform(approvedBevels[0].GlobalEnd);
+                    Point b=transform.Transform(approvedBevels[0].GlobalShoulder);
+                    if (Math.Abs(a.X-b.X)<RecessedBevelTolerance) continue;
+                    var vertices=ReadRecessedViewVertices(model,part,view);
+                    foreach(bool top in new[]{true,false})
+                    {
+                        var chain=ResolveRecessedFlangeFaceChain(approvedBevels,vertices,transform,top);
+                        if(chain==null) continue;
+                        foreach(bool right in new[]{false,true})
+                        {
+                            if(right?!chain.HasRight:!chain.HasLeft) continue;
+                            Point inner=right?chain.RightInner:chain.LeftInner;
+                            Point outer=right?chain.RightOuter:chain.LeftOuter;
+                            text.AppendLine("FACE "+view.ViewType+"/"+view.Name+" flange="+(top?"top":"bottom")
+                                +" side="+(right?"right":"left")+" shoulder="+inner+" end="+outer
+                                +" extension="+Math.Abs(outer.X-inner.X).ToString("F3",CultureInfo.InvariantCulture));
+                        }
+                    }
+                }
+            }
+            return text.ToString();
+        }
+
+        private static List<Point> ReadRecessedViewVertices(Model model,ModelPart part,View view)
+        {
+            Matrix global=model.GetWorkPlaneHandler().GetCurrentTransformationPlane().TransformationMatrixToGlobal;
+            Matrix local=MatrixFactory.ToCoordinateSystem(view.DisplayCoordinateSystem);
+            var points=new List<Point>();
+            var edges=part.GetSolid().GetEdgeEnumerator();
+            while(edges.MoveNext())
+            {
+                var edge=edges.Current as Tekla.Structures.Solid.Edge;
+                if(edge==null) continue;
+                foreach(Point p in new[] {edge.StartPoint,edge.EndPoint})
+                    points.Add(Clone2D(local.Transform(global.Transform(p))));
+            }
+            return points;
+        }
+
+        // All geometry consumers are checked before the existing full-DIM command
+        // deletes its background dimensions. No scale, plane or drawing mutation.
+        private static void PreflightRecessedFlangeDrawing(Model model,ModelPart part,
+            View front,View top,List<View> bottoms)
+        {
+            var bevels=ReadRecessedFlangeBevels(model,part,front);
+            if(bevels.Count==0) return;
+            if(bevels.Exists(b=>b.TopFlange))
+            {
+                if(top==null) throw new RecessedFlangeException("Recessed flange: missing top consumer view.");
+                ResolveRecessedFlangeFaceChain(bevels,ReadRecessedViewVertices(model,part,top),
+                    MatrixFactory.ToCoordinateSystem(top.DisplayCoordinateSystem),true);
+            }
+            foreach(var bottom in bottoms ?? new List<View>())
+            {
+                if(bottom==null) throw new RecessedFlangeException("Recessed flange: missing bottom consumer view.");
+                ResolveRecessedFlangeFaceChain(bevels,ReadRecessedViewVertices(model,part,bottom),
+                    MatrixFactory.ToCoordinateSystem(bottom.DisplayCoordinateSystem),false);
+            }
+        }
+    }
+}
+#endregion

@@ -1,3 +1,8 @@
+﻿// Điều phối kiểm tra DIM theo danh sách bản vẽ; bộ phân loại vẫn là PHU_DimensionCheck.
+// LUỒNG: Session giữ target/ngữ cảnh → kiểm từng Entry → Accept/Fail → PHU_DimensionReportForm.
+// ĐIỂM SỬA: chuyển bản vẽ và kiểm model ở Session; kết luận chân DIM phải sửa ở PHU_DimensionCheck, không đổi Status để che lỗi.
+// TRA CỨU: PROJECT_MAP.md ở gốc repo; chỉ mục kiểu/hàm và điểm chỉnh thông số.
+
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -7,7 +12,7 @@ using M = Tekla.Structures.Model;
 
 namespace Tekla.Technology.Akit.UserScript
 {
-    // Batch orchestration only. The existing read-only classifier remains authoritative.
+    // Chỉ điều phối batch; kết luận chân DIM lấy từ bộ phân loại chỉ đọc hiện tại.
     public static class PHU_DimensionBatch
     {
         public enum State { Pending, Checking, NeedsAttention, NeedsReview, Passed, Failed, Unsupported }

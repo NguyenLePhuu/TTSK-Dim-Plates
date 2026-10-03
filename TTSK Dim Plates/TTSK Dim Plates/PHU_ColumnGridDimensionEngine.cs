@@ -1,18 +1,768 @@
+﻿// DIM grid cột GENERAL/INZAI; nhận diện dự án, nối tầng DIM và planner hình học.
+// LUỒNG: Configure → Begin → PreflightPreparedGeometry → Shape → CaptureShapeDimensionsBeforeAddOns → ExecuteAfterShape.
+// ĐIỂM SỬA: phân dự án ở PHU_ColumnProjectRouter.TryResolve; GENERAL ở PHU_GeneralColumnGridPlanner; INZAI ở BuildInzaiPlans.
+// THAM SỐ: GeometryTolerance/MatchTolerance là mm view; DirectionCosineTolerance là ngưỡng hướng không đơn vị.
+// ĐIỂM GỌI Slot 07 nằm trong MainForm.cs và PHU_Slot07_ColumnConnections.cs; file này là engine được gọi.
+// TRA CỨU: PROJECT_MAP.md ở gốc repo; chỉ mục kiểu/hàm và điểm chỉnh thông số.
+// Mục lục:
+//   PHU_ColumnProjectRouter.cs
+//   PHU_ColumnDimensionTierContext.cs
+//   PHU_GeneralColumnGridPlanner.cs
+//   PHU_ColumnGridDimensionEngine.cs
+
+#region PHU_ColumnProjectRouter - Nhận diện dự án và phân tuyến DIM cột
 #pragma warning disable 1633
-
-using System;
-using System.Collections;
-using System.Collections.Generic;
-using System.Globalization;
-using System.Reflection;
-using System.Text;
-
-using TSD = Tekla.Structures.Drawing;
-using TSG = Tekla.Structures.Geometry3d;
-using TSM = Tekla.Structures.Model;
 
 namespace Tekla.Technology.Akit.UserScript
 {
+    using System;
+    using System.Collections.Generic;
+    using System.Globalization;
+    using System.Reflection;
+    using System.Text;
+    using TSM = Tekla.Structures.Model;
+
+    /// <summary>
+    /// Phân tuyến DIM cột theo dự án. Engine nhận project key đã xác định;
+    /// thêm dự án tại Matchers và nhánh engine tương ứng, không sửa chân DIM Inzai để nhận tên mới.
+    /// </summary>
+    public static class PHU_ColumnProjectRouter
+    {
+        public const string GeneralSystemKey = "GENERAL_SYSTEM";
+        public const string InzaiDataCenterKey = "INZAI_DATA_CENTER";
+
+        [ThreadStatic]
+        private static int _selectedInjaiDepth;
+
+        /// <summary>
+        /// Slot 07 ép tuyến Inzai trong scope hiện tại; vẫn giữ kiểm tra hình học.
+        /// Tạo và Dispose trên cùng luồng thực thi Tekla.
+        /// </summary>
+        public static IDisposable BeginInjaiSelection()
+        {
+            _selectedInjaiDepth++;
+            return new SelectedInjaiScope();
+        }
+
+        private sealed class SelectedInjaiScope : IDisposable
+        {
+            private readonly int _threadId = System.Threading.Thread.CurrentThread.ManagedThreadId;
+            private bool _disposed;
+
+            public void Dispose()
+            {
+                if (_disposed) return;
+                if (_threadId != System.Threading.Thread.CurrentThread.ManagedThreadId)
+                    throw new InvalidOperationException("Inzai selection must end on its execution thread.");
+                _disposed = true;
+                _selectedInjaiDepth--;
+            }
+        }
+
+        private sealed class ProjectIdentity
+        {
+            public string ModelPath;
+            public string ModelName;
+            public string Normalized;
+        }
+
+        private interface IProjectMatcher
+        {
+            string Key { get; }
+            bool Matches(ProjectIdentity identity);
+        }
+
+        private sealed class InzaiDataCenterMatcher : IProjectMatcher
+        {
+            public string Key
+            {
+                get { return InzaiDataCenterKey; }
+            }
+
+            public bool Matches(ProjectIdentity identity)
+            {
+                if (identity == null || String.IsNullOrEmpty(identity.Normalized))
+                    return false;
+
+                // Nhận tự động khi tên/đường dẫn chuẩn hóa chứa cả ATTOKPJ và DATACENTER.
+                // Scope chọn Inzai từ Slot 07 được ưu tiên trước phép dò tên này.
+                return identity.Normalized.Contains("ATTOKPJ")
+                    && identity.Normalized.Contains("DATACENTER");
+            }
+        }
+
+        private static readonly IProjectMatcher[] Matchers = new IProjectMatcher[]
+        {
+            new InzaiDataCenterMatcher()
+        };
+
+        public static bool TryResolve(TSM.Model model, out string projectKey, out string message)
+        {
+            projectKey = String.Empty;
+            message = String.Empty;
+            try
+            {
+                if (model == null || !model.GetConnectionStatus())
+                {
+                    message = "Column project routing failed: Model is unavailable.";
+                    return false;
+                }
+
+                if (_selectedInjaiDepth > 0)
+                {
+                    projectKey = InzaiDataCenterKey;
+                    message = "Inzai strategy explicitly selected by Slot 07; project identity is not required.";
+                    return true;
+                }
+
+                ProjectIdentity identity = ReadIdentity(model);
+                List<IProjectMatcher> matches = new List<IProjectMatcher>();
+                for (int i = 0; i < Matchers.Length; i++)
+                {
+                    if (Matchers[i].Matches(identity))
+                        matches.Add(Matchers[i]);
+                }
+
+                if (matches.Count == 0)
+                {
+                    projectKey = GeneralSystemKey;
+                    message = "Column project resolved to the general system strategy.";
+                    return true;
+                }
+                if (matches.Count != 1)
+                {
+                    message = "More than one column project matched the active model.";
+                    return false;
+                }
+
+                projectKey = matches[0].Key;
+                message = "Column project resolved: " + projectKey + ".";
+                return true;
+            }
+            catch (Exception ex)
+            {
+                projectKey = String.Empty;
+                message = "Column project routing failed. " + ex.Message;
+                return false;
+            }
+        }
+
+        private static ProjectIdentity ReadIdentity(TSM.Model model)
+        {
+            TSM.ModelInfo info = model.GetInfo();
+            ProjectIdentity identity = new ProjectIdentity();
+            identity.ModelPath = info == null ? String.Empty : (info.ModelPath ?? String.Empty);
+            identity.ModelName =
+                Convert.ToString(GetMember(info, "ModelName"), CultureInfo.InvariantCulture)
+                ?? String.Empty;
+            identity.Normalized = Normalize(identity.ModelPath + " " + identity.ModelName);
+            return identity;
+        }
+
+        private static object GetMember(object value, string name)
+        {
+            if (value == null || String.IsNullOrEmpty(name))
+                return null;
+            try
+            {
+                Type type = value.GetType();
+                PropertyInfo property = type.GetProperty(
+                    name,
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                );
+                if (property != null)
+                    return property.GetValue(value, null);
+                FieldInfo field = type.GetField(
+                    name,
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                );
+                return field == null ? null : field.GetValue(value);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static string Normalize(string value)
+        {
+            StringBuilder result = new StringBuilder();
+            string upper = (value ?? String.Empty).ToUpperInvariant();
+            for (int i = 0; i < upper.Length; i++)
+            {
+                char c = upper[i];
+                if (Char.IsLetterOrDigit(c))
+                    result.Append(c);
+            }
+            return result.ToString();
+        }
+    }
+}
+#pragma warning restore
+#endregion
+
+#region PHU_ColumnDimensionTierContext - Quản lý tầng và khoảng cách DIM cột
+#pragma warning disable 1633
+
+namespace Tekla.Technology.Akit.UserScript
+{
+    using System;
+    using System.Collections.Generic;
+    using System.Globalization;
+
+    public enum PHU_ColumnShapeFamily
+    {
+        Unknown = 0,
+        ShapeIH = 1,
+        ShapeC = 2,
+        ShapeL = 3
+    }
+
+    /// <summary>
+    /// Trao đổi tầng DIM trong một lần chạy: Shape cung cấp khoảng tầng,
+    /// Neighbor ghi tầng ngoài cùng để Grid đặt tiếp phía ngoài.
+    /// </summary>
+    public static class PHU_ColumnDimensionTierContext
+    {
+        private static bool _enabled;
+        private static PHU_ColumnShapeFamily _family;
+        private static readonly Dictionary<string, double> NeighborOutermostVerticalLines =
+            new Dictionary<string, double>(StringComparer.Ordinal);
+
+        // TRẠNG THÁI LẦN CHẠY: family chọn nguồn khoảng tầng từ Shape đã chạy; không sửa số tầng ở đây.
+        public static void Configure(bool enabled, PHU_ColumnShapeFamily family)
+        {
+            Reset();
+            _enabled = enabled;
+            _family = family;
+        }
+
+        public static void Reset()
+        {
+            _enabled = false;
+            _family = PHU_ColumnShapeFamily.Unknown;
+            NeighborOutermostVerticalLines.Clear();
+        }
+
+        public static void ClearNeighborTiers()
+        {
+            NeighborOutermostVerticalLines.Clear();
+        }
+
+        public static bool TryGetShapeSpacing(
+            out double tierBase,
+            out double tierStep,
+            out string message
+        )
+        {
+            tierBase = 0.0;
+            tierStep = 0.0;
+            message = String.Empty;
+            if (!_enabled)
+            {
+                message = "Column tier context is disabled.";
+                return false;
+            }
+
+            bool resolved;
+            switch (_family)
+            {
+                case PHU_ColumnShapeFamily.ShapeIH:
+                    resolved = ShapeScript.TryGetCurrentColumnDimensionTierSpacing(
+                        out tierBase,
+                        out tierStep
+                    );
+                    break;
+                case PHU_ColumnShapeFamily.ShapeC:
+                    resolved = ShapeCScript.TryGetCurrentColumnDimensionTierSpacing(
+                        out tierBase,
+                        out tierStep
+                    );
+                    break;
+                case PHU_ColumnShapeFamily.ShapeL:
+                    resolved = ShapeLScript.TryGetCurrentColumnDimensionTierSpacing(
+                        out tierBase,
+                        out tierStep
+                    );
+                    break;
+                default:
+                    resolved = false;
+                    break;
+            }
+
+            if (!resolved || !IsFinitePositive(tierBase) || !IsFinitePositive(tierStep))
+            {
+                tierBase = 0.0;
+                tierStep = 0.0;
+                message = "The active Shape did not publish a valid column tier contract.";
+                return false;
+            }
+
+            message =
+                "Column tier contract="
+                + _family.ToString()
+                + " base="
+                + tierBase.ToString("0.###", CultureInfo.InvariantCulture)
+                + " step="
+                + tierStep.ToString("0.###", CultureInfo.InvariantCulture)
+                + ".";
+            return true;
+        }
+
+        public static void RegisterNeighborOutermostVerticalLine(
+            int viewIdentifier,
+            int side,
+            double lineCoordinate
+        )
+        {
+            if (
+                !_enabled
+                || viewIdentifier <= 0
+                || (side != -1 && side != 1)
+                || Double.IsNaN(lineCoordinate)
+                || Double.IsInfinity(lineCoordinate)
+            )
+                return;
+
+            string key = BuildKey(viewIdentifier, side);
+            double current;
+            if (
+                !NeighborOutermostVerticalLines.TryGetValue(key, out current)
+                || (lineCoordinate - current) * side > 0.20
+            )
+                NeighborOutermostVerticalLines[key] = lineCoordinate;
+        }
+
+        public static bool TryGetNeighborOutermostVerticalLine(
+            int viewIdentifier,
+            int side,
+            out double lineCoordinate
+        )
+        {
+            lineCoordinate = 0.0;
+            if (!_enabled || viewIdentifier <= 0 || (side != -1 && side != 1))
+                return false;
+            return NeighborOutermostVerticalLines.TryGetValue(
+                BuildKey(viewIdentifier, side),
+                out lineCoordinate
+            );
+        }
+
+        /// <summary>
+        /// Resolves the two Grid vertical tiers without knowing any Neighbor
+        /// geometry.  With Neighbor, Grid continues one Shape step outside its
+        /// final tier.  Without Neighbor, Grid reuses the Shape total tier that
+        /// it replaces, so no blank tier is introduced.
+        /// </summary>
+        public static bool TryResolveGridVerticalLines(
+            int viewIdentifier,
+            int side,
+            double replaceableShapeTotalLine,
+            double tierStep,
+            out double columnLine,
+            out double floorLine
+        )
+        {
+            columnLine = 0.0;
+            floorLine = 0.0;
+            if (
+                !_enabled
+                || viewIdentifier <= 0
+                || (side != -1 && side != 1)
+                || !IsFinite(replaceableShapeTotalLine)
+                || !IsFinitePositive(tierStep)
+            )
+                return false;
+
+            double neighborLine;
+            columnLine = TryGetNeighborOutermostVerticalLine(viewIdentifier, side, out neighborLine)
+                ? neighborLine + (side * tierStep)
+                : replaceableShapeTotalLine;
+            floorLine = columnLine + (side * tierStep);
+            return IsFinite(columnLine) && IsFinite(floorLine);
+        }
+
+        private static string BuildKey(int viewIdentifier, int side)
+        {
+            return viewIdentifier.ToString(CultureInfo.InvariantCulture)
+                + ":"
+                + side.ToString(CultureInfo.InvariantCulture);
+        }
+
+        private static bool IsFinitePositive(double value)
+        {
+            return IsFinite(value) && value > 0.0;
+        }
+
+        private static bool IsFinite(double value)
+        {
+            return !Double.IsNaN(value) && !Double.IsInfinity(value);
+        }
+    }
+}
+#pragma warning restore
+#endregion
+
+#region PHU_GeneralColumnGridPlanner - Lập kế hoạch DIM cột theo grid
+#pragma warning disable 1633
+
+namespace Tekla.Technology.Akit.UserScript
+{
+    using System;
+    using System.Collections.Generic;
+
+    internal enum PHU_GeneralColumnVerticalTopology
+    {
+        BaseBetweenGrids = 0,
+        LowerGridCuts = 1,
+        UpperGridCuts = 2,
+        BothGridsCut = 3
+    }
+
+    internal enum PHU_GeneralColumnVerticalChainRole
+    {
+        ShapeRefEdges = 0,
+        ReferenceEnvelope = 1,
+        GridEnvelope = 2
+    }
+
+    internal enum PHU_GeneralColumnHorizontalRelation
+    {
+        GridLeftOfReference = 0,
+        GridRightOfReference = 1,
+        GridCoincidentWithReference = 2
+    }
+
+    internal sealed class PHU_GeneralColumnVerticalChain
+    {
+        public PHU_GeneralColumnVerticalChainRole Role;
+        public double[] Stations;
+    }
+
+    internal sealed class PHU_GeneralColumnVerticalPlan
+    {
+        public PHU_GeneralColumnVerticalTopology Topology;
+        public readonly List<PHU_GeneralColumnVerticalChain> LeftInnerToOuter =
+            new List<PHU_GeneralColumnVerticalChain>();
+        public readonly List<PHU_GeneralColumnVerticalChain> RightInnerToOuter =
+            new List<PHU_GeneralColumnVerticalChain>();
+    }
+
+    internal sealed class PHU_GeneralColumnHorizontalPlan
+    {
+        public PHU_GeneralColumnHorizontalRelation Relation;
+        public double[] Stations;
+    }
+
+    /// <summary>
+    /// Tekla-independent geometry planner for the company-standard Column Grid
+    /// DIM strategy. Inzai does not call this class and keeps its own topology.
+    /// All vertical station arrays are ordered bottom-to-top. Horizontal
+    /// non-coincident arrays deliberately retain semantic REF -> GRID order.
+    /// </summary>
+    internal static class PHU_GeneralColumnGridPlanner
+    {
+        internal static PHU_GeneralColumnVerticalPlan BuildVertical(
+            double lowerGrid,
+            double upperGrid,
+            double refBottom,
+            double refTop,
+            double edgeBottom,
+            double edgeTop,
+            double tolerance
+        )
+        {
+            ValidateTolerance(tolerance);
+            RequireFinite(lowerGrid, upperGrid, refBottom, refTop, edgeBottom, edgeTop);
+
+            if (upperGrid - lowerGrid <= tolerance)
+                throw new InvalidOperationException(
+                    "The lower and upper Grid levels are not distinct."
+                );
+            if (refTop - refBottom <= tolerance)
+                throw new InvalidOperationException("The MainPart REF span is not valid.");
+            if (edgeTop - edgeBottom <= tolerance)
+                throw new InvalidOperationException("The Shape edge span is not valid.");
+            if (edgeBottom < refBottom - tolerance || edgeTop > refTop + tolerance)
+            {
+                throw new InvalidOperationException(
+                    "The Shape edge span is not contained by the REF span."
+                );
+            }
+            if (lowerGrid > refTop + tolerance || upperGrid < refBottom - tolerance)
+            {
+                throw new InvalidOperationException(
+                    "The selected Grid pair does not overlap or bracket the REF span."
+                );
+            }
+
+            bool lowerCuts = lowerGrid > refBottom + tolerance;
+            bool upperCuts = upperGrid < refTop - tolerance;
+
+            PHU_GeneralColumnVerticalPlan result = new PHU_GeneralColumnVerticalPlan();
+            if (lowerCuts && upperCuts)
+                result.Topology = PHU_GeneralColumnVerticalTopology.BothGridsCut;
+            else if (lowerCuts)
+                result.Topology = PHU_GeneralColumnVerticalTopology.LowerGridCuts;
+            else if (upperCuts)
+                result.Topology = PHU_GeneralColumnVerticalTopology.UpperGridCuts;
+            else
+                result.Topology = PHU_GeneralColumnVerticalTopology.BaseBetweenGrids;
+
+            double[] shape = SortedUnique(tolerance, refBottom, edgeBottom, edgeTop, refTop);
+
+            List<double> referenceValues = new List<double>();
+            referenceValues.Add(refBottom);
+            referenceValues.Add(refTop);
+            if (lowerGrid < refBottom - tolerance)
+                referenceValues.Add(lowerGrid);
+            if (upperGrid > refTop + tolerance)
+                referenceValues.Add(upperGrid);
+            double[] reference = SortedUnique(tolerance, referenceValues);
+
+            List<double> outerValues = new List<double>();
+            outerValues.Add(lowerGrid);
+            outerValues.Add(upperGrid);
+            if (lowerCuts)
+                outerValues.Add(refBottom);
+            if (upperCuts)
+                outerValues.Add(refTop);
+            double[] outer = SortedUnique(tolerance, outerValues);
+
+            AddDistinctChain(
+                result.LeftInnerToOuter,
+                PHU_GeneralColumnVerticalChainRole.ShapeRefEdges,
+                shape,
+                tolerance
+            );
+            AddDistinctChain(
+                result.LeftInnerToOuter,
+                PHU_GeneralColumnVerticalChainRole.ReferenceEnvelope,
+                reference,
+                tolerance
+            );
+            AddDistinctChain(
+                result.LeftInnerToOuter,
+                PHU_GeneralColumnVerticalChainRole.GridEnvelope,
+                outer,
+                tolerance
+            );
+
+            AddDistinctChain(
+                result.RightInnerToOuter,
+                PHU_GeneralColumnVerticalChainRole.ShapeRefEdges,
+                shape,
+                tolerance
+            );
+            AddDistinctChain(
+                result.RightInnerToOuter,
+                PHU_GeneralColumnVerticalChainRole.ReferenceEnvelope,
+                reference,
+                tolerance
+            );
+
+            if (result.LeftInnerToOuter.Count == 0 || result.RightInnerToOuter.Count == 0)
+            {
+                throw new InvalidOperationException("The general Column vertical plan is empty.");
+            }
+            return result;
+        }
+
+        internal static PHU_GeneralColumnHorizontalPlan BuildHorizontal(
+            double reference,
+            double grid,
+            double edgeLeft,
+            double edgeRight,
+            double tolerance
+        )
+        {
+            ValidateTolerance(tolerance);
+            RequireFinite(reference, grid, edgeLeft, edgeRight);
+            if (edgeRight - edgeLeft <= tolerance)
+                throw new InvalidOperationException(
+                    "The MainPart horizontal edge span is not valid."
+                );
+
+            PHU_GeneralColumnHorizontalPlan result = new PHU_GeneralColumnHorizontalPlan();
+            if (Math.Abs(grid - reference) <= tolerance)
+            {
+                if (reference <= edgeLeft + tolerance || reference >= edgeRight - tolerance)
+                {
+                    throw new InvalidOperationException(
+                        "A coincident vertical Grid is not inside the MainPart edges."
+                    );
+                }
+                result.Relation = PHU_GeneralColumnHorizontalRelation.GridCoincidentWithReference;
+                result.Stations = SortedUnique(tolerance, edgeLeft, grid, edgeRight);
+                if (result.Stations.Length != 3)
+                    throw new InvalidOperationException(
+                        "The edge -> coincident Grid -> edge chain did not retain three feet."
+                    );
+            }
+            else
+            {
+                result.Relation =
+                    grid < reference
+                        ? PHU_GeneralColumnHorizontalRelation.GridLeftOfReference
+                        : PHU_GeneralColumnHorizontalRelation.GridRightOfReference;
+                // Semantic order is intentionally REF -> GRID on both sides.
+                result.Stations = new double[] { reference, grid };
+            }
+            return result;
+        }
+
+        internal static double[] SelectFloorPair(IEnumerable<double> coordinates, double tolerance)
+        {
+            ValidateTolerance(tolerance);
+            double[] ordered = SortedUnique(tolerance, coordinates);
+            if (ordered.Length < 2)
+                throw new InvalidOperationException(
+                    "At least two distinct horizontal Grid levels are required."
+                );
+            return new double[] { ordered[0], ordered[ordered.Length - 1] };
+        }
+
+        internal static double SelectNearestCoordinate(
+            double reference,
+            IEnumerable<double> coordinates,
+            double tolerance
+        )
+        {
+            ValidateTolerance(tolerance);
+            RequireFinite(reference);
+            double[] ordered = SortedUnique(tolerance, coordinates);
+            if (ordered.Length == 0)
+                throw new InvalidOperationException(
+                    "No overlapping vertical Grid candidate is available."
+                );
+
+            double selected = ordered[0];
+            double best = Math.Abs(selected - reference);
+            for (int i = 1; i < ordered.Length; i++)
+            {
+                double distance = Math.Abs(ordered[i] - reference);
+                if (distance < best - tolerance)
+                {
+                    selected = ordered[i];
+                    best = distance;
+                }
+                else if (
+                    Math.Abs(distance - best) <= tolerance
+                    && Math.Abs(ordered[i] - selected) > tolerance
+                )
+                {
+                    throw new InvalidOperationException(
+                        "Two vertical Grids are equally close to the MainPart REF."
+                    );
+                }
+            }
+            return selected;
+        }
+
+        private static void AddDistinctChain(
+            List<PHU_GeneralColumnVerticalChain> target,
+            PHU_GeneralColumnVerticalChainRole role,
+            double[] stations,
+            double tolerance
+        )
+        {
+            if (stations == null || stations.Length < 2)
+                return;
+            for (int i = 0; i < target.Count; i++)
+            {
+                if (ChainsMatch(target[i].Stations, stations, tolerance))
+                    return;
+            }
+
+            PHU_GeneralColumnVerticalChain chain = new PHU_GeneralColumnVerticalChain();
+            chain.Role = role;
+            chain.Stations = stations;
+            target.Add(chain);
+        }
+
+        private static bool ChainsMatch(double[] first, double[] second, double tolerance)
+        {
+            if (first == null || second == null || first.Length != second.Length)
+                return false;
+            for (int i = 0; i < first.Length; i++)
+            {
+                if (Math.Abs(first[i] - second[i]) > tolerance)
+                    return false;
+            }
+            return true;
+        }
+
+        private static double[] SortedUnique(double tolerance, params double[] values)
+        {
+            return SortedUnique(tolerance, (IEnumerable<double>)values);
+        }
+
+        private static double[] SortedUnique(double tolerance, IEnumerable<double> values)
+        {
+            List<double> ordered = new List<double>();
+            if (values != null)
+            {
+                foreach (double value in values)
+                {
+                    RequireFinite(value);
+                    ordered.Add(value);
+                }
+            }
+            ordered.Sort();
+
+            List<double> unique = new List<double>();
+            for (int i = 0; i < ordered.Count; i++)
+            {
+                if (
+                    unique.Count == 0
+                    || Math.Abs(ordered[i] - unique[unique.Count - 1]) > tolerance
+                )
+                    unique.Add(ordered[i]);
+            }
+            return unique.ToArray();
+        }
+
+        private static void ValidateTolerance(double tolerance)
+        {
+            if (!IsFinite(tolerance) || tolerance <= 0.0)
+                throw new ArgumentOutOfRangeException("tolerance");
+        }
+
+        private static void RequireFinite(params double[] values)
+        {
+            for (int i = 0; values != null && i < values.Length; i++)
+            {
+                if (!IsFinite(values[i]))
+                    throw new InvalidOperationException(
+                        "A general Column Grid coordinate is not finite."
+                    );
+            }
+        }
+
+        private static bool IsFinite(double value)
+        {
+            return !Double.IsNaN(value) && !Double.IsInfinity(value);
+        }
+    }
+}
+#pragma warning restore
+#endregion
+
+#region PHU_ColumnGridDimensionEngine - Đọc hình học và thực hiện DIM grid cột
+#pragma warning disable 1633
+
+namespace Tekla.Technology.Akit.UserScript
+{
+    using System;
+    using System.Collections;
+    using System.Collections.Generic;
+    using System.Globalization;
+    using System.Reflection;
+    using System.Text;
+    using TSD = Tekla.Structures.Drawing;
+    using TSG = Tekla.Structures.Geometry3d;
+    using TSM = Tekla.Structures.Model;
+
     /// <summary>
     /// Project-routed column Grid DIM flow. Inzai Data Center retains its
     /// isolated project strategy; every non-Inzai model uses the independent
@@ -20,6 +770,8 @@ namespace Tekla.Technology.Akit.UserScript
     /// </summary>
     public static class PHU_ColumnGridDimensionEngine
     {
+        // CHỈNH NGƯỠNG: GeometryTolerance gom hình học; MatchTolerance khớp DIM có sẵn (mm view).
+        // DirectionCosineTolerance không đơn vị; tăng gần 1 siết điều kiện song song.
         private const double GeometryTolerance = 0.20;
         private const double MatchTolerance = 2.0;
         private const double DirectionCosineTolerance = 0.985;
@@ -174,6 +926,7 @@ namespace Tekla.Technology.Akit.UserScript
         public static bool LastRunSucceeded { get; private set; }
         public static string LastRunMessage { get; private set; }
 
+        // ĐIỀU KHIỂN: engine cột chỉ cho Grid=3; enabled=true với số khác sẽ tự tắt và trả lý do.
         public static void Configure(bool enabled, int requestedAxisCount)
         {
             ClearState();
@@ -3273,3 +4026,5 @@ namespace Tekla.Technology.Akit.UserScript
         }
     }
 }
+#pragma warning restore
+#endregion

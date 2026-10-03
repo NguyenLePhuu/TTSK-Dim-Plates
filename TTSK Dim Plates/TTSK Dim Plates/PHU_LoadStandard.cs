@@ -462,12 +462,7 @@ namespace Tekla.Technology.Akit.UserScript
         {
             try
             {
-                Process[] processes = Process.GetProcessesByName("TeklaStructures");
-                for (int i = 0; i < processes.Length; i++)
-                {
-                    if (processes[i].MainWindowHandle != IntPtr.Zero)
-                        return processes[i];
-                }
+                return TTSK_AutoDim_Plates.TeklaSessionCoordinator.GetBoundProcess();
             }
             catch { }
 

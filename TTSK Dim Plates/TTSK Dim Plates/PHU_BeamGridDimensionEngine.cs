@@ -1,3 +1,9 @@
+﻿// DIM dầm theo grid, nhận tầng DIM từ Shape và căn Top/Front theo trục.
+// LUỒNG: Configure → Prepare → Shape báo tầng qua ReportShapeHorizontalTotal → CreatePreparedDimensions.
+// ĐIỂM SỬA: chân grid ở ResolveAxes*/BuildPlans; tiếp quản DIM tổng ở ShouldTakeOver*; nối view ở CreatePreparedTopFrontReferenceConnectors.
+// THAM SỐ: requestedAxisCount chọn chế độ trục; khoảng cách DIM nhận từ Shape, không hard-code lại trong engine.
+// TRA CỨU: PROJECT_MAP.md ở gốc repo; chỉ mục kiểu/hàm và điểm chỉnh thông số.
+
 #pragma warning disable 1633
 
 using System;

@@ -1,28 +1,30 @@
+﻿// Sắp lại khoảng cách DIM có sẵn theo view, hướng nhìn và tầng; giữ chuỗi và side mark từng đoạn.
+// LUỒNG: đọc/snapshot → giải vị trí tầng → sửa Distance trên StraightDimension con → kiểm lại.
+// THAM SỐ: khoảng cách giấy quy đổi theo scale; SHARED_TIER_PAPER_* là mm giấy, INTERNAL_DIM_EDGE_TOL là mm view.
+// LƯU Ý: không tạo/xóa/tách DIM; set.Modify() có thể làm mất side mark nên không thay thế bộ ghi segment.
+// TRA CỨU: PROJECT_MAP.md ở gốc repo; chỉ mục kiểu/hàm và điểm chỉnh thông số.
+
 using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Linq;
+using System.IO;
+using System.Text;
+using System.Globalization;
+using System.Security.Cryptography;
+using System.Threading;
+using Model = Tekla.Structures.Model;
+using Revision = Tekla.Technology.Akit.UserScript.PHU_DimensionRevision;
 using Tekla.Structures.Drawing;
 using Tekla.Structures.Geometry3d;
 
 namespace TTSK_AutoDim_Plates
 {
-    // PHU V20 - NO SPLIT / VIEW ISOLATED / UNIFIED GEOMETRY SPACING
-    // RULES:
-    // - Do NOT create new dimension sets.
-    // - Do NOT delete old dimension sets.
-    // - Do NOT split/cut existing chains.
-    // - Only change Distance on existing StraightDimension children. Never rebuild a set:
-    //   set.Modify() can discard per-segment plate side marks not exposed by the API.
-    // - Tier 1 starts one input spacing outside the existing dimension-foot bounds.
-    // - One common arrange flow for H/V/S multi-set groups.
-    // - Single and multi-set groups use the same segment-preserving writer.
-    // - Views are isolated by runtime view identity; Front/Top/Bottom never share tiers.
-    // - Grouping/sorting uses visual side = OffsetDirection * Sign(Distance).
-    // - V20: one spacing solver for ALL sides/views using the same visual-line geometry.
-    // - No special RIGHT-side patch; if geometry is readable, every group is solved the same way.
-    //   Tekla Distance is measured from the first DimensionPoint to the dimension line.
-    //   Using center or an outer-most DimensionPoint changes the measured tier when feet protrude.
+    // GIỮ NGUYÊN CHUỖI: chỉ sửa Distance trên DIM con; không tạo/xóa/tách set.
+    // Tách tầng theo từng view và phía hiển thị = OffsetDirection × dấu Distance.
+    // Tekla đo Distance từ DimensionPoint đầu; đổi gốc sang tâm/điểm ngoài có thể làm lệch tầng.
+    // Dùng chung bộ giải khoảng cách và bộ ghi giữ side mark cho nhóm một/nhiều set.
     public static class PHU_DimSpacingNormalize
     {
         // TEST PORT TỪ FILE DIM PLATE:
@@ -32,7 +34,7 @@ namespace TTSK_AutoDim_Plates
         private const bool USE_ANCHOR_ABCD_AS_TIER_BASE = true;
 
         // INTERNAL DIM: DIM nằm trong lòng thanh không được tham gia hệ tầng ngoài.
-        // Nó vẫn được chỉnh khoảng cách theo input, nhưng lấy chính chân DIM của nó làm gốc.
+        // Geometry classifies internal; overlapping internal spans are planned together.
         private const bool HANDLE_INTERNAL_DIMS_SEPARATELY = true;
         private const double INTERNAL_DIM_EDGE_TOL = 1.0;
         private const double SHARED_TIER_PAPER_TOLERANCE = 1.0;
@@ -110,6 +112,9 @@ namespace TTSK_AutoDim_Plates
             public string SideKey;
             public string KindKey;
             public bool IsInternal;
+            public bool IsLocal;
+            public List<Point> InternalFeet;
+            public PHU_InternalDimLayout.Body InternalBody;
         }
 
         private class DimDistanceChange
@@ -141,6 +146,241 @@ namespace TTSK_AutoDim_Plates
 
         public static Result Run(double spacing, string scope, bool apply)
         {
+            // Public Open API returns inherited set attributes for some individually
+            // formatted children. Protect the real native properties around the whole
+            // distance operation; never infer a child's colour from its parent.
+            return apply ? RunWithNativeAttributes(spacing, scope) : RunCore(spacing, scope, false);
+        }
+
+        private sealed class NativeAttributeSnapshot
+        {
+            public int Id;
+            public Dictionary<string, object> Properties;
+        }
+
+        private static string EncodeNative(string value)
+        { return Convert.ToBase64String(Encoding.UTF8.GetBytes(value ?? "")); }
+        private static string DecodeNative(string value)
+        { return Encoding.UTF8.GetString(Convert.FromBase64String(value)); }
+        private static string NativeDrawingId(Drawing drawing)
+        { return ((Tekla.Structures.Identifier)GetPropertyOrFieldValue(drawing, "Identifier")).GUID.ToString(); }
+
+        private static Result RunWithNativeAttributes(double spacing, string scope)
+        {
+            if (!IsFinite(spacing) || spacing <= 0) throw new ArgumentOutOfRangeException("spacing");
+            var model = new Model.Model();
+            var drawing = new DrawingHandler().GetActiveDrawing();
+            if (!model.GetConnectionStatus() || drawing == null) throw new InvalidOperationException("Chưa mở bản vẽ Tekla.");
+            // Share the native-properties lock with Revision so neither command
+            // overwrites an attribute being changed by the other command.
+            using (var mutex = new Mutex(false, "Local\\TTSK_RevisionNativeColor"))
+            {
+                bool locked;
+                try { locked = mutex.WaitOne(0); } catch (AbandonedMutexException) { locked = true; }
+                if (!locked) throw new InvalidOperationException("Tekla đang xử lý thuộc tính DIM; hãy chờ thao tác hiện tại hoàn tất.");
+                try
+                {
+                    string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                        "TTSK Dim Plates", "DimSpacingJobs");
+                    Directory.CreateDirectory(root);
+                    string pending = Path.Combine(root, "pending.txt");
+                    if (File.Exists(pending))
+                    {
+                        string previous = File.ReadAllText(pending);
+                        if (!File.Exists(Path.Combine(previous, "result.txt")))
+                            throw new InvalidOperationException("Lần Dimspacing trước chưa kết thúc. Log: " + previous);
+                    }
+                    string folder = Path.Combine(root, Guid.NewGuid().ToString("N"));
+                    Directory.CreateDirectory(folder);
+                    string request = Path.Combine(folder, "request.txt"), response = Path.Combine(folder, "result.txt");
+                    File.WriteAllLines(request, new[] { EncodeNative(model.GetInfo().ModelPath), NativeDrawingId(drawing),
+                        spacing.ToString("R", CultureInfo.InvariantCulture), EncodeNative(scope),
+                        DateTime.UtcNow.AddSeconds(60).Ticks.ToString(CultureInfo.InvariantCulture) }, Encoding.UTF8);
+                    string assembly = typeof(PHU_DimSpacingNormalize).Assembly.Location;
+                    string hash;
+                    using (var stream = File.OpenRead(assembly)) using (var sha = SHA256.Create())
+                        hash = BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "");
+                    string writer = Path.Combine(root, "writer-" + hash + ".dll");
+                    if (!File.Exists(writer)) File.Copy(assembly, writer);
+                    string source = Path.Combine(folder, "Spacing.cs");
+                    File.WriteAllText(source,
+                        "#pragma warning disable 1633\n#pragma reference \"Tekla.Macros.Runtime\"\n" +
+                        "using System;using System.IO;using System.Text;using System.Reflection;namespace UserMacros {public sealed class Macro {" +
+                        "[Tekla.Macros.Runtime.MacroEntryPointAttribute()]public static void Run(Tekla.Macros.Runtime.IMacroRuntime runtime){" +
+                        "string request=Encoding.UTF8.GetString(Convert.FromBase64String(\"" + EncodeNative(request) + "\"));try{" +
+                        "Assembly.LoadFile(Encoding.UTF8.GetString(Convert.FromBase64String(\"" + EncodeNative(writer) + "\")))" +
+                        ".GetType(\"TTSK_AutoDim_Plates.PHU_DimSpacingNormalize\").GetMethod(\"RunNativeSpacingRequest\").Invoke(null,new object[]{request});" +
+                        "}catch(Exception ex){File.WriteAllText(Path.Combine(Path.GetDirectoryName(request),\"result.txt\"),\"ERROR: \"+ex.GetBaseException().Message);}}}}",
+                        Encoding.UTF8);
+                    File.WriteAllText(pending, folder);
+                    try { Model.Operations.Operation.RunMacro(source); }
+                    catch (Exception ex)
+                    {
+                        File.WriteAllText(Path.Combine(folder, "cancel"), "");
+                        throw new InvalidOperationException("Không khởi chạy được bộ bảo toàn thuộc tính DIM. Log: " + folder, ex);
+                    }
+                    var timer = System.Diagnostics.Stopwatch.StartNew();
+                    while (!File.Exists(response) && timer.ElapsedMilliseconds < 65000) Thread.Sleep(50);
+                    if (!File.Exists(response))
+                    {
+                        File.WriteAllText(Path.Combine(folder, "cancel"), "");
+                        throw new TimeoutException("Tekla chưa hoàn tất Dimspacing; yêu cầu đã hủy. Log: " + folder);
+                    }
+                    string[] rows = File.ReadAllLines(response, Encoding.UTF8);
+                    if (rows.Length != 7 || rows[0] != "DONE") throw new InvalidOperationException(String.Join("\n", rows));
+                    return new Result { FoundCount = Int32.Parse(rows[1]), GroupCount = Int32.Parse(rows[2]),
+                        ChangedCount = Int32.Parse(rows[3]), FailedCount = Int32.Parse(rows[4]), SkippedCount = Int32.Parse(rows[5]),
+                        FailureDetail = DecodeNative(rows[6]), Spacing = spacing, Scope = string.IsNullOrWhiteSpace(scope) ? "Toàn bộ bản vẽ" : scope };
+                }
+                finally { mutex.ReleaseMutex(); }
+            }
+        }
+
+        // Runs on Tekla's macro worker. Only native property access is dispatched
+        // to the main thread by the existing Revision bridge; Open API stays here.
+        public static void RunNativeSpacingRequest(string request)
+        {
+            string folder = Path.GetDirectoryName(request), response = Path.Combine(folder, "result.txt");
+            var distances = new List<DimDistanceChange>();
+            var native = new List<NativeAttributeSnapshot>();
+            Drawing drawing = null;
+            bool writesStarted = false;
+            string[] output;
+            try
+            {
+                if (!String.Equals(System.Diagnostics.Process.GetCurrentProcess().ProcessName, "TeklaStructures", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Native spacing must run inside Tekla.");
+                var rows = File.ReadAllLines(request, Encoding.UTF8);
+                long deadline = Int64.Parse(rows[4], CultureInfo.InvariantCulture);
+                Action check = () => { if (File.Exists(Path.Combine(folder, "cancel")) || DateTime.UtcNow.Ticks > deadline)
+                    throw new OperationCanceledException("Yêu cầu Dimspacing đã hủy trước khi hoàn tất."); };
+                check();
+                var model = new Model.Model(); drawing = new DrawingHandler().GetActiveDrawing();
+                if (!model.GetConnectionStatus() || drawing == null || NativeDrawingId(drawing) != rows[1]
+                    || !String.Equals(model.GetInfo().ModelPath, DecodeNative(rows[0]), StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Model hoặc bản vẽ đã thay đổi; chưa ghi DIM.");
+                double spacing = Double.Parse(rows[2], CultureInfo.InvariantCulture);
+                string scope = DecodeNative(rows[3]);
+                var items = CollectStraightDimensionSets(drawing.GetSheet(), scope);
+                foreach (var item in items)
+                {
+                    var change = new DimDistanceChange { Item = item, OriginalDistance = item.Distance, NewDistance = item.Distance };
+                    if (!TryCaptureChildDistances(change)) throw new InvalidOperationException("Không đọc được toàn bộ đoạn DIM trước khi ghi.");
+                    foreach (var child in change.Children)
+                    {
+                        child.Attributes = Revision.CopyValue(child.Attributes);
+                        child.SetAttributes = Revision.CopyValue((AttributesBase)child.SetAttributes);
+                        native.Add(new NativeAttributeSnapshot { Id = ((Tekla.Structures.Identifier)GetPropertyOrFieldValue(child.Child, "Identifier")).ID });
+                    }
+                    distances.Add(change);
+                }
+                NativeProperties(native, true, false);
+                check(); writesStarted = true;
+                Result result = RunCore(spacing, scope, true);
+                if (result.FailedCount != 0) throw new InvalidOperationException(result.ToDisplayText(true));
+                foreach (var change in distances)
+                    foreach (var child in change.Children)
+                    {
+                        if (!child.Child.Select() || !IsFinite(child.Child.Distance))
+                            throw new InvalidOperationException("Không đọc lại được khoảng cách DIM đã bố trí.");
+                        child.TargetDistance = child.Child.Distance;
+                    }
+                check();
+                // Restore only properties actually changed by Open API round-tripping.
+                // Values come from each exact child, never from a parent, colour rule,
+                // mark name, or a hard-coded red/black value.
+                NativeProperties(native, false, true);
+                if (!TryCommitDrawing(drawing)) throw new InvalidOperationException("Không commit được thuộc tính DIM đã bảo toàn.");
+                NativeProperties(native, false, false);
+                foreach (var change in distances)
+                {
+                    var set = (StraightDimensionSet)change.Item.DimSet;
+                    if (!set.Select()) throw new InvalidOperationException("Không đọc lại được chuỗi DIM.");
+                    var children = set.GetObjects(); int count = 0;
+                    while (children.MoveNext())
+                    {
+                        var actual = children.Current as StraightDimension;
+                        var saved = actual == null ? null : change.Children.Find(c => c.Child.IsSameDatabaseObject(actual));
+                        if (saved == null || !SamePoint(actual.StartPoint, saved.Start) || !SamePoint(actual.EndPoint, saved.End)
+                            || !SamePoint(actual.UpDirection, saved.Direction) || !saved.Attributes.IsEqual(actual.Attributes)
+                            || !IsFinite(actual.Distance) || Math.Abs(actual.Distance - saved.TargetDistance) > .01)
+                            throw new InvalidOperationException("Chân đo hoặc nhãn DIM đã thay đổi ngoài khoảng cách.");
+                        count++;
+                    }
+                    if (count != change.Children.Count) throw new InvalidOperationException("Số đoạn DIM đã thay đổi.");
+                }
+                check();
+                output = new[] { "DONE", result.FoundCount.ToString(), result.GroupCount.ToString(), result.ChangedCount.ToString(),
+                    result.FailedCount.ToString(), result.SkippedCount.ToString(), EncodeNative(result.FailureDetail) };
+            }
+            catch (Exception ex)
+            {
+                bool restored = true;
+                if (writesStarted)
+                {
+                    try
+                    {
+                        foreach (var change in distances) restored &= WriteChildDistances(change, true);
+                        NativeProperties(native, false, true);
+                        restored &= TryCommitDrawing(drawing);
+                        NativeProperties(native, false, false);
+                        foreach (var change in distances) restored &= VerifyChildDistances(change, true);
+                    }
+                    catch { restored = false; }
+                }
+                output = new[] { "ERROR: " + ex.GetBaseException().Message + (!writesStarted ? " Chưa ghi DIM." : restored
+                    ? " Đã phục hồi khoảng cách và thuộc tính gốc." : " Chưa xác minh được phục hồi; kiểm tra bản vẽ trước khi lưu.") };
+            }
+            File.WriteAllLines(response + ".tmp", output, Encoding.UTF8);
+            File.Move(response + ".tmp", response);
+        }
+
+        private static void NativeProperties(List<NativeAttributeSnapshot> snapshots, bool capture, bool restore)
+        {
+            if (snapshots.Count == 0) return;
+            Revision.WithNativeColorFactory((factory, create, update) =>
+            {
+                foreach (var snapshot in snapshots)
+                {
+                    object proxy = create.Invoke(factory, new object[] { snapshot.Id, String.Empty });
+                    if (proxy == null) throw new InvalidOperationException("Không đọc được thuộc tính riêng của đoạn DIM " + snapshot.Id);
+                    try
+                    {
+                        var type = proxy.GetType(); var get = type.GetMethod("GetProperty");
+                        if (capture)
+                        {
+                            snapshot.Properties = new Dictionary<string, object>(StringComparer.Ordinal);
+                            foreach (string name in (IEnumerable)type.GetMethod("GetPropertyNames").Invoke(proxy, null))
+                            {
+                                object value = get.Invoke(proxy, new object[] { name });
+                                if (value != null && !(value is string) && !value.GetType().IsPrimitive && !value.GetType().IsEnum)
+                                    throw new InvalidOperationException("Unsupported native DIM property: " + name);
+                                snapshot.Properties.Add(name, value);
+                            }
+                            if (!snapshot.Properties.ContainsKey("proFontColor")) throw new InvalidOperationException("Không đọc được thuộc tính chữ riêng của DIM.");
+                        }
+                        else
+                        {
+                            bool changed = false;
+                            foreach (var pair in snapshot.Properties)
+                            {
+                                object actual = get.Invoke(proxy, new object[] { pair.Key });
+                                if (Object.Equals(actual, pair.Value)) continue;
+                                if (!restore) throw new InvalidOperationException("Thuộc tính riêng chưa được bảo toàn: DIM " + snapshot.Id + "/" + pair.Key);
+                                if (!(bool)type.GetMethod("SetProperty").Invoke(proxy, new[] { (object)pair.Key, pair.Value }))
+                                    throw new InvalidOperationException("Không phục hồi được thuộc tính DIM " + pair.Key);
+                                changed = true;
+                            }
+                            if (changed && !(bool)update.Invoke(factory, new[] { proxy })) throw new InvalidOperationException("Không cập nhật được thuộc tính DIM gốc.");
+                        }
+                    }
+                    finally { ((IDisposable)proxy).Dispose(); }
+                }
+            });
+        }
+
+        private static Result RunCore(double spacing, string scope, bool apply)
+        {
             Result result = new Result();
             result.Spacing = spacing;
             result.IsPreview = !apply;
@@ -169,8 +409,8 @@ namespace TTSK_AutoDim_Plates
             BuildViewAnchorMap(items);
 
             // Tách DIM nằm trong lòng thanh ra khỏi hệ tầng ngoài.
-            // Internal dim vẫn chạy spacing, nhưng dùng chính chân DIM của nó làm gốc và không ảnh hưởng tier ngoài.
-            MarkInternalDimItems(items, spacing);
+            // Internal geometry/planning does not redefine the external anchor map.
+            MarkInternalDimItems(items, spacing, drawing);
 
             Dictionary<string, List<DimSetItem>> groups =
                 new Dictionary<string, List<DimSetItem>>();
@@ -189,6 +429,7 @@ namespace TTSK_AutoDim_Plates
             }
 
             result.GroupCount = groups.Count;
+            var internalPlans = PrepareInternalPlans(groups, items, spacing, result);
 
             foreach (KeyValuePair<string, List<DimSetItem>> pair in groups)
             {
@@ -196,24 +437,25 @@ namespace TTSK_AutoDim_Plates
                 if (list == null || list.Count == 0)
                     continue;
 
+                if (IsInternalOnlyGroup(list))
+                    continue;
+
                 if (list.Count == 1)
                 {
-                    if (list[0] != null && list[0].IsInternal)
-                    {
-                        ArrangeInternalDimItem(list[0], spacing, result);
-                    }
-                    else
-                    {
-                        // NEW: External single DIM is still a valid tier-1 DIM.
-                        // It has no tier-2..n group, but it can still be placed by Anchor A/B/C/D.
-                        // If anchor/solver fails, only then skip to preserve the old safety rule.
-                        ArrangeSingleExternalDimItemByAnchor(list[0], spacing, result);
-                    }
+                    // External single DIM remains on the established tier-1 path.
+                    ArrangeSingleExternalDimItemByAnchor(list[0], spacing, result);
                     continue;
                 }
 
                 ArrangeExistingSetGroup(list, spacing, result, drawing);
             }
+
+            // Internal collision checks use the predicted external targets. Only
+            // apply them after those targets have been written and verified.
+            if (result.FailedCount == 0)
+                ApplyInternalPlans(internalPlans, groups, spacing, result, drawing);
+            else
+                result.SkippedCount += groups.Where(g => IsInternalOnlyGroup(g.Value)).Sum(g => g.Value.Count);
 
             try
             {
@@ -236,8 +478,7 @@ namespace TTSK_AutoDim_Plates
 
             if (IsInternalOnlyGroup(list))
             {
-                foreach (DimSetItem item in list)
-                    ArrangeInternalDimItem(item, spacing, result);
+                if (result != null) result.SkippedCount += list.Count;
                 return;
             }
 
@@ -263,7 +504,7 @@ namespace TTSK_AutoDim_Plates
                 if (list.Count == 1)
                 {
                     if (list[0] != null && list[0].IsInternal)
-                        ArrangeInternalDimItem(list[0], spacing, result);
+                        result.SkippedCount++;
                     else
                         ArrangeSingleExternalDimItemByAnchor(list[0], spacing, result);
                 }
@@ -336,29 +577,72 @@ namespace TTSK_AutoDim_Plates
                 return;
         }
 
-        private static void MarkInternalDimItems(List<DimSetItem> items, double spacing)
+        private static void MarkInternalDimItems(List<DimSetItem> items, double spacing, Drawing drawing)
         {
-            try
+            if (!HANDLE_INTERNAL_DIMS_SEPARATELY || items == null) return;
+            var bodies = PHU_InternalDimLayout.ReadBodies(drawing,
+                items.Where(i => i != null && i.View != null).Select(i => i.View));
+            foreach (DimSetItem item in items)
             {
-                if (!HANDLE_INTERNAL_DIMS_SEPARATELY || items == null)
-                    return;
-
-                foreach (DimSetItem item in items)
+                if (item == null || item.View == null || item.DimSet == null) continue;
+                item.InternalFeet = GetDimensionPoints(item.DimSet);
+                if (item.KindKey != "H" && item.KindKey != "V") continue;
+                PHU_InternalDimLayout.Body body;
+                bodies.TryGetValue(item.View, out body);
+                SimpleVector normal = item.VisualOffset;
+                normal.Normalize();
+                double level;
+                var location = PHU_InternalDimLayout.Location.Uncertain;
+                if (Math.Max(Math.Abs(normal.X), Math.Abs(normal.Y)) >= .999999
+                    && TryGetCurrentVisualLineLevel(item, normal, out level))
+                    location = PHU_InternalDimLayout.Classify(body, item.InternalFeet,
+                        normal.X, normal.Y, level);
+                if (location == PHU_InternalDimLayout.Location.Internal)
                 {
-                    if (item == null || item.View == null || item.DimSet == null)
-                        continue;
-
-                    if (IsInternalDimItem(item, spacing))
+                    item.IsInternal = true;
+                    item.InternalBody = body;
+                    item.GroupKey += "_INTERNAL";
+                }
+                else if (location == PHU_InternalDimLayout.Location.Uncertain)
+                {
+                    // Unproven local geometry uses the approved existing first tier.
+                    // Never force a secondary connection into the global outer tiers.
+                    var feet = item.InternalFeet;
+                    bool needsLocal = IsInternalDimItem(item, spacing)
+                        || (body != null && feet != null && feet.Count >= 2 && feet.All(body.Contains));
+                    if (needsLocal)
                     {
                         item.IsInternal = true;
-                        item.GroupKey =
-                            GetViewKey(item.View)
-                            + "_INTERNAL_"
-                            + RuntimeHelpersHash(item.DimSet).ToString();
+                        item.IsLocal = true;
+                        item.GroupKey += "_LOCAL";
                     }
                 }
             }
-            catch { }
+            // Partition local clusters by foot geometry, never by dimension-line
+            // distance: moving a line must not change its cluster on the next run.
+            foreach (var bucket in items.Where(i => i.IsLocal).GroupBy(i => i.GroupKey).ToList())
+            {
+                var pending = bucket.OrderBy(i => i.StableId, StringComparer.Ordinal).ToList();
+                int component = 0;
+                while (pending.Count > 0)
+                {
+                    var connected = new List<DimSetItem> { pending[0] }; pending.RemoveAt(0);
+                    for (int c = 0; c < connected.Count; c++)
+                        for (int j = pending.Count - 1; j >= 0; j--)
+                            if (LocalFeetConnected(connected[c], pending[j]))
+                            { connected.Add(pending[j]); pending.RemoveAt(j); }
+                    foreach (var item in connected) item.GroupKey = bucket.Key + "_" + component;
+                    component++;
+                }
+            }
+        }
+
+        private static bool LocalFeetConnected(DimSetItem a, DimSetItem b)
+        {
+            var normal = a.VisualOffset; normal.Normalize();
+            var pa = a.InternalFeet; var pb = b.InternalFeet;
+            double clearance = SHARED_TIER_PAPER_CLEARANCE * a.View.Attributes.Scale;
+            return PHU_InternalDimLayout.FeetConnected(pa, pb, normal.X, normal.Y, clearance);
         }
 
         private static bool IsInternalOnlyGroup(List<DimSetItem> list)
@@ -375,6 +659,8 @@ namespace TTSK_AutoDim_Plates
             return true;
         }
 
+        // Legacy candidate detector ONLY for routing uncertain geometry to a local
+        // reference-tier plan. It no longer authorizes independent Distance=spacing.
         private static bool IsInternalDimItem(DimSetItem item, double spacing)
         {
             try
@@ -514,25 +800,158 @@ namespace TTSK_AutoDim_Plates
             }
         }
 
-        private static void ArrangeInternalDimItem(DimSetItem item, double spacing, Result result)
+        private static Dictionary<string, List<DimDistanceChange>> PrepareInternalPlans(
+            Dictionary<string, List<DimSetItem>> groups, List<DimSetItem> allItems,
+            double spacing, Result result)
         {
-            try
+            var plans = new Dictionary<string, List<DimDistanceChange>>();
+            var spansByGroup = new Dictionary<string, List<PHU_InternalDimLayout.Span>>();
+            var targets = allItems.ToDictionary(i => i, i => i.OriginalDistance);
+            // Predict the unchanged external solver's final lines for collision checks.
+            foreach (var pair in groups)
             {
-                if (item == null || item.DimSet == null)
+                var list = pair.Value;
+                if (IsInternalOnlyGroup(list)) continue;
+                var axis = GetGroupAxisFromFirstValidOffset(list);
+                double first;
+                if (!TryCaptureOriginalTierOrder(list, axis)
+                    || !TryGetAnchorFirstTierVisualLevel(list, axis, spacing, out first)) continue;
+                AssignSharedLayoutTiers(list, axis, spacing);
+                var candidate = new Dictionary<DimSetItem, double>();
+                foreach (var item in list)
                 {
-                    if (result != null)
-                        result.SkippedCount++;
-                    return;
+                    double distance;
+                    if (!TrySolveDistanceForTargetVisualLevel(item, axis, first + spacing * item.LayoutTierIndex, out distance)
+                        || !IsFinite(distance) || (Math.Abs(distance) > .0001 && Math.Abs(item.OriginalDistance) > .0001
+                        && Math.Sign(distance) != Math.Sign(item.OriginalDistance))) break;
+                    candidate[item] = distance;
                 }
-
-                double sign = Math.Abs(item.Sign) < 0.0001 ? 1.0 : item.Sign;
-                double newDistance = sign * spacing;
-                TryApplyDistance(item, newDistance, result);
+                if (candidate.Count == list.Count) foreach (var c in candidate) targets[c.Key] = c.Value;
             }
-            catch
+            foreach (var pair in groups)
             {
-                if (result != null)
-                    result.FailedCount++;
+                var list = pair.Value;
+                if (!IsInternalOnlyGroup(list)) continue;
+                plans[pair.Key] = null;
+                var axis = GetGroupAxisFromFirstValidOffset(list);
+                if (!TryCaptureOriginalTierOrder(list, axis)) continue;
+                var spans = new List<PHU_InternalDimLayout.Span>();
+                foreach (var item in list)
+                {
+                    double min, max;
+                    if (!TryGetMeasuredSpan(item, axis, out min, out max)) break;
+                    spans.Add(new PHU_InternalDimLayout.Span { Min = min, Max = max,
+                        Anchor = GetDimensionLineAnchorProjection(item, axis), OriginalLevel = item.OriginalVisualLineLevel });
+                }
+                if (spans.Count != list.Count) continue;
+                spansByGroup[pair.Key] = spans;
+                double clearance = SHARED_TIER_PAPER_CLEARANCE * list[0].View.Attributes.Scale;
+                if (list[0].IsLocal || !PHU_InternalDimLayout.Plan(list[0].InternalBody, spans,
+                    axis.X, axis.Y, spacing, clearance))
+                {
+                    foreach (var item in list) item.IsLocal = true;
+                    continue;
+                }
+                var changes = MakeInternalChanges(list, spans, axis);
+                if (changes == null) continue;
+                plans[pair.Key] = changes;
+                foreach (var c in changes) targets[c.Item] = c.NewDistance;
+            }
+            // A proved internal plan that would hit another group switches to local
+            // reference-tier placement. Repeat as old reference lines become fixed.
+            bool converted;
+            do
+            {
+                converted = false;
+                foreach (var pair in plans.ToList())
+                {
+                    var list = groups[pair.Key];
+                    if (pair.Value == null || list[0].IsLocal) continue;
+                    var axis = GetGroupAxisFromFirstValidOffset(list);
+                    double clearance = SHARED_TIER_PAPER_CLEARANCE * list[0].View.Attributes.Scale;
+                    var obstacles = InternalObstacles(list, allItems, targets, axis);
+                    if (spansByGroup[pair.Key].Any(span => obstacles.Any(o =>
+                        PHU_InternalDimLayout.Overlaps(span, o, clearance)
+                        && Math.Abs(span.TargetLevel - o.TargetLevel) < Math.Max(spacing, clearance) - .01)))
+                    {
+                        foreach (var item in list) { item.IsLocal = true; targets[item] = item.OriginalDistance; }
+                        plans[pair.Key] = null; converted = true;
+                    }
+                }
+            } while (converted);
+            foreach (var pair in plans.OrderBy(p => groups[p.Key][0].StableId, StringComparer.Ordinal).ToList())
+            {
+                var list = groups[pair.Key];
+                if (!list[0].IsLocal || !spansByGroup.ContainsKey(pair.Key)) continue;
+                var axis = GetGroupAxisFromFirstValidOffset(list);
+                double clearance = SHARED_TIER_PAPER_CLEARANCE * list[0].View.Attributes.Scale;
+                var spans = spansByGroup[pair.Key];
+                if (!PHU_InternalDimLayout.PlanLocal(spans, spacing, clearance,
+                    InternalObstacles(list, allItems, targets, axis))) continue;
+                plans[pair.Key] = MakeInternalChanges(list, spans, axis);
+                if (plans[pair.Key] != null) foreach (var c in plans[pair.Key]) targets[c.Item] = c.NewDistance;
+            }
+            int invalid = plans.Where(p => p.Value == null).Sum(p => groups[p.Key].Count);
+            if (invalid > 0 && result != null)
+                result.FailureDetail = "Cannot resolve finite dimension geometry for " + invalid + " DIM.";
+            return plans;
+        }
+
+        private static List<PHU_InternalDimLayout.Span> InternalObstacles(List<DimSetItem> group,
+            List<DimSetItem> all, Dictionary<DimSetItem, double> targets, SimpleVector axis)
+        {
+            var obstacles = new List<PHU_InternalDimLayout.Span>();
+            foreach (var item in all)
+            {
+                if (item.View != group[0].View || group.Contains(item)) continue;
+                var other = item.VisualOffset; other.Normalize();
+                if (Math.Abs(axis.X * other.X + axis.Y * other.Y) < .999999) continue;
+                double min, max, level;
+                if (TryGetMeasuredSpan(item, axis, out min, out max)
+                    && TryGetVisualLineLevelForDistance(item, axis, targets[item], out level))
+                    obstacles.Add(new PHU_InternalDimLayout.Span { Min = min, Max = max, TargetLevel = level });
+            }
+            return obstacles;
+        }
+
+        private static List<DimDistanceChange> MakeInternalChanges(List<DimSetItem> list,
+            List<PHU_InternalDimLayout.Span> spans, SimpleVector axis)
+        {
+            var changes = new List<DimDistanceChange>();
+            for (int i = 0; i < list.Count; i++)
+            {
+                double distance;
+                if (!TrySolveDistanceForTargetVisualLevel(list[i], axis, spans[i].TargetLevel, out distance)
+                    || !IsFinite(distance) || (Math.Abs(distance) > .0001 && Math.Abs(list[i].OriginalDistance) > .0001
+                    && Math.Sign(distance) != Math.Sign(list[i].OriginalDistance))) return null;
+                changes.Add(new DimDistanceChange { Item = list[i], OriginalDistance = list[i].OriginalDistance,
+                    NewDistance = distance, OriginalTierIndex = i, OriginalStableId = list[i].StableId });
+            }
+            return changes;
+        }
+
+        private static void ApplyInternalPlans(Dictionary<string, List<DimDistanceChange>> plans,
+            Dictionary<string, List<DimSetItem>> groups, double spacing, Result result, Drawing drawing)
+        {
+            var applied = new List<List<DimDistanceChange>>();
+            int changedBefore = result.ChangedCount;
+            foreach (var pair in plans)
+            {
+                if (pair.Value == null) { result.SkippedCount += groups[pair.Key].Count; continue; }
+                if (TryApplyGroupAtomically(pair.Value, GetGroupAxisFromFirstValidOffset(groups[pair.Key]),
+                    spacing, result, drawing))
+                {
+                    applied.Add(pair.Value);
+                    continue;
+                }
+                // Collision preflight considered all future internal targets. If one
+                // group fails, none of those targets may remain partially applied.
+                bool restored = true;
+                if (!result.IsPreview)
+                    foreach (var previous in applied) restored &= RestoreGroupDistances(previous, drawing);
+                result.ChangedCount = changedBefore;
+                if (!restored) result.FailureDetail = "Không xác minh được phục hồi nhóm internal. Hãy kiểm tra bản vẽ trước khi chạy lại.";
+                return;
             }
         }
 
@@ -1293,7 +1712,7 @@ namespace TTSK_AutoDim_Plates
                 )
                     return false;
 
-                if (!Double.IsNaN(previousLevel))
+                if (!change.Item.IsInternal && !Double.IsNaN(previousLevel))
                 {
                     double delta = currentLevel - previousLevel;
                     int tierStep = change.Item.LayoutTierIndex - changes[i - 1].Item.LayoutTierIndex;
@@ -2497,5 +2916,309 @@ namespace TTSK_AutoDim_Plates
                 return 0;
             return System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(obj);
         }
+    }
+}
+
+namespace TTSK_AutoDim_Plates
+{
+    // Independent of the external tier solver. Geometry is read once per run;
+    // no work-plane change, drawing mutation, or static geometry cache.
+    internal static class PHU_InternalDimLayout
+    {
+        internal enum Location { External, Internal, Uncertain }
+        internal const double EdgeTolerance = 1.0;
+        private const double Epsilon = 0.000001;
+
+        internal sealed class Body
+        {
+            // Union of projected outer face loops. Closed bolt holes are deliberately
+            // filled: internal means inside the part envelope, not inside steel material.
+            // Open notches/concave outer contours remain open.
+            internal readonly List<Point[]> Faces = new List<Point[]>();
+
+            internal bool Contains(Point p)
+            {
+                if (!Finite(p)) return false;
+                foreach (Point[] face in Faces)
+                {
+                    bool inside = false;
+                    for (int i = 0, j = face.Length - 1; i < face.Length; j = i++)
+                    {
+                        Point a = face[j], b = face[i];
+                        double dx = b.X - a.X, dy = b.Y - a.Y;
+                        double length2 = dx * dx + dy * dy;
+                        double t = length2 < Epsilon * Epsilon ? 0 :
+                            Math.Max(0, Math.Min(1, ((p.X - a.X) * dx + (p.Y - a.Y) * dy) / length2));
+                        double ex = p.X - a.X - t * dx, ey = p.Y - a.Y - t * dy;
+                        if (ex * ex + ey * ey <= Epsilon * Epsilon) return true;
+                        if ((a.Y > p.Y) != (b.Y > p.Y)
+                            && p.X < a.X + (p.Y - a.Y) * dx / dy) inside = !inside;
+                    }
+                    if (inside) return true;
+                }
+                return false;
+            }
+
+            internal bool Covers(Point a, Point b)
+            {
+                if (!Contains(a) || !Contains(b)) return false;
+                // Test every interval between contour crossings, not a sampling grid.
+                // Thus even a narrow notch between two valid endpoints is detected.
+                var cuts = new List<double> { 0, 1 };
+                double dx = b.X - a.X, dy = b.Y - a.Y;
+                foreach (Point[] face in Faces)
+                    for (int i = 0; i < face.Length; i++)
+                    {
+                        Point c = face[i], d = face[(i + 1) % face.Length];
+                        double ex = d.X - c.X, ey = d.Y - c.Y;
+                        double cross = dx * ey - dy * ex;
+                        if (Math.Abs(cross) < Epsilon) continue;
+                        double t = ((c.X - a.X) * ey - (c.Y - a.Y) * ex) / cross;
+                        double u = ((c.X - a.X) * dy - (c.Y - a.Y) * dx) / cross;
+                        if (t > 0 && t < 1 && u >= -Epsilon && u <= 1 + Epsilon) cuts.Add(t);
+                    }
+                cuts.Sort();
+                for (int i = 1; i < cuts.Count; i++)
+                {
+                    double t = (cuts[i - 1] + cuts[i]) / 2;
+                    if (!Contains(new Point(a.X + t * dx, a.Y + t * dy))) return false;
+                }
+                return true;
+            }
+        }
+
+        internal sealed class Span
+        {
+            internal double Min, Max, Anchor, OriginalLevel, TargetLevel;
+        }
+
+        internal static bool Finite(double x) { return !Double.IsNaN(x) && !Double.IsInfinity(x); }
+        private static bool Finite(Point p) { return p != null && Finite(p.X) && Finite(p.Y) && Finite(p.Z); }
+        internal static Point At(double level, double along, double nx, double ny)
+        { return new Point(nx * level - ny * along, ny * level + nx * along); }
+
+        internal static bool CoversLine(Body body, double level, double min, double max, double nx, double ny)
+        {
+            return body != null && body.Covers(At(level, min, nx, ny), At(level, max, nx, ny))
+                && body.Covers(At(level - EdgeTolerance, min, nx, ny), At(level - EdgeTolerance, max, nx, ny))
+                && body.Covers(At(level + EdgeTolerance, min, nx, ny), At(level + EdgeTolerance, max, nx, ny));
+        }
+
+        internal static Location Classify(Body body, IList<Point> feet, double nx, double ny, double level)
+        {
+            if (body == null || body.Faces.Count == 0 || feet == null || feet.Count < 2
+                || !Finite(level) || !Finite(nx) || !Finite(ny)
+                || Math.Abs(nx * nx + ny * ny - 1) > Epsilon) return Location.Uncertain;
+            double min = Double.PositiveInfinity, max = Double.NegativeInfinity;
+            bool edgeFoot = false;
+            foreach (Point p in feet)
+            {
+                // No guessed ownership for dimensions referring to another part/grid.
+                if (!Finite(p) || !body.Contains(p)) return Location.Uncertain;
+                double t = -ny * p.X + nx * p.Y;
+                min = Math.Min(min, t); max = Math.Max(max, t);
+                if (!body.Contains(new Point(p.X - nx * EdgeTolerance, p.Y - ny * EdgeTolerance))
+                    || !body.Contains(new Point(p.X + nx * EdgeTolerance, p.Y + ny * EdgeTolerance))) edgeFoot = true;
+            }
+            if (max - min <= Epsilon) return Location.Uncertain;
+            // An edge chain belongs to the external solver, even after a previous
+            // internal run collapsed its line into the part.
+            if (edgeFoot) return Location.External;
+            if (CoversLine(body, level, min, max, nx, ny)) return Location.Internal;
+            Point a = At(level, min, nx, ny), b = At(level, max, nx, ny);
+            // Entirely outside is external; a straddling line is left untouched.
+            if (!body.Contains(a) && !body.Contains(b))
+            {
+                // Covers is insufficient for intersection; include every edge crossing.
+                foreach (Point[] face in body.Faces)
+                    for (int i = 0; i < face.Length; i++)
+                    {
+                        Point c = face[i], d = face[(i + 1) % face.Length];
+                        double nc = c.X * nx + c.Y * ny, nd = d.X * nx + d.Y * ny;
+                        if (Math.Abs(nd - nc) < Epsilon)
+                        {
+                            if (Math.Abs(level - nc) <= Epsilon)
+                            {
+                                double tc = -ny * c.X + nx * c.Y, td = -ny * d.X + nx * d.Y;
+                                if (Math.Max(tc, td) >= min && Math.Min(tc, td) <= max) return Location.Uncertain;
+                            }
+                            continue;
+                        }
+                        double ratio = (level - nc) / (nd - nc);
+                        double t = -ny * (c.X + ratio * (d.X - c.X)) + nx * (c.Y + ratio * (d.Y - c.Y));
+                        if (ratio >= 0 && ratio <= 1 && t >= min && t <= max) return Location.Uncertain;
+                    }
+                return Location.External;
+            }
+            return Location.Uncertain;
+        }
+
+        internal static bool Overlaps(Span a, Span b, double clearance)
+        { return Math.Max(a.Min, b.Min) <= Math.Min(a.Max, b.Max) + clearance; }
+
+        internal static bool FeetConnected(IList<Point> a, IList<Point> b, double nx, double ny, double clearance)
+        {
+            if (a == null || b == null || a.Count < 2 || b.Count < 2
+                || a.Any(p => !Finite(p)) || b.Any(p => !Finite(p))) return false;
+            // Both projections must overlap; equal measured Y rows alone must not
+            // join the two ends of a beam or separate plate connections.
+            return Math.Max(a.Min(p => p.X * nx + p.Y * ny), b.Min(p => p.X * nx + p.Y * ny))
+                    <= Math.Min(a.Max(p => p.X * nx + p.Y * ny), b.Max(p => p.X * nx + p.Y * ny)) + clearance
+                && Math.Max(a.Min(p => -p.X * ny + p.Y * nx), b.Min(p => -p.X * ny + p.Y * nx))
+                    <= Math.Min(a.Max(p => -p.X * ny + p.Y * nx), b.Max(p => -p.X * ny + p.Y * nx)) + clearance;
+        }
+
+        internal static bool PlanLocal(IList<Span> spans, double spacing, double clearance, IList<Span> obstacles)
+        {
+            if (spans == null || spans.Count == 0 || !Finite(spacing) || spacing <= 0
+                || !Finite(clearance) || clearance < 0) return false;
+            double step = Math.Max(spacing, clearance);
+            for (int i = 0; i < spans.Count; i++)
+            {
+                var s = spans[i];
+                if (s == null || !Finite(s.Anchor) || !Finite(s.OriginalLevel)
+                    || !Finite(s.Min) || !Finite(s.Max) || s.Max <= s.Min) return false;
+                s.TargetLevel = i == 0 ? s.OriginalLevel : Math.Max(spans[0].OriginalLevel, s.Anchor + .01);
+                if (i == 0) continue; // User-approved local reference tier stays fixed.
+                for (int j = 0; j < i; j++)
+                    if (Overlaps(s, spans[j], clearance))
+                        s.TargetLevel = Math.Max(s.TargetLevel, spans[j].TargetLevel + step);
+                // Each collision moves beyond an obstacle, so at most N+1 passes.
+                for (int pass = 0; obstacles != null && pass <= obstacles.Count; pass++)
+                {
+                    double before = s.TargetLevel;
+                    foreach (var obstacle in obstacles)
+                        if (Overlaps(s, obstacle, clearance) && Math.Abs(s.TargetLevel - obstacle.TargetLevel) < step - .01)
+                            s.TargetLevel = obstacle.TargetLevel + step;
+                    if (s.TargetLevel == before) break;
+                }
+                if (!Finite(s.TargetLevel)) return false;
+            }
+            return true;
+        }
+
+        // Caller supplies original visual order. Disjoint local dimensions retain
+        // their own anchors. Overlapping spans receive outward tiers as one plan.
+        internal static bool Plan(Body body, IList<Span> spans, double nx, double ny,
+            double spacing, double clearance)
+        {
+            if (body == null || spans == null || !Finite(spacing) || spacing <= 0
+                || !Finite(clearance) || clearance < 0) return false;
+            for (int i = 0; i < spans.Count; i++)
+            {
+                Span s = spans[i];
+                if (s == null || !Finite(s.Anchor) || !Finite(s.Min) || !Finite(s.Max)
+                    || !Finite(s.OriginalLevel) || s.Max <= s.Min
+                    || (i > 0 && s.OriginalLevel < spans[i - 1].OriginalLevel - .01)) return false;
+                s.TargetLevel = s.Anchor + spacing;
+                for (int j = 0; j < i; j++)
+                    if (Overlaps(s, spans[j], clearance))
+                    {
+                        if (spacing < clearance) return false;
+                        s.TargetLevel = Math.Max(s.TargetLevel, spans[j].TargetLevel + spacing);
+                    }
+                if (!Finite(s.TargetLevel) || !CoversLine(body, s.TargetLevel, s.Min, s.Max, nx, ny)) return false;
+            }
+            return true;
+        }
+
+        internal static Dictionary<View, Body> ReadBodies(Drawing drawing, IEnumerable<View> views)
+        {
+            var result = new Dictionary<View, Body>();
+            try
+            {
+                var model = new Model.Model();
+                if (!model.GetConnectionStatus()) return result;
+                Model.Part main = null;
+                var single = drawing as SinglePartDrawing;
+                var assembly = drawing as AssemblyDrawing;
+                if (single != null) main = model.SelectModelObject(single.PartIdentifier) as Model.Part;
+                if (assembly != null)
+                {
+                    var obj = model.SelectModelObject(assembly.AssemblyIdentifier);
+                    var ass = obj as Model.Assembly;
+                    main = ass == null ? obj as Model.Part : ass.GetMainPart() as Model.Part;
+                }
+                if (main == null) return result;
+                var toGlobal = model.GetWorkPlaneHandler().GetCurrentTransformationPlane().TransformationMatrixToGlobal;
+                var globalFaces = ReadGlobalFaces(main, toGlobal);
+                foreach (View view in views.Distinct())
+                {
+                    try
+                    {
+                        bool visible = false;
+                        var parts = view.GetAllObjects(typeof(Tekla.Structures.Drawing.Part));
+                        while (parts.MoveNext())
+                        {
+                            var part = parts.Current as Tekla.Structures.Drawing.Part;
+                            if (part != null && part.ModelIdentifier.ID == main.Identifier.ID) visible = true;
+                        }
+                        if (!visible) continue;
+                        var body = ProjectBody(globalFaces, view);
+                        if (body.Faces.Count > 0) result.Add(view, body);
+                    }
+                    catch { /* Missing geometry is uncertain, never a fabricated box. */ }
+                }
+            }
+            catch { result.Clear(); }
+            return result;
+        }
+        private static List<List<Point[]>> ReadGlobalFaces(Model.Part part, Matrix toGlobal)
+        {
+                var globalFaces = new List<List<Point[]>>();
+                var faces = part.GetSolid().GetFaceEnumerator();
+                while (faces.MoveNext())
+                {
+                    var face = faces.Current as Tekla.Structures.Solid.Face;
+                    if (face == null) throw new InvalidOperationException("Unreadable solid face");
+                    var loops = face.GetLoopEnumerator();
+                    var faceLoops = new List<Point[]>();
+                    while (loops.MoveNext())
+                    {
+                        var loop = loops.Current as Tekla.Structures.Solid.Loop;
+                        if (loop == null) throw new InvalidOperationException("Unreadable solid loop");
+                        var points = new List<Point>();
+                        var vertices = loop.GetVertexEnumerator();
+                        while (vertices.MoveNext())
+                        {
+                            var p = toGlobal.Transform(vertices.Current);
+                            if (!Finite(p)) throw new InvalidOperationException("Invalid solid vertex");
+                            points.Add(p);
+                        }
+                        if (points.Count < 3) throw new InvalidOperationException("Incomplete solid loop");
+                        faceLoops.Add(points.ToArray());
+                    }
+                    globalFaces.Add(faceLoops);
+                }
+            return globalFaces;
+        }
+
+        private static Body ProjectBody(List<List<Point[]>> globalFaces, View view)
+        {
+                        var matrix = MatrixFactory.ToCoordinateSystem(view.DisplayCoordinateSystem);
+                        var body = new Body();
+                        foreach (var face in globalFaces)
+                        {
+                            Point[] outer = null;
+                            double largest = Epsilon;
+                            foreach (Point[] loop in face)
+                            {
+                                Point[] projected = loop.Select(matrix.Transform).ToArray();
+                                if (projected.Any(p => !Finite(p))) throw new InvalidOperationException("Invalid view projection");
+                                double area = 0;
+                                for (int i = 0; i < projected.Length; i++)
+                                {
+                                    Point a = projected[i], b = projected[(i + 1) % projected.Length];
+                                    area += (a.X - projected[0].X) * (b.Y - projected[0].Y)
+                                        - (b.X - projected[0].X) * (a.Y - projected[0].Y);
+                                }
+                                if (Math.Abs(area) > largest) { largest = Math.Abs(area); outer = projected; }
+                            }
+                            if (outer != null) body.Faces.Add(outer);
+                        }
+            return body;
+        }
+
+
     }
 }

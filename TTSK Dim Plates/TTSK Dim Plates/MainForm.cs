@@ -1,21 +1,604 @@
-using System;
-using System.Collections.Generic;
-using System.Drawing;
-using System.Drawing.Drawing2D;
-using System.Reflection;
-using System.Runtime.InteropServices;
-using System.Threading;
-using System.Windows.Forms;
-using Tekla.Structures.Drawing;
-using Tekla.Structures.Model;
+﻿// Giao diện chính và điều phối các lệnh Tekla, DIM, kiểm tra, batch, keyplan, updater.
+// LUỒNG DIM: RunActiveDrawing/RunBatchDrawings → RunCurrentAutoDimScript → nhận part → Auto Section tùy chọn → engine tương ứng.
+// LUỒNG SLOT 07: RunDataCenterCurrentDrawing; cột H/C/L qua RunDataCenterLegacyColumn, cột hộp và dầm qua nhánh riêng.
+// ĐIỂM SỬA: route ở RunVisibleAutoDimSlot/RunExternalAutoDimSlot; thứ tự DIM ở RunCurrentAutoDimScript; giao diện ở Build*/Initialize*.
+// THAM SỐ: DATA_CENTER_GRID_AXIS_COUNT, DATA_CENTER_FIT_PADDING, DEFAULT_AUTO_SECTION_ENABLED; setting đã lưu có thể thay mặc định.
+// TÁCH LUỒNG: UI dùng Ui/ReadUi; lệnh Tekla qua dispatcher. Phím tắt/batch chọn target còn ở các MainForm.*.cs riêng.
+// TRA CỨU: PROJECT_MAP.md ở gốc repo; chỉ mục kiểu/hàm và điểm chỉnh thông số.
+// Mục lục:
+//   MainForm.CheckMenu.cs
+//   MainForm.Operations.cs
+//   MainForm.cs
+//   MainForm.ArrangeReference.cs
+//   MainForm.WorkJournal.cs
+//   MainForm.Keyplan.cs
+//   MainForm.Updater.cs
+
+#region MainForm.CheckMenu - Menu kiểm tra DIM, scale và revision
+
 
 namespace TTSK_AutoDim_Plates
 {
+    using System;
+    using System.Drawing;
+    using System.Windows.Forms;
+    using System.Collections.Generic;
+    using System.Linq;
+    using D = Tekla.Structures.Drawing;
+    using B = Tekla.Technology.Akit.UserScript.PHU_DimensionBatch;
+
+    public partial class MainForm
+    {
+        private Panel checkMenuHost;
+        private SafeRoundedButton btnCheckDim;
+        private SafeRoundedButton btnCheckRevision;
+        private Timer checkMenuCloseTimer;
+        private B.Session dimensionCheckBatch;
+        private string dimensionCheckModelPath;
+        private bool dimensionCheckOpen;
+
+        private void ResetDimensionCheckBatch()
+        {dimensionCheckBatch=null;dimensionCheckModelPath=null;}
+        private void CaptureDimensionCheckBatchSource()
+        {
+            var model=new Tekla.Structures.Model.Model();
+            dimensionCheckModelPath=model.GetConnectionStatus()?model.GetInfo().ModelPath:null;
+        }
+
+        private void InitializeCheckMenu()
+        {
+            checkMenuHost = new Panel { Visible = false, BackColor = Color.Transparent, Padding = Padding.Empty, Margin = Padding.Empty };
+            btnCheckDim = new SafeRoundedButton { Text = "⌕  Check Dim", TabStop = true };
+            btnCheckRevision = new SafeRoundedButton { Text = "↺  Revision", TabStop = true };
+            btnCheckScale.IconAlignmentReference = btnCheckScale.Text;
+            btnCheckDim.IconAlignmentReference = btnCheckScale.Text;
+            btnCheckRevision.IconAlignmentReference = btnCheckScale.Text;
+            checkMenuHost.Controls.Add(btnCheckDim);
+            checkMenuHost.Controls.Add(btnCheckRevision);
+            Controls.Add(checkMenuHost);
+            checkMenuCloseTimer = new Timer { Interval = 180 };
+            checkMenuCloseTimer.Tick += delegate
+            {
+                checkMenuCloseTimer.Stop();
+                if (!IsCursorInsideControl(btnCheckScale) && !IsCursorInsideControl(checkMenuHost)
+                    && !checkMenuHost.ContainsFocus) HideCheckMenu();
+            };
+            btnCheckScale.MouseHover += delegate { ShowCheckMenu(); };
+            btnCheckScale.MouseEnter += delegate { checkMenuCloseTimer.Stop(); };
+            btnCheckScale.MouseLeave += delegate { ScheduleCheckMenuClose(); };
+            foreach (Control control in new Control[] { checkMenuHost, btnCheckDim, btnCheckRevision })
+            {
+                control.MouseEnter += delegate { checkMenuCloseTimer.Stop(); };
+                control.MouseLeave += delegate { ScheduleCheckMenuClose(); };
+            }
+            btnCheckDim.Click += delegate { RunDimensionCheck(); };
+            btnCheckRevision.Click += delegate { RunRevisionCheck(); };
+            btnCheckDim.KeyDown += delegate(object sender, KeyEventArgs e)
+            { if (e.KeyCode == Keys.Down) { btnCheckRevision.Focus(); e.Handled = e.SuppressKeyPress = true; } };
+            btnCheckRevision.KeyDown += delegate(object sender, KeyEventArgs e)
+            {
+                if (e.KeyCode == Keys.Up) btnCheckDim.Focus();
+                else if (e.KeyCode == Keys.Escape) { HideCheckMenu(); btnCheckScale.Focus(); }
+                else return;
+                e.Handled = e.SuppressKeyPress = true;
+            };
+            btnCheckScale.Click += delegate { HideCheckMenu(); };
+            btnCheckScale.EnabledChanged += delegate { if (!btnCheckScale.Enabled) HideCheckMenu(); };
+            btnCheckScale.KeyDown += delegate(object sender, KeyEventArgs e)
+            {
+                if (e.KeyCode != Keys.Down && e.KeyCode != Keys.Up) return;
+                ShowCheckMenu();
+                btnCheckDim.Focus();
+                e.Handled = e.SuppressKeyPress = true;
+            };
+            btnCheckDim.KeyDown += delegate(object sender, KeyEventArgs e)
+            {
+                if (e.KeyCode != Keys.Escape) return;
+                HideCheckMenu();
+                btnCheckScale.Focus();
+                e.Handled = e.SuppressKeyPress = true;
+            };
+            Deactivate += delegate { HideCheckMenu(); };
+            Resize += delegate { HideCheckMenu(); };
+            Disposed += delegate { checkMenuCloseTimer.Dispose(); };
+        }
+
+        private void RunDimensionCheck()
+        {
+            RunDimensionCheckShortcut();
+        }
+
+        private void RunDimensionCheckCore()
+        {
+            if (operationRunning || sessionSwitching || !EnsureSessionCommandTarget()) return;
+            HideCheckMenu();
+            if (dimensionCheckOpen || _snapshotExportRunning || _isBatchRunning || _fitAndCleanupRunning
+                || btnCheckScale == null || !btnCheckScale.Enabled) return;
+            if(rbBatch!=null&&rbBatch.Checked){RunDimensionCheckBatch();return;}
+            Tekla.Technology.Akit.UserScript.PHU_DimensionCheck.ReportDarkMode = _darkMode;
+            // Check DIM findings and execution failures are not AutoDim's "NO DIM CREATED".
+            dimensionCheckOpen=true;
+            try
+            {
+                TeklaSessionCoordinator.VerifyConnection();
+                var active=new D.DrawingHandler().GetActiveDrawing();
+                var model=new Tekla.Structures.Model.Model();
+                if(_selectedDrawings.Count!=1 || active==null
+                    || !active.IsSameDatabaseObject(_selectedDrawings[0])
+                    || !model.GetConnectionStatus()
+                    || !string.Equals(model.GetInfo().ModelPath,dimensionCheckModelPath,StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Bản vẽ/model hiện hành đã đổi. Hãy chạy Check DIM lại.");
+                var result=Tekla.Technology.Akit.UserScript.PHU_DimensionCheck.Analyze();
+                Tekla.Technology.Akit.UserScript.PHU_DimensionCheck.AcceptRecheck(result);
+                using(var report=new Tekla.Technology.Akit.UserScript.PHU_DimensionReportForm(result,_darkMode,
+                    ()=>{result=Tekla.Technology.Akit.UserScript.PHU_DimensionCheck.Analyze();return result;}))report.ShowDialog(this);
+                bool attention=result.Warnings.Count>0||result.Findings.Any(f=>f.Status=="ERROR"||f.Status=="REVIEW");
+                SetMainStatus("Check DIM: "+result.Summary,attention?MainStatusKind.Warning:MainStatusKind.Success);
+            }
+            catch(Exception ex){SetMainStatus("Check DIM chưa hoàn tất: "+ex.GetBaseException().Message,MainStatusKind.Warning);}
+            finally{dimensionCheckOpen=false;}
+        }
+
+        private void RunRevisionCheck()
+        {
+            if (operationRunning || sessionSwitching || !EnsureSessionCommandTarget()) return;
+            HideCheckMenu();
+            if (dimensionCheckOpen || _snapshotExportRunning || _isBatchRunning || _fitAndCleanupRunning
+                || !btnCheckScale.Enabled) return;
+            dimensionCheckOpen = true;
+            try
+            {
+                TeklaSessionCoordinator.VerifyConnection();
+                using (var report = new Tekla.Technology.Akit.UserScript.PHU_DimensionReportForm(_darkMode, CreateRevisionDimensions))
+                    report.ShowDialog(this);
+            }
+            catch (Exception ex) { SetMainStatus("Check Revision: " + ex.GetBaseException().Message, MainStatusKind.Warning); }
+            finally { dimensionCheckOpen = false; }
+        }
+
+        private string CreateRevisionDimensions()
+        {
+            // Resolve before entering the scoped operation. No Load Standard, Auto Section,
+            // grid fitting, autoscale or MainForm Create Drawing orchestration is invoked.
+            var model = new Tekla.Structures.Model.Model();
+            var drawing = new D.DrawingHandler().GetActiveDrawing();
+            var part = Tekla.Technology.Akit.UserScript.PHU_MainPartResolver.Resolve(model, drawing);
+            if (part == null) throw new InvalidOperationException("Không xác định được main part.");
+            var type = DetectAutoDimPartType(part);
+            if (type == AutoDimPartType.Plate && !(drawing is D.SinglePartDrawing))
+                throw new InvalidOperationException("Plate Create drawing cần bản vẽ single part.");
+            Tekla.Technology.Akit.UserScript.PHU_BeamGridDimensionEngine.Reset();
+            Tekla.Technology.Akit.UserScript.PHU_VerticalShapeViewLayoutContext.Reset();
+            return Tekla.Technology.Akit.UserScript.PHU_DimensionRevision.CreateRevisionDrawing(() =>
+            {
+                switch (type)
+                {
+                    case AutoDimPartType.Plate: Tekla.Technology.Akit.UserScript.Script.Run(null); break;
+                    case AutoDimPartType.ShapeIH: Tekla.Technology.Akit.UserScript.ShapeScript.Run(null); break;
+                    case AutoDimPartType.ShapeC: Tekla.Technology.Akit.UserScript.ShapeCScript.Run(null); break;
+                    case AutoDimPartType.ShapeL: Tekla.Technology.Akit.UserScript.ShapeLScript.Run(null); break;
+                    case AutoDimPartType.ShapeBox: Tekla.Technology.Akit.UserScript.ShapeBoxScript.Run(null); break;
+                    case AutoDimPartType.ShapeUnknown:
+                        var result = Tekla.Technology.Akit.UserScript.ShapeUnknownScript.RunSafe(drawing, model, part);
+                        if (result == null || !result.Success)
+                            throw new InvalidOperationException(result == null ? "Không có kết quả DIM." : result.Message);
+                        break;
+                    default: throw new InvalidOperationException("Profile chưa hỗ trợ Create drawing.");
+                }
+            });
+        }
+
+        private void RunDimensionCheckBatch()
+        {
+            if(_selectedDrawings.Count==0)
+            {SetMainStatus("Check DIM Batch: chọn bản vẽ trong Document Manager rồi bấm Load Selected.",MainStatusKind.Warning);return;}
+            dimensionCheckOpen=true;
+            try
+            {
+                var model=new Tekla.Structures.Model.Model();
+                if(!model.GetConnectionStatus()||String.IsNullOrEmpty(dimensionCheckModelPath)||
+                    !String.Equals(model.GetInfo().ModelPath,dimensionCheckModelPath,StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Hãy Load Selected lại trong model hiện tại.");
+                var drawings=new List<D.Drawing>();
+                foreach(var drawing in _selectedDrawings)
+                    if(!drawings.Any(existing=>existing.IsSameDatabaseObject(drawing)))drawings.Add(drawing);
+                if(dimensionCheckBatch==null||dimensionCheckBatch.Entries.Count!=drawings.Count||
+                    dimensionCheckBatch.Entries.Where((e,i)=>!e.Drawing.IsSameDatabaseObject(drawings[i])).Any())
+                {
+                    var entries=drawings.Select((d,i)=>new B.Entry {Key=Guid.NewGuid().ToString("N"),Number=i+1,
+                        Name=SafeDrawingMark(d)+" / "+d.Name,Drawing=d,Supported=d is D.AssemblyDrawing||d is D.SinglePartDrawing}).ToList();
+                    dimensionCheckBatch=new B.Session(entries,new B.TeklaAdapter(dimensionCheckModelPath),dimensionCheckModelPath);
+                }
+                using(var report=new Tekla.Technology.Akit.UserScript.PHU_DimensionReportForm(dimensionCheckBatch,_darkMode,true))report.ShowDialog(this);
+                int work=dimensionCheckBatch.Entries.Count(e=>e.NeedsWork);
+                int pending=dimensionCheckBatch.Entries.Count(e=>e.Status==B.State.Pending);
+                int unsupported=dimensionCheckBatch.Entries.Count(e=>e.Status==B.State.Unsupported);
+                SetMainStatus("Check DIM Batch: "+dimensionCheckBatch.Entries.Count+" bản · "+work+" cần xử lý · "+pending+" chưa chạy · "+unsupported+" chưa hỗ trợ",
+                    work+pending+unsupported>0?MainStatusKind.Warning:MainStatusKind.Success);
+            }
+            catch(Exception ex){SetMainStatus("Check DIM Batch: "+ex.GetBaseException().Message,MainStatusKind.Warning);}
+            finally{dimensionCheckOpen=false;}
+        }
+
+        private void ShowCheckMenu()
+        {
+            if (checkMenuHost == null || !btnCheckScale.Enabled) return;
+            HidePrintMenu();
+            checkMenuCloseTimer.Stop();
+            ApplyCheckMenuTheme();
+            Point anchor = PointToClient(btnCheckScale.PointToScreen(Point.Empty));
+            checkMenuHost.Location = new Point(
+                Math.Max(0, Math.Min(anchor.X, ClientSize.Width - checkMenuHost.Width)),
+                Math.Max(0, Math.Min(anchor.Y + btnCheckScale.Height, ClientSize.Height - checkMenuHost.Height)));
+            btnCheckScale.ConnectedBottom = true;
+            btnCheckScale.Invalidate();
+            checkMenuHost.Show();
+            checkMenuHost.BringToFront();
+        }
+
+        private void HideCheckMenu()
+        {
+            if (checkMenuCloseTimer != null) checkMenuCloseTimer.Stop();
+            if (checkMenuHost != null) checkMenuHost.Hide();
+            if (btnCheckScale != null)
+            {
+                btnCheckScale.ConnectedBottom = false;
+                btnCheckScale.Invalidate();
+            }
+        }
+
+        private void ScheduleCheckMenuClose()
+        {
+            if (!checkMenuHost.Visible) return;
+            checkMenuCloseTimer.Stop();
+            checkMenuCloseTimer.Start();
+        }
+
+        private void ApplyCheckMenuTheme()
+        {
+            if (checkMenuHost == null || btnCheckDim == null) return;
+            int menuWidth = btnCheckScale.Width;
+            checkMenuHost.Size = new Size(menuWidth, btnCheckScale.Height * 2);
+            btnCheckDim.Location = Point.Empty;
+            btnCheckDim.Size = new Size(menuWidth, btnCheckScale.Height);
+            btnCheckDim.Font = btnCheckScale.Font;
+            btnCheckDim.FillColor = btnCheckScale.FillColor;
+            btnCheckDim.GradientEndColor = btnCheckScale.GradientEndColor;
+            btnCheckDim.BorderColor = btnCheckScale.BorderColor;
+            btnCheckDim.HoverBorderColor = btnCheckScale.HoverBorderColor;
+            btnCheckDim.TextColor = btnCheckScale.TextColor;
+            btnCheckDim.BorderRadius = btnCheckScale.BorderRadius;
+            btnCheckDim.ConnectedTop = true;
+            btnCheckDim.ConnectedBottom = true;
+            btnCheckDim.FlushOuterEdge = btnCheckScale.FlushOuterEdge;
+            btnCheckDim.Invalidate();
+            btnCheckRevision.Location = new Point(0, btnCheckScale.Height);
+            btnCheckRevision.Size = btnCheckDim.Size;
+            btnCheckRevision.Font = btnCheckScale.Font;
+            btnCheckRevision.FillColor = btnCheckScale.FillColor;
+            btnCheckRevision.GradientEndColor = btnCheckScale.GradientEndColor;
+            btnCheckRevision.BorderColor = btnCheckScale.BorderColor;
+            btnCheckRevision.HoverBorderColor = btnCheckScale.HoverBorderColor;
+            btnCheckRevision.TextColor = btnCheckScale.TextColor;
+            btnCheckRevision.BorderRadius = btnCheckScale.BorderRadius;
+            btnCheckRevision.ConnectedTop = true;
+            btnCheckRevision.FlushOuterEdge = btnCheckScale.FlushOuterEdge;
+            btnCheckRevision.Invalidate();
+            checkMenuHost.Invalidate();
+        }
+    }
+}
+#endregion
+
+#region MainForm.Operations - Điều phối lệnh Tekla và trạng thái bận
+
+
+namespace TTSK_AutoDim_Plates
+{
+    using System;
+    using System.Threading.Tasks;
+    using System.Linq;
+    using System.Windows.Forms;
+
+    public partial class MainForm
+    {
+        private bool sessionSwitching;
+        private bool sessionHandoffAccepted;
+        private int pendingTeklaProcess;
+        private bool sessionDiscoveryRunning;
+        private readonly System.Collections.Generic.HashSet<string> knownTeklaSessions = new System.Collections.Generic.HashSet<string>();
+        private System.Windows.Forms.Timer sessionTimer;
+        private IntPtr sessionForegroundHook;
+        private SessionForegroundCallback sessionForegroundCallback;
+        private delegate void SessionForegroundCallback(IntPtr hook, uint eventId, IntPtr window, int objectId, int childId, uint thread, uint time);
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern IntPtr SetWinEventHook(uint first, uint last, IntPtr module, SessionForegroundCallback callback, uint process, uint thread, uint flags);
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool UnhookWinEvent(IntPtr hook);
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
+
+        private void InitializeTeklaSessionUi()
+        {
+            if (TeklaSessionCoordinator.Current == null) return;
+            string known = Environment.GetEnvironmentVariable("TTSK_SESSION_KNOWN");
+            if (!string.IsNullOrEmpty(known))
+                foreach (string key in known.Split(';')) knownTeklaSessions.Add(key);
+            else
+                foreach (var target in TeklaSessionCoordinator.Discover().Where(t => !string.IsNullOrEmpty(t.ModelFolder)))
+                    knownTeklaSessions.Add(target.Id + ":" + target.Started);
+            knownTeklaSessions.Add(TeklaSessionCoordinator.Current.Id + ":" + TeklaSessionCoordinator.Current.Started);
+            int savedX, savedY;
+            if (int.TryParse(Environment.GetEnvironmentVariable("TTSK_SESSION_X"), out savedX)
+                && int.TryParse(Environment.GetEnvironmentVariable("TTSK_SESSION_Y"), out savedY))
+            {
+                var requested = new System.Drawing.Rectangle(savedX, savedY, Width, Height);
+                if (System.Windows.Forms.Screen.AllScreens.Any(s => s.WorkingArea.Contains(requested)))
+                { StartPosition = FormStartPosition.Manual; Location = requested.Location; }
+                pinTopMostButton.Pinned = Environment.GetEnvironmentVariable("TTSK_SESSION_PIN") == "1";
+            }
+            UpdateTeklaSessionCaption();
+            mainBrandSubtitle.Cursor = Cursors.Hand;
+            mainBrandSubtitle.AccessibleName = "Chọn dự án Tekla";
+            mainBrandSubtitle.Click += async delegate
+            {
+                if (!CanSwitchTeklaSession() || sessionDiscoveryRunning) return;
+                sessionDiscoveryRunning = true;
+                try
+                {
+                    var targets = await Task.Run(() => TeklaSessionCoordinator.Discover().Where(TeklaSessionCoordinator.IsReady).ToList());
+                    if (IsDisposed || !CanSwitchTeklaSession()) return;
+                    if (targets.Count == 0) { SetMainStatus("Đang chờ Tekla mở model…", MainStatusKind.Information); return; }
+                    var target = TeklaSessionCoordinator.Choose(this, targets);
+                    pendingTeklaProcess = 0;
+                    if (target != null) SwitchTeklaSession(target);
+                }
+                catch (Exception ex) { if (!IsDisposed) SetMainStatus("Chưa đọc được phiên Tekla.", MainStatusKind.Warning); TTSK_AutoDim_Plates.Updater.UpdateSecurity.Log(Application.StartupPath, "Session picker: " + ex); }
+                finally { sessionDiscoveryRunning = false; }
+            };
+            sessionForegroundCallback = delegate(IntPtr hook, uint eventId, IntPtr window, int objectId, int childId, uint thread, uint time)
+            {
+                uint id; GetWindowThreadProcessId(window, out id);
+                ObserveTeklaForeground((int)id);
+            };
+            // EVENT_SYSTEM_FOREGROUND, ngoài tiến trình: chỉ theo dõi, không kích hoạt/đổi cửa sổ Tekla.
+            sessionForegroundHook = SetWinEventHook(3, 3, IntPtr.Zero, sessionForegroundCallback, 0, 0, 0);
+            sessionTimer = new System.Windows.Forms.Timer { Interval = 500 }; // ms; chỉ chuyển khi không có lệnh/dialog.
+            sessionTimer.Tick += async delegate
+            {
+                if (sessionForegroundHook == IntPtr.Zero) ObserveTeklaForeground(TeklaSessionCoordinator.ForegroundProcessId());
+                if (!TeklaSessionCoordinator.FollowForeground || !CanSwitchTeklaSession() || pendingTeklaProcess == 0 || sessionDiscoveryRunning) return;
+                sessionDiscoveryRunning = true;
+                int requested = pendingTeklaProcess;
+                try
+                {
+                    var targets = await Task.Run(() => TeklaSessionCoordinator.Discover().Where(TeklaSessionCoordinator.IsReady).ToList());
+                    if (IsDisposed || !CanSwitchTeklaSession() || requested != pendingTeklaProcess) return;
+                    var target = targets.Find(t => t.Id == requested);
+                    if (target == null)
+                    {
+                        // Tekla mới còn ở màn hình khởi động: chờ model xuất hiện, không thử kết nối sớm.
+                        try { using (var process = System.Diagnostics.Process.GetProcessById(pendingTeklaProcess)) if (process.HasExited) pendingTeklaProcess = 0; }
+                        catch (ArgumentException) { pendingTeklaProcess = 0; }
+                        return;
+                    }
+                    if (!knownTeklaSessions.Contains(target.Id + ":" + target.Started))
+                    {
+                        pendingTeklaProcess = 0;
+                        foreach (var session in targets) knownTeklaSessions.Add(session.Id + ":" + session.Started);
+                        // Phiên vừa mở: cho người dùng chọn bằng thẻ; không tự chuyển trong lúc model đang tải.
+                        SetMainStatus("Chọn dự án Tekla.", MainStatusKind.Information);
+                        target = TeklaSessionCoordinator.Choose(this, targets);
+                        if (target == null) { SetMainStatus("Giữ dự án hiện tại.", MainStatusKind.Information); return; }
+                    }
+                    SwitchTeklaSession(target);
+                }
+                catch (Exception ex) { TTSK_AutoDim_Plates.Updater.UpdateSecurity.Log(Application.StartupPath, "Session scan: " + ex); }
+                finally { sessionDiscoveryRunning = false; }
+            };
+            Shown += delegate { sessionTimer.Start(); };
+            Disposed += delegate
+            {
+                sessionTimer.Dispose();
+                if (sessionForegroundHook != IntPtr.Zero) UnhookWinEvent(sessionForegroundHook);
+                GC.KeepAlive(sessionForegroundCallback);
+            };
+        }
+
+        private void UpdateTeklaSessionCaption()
+        {
+            string project = System.IO.Path.GetFileName(TeklaSessionCoordinator.ModelPath ?? "");
+            mainBrandSubtitle.Text = "Dự án: " + project
+                + (TeklaSessionCoordinator.FollowForeground ? " · Tự động  ▾" : " · Cố định  ▾");
+            mainBrandSubtitle.AutoEllipsis = true;
+            Text = "TTSK AutoDim — " + project;
+        }
+
+        private void ObserveTeklaForeground(int id)
+        {
+            if (id <= 0 || !TeklaSessionCoordinator.FollowForeground || sessionSwitching) return;
+            try
+            {
+                using (var process = System.Diagnostics.Process.GetProcessById(id))
+                    if (string.Equals(process.ProcessName, "TeklaStructures", StringComparison.OrdinalIgnoreCase))
+                        pendingTeklaProcess = id == TeklaSessionCoordinator.Current.Id
+                            && process.StartTime.ToUniversalTime().Ticks == TeklaSessionCoordinator.Current.Started ? 0 : id;
+            }
+            catch (ArgumentException) { }
+            catch (System.ComponentModel.Win32Exception) { }
+            catch (InvalidOperationException) { }
+        }
+
+        private bool CanSwitchTeklaSession()
+        {
+            return CanApplyUpdateNow() && !batchShortcutPending && !dimensionCheckOpen && !_updateDialogOpen && !_updaterHandoffClosing
+                && Enabled && Application.OpenForms.Count == 1;
+        }
+
+        private bool EnsureSessionCommandTarget()
+        {
+            if (sessionSwitching) return false;
+            if (TeklaSessionCoordinator.FollowForeground && pendingTeklaProcess != 0)
+            {
+                SetMainStatus("Chờ chuyển dự án…", MainStatusKind.Information);
+                return false;
+            }
+            return true;
+        }
+
+        private async void SwitchTeklaSession(TeklaSessionTarget target)
+        {
+            if (!CanSwitchTeklaSession()) return;
+            sessionSwitching = true;
+            pendingTeklaProcess = 0;
+            bool wasTopMost = TopMost;
+            System.Diagnostics.Process child = null;
+            try
+            {
+                // Kết nối/cache Tekla tĩnh không hỗ trợ đổi tại chỗ: tiến trình mới cho mỗi lần đổi dự án.
+                // Chỉ bàn giao khi tiến trình mới xác minh cả hai API; lỗi giữ nguyên cửa sổ hiện tại.
+                if (!SaveWorkSession()) throw new InvalidOperationException(workJournalError);
+                string token = "Local\\TTSK-session-" + Guid.NewGuid().ToString("N");
+                using (var ready = new System.Threading.EventWaitHandle(false, System.Threading.EventResetMode.ManualReset, token + "-ready"))
+                using (var accept = new System.Threading.EventWaitHandle(false, System.Threading.EventResetMode.ManualReset, token + "-accept"))
+                {
+                    Enabled = false; TopMost = false;
+                    SetMainStatus("Đang chuyển dự án…", MainStatusKind.Information);
+                    var start = TeklaSessionCoordinator.CreateStartInfo(target, token);
+                    start.EnvironmentVariables["TTSK_SESSION_KNOWN"] = string.Join(";", knownTeklaSessions);
+                    start.EnvironmentVariables["TTSK_SESSION_FADE"] = "1";
+                    start.EnvironmentVariables["TTSK_SESSION_X"] = Left.ToString();
+                    start.EnvironmentVariables["TTSK_SESSION_Y"] = Top.ToString();
+                    start.EnvironmentVariables["TTSK_SESSION_PIN"] = wasTopMost ? "1" : "0";
+                    child = System.Diagnostics.Process.Start(start);
+                    bool connected = await Task.Run(() =>
+                    {
+                        var clock = System.Diagnostics.Stopwatch.StartNew();
+                        while (clock.ElapsedMilliseconds < 30000)
+                        {
+                            if (ready.WaitOne(100)) return true;
+                            if (child.HasExited) return false;
+                        }
+                        return false;
+                    });
+                    if (!connected) throw new InvalidOperationException("Kết nối dự án mới chưa sẵn sàng.");
+                    accept.Set();
+                    sessionHandoffAccepted = true;
+                    // Đã lưu nhật ký trước bàn giao; sessionSwitching ngăn timer ghi đè từ phiên cũ.
+                    Close();
+                }
+            }
+            catch (Exception ex)
+            {
+                if (child != null)
+                    try { if (!child.HasExited) child.Kill(); } catch (Exception) { }
+                TeklaSessionCoordinator.FollowForeground = false; // Lỗi chỉ báo một lần; chọn lại bằng tên dự án.
+                UpdateTeklaSessionCaption();
+                TTSK_AutoDim_Plates.Updater.UpdateSecurity.Log(Application.StartupPath, "Session handoff: " + ex);
+                SetMainStatus("Chưa chuyển được. Chọn lại dự án.", MainStatusKind.Error);
+            }
+            finally
+            {
+                if (child != null) child.Dispose();
+                if (!IsDisposed) { sessionSwitching = false; Enabled = true; TopMost = wasTopMost; }
+            }
+        }
+
+        private readonly TeklaOperationDispatcher teklaOperations = new TeklaOperationDispatcher();
+        private volatile bool operationRunning;
+        private void Ui(Action action) { if (InvokeRequired) Invoke(action); else action(); }
+        private T ReadUi<T>(Func<T> read) { return InvokeRequired ? (T)Invoke(read) : read(); }
+
+        // Legacy synchronous implementations run on the worker. The UI only awaits,
+        // never Task.Wait/Result or a nested DoEvents loop.
+        private bool DispatchTeklaCommand(string name, Action work)
+        {
+            if (teklaOperations.IsWorkerThread) return false;
+            StartTeklaCommand(name, work);
+            return true;
+        }
+        private async void StartTeklaCommand(string name, Action work)
+        {
+            await ExecuteTeklaCommandAsync(name, work);
+        }
+        private async Task ExecuteTeklaCommandAsync(string name, Action work)
+        {
+            if (operationRunning || _isBatchRunning || _pdfCommandRunning || _snapshotExportRunning
+                || dimensionCheckOpen || _updateDialogOpen || _updaterHandoffClosing || sessionSwitching) return;
+            operationRunning = true;
+            var input = new OperationInputFilter(this);
+            Application.AddMessageFilter(input);
+            try
+            {
+                if (!EnsureSessionCommandTarget()) return;
+                SetMainStatus(name + ": đang chạy…", MainStatusKind.Information);
+                await teklaOperations.RunAsync(() => { TeklaSessionCoordinator.VerifyConnection(); work(); });
+            }
+            catch (Exception ex) { SetMainStatus(name + ": " + ex.GetBaseException().Message, MainStatusKind.Error); }
+            finally
+            {
+                Application.RemoveMessageFilter(input);
+                operationRunning = false;
+            }
+        }
+        private bool IsOperationNavigation(Control target)
+        {
+            for (var c = target; c != null && c != this; c = c.Parent)
+            {
+                if (c == slideHandle || c == toolHomeButton || c == themeSwitch || c == pinTopMostButton
+                    || c == slideDimTool || c == slideLineTool || c == slideGridTool
+                    || c == slideArrangeTool || c == slideAutoDimTool || c == btnDictionary)
+                    return true;
+                if (Equals(c.Tag, "OperationNavigation") || c == dgvDrawings) return true;
+                if (toolNavigationButtons.Contains(c as SafeRoundedButton)
+                    || autoDimPageButtons.Contains(c as SafeRoundedButton)) return true;
+                if (c == japaneseDictionaryPanel) return true;
+            }
+            return false;
+        }
+        private sealed class OperationInputFilter : IMessageFilter
+        {
+            private readonly MainForm owner;
+            internal OperationInputFilter(MainForm owner) { this.owner = owner; }
+            public bool PreFilterMessage(ref Message message)
+            {
+                if (!owner.operationRunning && !owner._pdfCommandRunning) return false;
+                bool input = (message.Msg >= 0x0100 && message.Msg <= 0x0109)
+                    || (message.Msg >= 0x0201 && message.Msg <= 0x020E);
+                if (!input) return false;
+                var control = Control.FromChildHandle(message.HWnd);
+                if (control == null || control.FindForm() != owner) return false;
+                if (owner._isBatchRunning && control == owner.btnRun) return false;
+                return !owner.IsOperationNavigation(control);
+            }
+        }
+    }
+}
+#endregion
+
+#region MainForm - Giao diện chính, sự kiện và điều phối chức năng
+
+
+namespace TTSK_AutoDim_Plates
+{
+    using System;
+    using System.Collections.Generic;
+    using System.Drawing;
+    using System.Drawing.Drawing2D;
+    using System.Reflection;
+    using System.Runtime.InteropServices;
+    using System.Threading;
+    using System.Windows.Forms;
+    using Tekla.Structures.Drawing;
+    using Tekla.Structures.Model;
+
     public partial class MainForm : Form
     {
         private const string GridVisibilityMacroFileName = "Phu_Macro_GridVisibility.cs";
         private const string GridVisibilityCommandFileName = "TTSK_GridVisibility.command";
+        // CHỈNH SLOT 07 DẦM: số trục grid; nhánh cột legacy tự đặt Grid=3 ở luồng riêng.
         private const int DATA_CENTER_GRID_AXIS_COUNT = 1;
+        // CHỈNH FIT: padding truyền vào RunDataCenterFitGridCore; xem phép đổi scale trong Fit, không dùng như khoảng tầng DIM.
         private const double DATA_CENTER_FIT_PADDING = 20.0;
 
         private readonly List<Drawing> _selectedDrawings = new List<Drawing>();
@@ -25,6 +608,7 @@ namespace TTSK_AutoDim_Plates
         private volatile bool _stopRequested = false;
         private int _resumeIndex = 0;
         private bool _gridVisibilityMacroRunning = false;
+        // MẶC ĐỊNH GIAO DIỆN: chỉ dùng khi không có lựa chọn đã lưu; auto_section.cfg có thể ghi đè.
         private const bool DEFAULT_AUTO_SECTION_ENABLED = false;
         private bool _autoSectionEnabled = DEFAULT_AUTO_SECTION_ENABLED;
         private bool? _batchAutoSectionEnabledSnapshot = null;
@@ -59,6 +643,7 @@ namespace TTSK_AutoDim_Plates
         private ThemeSwitch themeSwitch;
         private PinTopMostButton pinTopMostButton;
         private ToolTip pinTopMostToolTip;
+        private ToolTip mainStatusToolTip;
         private AutoSectionSwitch autoSectionSwitch;
         private ToolTip autoSectionToolTip;
         private Label lblManualScalePrefix;
@@ -69,6 +654,9 @@ namespace TTSK_AutoDim_Plates
         private RoundedPanel mainHeaderSurface;
         private RoundedPanel mainListSurface;
         private Label mainBrandTitle, mainBrandSubtitle, mainVersionLabel;
+        private PictureBox mainBrandLogo;
+        private Icon companyThemeIcon;
+        private bool? companyLogoDark;
         private RoundedPanel mainIdentityTile, mainHeaderActions;
 
         private ShortcutManager _shortcutManager;
@@ -80,6 +668,7 @@ namespace TTSK_AutoDim_Plates
         private readonly HashSet<Keys> _pressedShortcutKeys = new HashSet<Keys>();
 
         // ===== PHU SLIDE TOOLS PANEL =====
+        // CHỈNH GIAO DIỆN: nhóm Main*/Slide* là pixel; thay phải kiểm panel, DPI và kích thước cửa sổ.
         private const int MainBaseWidth = 966;
         private const int MainBaseHeight = 640;
         private const int SlideHandleWidth = 8;
@@ -88,6 +677,7 @@ namespace TTSK_AutoDim_Plates
         private const int SlideToolsWidth = 350;
         private const int SlidePanelGap = 2;
         private const int SlideRightMargin = 10;
+        // KHÔNG CÓ NƠI ĐỌC TRỰC TIẾP: hằng được giữ từ luồng cũ; không dùng để chỉnh chức năng hiện tại.
         private const int SlideDetailWidth = SlideToolsWidth;
 
         private Panel slideHandle;
@@ -136,19 +726,16 @@ namespace TTSK_AutoDim_Plates
         private BorderNumericUpDown nudArrangeGap;
         private BorderComboBox cboDimScope;
         private ArrangeLayoutSwitch cboArrangeLayout;
-        private Panel arrangeMainHorizontalBox;
-        private Panel arrangeMainVerticalBox;
         private Panel arrangeSectionHorizontalBox;
         private Panel arrangeSectionVerticalBox;
         private Panel arrangeVerticalOrderBox;
         private ArrangeOrderSwitch arrangeVerticalOrderSwitch;
-        private Label arrangeVerticalOrderIcon;
+        private Label arrangeVerticalOrderIcon = null; // Icon tùy chọn, hiện chưa được tạo.
         private Slot04TargetSwitch slot04TargetSwitch;
         private ThemeButton btnSlot04Auto;
         private bool slot04AutoMode = true;
         private Slot05ModeSwitch slot05ModeSwitch;
         private bool arrangeVerticalBottomUp = false;
-        private bool arrangeMainHorizontal = true;
         private bool arrangeSectionHorizontal = true;
         private bool fitKeepGridAxes = false;
         private bool fitArrangeColumnMode = false;
@@ -191,7 +778,16 @@ namespace TTSK_AutoDim_Plates
             BuildUi();
             InitializeUpdater();
             InitializeWorkJournal();
+            InitializeTeklaSessionUi();
             Disposed += delegate { teklaOperations.Dispose(); };
+            Disposed += delegate
+            {
+                foreach (var picture in loadedSlotPictures.Keys)
+                    if (picture.Image != null) { picture.Image.Dispose(); picture.Image = null; }
+                loadedSlotPictures.Clear();
+                if (mainBrandLogo != null && mainBrandLogo.Image != null) { mainBrandLogo.Image.Dispose(); mainBrandLogo.Image = null; }
+                if (companyThemeIcon != null) { companyThemeIcon.Dispose(); companyThemeIcon = null; }
+            };
         }
 
         // Cooperative waits retain Tekla calls and ThreadStatic contexts on their original thread.
@@ -251,6 +847,7 @@ namespace TTSK_AutoDim_Plates
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            if (sessionSwitching && !sessionHandoffAccepted) { e.Cancel = true; return; }
             if ((_pdfCommandRunning || operationRunning) && e.CloseReason == CloseReason.UserClosing)
             {
                 e.Cancel = true;
@@ -311,17 +908,23 @@ namespace TTSK_AutoDim_Plates
 
         private void SetFormIconFromLogo()
         {
+            if (companyLogoDark == _darkMode && companyThemeIcon != null && mainBrandLogo != null && mainBrandLogo.Image != null) return;
             try
             {
-                string logoPath = Application.StartupPath + @"\Resources\logo.png";
-
-                if (!System.IO.File.Exists(logoPath))
-                    return;
-
-                using (Bitmap bitmap = new Bitmap(logoPath))
+                using (Bitmap bitmap = CompanyLogoRenderer.Load(_darkMode))
                 {
-                    IntPtr hIcon = bitmap.GetHicon();
-                    Icon = Icon.FromHandle(hIcon);
+                    var nextIcon = CompanyLogoRenderer.CreateIcon(bitmap);
+                    Icon previous = companyThemeIcon;
+                    Icon = nextIcon; // WinForms cập nhật ICON_SMALL/ICON_BIG cho title bar và taskbar đang chạy.
+                    companyThemeIcon = nextIcon;
+                    if (previous != null) previous.Dispose();
+                    if (mainBrandLogo != null)
+                    {
+                        var old = mainBrandLogo.Image;
+                        mainBrandLogo.Image = (Bitmap)bitmap.Clone();
+                        if (old != null) old.Dispose();
+                    }
+                    companyLogoDark = _darkMode;
                 }
             }
             catch { }
@@ -330,7 +933,6 @@ namespace TTSK_AutoDim_Plates
         private void BuildUi()
         {
             Text = "TTSK AutoDim Auto Dimension";
-            SetFormIconFromLogo();
             StartPosition = FormStartPosition.CenterScreen;
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
@@ -344,9 +946,7 @@ namespace TTSK_AutoDim_Plates
             Controls.Add(header);
 
             PictureBox logo = new PictureBox();
-            logo.Image = System.Drawing.Image.FromFile(
-                Application.StartupPath + @"\Resources\logo.png"
-            );
+            mainBrandLogo = logo;
             logo.Location = new Point(18, 18);
             logo.Size = new System.Drawing.Size(70, 70);
             logo.SizeMode = PictureBoxSizeMode.Zoom;
@@ -597,6 +1197,10 @@ namespace TTSK_AutoDim_Plates
             Controls.Add(status);
 
             lblStatus = new Label();
+            lblStatus.AutoEllipsis = true;
+            mainStatusToolTip = new ToolTip { InitialDelay = 400, AutoPopDelay = 15000 };
+            lblStatus.TextChanged += delegate { mainStatusToolTip.SetToolTip(lblStatus, lblStatus.Text); };
+            Disposed += delegate { mainStatusToolTip.Dispose(); };
             lblStatus.Text = "✓  Ready    |    0 bản vẽ";
             lblStatus.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
             lblStatus.ForeColor = Color.FromArgb(22, 163, 74);
@@ -1366,21 +1970,26 @@ namespace TTSK_AutoDim_Plates
             slideArrangePanel.Controls[2].Visible = false;
             slideArrangePanel.Controls[0].Width = 180;
             arrangeVerticalOrderBox.SetBounds(222, 14, 72, 34);
-            arrangeSectionHorizontalBox.SetBounds(20, 64, 131, 136);
-            arrangeSectionVerticalBox.SetBounds(163, 64, 131, 136);
+            arrangeSectionHorizontalBox.SetBounds(20, 56, 131, 136);
+            arrangeSectionVerticalBox.SetBounds(163, 56, 131, 136);
             ConfigureArrangeIllustration(arrangeSectionHorizontalBox, true);
             ConfigureArrangeIllustration(arrangeSectionVerticalBox, false);
-            slideArrangePanel.Controls[5].SetBounds(20, 214, 274, 22);
+            slideArrangePanel.Controls[5].SetBounds(20, 206, 274, 22);
             slideArrangePanel.Controls[5].Text = "Khoảng cách view · mm";
-            nudArrangeGap.SetBounds(20, 242, 274, 58);
+            nudArrangeGap.SetBounds(20, 234, 274, 50);
             slideArrangePanel.Controls[7].Text = "Sắp xếp view";
             slideArrangePanel.Controls[7].SetBounds(20, 358, 274, 44);
             BuildArrangeReferenceControls();
             slideArrangePanel.Controls[slideArrangePanel.Controls.Count - 1].SetBounds(20, 414, 274, 44);
             cboArrangeLayout = new ArrangeLayoutSwitch();
             cboArrangeLayout.SelectedIndex = 0;
-            cboArrangeLayout.AccessibleName = "Kiểu sắp xếp dọc";
-            cboArrangeLayout.SetBounds(47, 305, 220, 46);
+            cboArrangeLayout.BottomUp = arrangeVerticalBottomUp;
+            cboArrangeLayout.AccessibleDescription = "Kiểu sắp xếp dọc. Dùng phím trái/phải để chọn.";
+            // Equal 8 px gaps above/below; share the input/action alignment.
+            const int arrangeSwitchGap = 8;
+            int arrangeSwitchTop = nudArrangeGap.Bottom + arrangeSwitchGap;
+            int arrangeSwitchHeight = slideArrangePanel.Controls[7].Top - arrangeSwitchTop - arrangeSwitchGap;
+            cboArrangeLayout.SetBounds(nudArrangeGap.Left, arrangeSwitchTop, nudArrangeGap.Width, arrangeSwitchHeight);
             cboArrangeLayout.Enabled = !arrangeSectionHorizontal;
             slideArrangePanel.Controls.Add(cboArrangeLayout);
             // Existing theme code keeps the reference-layout action last.
@@ -2444,6 +3053,8 @@ namespace TTSK_AutoDim_Plates
             return imageFileName;
         }
 
+        // Cache theo control + tên ảnh đã nạp; bỏ giải mã PNG trùng khi BuildUi/ApplyTheme chạy liên tiếp.
+        private readonly Dictionary<PictureBox, string> loadedSlotPictures = new Dictionary<PictureBox, string>();
         private void LoadAutoDimSlotPicture(PictureBox pic, string imageFileName)
         {
             if (pic == null)
@@ -2452,6 +3063,9 @@ namespace TTSK_AutoDim_Plates
             try
             {
                 string resolvedFileName = ResolveAutoDimSlotImageFileName(imageFileName);
+                string loaded;
+                if (pic.Image != null && loadedSlotPictures.TryGetValue(pic, out loaded)
+                    && string.Equals(loaded, resolvedFileName, StringComparison.OrdinalIgnoreCase)) return;
                 string imagePath = System.IO.Path.Combine(
                     Application.StartupPath,
                     "Resources",
@@ -2464,6 +3078,7 @@ namespace TTSK_AutoDim_Plates
                     {
                         System.Drawing.Image oldImage = pic.Image;
                         pic.Image = new Bitmap(bitmap);
+                        loadedSlotPictures[pic] = resolvedFileName;
 
                         if (oldImage != null)
                             oldImage.Dispose();
@@ -2601,6 +3216,7 @@ namespace TTSK_AutoDim_Plates
             }
         }
 
+        // HỢP ĐỒNG REFLECTION: tên kiểu phải khớp slot; cần public static Run(), đọc LastRunSucceeded/LastRunMessage nếu có.
         private void RunExternalAutoDimSlot(string typeFullName)
         {
             if (_slot07Running || _snapshotExportRunning || _fitAndCleanupRunning) return;
@@ -3000,7 +3616,7 @@ namespace TTSK_AutoDim_Plates
             if (string.Equals(actionId, ShortcutManager.ActionCheckDim, StringComparison.OrdinalIgnoreCase))
             {
                 _lastRepeatableShortcutActionId = null;
-                RunDimensionCheck();
+                RunDimensionCheckShortcut();
                 return;
             }
 
@@ -3251,7 +3867,8 @@ namespace TTSK_AutoDim_Plates
                 case ShortcutManager.ActionArrangeReference: action = RunArrangeReferenceShortcut; break;
                 case ShortcutManager.ActionLoadSelected:
                     action = () => { rbBatch.Checked = true; UpdateModeUi(); btnLoad.PerformClick(); }; break;
-                case ShortcutManager.ActionPrintMenu: action = ShowPrintMenu; break;
+                case ShortcutManager.ActionPrintMenu: action = () => RunPdfCommand(true); break;
+                case ShortcutManager.ActionPrintPdf: action = () => RunPdfCommand(false); break;
                 case ShortcutManager.ActionSnapshot: action = RunSnapshotExport; break;
                 case ShortcutManager.ActionDictionary: action = ToggleDictionaryPanel; break;
                 case ShortcutManager.ActionWorkJournal: action = ShowWorkJournal; break;
@@ -3260,7 +3877,7 @@ namespace TTSK_AutoDim_Plates
                 case ShortcutManager.ActionClearLog: action = () => btnClear.PerformClick(); break;
                 default: return false;
             }
-            if (!CanApplyUpdateNow()) return true;
+            if (!CanApplyUpdateNow() || dimensionCheckOpen || _updateDialogOpen || _updaterHandoffClosing) return true;
             _lastRepeatableShortcutActionId = actionId == ShortcutManager.ActionDimensionSpacing
                 || actionId == ShortcutManager.ActionLineByLength ? actionId : null;
             action();
@@ -3271,31 +3888,6 @@ namespace TTSK_AutoDim_Plates
         {
             if (!CanApplyUpdateNow()) return;
             if (await LoadSelectedArrangeDrawings()) await RunArrangeReferenceBatch();
-        }
-
-        private async void RunCheckScaleShortcut()
-        {
-            if (!CanApplyUpdateNow()) return;
-            try
-            {
-                if (rbBatch != null)
-                    rbBatch.Checked = true;
-
-                if (rbActive != null)
-                    rbActive.Checked = false;
-
-                UpdateModeUi();
-
-                await ExecuteTeklaCommandAsync("Load / Check Scale", () =>
-                {
-                    LoadSelectedDrawingsCore();
-                    RunScaleCheck();
-                });
-            }
-            catch (Exception ex)
-            {
-                SetMainStatus("Shortcut Check Scale lỗi: " + ex.Message, MainStatusKind.Error);
-            }
         }
 
         private void OpenShortcutSettingsDialog()
@@ -3675,6 +4267,8 @@ namespace TTSK_AutoDim_Plates
             arrangeVerticalOrderSwitch.CheckedChanged += delegate
             {
                 arrangeVerticalBottomUp = arrangeVerticalOrderSwitch.Checked;
+                if (cboArrangeLayout != null)
+                    cboArrangeLayout.BottomUp = arrangeVerticalBottomUp;
             };
             arrangeVerticalOrderBox.Controls.Add(arrangeVerticalOrderSwitch);
 
@@ -3785,8 +4379,10 @@ namespace TTSK_AutoDim_Plates
             if(cboArrangeLayout != null)
             {
                 cboArrangeLayout.Enabled = showVerticalSwitch;
+                cboArrangeLayout.BottomUp = arrangeVerticalBottomUp;
                 cboArrangeLayout.DarkMode = _darkMode;
                 cboArrangeLayout.AccentColor = PrimaryButtonColor;
+                cboArrangeLayout.HighlightColor = _darkMode ? PrimaryButtonColor : BrightBlue;
                 cboArrangeLayout.BackColor = _darkMode ? Color.FromArgb(22,22,22) : Color.White;
                 cboArrangeLayout.Invalidate();
             }
@@ -4844,10 +5440,10 @@ namespace TTSK_AutoDim_Plates
             }
         }
 
-        private bool TryEnsureFitPrerequisite()
+        private bool TryEnsureFitPrerequisite(out bool requiresGridVisibilityMacro)
         {
             string prerequisiteMessage;
-            if (PHU_OpenGridView.CanRunFitForCurrentTargets(out prerequisiteMessage))
+            if (PHU_OpenGridView.CanRunFitForCurrentTargets(out prerequisiteMessage, out requiresGridVisibilityMacro))
                 return true;
 
             if (string.IsNullOrEmpty(prerequisiteMessage))
@@ -4936,11 +5532,12 @@ namespace TTSK_AutoDim_Plates
                     return;
                 }
 
-                if (!TryEnsureFitPrerequisite())
+                bool requiresGridVisibilityMacro;
+                if (!TryEnsureFitPrerequisite(out requiresGridVisibilityMacro))
                     return;
 
                 string macroError;
-                if (!TryRunGridVisibilityMacro("FIT", out macroError))
+                if (requiresGridVisibilityMacro && !TryRunGridVisibilityMacro("FIT", out macroError))
                 {
                     if (gridResultLabel != null)
                     {
@@ -4970,7 +5567,7 @@ namespace TTSK_AutoDim_Plates
                 }
 
                 string fitCompleteMacroError;
-                if (!TryRunGridVisibilityMacro("FIT_COMPLETE", out fitCompleteMacroError))
+                if (requiresGridVisibilityMacro && !TryRunGridVisibilityMacro("FIT_COMPLETE", out fitCompleteMacroError))
                 {
                     if (gridResultLabel != null)
                     {
@@ -5041,11 +5638,12 @@ namespace TTSK_AutoDim_Plates
                     return;
                 }
 
-                if (!TryEnsureFitPrerequisite())
+                bool requiresGridVisibilityMacro;
+                if (!TryEnsureFitPrerequisite(out requiresGridVisibilityMacro))
                     return;
 
                 string macroError;
-                if (!TryRunGridVisibilityMacro("FIT_KEEP_GRID", out macroError))
+                if (requiresGridVisibilityMacro && !TryRunGridVisibilityMacro("FIT_KEEP_GRID", out macroError))
                 {
                     if (gridResultLabel != null)
                     {
@@ -5083,7 +5681,7 @@ namespace TTSK_AutoDim_Plates
                     Ui(() => { lblStatus.AccessibleDescription = result == null ? "" : result.SelectedGridAxes; });
 
                 string verifyMacroError;
-                if (!TryRunGridVisibilityMacro("FIT_KEEP_GRID", out verifyMacroError))
+                if (requiresGridVisibilityMacro && !TryRunGridVisibilityMacro("FIT_KEEP_GRID", out verifyMacroError))
                 {
                     PHU_OpenGridView.RestoreFitKeepGridRestrictionBoxes();
 
@@ -5099,7 +5697,7 @@ namespace TTSK_AutoDim_Plates
                 }
 
                 string fitCompleteMacroError;
-                if (!TryRunGridVisibilityMacro("FIT_GRID_COMPLETE", out fitCompleteMacroError))
+                if (requiresGridVisibilityMacro && !TryRunGridVisibilityMacro("FIT_GRID_COMPLETE", out fitCompleteMacroError))
                 {
                     if (gridResultLabel != null)
                     {
@@ -6113,6 +6711,7 @@ namespace TTSK_AutoDim_Plates
             ApplyPrintMenuTheme();
             ApplyCheckMenuTheme();
             ApplyWindowTitleBarTheme();
+            SetFormIconFromLogo();
             UpdateModeUi();
             ApplySlideTheme();
             ApplySlot04ModeUi();
@@ -6590,18 +7189,10 @@ namespace TTSK_AutoDim_Plates
             _snapshotExportRunning = true;
             try
             {
-                var handler = new DrawingHandler();
-                var selected = handler.GetDrawingSelector().GetSelected();
-                var drawings = new List<Drawing>();
-                while (selected.MoveNext()) drawings.Add(selected.Current);
-                if (drawings.Count == 0) throw new InvalidOperationException("Hãy chọn bản vẽ trong Document manager.");
-                if (drawings.Count > 1)
-                {
-                    Ui(() => { rbBatch.Checked = true; rbActive.Checked = false; UpdateModeUi(); });
-                    LoadSelectedDrawingsCore();
-                    if (_selectedDrawings.Count == 0) throw new InvalidOperationException("Load Selected chưa hoàn tất.");
-                    drawings = new List<Drawing>(_selectedDrawings);
-                }
+                LoadContextDrawingsCore();
+                if (_selectedDrawings.Count == 0)
+                    throw new InvalidOperationException("Hãy chọn bản vẽ trong Document Manager rồi thử lại.");
+                var drawings = new List<Drawing>(_selectedDrawings);
                 var sources = Tekla.Technology.Akit.UserScript.PHU_CopyDrawingSnapshot_Temp.FindSources(drawings);
                 SetMainStatus("Snapshot: đang xuất " + sources.Count + " bản vẽ...", MainStatusKind.Information);
                 string folder = Tekla.Technology.Akit.UserScript.PHU_CopyDrawingSnapshot_Temp.ExportSources(sources);
@@ -6648,17 +7239,10 @@ namespace TTSK_AutoDim_Plates
                     _selectedDrawings.Add(dr);
                     count++;
 
-                    string mark = SafeDrawingMark(dr);
-                    string rev = SafeDrawingRevision(dr);
-                    string changes = SafeDrawingChanges(dr);
-
-                    AddDrawingGridRow(count, mark, rev, changes);
                 }
 
                 CaptureDimensionCheckBatchSource();
-                Ui(() => dgvDrawings.ClearSelection());
-
-                Ui(() => { lblCount.Text = "Tổng số bản vẽ:  " + count; });
+                RefreshContextDrawingRows();
                 if (count == 0)
                 {
                     Ui(() => { lblStatus.Text = _dataCenterModeEnabled
@@ -7002,7 +7586,7 @@ namespace TTSK_AutoDim_Plates
 
         private async void RunPdfCommand(bool mergeAndDeleteChildren)
         {
-            if (operationRunning) return;
+            if (operationRunning || sessionSwitching || !EnsureSessionCommandTarget()) return;
             if (_pdfCommandRunning || _isBatchRunning || _snapshotExportRunning || _fitAndCleanupRunning) return;
             _pdfCommandRunning = true;
             var responsiveInput = new OperationInputFilter(this);
@@ -7031,23 +7615,7 @@ namespace TTSK_AutoDim_Plates
                 if (btnMergeFileDropDown != null)
                     btnMergeFileDropDown.Enabled = false;
 
-                // Print và Merge luôn dùng selection hiện tại trong Document Manager.
-                // Tự chuyển sang BATCH rồi gọi lại nguyên logic Load Selected hiện có.
-                if (rbBatch != null)
-                    rbBatch.Checked = true;
-
-                if (rbActive != null)
-                    rbActive.Checked = false;
-
-                UpdateModeUi();
-                Application.DoEvents();
-
-                SetMainStatus(
-                    "Đang đọc drawing được chọn trong Document Manager...",
-                    MainStatusKind.Information
-                );
-
-                await teklaOperations.RunAsync(LoadSelectedDrawingsCore);
+                await teklaOperations.RunAsync(() => { TeklaSessionCoordinator.VerifyConnection(); LoadContextDrawingsCore(); });
 
                 if (_selectedDrawings.Count == 0)
                 {
@@ -7531,7 +8099,7 @@ namespace TTSK_AutoDim_Plates
 
         private void btnCheckScale_Click(object sender, EventArgs e)
         {
-            RunScaleCheck();
+            RunCheckScaleShortcut();
         }
 
         private class ScaleCheckResult
@@ -7546,15 +8114,6 @@ namespace TTSK_AutoDim_Plates
             public List<string> ViewScales = new List<string>();
             public List<string> ViewScaleLabels = new List<string>();
             public string Message;
-        }
-
-        private class ViewScaleEntry
-        {
-            public Tekla.Structures.Drawing.View View;
-            public string Scale;
-            public string ViewLabel;
-            public double Height;
-            public double Area;
         }
 
         private void RunScaleCheck()
@@ -7646,7 +8205,8 @@ namespace TTSK_AutoDim_Plates
                 {
                     ScaleCheckResult error = errors[i];
                     _selectedDrawings.Add(error.Drawing);
-                    AddScaleErrorGridRow(i + 1, error);
+                    // Một bản lỗi vẫn giữ để xử lý, nhưng không tạo dòng tồn dư.
+                    if(errors.Count>1) AddScaleErrorGridRow(i + 1, error);
                 }
 
                 Ui(() => dgvDrawings.ClearSelection());
@@ -8847,6 +9407,8 @@ namespace TTSK_AutoDim_Plates
             return RunCurrentAutoDimScript(false);
         }
 
+        // LUỒNG CHỦ DIM: xác định part → precheck/thuộc tính section → chuẩn bị context → engine Shape/Plate → DIM bổ sung.
+        // Không đổi thứ tự Neighbor → Splice → Grid → Section: các bước trao đổi hình học và tầng DIM.
         private AutoDimExecutionResult RunCurrentAutoDimScript(bool slot07LegacyColumn)
         {
             AutoDimExecutionResult execution = new AutoDimExecutionResult();
@@ -9638,6 +10200,8 @@ namespace TTSK_AutoDim_Plates
             }
         }
 
+        // PHÂN TUYẾN SLOT 07: nhận hướng/profile trước khi tạo scope dầm Type 1/2.
+        // activeQuickDimensionOnly giữ bố cục đã chuẩn bị; nhánh đầy đủ còn chạy Open Grid/Fit.
         private DataCenterExecutionResult RunDataCenterCurrentDrawing()
         {
             return RunDataCenterCurrentDrawing(false);
@@ -10952,6 +11516,18 @@ namespace TTSK_AutoDim_Plates
                     return ShapeProfileType.Unknown;
 
                 string profile = GetShapeProfileText(part);
+                return DetectShapeProfileText(profile);
+            }
+            catch
+            {
+                return ShapeProfileType.Unknown;
+            }
+        }
+
+        private ShapeProfileType DetectShapeProfileText(string profile)
+        {
+            try
+            {
                 if (string.IsNullOrEmpty(profile))
                     return ShapeProfileType.Unknown;
 
@@ -10963,6 +11539,7 @@ namespace TTSK_AutoDim_Plates
                 // không phụ thuộc chiều rộng, chiều cao hoặc chiều dày profile.
                 if (
                     p.Contains("□")
+                    || p.StartsWith("STKR")
                     || p.StartsWith("RHS")
                     || p.StartsWith("SHS")
                     || p.StartsWith("BOX")
@@ -13970,14 +14547,27 @@ namespace TTSK_AutoDim_Plates
         private sealed class ArrangeLayoutSwitch : Control
         {
             private int selectedIndex, hoverIndex = -1;
+            private bool bottomUp;
             public bool DarkMode { get; set; }
             public Color AccentColor { get; set; }
+            public Color HighlightColor { get; set; }
+            public bool BottomUp
+            {
+                get { return bottomUp; }
+                set {
+                    if (bottomUp == value) return;
+                    bottomUp = value;
+                    UpdateAccessibleName();
+                    Invalidate();
+                    AccessibilityNotifyClients(AccessibleEvents.ValueChange, -1);
+                }
+            }
             public int SelectedIndex
             {
                 get { return selectedIndex; }
                 set {
                     selectedIndex = value == 1 ? 1 : 0;
-                    AccessibleName = selectedIndex == 0 ? "Xếp theo cột (kiểu cũ)" : "Xếp theo hàng, căn cột";
+                    UpdateAccessibleName();
                     Invalidate();
                     AccessibilityNotifyClients(AccessibleEvents.ValueChange, -1);
                 }
@@ -13990,7 +14580,25 @@ namespace TTSK_AutoDim_Plates
                 AccessibleRole = AccessibleRole.List;
                 AccessibleDescription = "Hai lựa chọn: theo cột hoặc theo hàng. Dùng phím trái/phải để chọn.";
                 AccentColor = Color.FromArgb(37,99,235);
+                HighlightColor = AccentColor;
                 SelectedIndex = 0;
+            }
+            private static Color BlendColor(Color basis, Color tint, float amount)
+            {
+                return Color.FromArgb(
+                    (int)Math.Round(basis.R+(tint.R-basis.R)*amount),
+                    (int)Math.Round(basis.G+(tint.G-basis.G)*amount),
+                    (int)Math.Round(basis.B+(tint.B-basis.B)*amount));
+            }
+            private void UpdateAccessibleName()
+            {
+                AccessibleName = (SelectedIndex == 0 ? "Xếp theo cột" : "Xếp theo hàng, căn cột")
+                    + (BottomUp ? ", từ dưới lên" : ", từ trên xuống");
+            }
+            private int GetDisplayNumber(int layout, int row, int column)
+            {
+                int orderedRow = BottomUp ? 1 - row : row;
+                return layout == 0 ? column * 2 + orderedRow + 1 : orderedRow * 2 + column + 1;
             }
             protected override bool IsInputKey(Keys keyData)
             { return (keyData & Keys.KeyCode) == Keys.Left || (keyData & Keys.KeyCode) == Keys.Right || base.IsInputKey(keyData); }
@@ -14027,41 +14635,81 @@ namespace TTSK_AutoDim_Plates
             protected override void OnPaint(PaintEventArgs e)
             {
                 base.OnPaint(e); var g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
-                Color muted = DarkMode ? Color.FromArgb(174,182,195) : Color.FromArgb(89,102,125);
-                Color edge = DarkMode ? Color.FromArgb(53,55,60) : Color.FromArgb(224,230,239);
-                using(var path=Outline(new RectangleF(.5f,.5f,Width-1,Height-1),10))
-                using(var brush=new SolidBrush(DarkMode?Color.FromArgb(28,28,28):Color.FromArgb(245,247,251)))
-                using(var pen=new Pen(edge)) {g.FillPath(brush,path);g.DrawPath(pen,path);}
+                // Keep cell padding, arrow geometry and type in proportion at higher DPI.
+                float scale = Math.Min(Width / 274f, Height / 58f);
+                if (scale <= 0) return;
+                Color muted = DarkMode ? Color.FromArgb(192,199,210) : Color.FromArgb(75,91,116);
+                Color edge = DarkMode ? Color.FromArgb(61,64,69) : Color.FromArgb(213,223,238);
+                // Derive the selected surfaces from MainForm's actual theme colors.
+                Color selectedTop=DarkMode
+                    ? BlendColor(BlendColor(BackColor,Color.White,.075f),HighlightColor,.14f)
+                    : BlendColor(BackColor,HighlightColor,.08f);
+                Color selectedBottom=DarkMode
+                    ? BlendColor(BlendColor(BackColor,Color.White,.025f),HighlightColor,.12f)
+                    : BlendColor(BackColor,HighlightColor,.16f);
+                Color selectedEdge=DarkMode
+                    ? BlendColor(BlendColor(BackColor,AccentColor,.5f),Color.White,.15f)
+                    : BlendColor(BackColor,HighlightColor,.38f);
+                g.Clear(BackColor);
                 for(int index=0;index<2;index++)
                 {
-                    float half=Width/2f; var box=new RectangleF(index*half+3,3,half-6,Height-6);
+                    float half=Width/2f, inset=4*scale;
+                    var box=new RectangleF(index*half+inset,inset,half-inset*2,Height-inset*2);
                     bool active=Enabled && index==SelectedIndex;
-                    if(active || (Enabled && hoverIndex==index))
-                        using(var path=Outline(box,7))
-                        using(var brush=new SolidBrush(active ? (DarkMode?Color.FromArgb(53,55,62):Color.White)
-                            : (DarkMode?Color.FromArgb(38,38,38):Color.FromArgb(234,239,248))))
-                        {g.FillPath(brush,path);}
-                    Color ink=Enabled?(active?(DarkMode?Color.FromArgb(248,249,252):Color.FromArgb(30,47,81)):muted):(DarkMode?Color.FromArgb(80,80,80):Color.FromArgb(184,191,203));
-                    float x=box.Left+24,y=(Height-34)/2f;
-                    using(var font=new Font("Segoe UI",10f,FontStyle.Bold))
-                    using(var pen=new Pen(active?AccentColor:ink,1.8f))
-                    using(var fill=new SolidBrush(Color.FromArgb(active?40:12,active?AccentColor:ink)))
+                    bool hover=Enabled && hoverIndex==index;
+                    Color arrowInk=active?(DarkMode?BlendColor(AccentColor,Color.White,.60f):AccentColor):muted;
+                    {
+                        var shadowBox=box; shadowBox.Offset(0,1.5f*scale);
+                        using(var shadowPath=Outline(shadowBox,9*scale))
+                        using(var shadow=new SolidBrush(DarkMode?Color.FromArgb(70,0,0,0):Color.FromArgb(22,45,65,95)))
+                            g.FillPath(shadow,shadowPath);
+                        using(var path=Outline(box,9*scale))
+                        using(var brush=new LinearGradientBrush(box,
+                            active?selectedTop
+                                :(DarkMode?Color.FromArgb(hover?40:32,hover?39:32,hover?37:33):Color.White),
+                            active?selectedBottom
+                                :(DarkMode?Color.FromArgb(23,23,24):Color.FromArgb(hover?237:245,hover?243:248,253)),LinearGradientMode.Vertical))
+                        using(var pen=new Pen(active?selectedEdge:edge))
+                        {g.FillPath(brush,path);g.DrawPath(pen,path);}
+                    }
+                    Color ink=Enabled?(active?(DarkMode?Color.FromArgb(230,235,244):Color.FromArgb(36,60,93)):muted):(DarkMode?Color.FromArgb(120,120,120):Color.FromArgb(137,149,167));
+                    float cellWidth=22*scale, cellHeight=17*scale, cellGap=5*scale;
+                    float gridWidth=cellWidth*2+cellGap, contentWidth=100*scale;
+                    float x=box.Left+(box.Width-contentWidth)/2f,y=(Height-(cellHeight*2+cellGap))/2f;
+                    Color groupEdge=Enabled ? (active?(DarkMode?BlendColor(BlendColor(BackColor,AccentColor,.5f),Color.White,.22f):BlendColor(BackColor,AccentColor,.43f))
+                        :(DarkMode?Color.FromArgb(103,109,119):Color.FromArgb(158,177,206))) : edge;
+                    Color cellEdge=active?(DarkMode?BlendColor(BackColor,AccentColor,.25f):BlendColor(BackColor,HighlightColor,.30f))
+                        :(DarkMode?Color.FromArgb(61,65,72):Color.FromArgb(208,218,233));
+                    Color groupFill=active?(DarkMode?BlendColor(BlendColor(BackColor,AccentColor,.32f),Color.White,.10f):BlendColor(BackColor,HighlightColor,.24f))
+                        :(DarkMode?Color.FromArgb(44,46,50):Color.FromArgb(231,238,249));
+                    Color cellFill=active?(DarkMode?BlendColor(BackColor,AccentColor,.10f):BlendColor(BackColor,HighlightColor,.035f))
+                        :(DarkMode?Color.FromArgb(28,28,28):Color.FromArgb(249,251,255));
+                    using(var font=new Font("Segoe UI",(40f/3f)*scale,FontStyle.Bold,GraphicsUnit.Pixel))
+                    using(var pen=new Pen(active?arrowInk:ink,2.4f*scale))
                     using(var sf=new StringFormat{Alignment=StringAlignment.Center,LineAlignment=StringAlignment.Center})
                     using(var text=new SolidBrush(ink))
+                    using(var leadingText=new SolidBrush(DarkMode?BlendColor(AccentColor,Color.White,.86f):AccentColor))
                     {
+                        pen.StartCap=LineCap.Round; pen.EndCap=LineCap.Round; pen.LineJoin=LineJoin.Round;
                         for(int row=0;row<2;row++)for(int col=0;col<2;col++) {
-                            var cell=new RectangleF(x+col*20,y+row*18,17,16);
-                            if(index==0?col==0:row==0)
-                                using(var cellPath=Outline(cell,3))g.FillPath(fill,cellPath);
-                            string number=(index==0?col*2+row+1:row*2+col+1).ToString();
-                            g.DrawString(number,font,text,cell,sf);
+                            var cell=new RectangleF(x+col*(cellWidth+cellGap),y+row*(cellHeight+cellGap),cellWidth,cellHeight);
+                            bool firstGroup=index==0?col==0:row==(BottomUp?1:0);
+                            using(var cellPath=Outline(cell,3.5f*scale))
+                            using(var fill=new SolidBrush(firstGroup&&Enabled?groupFill:cellFill))
+                            using(var cellPen=new Pen(firstGroup?groupEdge:cellEdge,scale))
+                            {g.FillPath(fill,cellPath);g.DrawPath(cellPen,cellPath);}
+                            string number=GetDisplayNumber(index,row,col).ToString();
+                            g.DrawString(number,font,firstGroup&&active?leadingText:text,cell,sf);
                         }
-                        float ax=x+55,ay=Height/2f;
-                        if(index==0){g.DrawLine(pen,ax,ay-6,ax,ay+6);g.DrawLine(pen,ax-3,ay+3,ax,ay+6);g.DrawLine(pen,ax+3,ay+3,ax,ay+6);}
-                        else {g.DrawLine(pen,ax-6,ay,ax+6,ay);g.DrawLine(pen,ax+3,ay-3,ax+6,ay);g.DrawLine(pen,ax+3,ay+3,ax+6,ay);}
+                        float ax=x+gridWidth+31.5f*scale,ay=Height/2f;
+                        if(index==0){
+                            float tipY=ay+(BottomUp?-13:13)*scale,tailY=ay+(BottomUp?13:-13)*scale,wingY=tipY+(BottomUp?6:-6)*scale;
+                            g.DrawLine(pen,ax,tailY,ax,tipY);g.DrawLine(pen,ax-6*scale,wingY,ax,tipY);g.DrawLine(pen,ax+6*scale,wingY,ax,tipY);
+                        }
+                        else {g.DrawLine(pen,ax-13*scale,ay,ax+13*scale,ay);g.DrawLine(pen,ax+7*scale,ay-6*scale,ax+13*scale,ay);g.DrawLine(pen,ax+7*scale,ay+6*scale,ax+13*scale,ay);}
                     }
                     if(Focused && ShowFocusCues && index==SelectedIndex)
-                        ControlPaint.DrawFocusRectangle(g,System.Drawing.Rectangle.Round(new RectangleF(box.X+3,box.Y+3,box.Width-6,box.Height-6)),ink,BackColor);
+                        ControlPaint.DrawFocusRectangle(g,System.Drawing.Rectangle.Round(new RectangleF(box.X+3*scale,box.Y+3*scale,box.Width-6*scale,box.Height-6*scale)),ink,BackColor);
                 }
             }
         }
@@ -15383,3 +16031,750 @@ namespace TTSK_AutoDim_Plates
         }
     }
 }
+#endregion
+
+#region MainForm.ArrangeReference - Giao diện sắp xếp theo mẫu
+
+
+namespace TTSK_AutoDim_Plates
+{
+    using System;
+    using System.Drawing;
+    using Rectangle = System.Drawing.Rectangle;
+    using System.Linq;
+    using System.Threading.Tasks;
+    using System.Windows.Forms;
+    using Tekla.Structures.Drawing;
+    using R = Tekla.Technology.Akit.UserScript.PHU_DimensionRevision;
+
+    public partial class MainForm
+    {
+        private void BuildArrangeReferenceControls()
+        {
+            slideArrangePanel.Height = 410;
+            var run = new SafeRoundedButton { Text = "Theo bản mẫu", Bounds = new Rectangle(16, 358, 282, 40),
+                Font = new Font("Segoe UI", 10F, FontStyle.Bold) };
+            run.Click += async delegate
+            {
+                if (operationRunning || _isBatchRunning || _snapshotExportRunning || _fitAndCleanupRunning) return;
+                if (await LoadSelectedArrangeDrawings()) await RunArrangeReferenceBatch();
+            };
+            slideArrangePanel.Controls.Add(run);
+        }
+        private async Task<bool> LoadSelectedArrangeDrawings()
+        {
+            if (operationRunning || _isBatchRunning || _snapshotExportRunning || _fitAndCleanupRunning) return false;
+            rbBatch.Checked = true;
+            UpdateModeUi();
+            await ExecuteTeklaCommandAsync("Load Selected", LoadSelectedDrawingsCore);
+            if (_selectedDrawings.Count == 0) return false;
+            if (_selectedDrawings.Count < 2)
+            {
+                SetMainStatus("Hãy chọn ít nhất 2 bản vẽ trong Document Manager để căn theo bản mẫu.", MainStatusKind.Warning);
+                return false;
+            }
+            return true;
+        }
+
+        private async Task RunArrangeReferenceBatch()
+        {
+            await ExecuteTeklaCommandAsync("Arrange Reference", RunArrangeReferenceCore);
+        }
+
+        private void RunArrangeReferenceCore()
+        {
+            var handler = new DrawingHandler();
+            if (_selectedDrawings.Count < 2)
+            { SetMainStatus("Hãy chọn ít nhất 2 bản vẽ trong Document Manager để căn theo bản mẫu.", MainStatusKind.Warning); return; }
+            if (handler.GetActiveDrawing() != null)
+            { SetMainStatus("Hãy lưu và đóng bản vẽ đang mở trước khi căn cả danh sách.", MainStatusKind.Warning); return; }
+            var drawings = _selectedDrawings.ToList();
+            var modelPath = new Tekla.Structures.Model.Model().GetInfo().ModelPath;
+            _stopRequested = false;
+            var display = ReadUi(() =>
+            {
+                var form = new Form { Text = "Arrange View · Theo bản đầu", Width = 580, Height = 180,
+                    StartPosition = FormStartPosition.CenterParent, MinimizeBox = false, MaximizeBox = false, ControlBox = false };
+                var label = new Label { Dock = DockStyle.Fill, Padding = new Padding(16), Text = "Đang đọc bản chuẩn..." };
+                var stop = new Button { Text = "Dừng sau bản hiện tại", Dock = DockStyle.Bottom, Height = 36 };
+                stop.Click += delegate { _stopRequested = true; stop.Enabled = false; };
+                form.Controls.Add(label); form.Controls.Add(stop);
+                return Tuple.Create(form, label);
+            });
+            var progress = display.Item1;
+            var status = display.Item2;
+            int ok = 0, failed = 0; Drawing owned = null;
+            _isBatchRunning = true;
+            Ui(() => { btnRun.Text = "■  STOP"; btnRun.Enabled = true; });
+            try
+            {
+                Ui(() => progress.Show(this));
+                R.ArrangeReference reference = null;
+                for (int i = 0; i < drawings.Count && !_stopRequested; i++)
+                {
+                    string progressText = (i + 1) + " / " + drawings.Count + " · " + SafeDrawingMark(drawings[i]);
+                    Ui(() => status.Text = progressText);
+                    if (_stopRequested) break;
+                    if (!String.Equals(modelPath, new Tekla.Structures.Model.Model().GetInfo().ModelPath, StringComparison.OrdinalIgnoreCase)
+                        || handler.GetActiveDrawing() != null) throw new InvalidOperationException("Model/bản vẽ đang mở đã thay đổi; dừng batch.");
+                    bool saveFailed = false;
+                    try
+                    {
+                        if (!handler.SetActiveDrawing(drawings[i], false)) throw new InvalidOperationException("Không mở được bản vẽ.");
+                        owned = handler.GetActiveDrawing();
+                        if (owned == null || !owned.IsSameDatabaseObject(drawings[i]))
+                        { owned = null; throw new InvalidOperationException("Tekla mở sai bản vẽ."); }
+                        string result;
+                        if (i == 0) { reference = R.CaptureArrangeReference(); result = "REFERENCE · giữ nguyên"; }
+                        else
+                        {
+                            var before = R.CaptureArrangeReference();
+                            int moved;
+                            result = R.ApplyArrangeReference(reference, before, out moved);
+                            // A fresh snapshot already proves an unchanged drawing is aligned.
+                            // Avoid Save/reopen when this operation wrote nothing.
+                            if (moved > 0)
+                            {
+                                saveFailed = true;
+                                if (!handler.SaveActiveDrawing())
+                                    throw new InvalidOperationException("Lưu thất bại; giữ bản vẽ đang mở để kiểm tra.");
+                                // Tekla can save AND close a drawing opened with visible=false.
+                                // Always reopen the persisted drawing; never validate a null active drawing.
+                                var afterSave = handler.GetActiveDrawing();
+                                if (afterSave != null)
+                                {
+                                    if (!afterSave.IsSameDatabaseObject(drawings[i]) || !handler.CloseActiveDrawing(false))
+                                        throw new InvalidOperationException("Không đóng được đúng bản vẽ sau lưu.");
+                                }
+                                if (!handler.SetActiveDrawing(drawings[i], false))
+                                    throw new InvalidOperationException("Đã lưu nhưng không mở lại được bản vẽ để xác minh.");
+                                owned = handler.GetActiveDrawing();
+                                if (owned == null || !owned.IsSameDatabaseObject(drawings[i]))
+                                {
+                                    owned = null;
+                                    throw new InvalidOperationException("Bản vẽ mở lại không đúng bản vừa lưu.");
+                                }
+                                R.VerifyArrangeReference(reference, before);
+                                saveFailed = false;
+                            }
+                            ok++;
+                        }
+                        SetArrangeRowResult(i, result);
+                    }
+                    catch (Exception ex)
+                    {
+                        failed++; SetArrangeRowResult(i, "ERROR · " + (saveFailed ? "Lưu/xác minh chưa hoàn tất; giữ bản vẽ đang mở. " : "") + ex.GetBaseException().Message);
+                        if (saveFailed) throw;
+                        if (i == 0) throw new InvalidOperationException("Bản chuẩn không hợp lệ: " + ex.GetBaseException().Message);
+                    }
+                    finally
+                    {
+                        if (owned != null && !saveFailed)
+                        {
+                            var active = handler.GetActiveDrawing();
+                            if (active == null || !active.IsSameDatabaseObject(owned)
+                                || !handler.CloseActiveDrawing(false) || handler.GetActiveDrawing() != null)
+                                throw new InvalidOperationException("Không đóng được đúng bản vẽ batch; dừng để kiểm tra.");
+                            owned = null;
+                        }
+                    }
+                }
+                SetMainStatus((_stopRequested ? "Đã dừng" : failed > 0 ? (ok == 0 ? "Không căn được bản nào" : "Kết thúc có lỗi") : "Hoàn tất")
+                    + " · căn " + ok + " bản · lỗi/bỏ qua " + failed
+                    + " · chưa xử lý " + Math.Max(0, drawings.Count - 1 - ok - failed),
+                    failed > 0 ? (ok == 0 ? MainStatusKind.Error : MainStatusKind.Warning) : MainStatusKind.Success);
+            }
+            catch (Exception ex) { SetMainStatus(ex.Message, MainStatusKind.Error); }
+            finally
+            {
+                _isBatchRunning = false; _stopRequested = false;
+                Ui(() => { progress.Close(); progress.Dispose(); btnRun.Text = "▶  CREATE DRAWING"; btnRun.Enabled = true; UpdateModeUi(); });
+            }
+        }
+
+        private void SetArrangeRowResult(int index, string result)
+        {
+            if (InvokeRequired) { Ui(() => SetArrangeRowResult(index, result)); return; }
+            if (index >= dgvDrawings.Rows.Count) return;
+            var row = dgvDrawings.Rows[index];
+            row.Cells["STATUS"].Value = result.StartsWith("ERROR") ? "ERROR" : result.StartsWith("REFERENCE") ? "REFERENCE" : "OK";
+            row.Cells["RESULT"].Value = result;
+            row.Cells["RESULT"].ToolTipText = result;
+        }
+    }
+}
+#endregion
+
+#region MainForm.WorkJournal - Kết nối giao diện với nhật ký
+
+
+namespace TTSK_AutoDim_Plates
+{
+    using System;
+    using System.Drawing;
+    using System.IO;
+    using System.Linq;
+    using System.Windows.Forms;
+
+    public partial class MainForm
+    {
+        private WorkSession workSession;
+        private System.Windows.Forms.Timer workJournalTimer;
+        private ToolTip workJournalTip;
+        private Label workJournalIcon;
+        private Label workJournalFortune;
+        private string workJournalError;
+        private string workJournalFolder = WorkJournal.Folder;
+
+        private void InitializeWorkJournal()
+        {
+            workSession = WorkJournal.StartDay(DateTime.Now);
+            workJournalIcon = new Label
+            {
+                Text = "⌬", AutoSize = false, Size = new Size(23, 24),
+                Location = new Point(MainClientWidth - 94, 9), Font = new Font("Segoe UI", 10F),
+                ForeColor = Color.White, BackColor = Color.Transparent, Cursor = Cursors.Hand,
+                AccessibleName = "Chức năng 11: Nhật ký giờ làm", TabStop = true,
+                TextAlign = ContentAlignment.MiddleCenter
+            };
+            mainFooter.Controls.Add(workJournalIcon);
+            workJournalIcon.BringToFront();
+            workJournalFortune = new Label { Text = "富", AutoSize = false, Size = new Size(25, 24),
+                Location = new Point(MainClientWidth - 71, 9), Font = new Font("Segoe UI", 10F),
+                ForeColor = Color.White, BackColor = Color.Transparent, TextAlign = ContentAlignment.MiddleCenter };
+            mainFooter.Controls.Add(workJournalFortune);
+            workJournalFortune.BringToFront();
+            ApplyWorkJournalFooterTheme();
+            workJournalTip = new ToolTip();
+            workJournalTip.SetToolTip(workJournalIcon, "11 · Nhật ký dự án / giờ làm · Xuất TXT");
+            workJournalIcon.Click += delegate { ShowWorkJournal(); };
+            workJournalIcon.KeyDown += (s, e) =>
+            {
+                if (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Space) { e.Handled = true; ShowWorkJournal(); }
+            };
+            workJournalTimer = new System.Windows.Forms.Timer { Interval = 30000 };
+            workJournalTimer.Tick += delegate
+            {
+                if (!EnsureWorkDay(DateTime.Now)) return;
+                if (!CanApplyUpdateNow()) return;
+                ObserveWorkProject();
+                SaveWorkSession();
+            };
+            Shown += delegate { ObserveWorkProject(); SaveWorkSession(); workJournalTimer.Start(); };
+        }
+
+        // Read-only Tekla calls. No model/drawing modifications, macros or CommitChanges.
+        private void ApplyWorkJournalFooterTheme()
+        {
+            // These glyphs sit on the colored footer, unlike ordinary body labels.
+            Color foreground = _darkMode ? Color.FromArgb(226, 232, 240) : Color.White;
+            foreach (var label in new[] { workJournalIcon, workJournalFortune })
+                if (label != null) { label.ForeColor = foreground; label.BackColor = Color.Transparent; }
+        }
+
+        private void ObserveWorkProject()
+        {
+            if (!EnsureWorkDay(DateTime.Now)) return;
+            try
+            {
+                var model = new Tekla.Structures.Model.Model();
+                if (!model.GetConnectionStatus()) return;
+                var project = model.GetProjectInfo();
+                var info = model.GetInfo();
+                if (project == null || info == null) return;
+                DateTime day = DateTime.Now.Date;
+                if (!workSession.Projects.Any(p => p.Day == day && p.Number == project.ProjectNumber
+                    && p.Name == project.Name && p.ModelPath == info.ModelPath))
+                    workSession.Projects.Add(new WorkProject { Day = day, FirstSeen = DateTime.Now, Number = project.ProjectNumber,
+                        Name = project.Name, ModelPath = info.ModelPath });
+            }
+            catch (Exception) { /* Retain already observed projects if Tekla disconnects first. */ }
+        }
+
+        private bool SaveWorkSession()
+        {
+            try
+            {
+                WorkJournal.Save(workJournalFolder, workSession);
+                workJournalError = null;
+                workJournalTip.SetToolTip(workJournalIcon, "11 · Nhật ký dự án / giờ làm · Xuất TXT");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                workJournalError = "Không lưu được nhật ký: " + ex.Message;
+                workJournalTip.SetToolTip(workJournalIcon, workJournalError);
+                return false;
+            }
+        }
+
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            if (workSession != null)
+            {
+                workJournalTimer.Stop();
+                // Capture the timestamp immediately; this event runs only after an accepted close.
+                DateTime closedAt = DateTime.Now;
+                EnsureWorkDay(closedAt);
+                workSession.Closed = closedAt;
+                if (!SaveWorkSession())
+                    MessageBox.Show(workJournalError + "\r\nGiờ đóng: " + workSession.Closed.Value.ToString("dd/MM/yyyy HH:mm:ss")
+                        + "\r\nHãy ghi lại giờ này để đối chiếu.", "TTSK · Nhật ký giờ làm", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                workJournalTimer.Dispose();
+                workJournalTip.Dispose();
+            }
+            base.OnFormClosed(e);
+        }
+
+        private bool EnsureWorkDay(DateTime now)
+        {
+            try
+            {
+                workSession = WorkJournal.RollToDay(workJournalFolder, workSession, now);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                workJournalError = "Không lưu được nhật ký: " + ex.Message;
+                workJournalTip.SetToolTip(workJournalIcon, workJournalError);
+                return false;
+            }
+        }
+
+        private void ShowWorkJournal()
+        {
+            if (!CanApplyUpdateNow()) return;
+            using (var form = new WorkJournalReportForm(() =>
+            {
+                if (!EnsureWorkDay(DateTime.Now)) throw new IOException(workJournalError);
+                ObserveWorkProject();
+                if (!SaveWorkSession()) throw new IOException(workJournalError);
+                int unreadable;
+                var sessions = WorkJournal.Read(workJournalFolder, out unreadable);
+                if (unreadable > 0) throw new IOException("Không đọc được " + unreadable + " tệp nhật ký.");
+                return sessions;
+            }, _darkMode))
+            {
+                form.ShowDialog(this);
+            }
+        }
+    }
+}
+#endregion
+
+#region MainForm.Keyplan - Lệnh mở và tạo keyplan
+
+
+namespace TTSK_AutoDim_Plates
+{
+    using System;
+    using System.Threading.Tasks;
+    using TTSK_AutoDim_Plates.Keyplan;
+
+    public partial class MainForm
+    {
+        private bool keyplanOpen;
+        private void RunKeyplanSlot09()
+        {
+            if(operationRunning||keyplanOpen||_isBatchRunning||_snapshotExportRunning||_fitAndCleanupRunning)return;
+            keyplanOpen=true;
+            try
+            {
+                var preferences=new KeyplanPreferences(KeyplanPreferences.DefaultPath);
+                bool autoApply=false;
+                try {
+                    if(System.IO.File.Exists(KeyplanPreferences.DefaultPath))autoApply=preferences.Load();
+                    else {
+                        // Read the previous portable preference once, migrate to
+                        // user storage; never create or edit files beside a model.
+                        var previous=System.IO.Path.Combine(System.Windows.Forms.Application.StartupPath,"keyplan.cfg");
+                        if(System.IO.File.Exists(previous)){autoApply=new KeyplanPreferences(previous).Load();preferences.Save(autoApply);}
+                    }
+                }
+                catch(Exception ex) {SetMainStatus("Chưa đọc được cấu hình Keyplan: "+ex.Message,MainStatusKind.Warning);}
+                using(var form=new KeyplanForm(RunKeyplanCheck,_darkMode,autoApply,preferences.Save))form.ShowDialog(this);
+            }
+            finally { keyplanOpen=false; }
+        }
+        private async Task<KeyplanRunResult> RunKeyplanCheck(KeyplanRunRequest request)
+        {
+            KeyplanRunResult result=null;Exception error=null;
+            await ExecuteTeklaCommandAsync(request.AutoApply?"Slot 09 · Tự áp dụng keyplan":"Slot 09 · Đọc keyplan",()=>
+            {
+                try { result=KeyplanApply.Run(request); } catch(Exception ex) { error=ex; }
+            });
+            if(error!=null)throw error;
+            if(result==null)throw new InvalidOperationException("Tekla đang bận; hãy thử lại sau khi lệnh hiện tại kết thúc.");
+            return result;
+        }
+    }
+}
+#endregion
+
+#region MainForm.Updater - Thông báo phiên bản và thao tác cập nhật
+
+
+namespace TTSK_AutoDim_Plates
+{
+    using System;
+    using System.Drawing;
+    using System.Threading.Tasks;
+    using System.Windows.Forms;
+    using TTSK_AutoDim_Plates.Updater;
+
+    public partial class MainForm
+    {
+        private UpdateManager _updateManager;
+        private GitHubReleaseInfo _pendingUpdateRelease;
+        private bool _updaterHandoffClosing = false;
+        private ToolTip _versionToolTip;
+        private readonly System.Threading.CancellationTokenSource _updaterLifetime = new System.Threading.CancellationTokenSource();
+        private bool _updateCheckRunning;
+        private DownloadUpdateButton _downloadUpdateButton;
+        private bool _updateDialogOpen;
+        private string _updateCheckFeedback;
+
+        /// <summary>
+        /// Kiểm tra xem ứng dụng có đang rảnh rỗi để có thể áp dụng cập nhật an toàn hay không.
+        /// Đảm bảo tất cả 5 cờ bận (busy flags) của ứng dụng đều đang tắt.
+        /// </summary>
+        public bool CanApplyUpdateNow()
+        {
+            if (sessionSwitching) return false;
+            if (operationRunning) return false;
+            if (_isBatchRunning) return false;
+            if (_pdfCommandRunning) return false;
+            if (_gridVisibilityMacroRunning) return false;
+            if (_fitAndCleanupRunning) return false;
+            if (_snapshotExportRunning) return false;
+            return true;
+        }
+
+        /// <summary>
+        /// Khởi tạo hệ thống tự động cập nhật, đăng ký sự kiện và kiểm tra phiên bản ngầm.
+        /// </summary>
+        private void InitializeUpdater()
+        {
+            try
+            {
+                _updateManager = new UpdateManager(Application.StartupPath);
+            }
+            catch (Exception)
+            {
+                // Không làm gián đoạn khởi động ứng dụng nếu có lỗi đọc thư mục updater
+                return;
+            }
+
+            _versionToolTip = new ToolTip
+            {
+                AutoPopDelay = 8000,
+                InitialDelay = 500,
+                ReshowDelay = 200,
+                ShowAlways = true
+            };
+            _downloadUpdateButton = new DownloadUpdateButton { Anchor = AnchorStyles.Right | AnchorStyles.Top,
+                Size = new Size(32, 30), AccessibleName = "Tải bản cập nhật mới", TabStop = true };
+            mainFooter.Controls.Add(_downloadUpdateButton);
+            _downloadUpdateButton.Location = new Point(mainFooter.ClientSize.Width - 40, 5);
+            _downloadUpdateButton.BringToFront();
+            _downloadUpdateButton.Click += async (s, e) =>
+            {
+                if (_updateDialogOpen || _updateCheckRunning) return;
+                await CheckForUpdatesManualAsync(true);
+            };
+            _versionToolTip.SetToolTip(_downloadUpdateButton, "Kiểm tra cập nhật phần mềm");
+            UpdateVersionLabelTheme();
+
+            if (mainVersionLabel != null)
+            {
+                mainVersionLabel.Cursor = Cursors.Hand;
+                mainVersionLabel.AutoEllipsis = true;
+                mainVersionLabel.Text = _updateManager.CurrentVersion.ToDisplayString();
+                _versionToolTip.SetToolTip(mainVersionLabel, string.Format("Phiên bản hiện tại: {0}\r\nBấm vào để kiểm tra cập nhật.", _updateManager.CurrentVersion.ToDisplayString()));
+
+                mainVersionLabel.Click += async (s, e) => await CheckForUpdatesManualAsync();
+            }
+
+            // Đọc trạng thái cache để hiển thị indicator nếu đã biết có bản mới
+            try
+            {
+                UpdateStateCache cached = _updateManager.LoadCachedState();
+                if (cached != null && cached.HasUpdate && UpdateVersion.TryParse(cached.LatestVersion, out UpdateVersion cachedVer) && cachedVer > _updateManager.CurrentVersion)
+                {
+                    _pendingUpdateRelease = new GitHubReleaseInfo
+                    {
+                        Source = cached.Source ?? "GitHub",
+                        TagName = cached.LatestTagName,
+                        Version = cachedVer,
+                        Body = cached.ReleaseNotes,
+                        HtmlUrl = cached.HtmlUrl,
+                        ZipDownloadUrl = cached.ZipDownloadUrl,
+                        ZipSizeBytes = cached.ZipSizeBytes,
+                        Sha256DownloadUrl = cached.Sha256DownloadUrl,
+                        Sha256SizeBytes = cached.Sha256SizeBytes
+                    };
+                    UpdateVersionLabelIndicator();
+                }
+            }
+            catch { }
+
+            // Đăng ký kiểm tra cập nhật ngầm sau khi cửa sổ đã hiển thị (Shown)
+            this.Shown += (s, e) =>
+            {
+                string completed = _updateManager.CheckSuccessMarker();
+                if (completed != null) MessageBox.Show(this, "Đã cập nhật TTSK lên v" + completed, "TTSK Dim Plates");
+                Task.Run(async () =>
+                {
+                    try
+                    {
+                        await Task.Delay(2000, _updaterLifetime.Token);
+                        _updateManager.CleanupCompletedSessions();
+                        GitHubReleaseInfo release = await _updateManager.CheckForUpdatesAsync(true, _updaterLifetime.Token);
+                        if (!_updaterLifetime.IsCancellationRequested)
+                        {
+                            if (!IsDisposed && IsHandleCreated) this.BeginInvoke(new Action(() =>
+                            {
+                                if (IsDisposed) return;
+                                _pendingUpdateRelease = release != null && release.Version > _updateManager.CurrentVersion ? release : null;
+                                UpdateVersionLabelIndicator();
+                            }));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        UpdateSecurity.Log(Application.StartupPath, "Automatic check: " + ex.Message);
+                    }
+                });
+            };
+            FormClosed += (s, e) => { _updaterLifetime.Cancel(); if (_versionToolTip != null) _versionToolTip.Dispose(); };
+        }
+
+        /// <summary>
+        /// Cập nhật hiển thị nhãn phiên bản khi có bản cập nhật mới (ví dụ: v1.0.0 ↑).
+        /// </summary>
+        private void UpdateVersionLabelIndicator()
+        {
+            if (mainVersionLabel == null || IsDisposed) return;
+
+            string curVerStr = _updateManager != null ? _updateManager.CurrentVersion.ToDisplayString() : "v1.0.0";
+            if (_pendingUpdateRelease != null)
+            {
+                mainVersionLabel.Text = curVerStr;
+                string newVerStr = _pendingUpdateRelease.Version != null ? _pendingUpdateRelease.Version.ToDisplayString() : _pendingUpdateRelease.TagName;
+                _versionToolTip.SetToolTip(mainVersionLabel, string.Format("Có bản cập nhật mới: {0}!\r\nBấm vào đây để xem nội dung và tải về.", newVerStr));
+            }
+            else
+            {
+                mainVersionLabel.Text = curVerStr;
+                _versionToolTip.SetToolTip(mainVersionLabel, _updateCheckFeedback ?? string.Format("Phiên bản hiện tại: {0}\r\nBấm vào để kiểm tra cập nhật.", curVerStr));
+            }
+
+            UpdateVersionLabelTheme();
+            if (_downloadUpdateButton != null)
+            {
+                _downloadUpdateButton.Available = _pendingUpdateRelease != null;
+                _downloadUpdateButton.Invalidate();
+                _versionToolTip.SetToolTip(_downloadUpdateButton, _pendingUpdateRelease == null ? (_updateCheckFeedback ?? "Bấm để kiểm tra cập nhật phần mềm") :
+                    "Có bản " + _pendingUpdateRelease.Version.ToDisplayString() + " • Bấm một lần để tải, cập nhật và khởi động lại");
+            }
+        }
+
+        /// <summary>
+        /// Hook cập nhật lại màu sắc nhãn phiên bản theo theme hiện tại mà không làm mất trạng thái indicator.
+        /// </summary>
+        public void UpdateVersionLabelTheme()
+        {
+            if (_downloadUpdateButton != null)
+            {
+                _downloadUpdateButton.DarkMode = _darkMode;
+                _downloadUpdateButton.ForeColor = _darkMode ? PrimaryButtonColor : Color.FromArgb(24, 75, 164);
+                _downloadUpdateButton.Invalidate();
+            }
+            if (mainVersionLabel == null || mainHeaderActions == null) return;
+
+            mainVersionLabel.BackColor = mainHeaderActions.BackColor;
+            if (_pendingUpdateRelease != null)
+            {
+                // Khi có cập nhật mới, làm nổi bật màu nhãn phiên bản
+                mainVersionLabel.ForeColor = _darkMode ? PrimaryButtonColor : Color.FromArgb(24, 75, 164);
+            }
+            else
+            {
+                mainVersionLabel.ForeColor = _darkMode ? PrimaryButtonColor : Color.FromArgb(65, 85, 112);
+            }
+        }
+
+        /// <summary>
+        /// Kiểm tra cập nhật thủ công khi người dùng click vào nhãn phiên bản.
+        /// </summary>
+        private async Task CheckForUpdatesManualAsync(bool startImmediately = false)
+        {
+            if (mainVersionLabel == null || _updateManager == null || _updateCheckRunning || _updaterHandoffClosing || _updateDialogOpen) return;
+            _updateCheckRunning = true;
+            _updateCheckFeedback = null;
+            mainVersionLabel.Text = "Đang kiểm tra...";
+            mainVersionLabel.Enabled = false;
+            if (_downloadUpdateButton != null) _downloadUpdateButton.Enabled = false;
+
+            try
+            {
+                GitHubReleaseInfo release = await _updateManager.CheckForUpdatesAsync(true, _updaterLifetime.Token);
+                if (IsDisposed || _updaterLifetime.IsCancellationRequested) return;
+                // Provider failures are diagnostics only. Present a single combined result.
+                if (release != null && release.Version > _updateManager.CurrentVersion)
+                {
+                    _pendingUpdateRelease = release;
+                    UpdateVersionLabelIndicator();
+                    ShowUpdateDialog(release, startImmediately);
+                }
+                else
+                {
+                    _pendingUpdateRelease = null;
+                    ShowUpdateCheckFeedback("Chưa tìm thấy bản cập nhật mới.\r\nBạn có thể tiếp tục sử dụng TTSK.");
+                }
+            }
+            catch (OperationCanceledException) when (_updaterLifetime.IsCancellationRequested) { }
+            catch (Exception ex)
+            {
+                if (IsDisposed) return;
+                UpdateSecurity.Log(Application.StartupPath, "Manual update check: " + ex.Message);
+                ShowUpdateCheckFeedback("Chưa thể kiểm tra cập nhật lúc này.\r\nBạn có thể thử lại sau.");
+            }
+            finally
+            {
+                _updateCheckRunning = false;
+                if (!IsDisposed && mainVersionLabel != null)
+                {
+                    mainVersionLabel.Enabled = true;
+                    if (_downloadUpdateButton != null) _downloadUpdateButton.Enabled = true;
+                    UpdateVersionLabelIndicator();
+                }
+            }
+        }
+
+        private void ShowUpdateCheckFeedback(string message)
+        {
+            _updateCheckFeedback = message;
+            UpdateVersionLabelIndicator();
+            if (Visible && _versionToolTip != null && _downloadUpdateButton != null && _downloadUpdateButton.IsHandleCreated)
+                _versionToolTip.Show(message, _downloadUpdateButton, 0, -48, 6000);
+        }
+
+        /// <summary>
+        /// Mở hộp thoại thông tin cập nhật cho người dùng xem và lựa chọn.
+        /// </summary>
+        private void ShowUpdateDialog(GitHubReleaseInfo release, bool startImmediately = false)
+        {
+            if (_updateDialogOpen || IsDisposed) return;
+            _updateDialogOpen = true;
+            try
+            {
+            using (var dlg = new UpdateDialog(
+                release,
+                _updateManager.CurrentVersion,
+                _darkMode,
+                () => CanApplyUpdateNow(),
+                async (rel, progress, ct) => await _updateManager.DownloadAndPrepareStagingAsync(rel, progress, ct),
+                (stagingDir, rel) => ApplyUpdateAndHandoff(stagingDir, rel)
+            ))
+            {
+                if (startImmediately) dlg.StartAutomatically = true;
+                dlg.ShowDialog(this);
+            }
+            }
+            finally { _updateDialogOpen = false; }
+        }
+
+        private sealed class DownloadUpdateButton : Button
+        {
+            public bool Available { get; set; }
+            public bool DarkMode { get; set; }
+            private bool _hover;
+            private bool _pressed;
+            public DownloadUpdateButton()
+            {
+                SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+                FlatStyle = FlatStyle.Flat; FlatAppearance.BorderSize = 0; Cursor = Cursors.Hand;
+            }
+            protected override void OnMouseEnter(EventArgs e) { _hover = true; Invalidate(); base.OnMouseEnter(e); }
+            protected override void OnMouseLeave(EventArgs e) { _hover = false; _pressed = false; Invalidate(); base.OnMouseLeave(e); }
+            protected override void OnMouseDown(MouseEventArgs e) { _pressed = e.Button == MouseButtons.Left; Invalidate(); base.OnMouseDown(e); }
+            protected override void OnMouseUp(MouseEventArgs e) { _pressed = false; Invalidate(); base.OnMouseUp(e); }
+            protected override void OnKeyDown(KeyEventArgs e) { if (e.KeyCode == Keys.Space) { _pressed = true; Invalidate(); } base.OnKeyDown(e); }
+            protected override void OnKeyUp(KeyEventArgs e) { _pressed = false; Invalidate(); base.OnKeyUp(e); }
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                // Always use the live parent surface: the footer changes color after the theme hook.
+                e.Graphics.Clear(Parent == null ? BackColor : Parent.BackColor);
+                e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                float scale = Math.Min(Width / 32f, Height / 30f);
+                e.Graphics.ScaleTransform(scale, scale);
+                Color ink = Available ? (DarkMode ? Color.FromArgb(201, 122, 64) : Color.White) :
+                    (DarkMode ? Color.FromArgb(201, 122, 64) : Color.FromArgb(61, 88, 123));
+                if (Available || _hover)
+                {
+                    Color fill = DarkMode ? Color.FromArgb(37, 30, 25) : Color.FromArgb(28, 80, 170);
+                    if (_hover) fill = DarkMode ? Color.FromArgb(57, 40, 28) : Color.FromArgb(38, 104, 206);
+                    if (_pressed) fill = DarkMode ? Color.FromArgb(27, 23, 20) : Color.FromArgb(19, 58, 130);
+                    using (var shape = new System.Drawing.Drawing2D.GraphicsPath())
+                    {
+                        shape.AddArc(1, 1, 10, 10, 180, 90); shape.AddArc(20, 1, 10, 10, 270, 90);
+                        shape.AddArc(20, 19, 10, 10, 0, 90); shape.AddArc(1, 19, 10, 10, 90, 90); shape.CloseFigure();
+                        using (var brush = new System.Drawing.Drawing2D.LinearGradientBrush(new Rectangle(1, 1, 29, 28),
+                            ControlPaint.Light(fill, _hover ? .14F : .07F), fill, 90F)) e.Graphics.FillPath(brush, shape);
+                        using (var border = new Pen(DarkMode ? Color.FromArgb(_hover ? 201 : 109, _hover ? 122 : 73, _hover ? 64 : 47) : Color.FromArgb(66, 116, 200), 1F))
+                            e.Graphics.DrawPath(border, shape);
+                        using (var shine = new Pen(Color.FromArgb(DarkMode ? 55 : 65, Color.White), 1F))
+                            e.Graphics.DrawLine(shine, 8, 2, 21, 2);
+                    }
+                    if (!Available && !DarkMode) ink = Color.White;
+                }
+                using (var pen = new Pen(ink, 2f) { StartCap = System.Drawing.Drawing2D.LineCap.Round, EndCap = System.Drawing.Drawing2D.LineCap.Round })
+                {
+                    if (_pressed) e.Graphics.TranslateTransform(0, 1);
+                    if (Available)
+                    {
+                        e.Graphics.DrawLine(pen, 15, 7, 15, 18);
+                        e.Graphics.DrawLines(pen, new[] {new PointF(10, 13), new PointF(15, 18), new PointF(20, 13)});
+                        e.Graphics.DrawLines(pen, new[] {new PointF(8, 19), new PointF(8, 23), new PointF(22, 23), new PointF(22, 19)});
+                    }
+                    else { e.Graphics.DrawArc(pen, 9, 8, 13, 13, 40, 285); e.Graphics.DrawLines(pen, new[] {new PointF(22, 7),new PointF(22, 12),new PointF(17, 12)}); }
+                    if (_pressed) e.Graphics.TranslateTransform(0, -1);
+                }
+                if (Available)
+                {
+                    using (var rim = new SolidBrush(Parent == null ? BackColor : Parent.BackColor)) e.Graphics.FillEllipse(rim, 23, 0, 8, 8);
+                    using (var brush = new SolidBrush(DarkMode ? Color.FromArgb(233, 159, 95) : Color.FromArgb(0, 153, 104))) e.Graphics.FillEllipse(brush, 24, 1, 6, 6);
+                    using (var dot = new SolidBrush(Color.FromArgb(245, 248, 252))) e.Graphics.FillEllipse(dot, 25.5F, 2.5F, 2F, 2F);
+                }
+                e.Graphics.ResetTransform();
+                if (Focused) ControlPaint.DrawFocusRectangle(e.Graphics, new Rectangle(2, 2, Width-4, Height-4));
+            }
+        }
+
+        /// <summary>
+        /// Bàn giao và khởi động tiến trình worker để thay thế file ứng dụng.
+        /// </summary>
+        private async Task ApplyUpdateAndHandoff(string stagingDir, GitHubReleaseInfo release)
+        {
+            if (!CanApplyUpdateNow())
+            {
+                MessageBox.Show("Các tác vụ đang chạy trong ứng dụng. Hãy hoàn tất tác vụ trước khi cập nhật.", "TTSK Dim Plates", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            _updaterHandoffClosing = true;
+            try
+            {
+                await _updateManager.LaunchWorkerAndHandoff(stagingDir, release, () =>
+                {
+                    if (!CanApplyUpdateNow() || IsDisposed) return false;
+                    this.Close();
+                    return IsDisposed || !Visible;
+                });
+            }
+            finally { _updaterHandoffClosing = false; }
+        }
+    }
+}
+#endregion
