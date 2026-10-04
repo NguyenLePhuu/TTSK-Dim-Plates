@@ -19,6 +19,7 @@ function Read-GitHubVersionData([string]$Path) {
 }
 
 $hasRequestedVersion = $PSBoundParameters.ContainsKey('RequestedVersion')
+$series = (Get-ReleaseSeries).id
 if ($hasRequestedVersion) { $null = ConvertTo-ReleaseVersion $RequestedVersion }
 if ($Reserve -and ($hasRequestedVersion -or $CommitSha)) { throw 'Cannot reserve a workflow version twice.' }
 if (!$ReservationPath) { $ReservationPath = Join-Path $PSScriptRoot '..\.codex-artifacts\portable-update\version-reservation.json' }
@@ -31,7 +32,7 @@ try {
     }
     $prefix = (Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\update\release-version-prefix.txt') -Raw).Trim()
     if ($prefix -notmatch '\A(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\z') { throw 'Invalid version prefix.' }
-    $highest = ConvertTo-ReleaseVersion "$prefix.0"
+    $highest = $null
     $github = Read-GitHubVersionData 'releases/latest'
     $githubVersion = $null
     if ($github) {
@@ -47,6 +48,7 @@ try {
     if ($settings['GoogleDriveManifestId']) {
         # An unreadable configured source must not be treated as version zero by a publisher.
         $drive = Read-DriveManifest $settings['GoogleDriveManifestId'] $settings['GoogleDriveApiKey']
+        if (Test-LegacyDriveRelease $drive) { $drive = $null }
         if ($drive -and [version]$drive.version -gt $highest) { $highest = [version]$drive.version }
     }
     if ($hasRequestedVersion) {
@@ -62,7 +64,8 @@ try {
     if ($remoteRequest) {
         if ($remoteRequest.encoding -ne 'base64') { throw 'Invalid remote release request encoding.' }
         $request = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($remoteRequest.content)) | ConvertFrom-Json
-        if ($request.PSObject.Properties['version']) {
+        if ($request.PSObject.Properties['releaseSeries'] -and $request.releaseSeries -ceq $series -and
+            !($request.PSObject.Properties['pendingInitialRelease'] -and $request.pendingInitialRelease) -and $request.PSObject.Properties['version']) {
             $queued = ConvertTo-ReleaseVersion $request.version
             if ($queued -gt $highest) { $highest = $queued }
         }
@@ -71,13 +74,17 @@ try {
     foreach ($path in @($ReservationPath, (Join-Path $PSScriptRoot '..\update\release-request.json'))) {
         if (!(Test-Path -LiteralPath $path)) { continue }
         $saved = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+        # Số giữ chỗ của đợt test không thuộc chuỗi phiên bản chính thức.
+        if (!$saved.PSObject.Properties['releaseSeries'] -or $saved.releaseSeries -cne $series) { continue }
+        if ($saved.PSObject.Properties['pendingInitialRelease'] -and $saved.pendingInitialRelease) { continue }
         if ($saved.PSObject.Properties['version']) {
             $reserved = ConvertTo-ReleaseVersion $saved.version
             if ($reserved -gt $highest) { $highest = $reserved }
         } elseif ($path -eq $ReservationPath) { throw 'Damaged version reservation. Do not silently reuse a number.' }
     }
-    if ($highest.Build -eq [int]::MaxValue) { throw 'Patch version exhausted; increase the release prefix.' }
-    $next = [version]::new($highest.Major, $highest.Minor, ($highest.Build + 1))
+    if ($highest -and $highest.Build -eq [int]::MaxValue) { throw 'Patch version exhausted; increase the release prefix.' }
+    $next = ConvertTo-ReleaseVersion "$prefix.0"
+    if ($highest -and $highest -ge $next) { $next = [version]::new($highest.Major, $highest.Minor, ($highest.Build + 1)) }
     if ($MinimumVersion) {
         $minimum = ConvertTo-ReleaseVersion $MinimumVersion
         if ($minimum -gt $next) { $next = $minimum }
@@ -85,7 +92,7 @@ try {
     if ($Reserve) {
         $temporary = $ReservationPath + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
         try {
-            [IO.File]::WriteAllText($temporary, (@{version=$next.ToString(3);reservedUtc=[DateTime]::UtcNow.ToString('o')} | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+            [IO.File]::WriteAllText($temporary, (@{version=$next.ToString(3);releaseSeries=$series;reservedUtc=[DateTime]::UtcNow.ToString('o')} | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
             Move-Item -LiteralPath $temporary -Destination $ReservationPath -Force
         } finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force } }
     }

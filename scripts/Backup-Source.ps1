@@ -15,17 +15,25 @@ function Invoke-SourceGit([string[]]$Arguments) {
     return $output
 }
 $lock = $null
+$head = $null
+$zip = $null
 try {
     if (!$Destination) {
+        if ($NoPause) { throw 'Che do -NoPause can -Destination GitHub hoac GoogleDrive.' }
         do { $choice = Read-Host 'Luu tru code: 1 = GitHub, 2 = Google Drive' } while ($choice -notin @('1','2'))
         $Destination = if ($choice -eq '1') { 'GitHub' } else { 'GoogleDrive' }
+    }
+    # Không lưu nhầm repository cha khi thư mục source mất .git.
+    # Prefix rỗng tại gốc repo; tránh giải mã đường dẫn UTF-8 bằng code page của BAT.
+    $prefix = Invoke-SourceGit @('rev-parse','--show-prefix')
+    if (![string]::IsNullOrEmpty($prefix)) {
+        throw 'Thu muc source khong phai goc Git repository. Chua thay doi Git.'
     }
     $work = Join-Path (Get-Location) '.codex-artifacts\portable-update'
     New-Item -ItemType Directory -Path $work -Force | Out-Null
     $lock = [IO.File]::Open((Join-Path $work 'update.lock'), 'OpenOrCreate', 'ReadWrite', 'None')
     $branch = Invoke-SourceGit @('symbolic-ref','--quiet','--short','HEAD')
     if (Invoke-SourceGit @('ls-files','--unmerged')) { throw 'Hay giai quyet Git conflict truoc.' }
-    $gitDir = Invoke-SourceGit @('rev-parse','--absolute-git-dir')
     $indexLock = Invoke-SourceGit @('rev-parse','--git-path','index.lock')
     # A concurrent Git operation can release its lock shortly; never delete its lock automatically.
     for ($attempt = 0; (Test-Path -LiteralPath $indexLock) -and $attempt -lt 5; $attempt++) {
@@ -35,8 +43,9 @@ try {
     if (Test-Path -LiteralPath $indexLock) {
         throw 'Git dang bi khoa boi index.lock. Hay dong thao tac Git dang chay va thu lai. Neu van loi, can kiem tra khoa cu truoc khi di chuyen; cong cu khong tu xoa khoa Git. Chua commit hay tai source len Drive.'
     }
-    foreach ($state in @('MERGE_HEAD','rebase-merge','rebase-apply','CHERRY_PICK_HEAD')) {
-        if (Test-Path -LiteralPath (Join-Path $gitDir $state)) { throw 'Hay hoan tat merge/rebase/cherry-pick truoc.' }
+    foreach ($state in @('MERGE_HEAD','rebase-merge','rebase-apply','CHERRY_PICK_HEAD','REVERT_HEAD','sequencer')) {
+        $statePath = Invoke-SourceGit @('rev-parse','--git-path',$state)
+        if (Test-Path -LiteralPath $statePath) { throw 'Hay hoan tat merge/rebase/cherry-pick/revert truoc.' }
     }
     if ($Destination -eq 'GoogleDrive') {
         if (!$PSBoundParameters.ContainsKey('ArchiveName') -and !$NoPause) {
@@ -52,7 +61,10 @@ try {
             if ($ArchiveName.Length -gt 120) { throw 'Ten tep qua dai (toi da 120 ky tu, gom .zip).' }
         }
         . (Join-Path $PSScriptRoot 'GoogleDrive-ReleaseApi.ps1')
-        if (!$DriveFolderId) { $DriveFolderId = Read-Host 'ID thu muc Google Drive RIENG de luu source (tai khoan Google da dang nhap phai co quyen ghi)' }
+        if (!$DriveFolderId) {
+            if ($NoPause) { throw 'Che do -NoPause can DriveFolderId hop le.' }
+            $DriveFolderId = Read-Host 'ID thu muc Google Drive RIENG de luu source (tai khoan Google da dang nhap phai co quyen ghi)'
+        }
         Assert-DriveId $DriveFolderId
         Write-Host "Thu muc luu source: https://drive.google.com/drive/folders/$DriveFolderId"
         Connect-DriveForSourceBackup -NonInteractive:$NoPause
@@ -79,7 +91,10 @@ try {
     } else {
         $name = 'TTSK-Source-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + $head.Substring(0,12) + '.zip'
         if ($ArchiveName) { $name = $ArchiveName }
-        $zip = Join-Path $work $name
+        # Mỗi lần chạy giữ ZIP riêng để retry không ghi đè bản lưu trước.
+        $archiveDirectory = Join-Path $work ('source-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $archiveDirectory | Out-Null
+        $zip = Join-Path $archiveDirectory $name
         Invoke-SourceGit @('archive','--format=zip',"--output=$zip",$head) | Out-Host
         $id = Send-DriveFile -Path $zip -FolderId $DriveFolderId -Name $name
         $metadata = Invoke-DriveApi -Uri "https://www.googleapis.com/drive/v3/files/${id}?fields=id,size,md5Checksum"
@@ -90,6 +105,8 @@ try {
     }
 } catch {
     Write-Host "[THAT BAI] $($_.Exception.Message)" -ForegroundColor Red
+    if ($head) { Write-Host "Commit local van con: $head. Co the chay lai de thu luu len dich; khong can reset Git." }
+    if ($zip -and (Test-Path -LiteralPath $zip)) { Write-Host "ZIP local de kiem tra/thu lai: $zip" }
     exit 1
 } finally {
     if ($lock) { $lock.Dispose() }

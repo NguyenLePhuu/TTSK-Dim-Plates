@@ -9,10 +9,10 @@
 - Dòng **Dự án: … ▾** dưới tên ứng dụng cho biết dự án đang kết nối. Bấm dòng này để chọn lại, kể cả kết nối lại cùng PID sau khi đổi model.
 - Sau khi chọn thẻ, **Tự động** theo cửa sổ Tekla vừa thao tác; chỉ chuyển khi TTSK hết lệnh/batch/in và đóng các hộp thoại công cụ.
 - Nếu mở thêm phiên Tekla trong lúc TTSK đang làm việc: đợi cửa sổ mới có model rồi hiện hộp thẻ để chọn dự án. Hủy giữ phiên hiện tại; không gọi API sớm khi cửa sổ mới còn ở màn hình khởi động. Các phiên đã biết vẫn chuyển tự động khi thao tác cửa sổ.
-- **Cố định** chỉ là trạng thái sau một lần bàn giao lỗi; chọn lại bằng thẻ để bật theo cửa sổ.
+- Đổi model ngay trong cửa sổ Tekla đang kết nối được phát hiện định kỳ, kể cả không đổi foreground. Identity gồm PID/start time/kênh và model path. Chỉ chuyển sau khi TTSK rảnh và model mới ổn định. Nếu trạng thái cũ là **Cố định**, vẫn theo dõi model bên trong phiên đã gắn để tránh ngữ cảnh stale.
 - Một lệnh đã bắt đầu luôn thuộc phiên cũ. Không chuyển hoặc chạy lại lệnh đó ở dự án mới. Nếu bấm lệnh khi đang chờ chuyển, lệnh được chặn; chạy lại sau khi tên dự án đổi.
 - Đổi dự án tạo tiến trình TTSK mới. Vị trí cửa sổ và ghim trên cùng được chuyển; danh sách drawing, trạng thái resume, selection/reference và cache API không chuyển theo. Load Selected lại nếu cần làm batch.
-- Lỗi kết nối dự án mới giữ cửa sổ cũ và chuyển về chế độ cố định, tránh vòng lặp tự mở. Chọn lại dự án để thử lại.
+- Lỗi kết nối dự án mới giữ cửa sổ cũ, dừng child thất bại và đợi 5 giây trước khi thử lại; không tự tắt theo dõi. Khi model/kênh phiên hiện tại mất hoặc thay đổi, lệnh dùng ngữ cảnh cũ bị chặn cho tới khi kết nối lại thành công. Chọn lại thủ công vẫn dùng được.
 - Tiêu đề TTSK chỉ hiện tên dự án, không PID. Status điều phối ngắn; hover status để đọc đủ các thông báo dài khác. Hộp chọn dùng màu dark/light của MainForm; lúc khởi động đọc theme.cfg cạnh ứng dụng. Tên dự án trùng được phân biệt bằng folder/cửa sổ ở dòng phụ.
 - Nút Đóng/thẻ dự án luôn vẽ lại nền opaque theo ancestor trước khi vẽ đường bo, loại bỏ nền đen do Clear(Color.Transparent) trên buffer GDI. Khung ngoài dùng compositor DWM Windows 11 để bo mép có antialias và viền theo theme; bỏ Region ở cả form/container và không dùng TransparencyKey. Bán kính ngoài theo chính sách Windows. Dựng đủ control rồi autoscale; chốt chiều cao từng thẻ 110 px × DPI/96 sau autoscale để không tích lũy tỷ lệ.
 
@@ -35,6 +35,8 @@ Khung picker giữ WS_CAPTION/WS_THICKFRAME trong CreateParams để DWM nhận 
 Đổi kết nối bằng tiến trình mới để loại bỏ static remoting proxy và object/cache cũ. Windows events readiness/accept bảo vệ bàn giao; child chờ parent thoát trước khi hiện UI. Thời hạn chuẩn bị 30 giây; lỗi hủy child do chính lần chuyển tạo ra. Không đóng Tekla.
 
 Foreground hook theo dõi cả cửa sổ drawing/dialog cùng PID. Timer 500 ms chỉ thực hiện yêu cầu khi rảnh; polling foreground là fallback nếu không đăng ký được hook. Worker hole-mark/print kế thừa môi trường phiên. Worker render PNG đã có dữ liệu xuất riêng nên không cần Tekla còn mở.
+
+Từ lần sửa 2026-10-04: timer còn chủ động scan identity phiên đang gắn ngay khi không có pending PID, không phụ thuộc hook foreground để phát hiện đổi model cùng cửa sổ. Đợi cùng identity ổn định tối thiểu 500 ms trước tạo child, kiểm lại cờ bận và pending PID sau await. Discovery và VerifyConnection cùng dùng parser ModelFolder; title có khoảng trắng cuối được chấp nhận, đường dẫn chỉ trùng prefix bị từ chối. Chi tiết bằng chứng và ma trận kiểm thử tại `WORKSPACE_RECOVERY_2026-10-04.md`.
 
 **Không tạo/ghi/sửa file hoặc thư mục trong model.** Điều phối dùng biến môi trường cục bộ và Windows events, không đặt marker/macro/cache/log trong model. Quy tắc này đã được ghi vào AGENTS.md. Việc kiểm tra ở đây không chạy chức năng sản phẩm có tác động bản vẽ.
 

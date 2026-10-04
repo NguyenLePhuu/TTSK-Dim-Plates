@@ -13,7 +13,7 @@ Assert-DriveId $folder
 Assert-DriveId $index
 $before = Read-DriveManifest $index $key
 $beforeJson = $before | ConvertTo-Json -Compress
-if ($before -and [version]$before.version -ge [version]$Version) { throw 'Drive da co phien ban bang/moi hon. Khong ghi de ban da phat hanh.' }
+if ($before -and !(Test-LegacyDriveRelease $before) -and [version]$before.version -ge [version]$Version) { throw 'Drive da co phien ban bang/moi hon. Khong ghi de ban da phat hanh.' }
 $null = & (Join-Path $PSScriptRoot 'Resolve-PortableReleaseVersion.ps1') -RequestedVersion $Version
 $zipName = 'TTSK-Dim-Plates-Portable.zip'
 $zip = Join-Path $PackageDirectory $zipName

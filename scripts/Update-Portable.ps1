@@ -211,7 +211,8 @@ try {
         $version = & (Join-Path $PSScriptRoot 'Resolve-PortableReleaseVersion.ps1') -Reserve
         Write-Host "[4/4] Commit va push nhanh $branch len origin..."
         # Notes belong to the same commit as the verified portable, never to a previous release.
-        $request = [ordered]@{ requestId = [guid]::NewGuid().ToString('N'); version = $version; notes = $ReleaseNotes; createdUtc = [DateTime]::UtcNow.ToString('o') }
+        . (Join-Path $PSScriptRoot 'GoogleDrive-ReleaseApi.ps1')
+        $request = [ordered]@{ requestId = [guid]::NewGuid().ToString('N'); version = $version; releaseSeries = (Get-ReleaseSeries).id; notes = $ReleaseNotes; createdUtc = [DateTime]::UtcNow.ToString('o') }
         [IO.File]::WriteAllText((Join-Path $repo 'update/release-request.json'), ($request | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
         Invoke-Git @('add', '--all') | Write-Host
         if (Invoke-Git @('diff', '--cached', '--name-only')) { Invoke-Git @('commit', '-m', ('Cap nhat source va portable ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))) | Write-Host }

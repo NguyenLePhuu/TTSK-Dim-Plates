@@ -6,6 +6,7 @@
 - `Kiem_Tra_Google_Drive.bat`: kiểm tra đọc công khai và đăng nhập máy phát hành.
 - `release-request.json`: số phiên bản đã giữ chỗ và ghi chú phát hành GitHub.
 - `release-version-prefix.txt`: nhánh phiên bản major.minor.
+- `release-series.json`: đợt chính thức từ v1.0.0 và định danh gói test Drive cũ được bỏ qua; giữ nguyên sau khi phát hành.
 - `release-run-offset.txt`: tương thích yêu cầu GitHub cũ.
 
 Các BAT chạy được khi bấm đúp hoặc gọi từ thư mục khác. Script kỹ thuật ở `../scripts`; tài liệu ở `../docs/GOOGLE_DRIVE_UPDATES.md`.
@@ -23,6 +24,12 @@ Ví dụ: `Luu_Tru_Code.bat -Destination GitHub -CommitMessage "Luu tien do" -No
 Khi chọn Google Drive, nhập tên tệp lưu trữ theo ý muốn (hỗ trợ tiếng Việt và khoảng trắng). Công cụ tự thêm `.zip` nếu chưa có; bấm Enter để giữ tên tự động gồm thời gian và mã commit. Chỉ nhập tên tệp, không nhập đường dẫn.
 Drive với tên tùy chọn: `Luu_Tru_Code.bat -Destination GoogleDrive -ArchiveName "Ban luu tru hom nay" -NoPause`.
 Với `-NoPause`, công cụ không hỏi tên; nếu không truyền `-ArchiveName` thì dùng tên tự động.
+Phải truyền `-Destination` khi dùng `-NoPause`; thiếu nơi lưu sẽ báo lỗi ngay, không chờ nhập.
+
+Mỗi lần lưu Drive tạo thư mục ZIP local riêng tại `.codex-artifacts/portable-update/source-<GUID>/`, nên tên trùng không ghi đè bản local trước. Drive tạo file mới mỗi lần chạy, kể cả khi tên trùng. Nếu upload hoặc xác minh thất bại, công cụ báo commit và đường dẫn ZIP còn giữ lại để kiểm tra/thử lại; không tự reset commit. Upload có thể đã tới Drive dù kiểm tra sau đó lỗi, nên kiểm tra thư mục Drive trước khi chạy lại nếu muốn tránh bản trùng. Có thể dọn các ZIP local sau khi đã xác minh bản lưu và lệnh đã kết thúc.
+
+Công cụ chỉ chạy tại gốc Git repository và chặn merge/rebase/cherry-pick/revert đang dở, cũng như khóa của luồng cập nhật/lưu trữ khác. Các thao tác Git thủ công vẫn cần thực hiện sau khi lệnh lưu trữ kết thúc.
+Kiểm thử hồi quy offline: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-SourceBackup.ps1`. Bộ thử dùng repository tạm, remote Git local và Drive giả; không upload hay commit dự án thật.
 
 Nếu Google từ chối phiên đã lưu (`invalid_grant`), chạy BAT tương tác sẽ tự mở đăng nhập lại bằng OAuth client đã lưu. Xác nhận trên trang Google rồi công cụ tiếp tục lưu trữ. Chế độ `-NoPause` báo lỗi và dừng, không mở trình duyệt; có thể chạy `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Connect-GoogleDrivePublisher.ps1` để đăng nhập lại trước. Lỗi mạng hoặc OAuth client không hợp lệ được báo riêng, không tự lặp đăng nhập.
 Nếu muốn lưu vào thư mục khác cho một lần chạy, thêm `-DriveFolderId "ID_THU_MUC_KHAC"`.

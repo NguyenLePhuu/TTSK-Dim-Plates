@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text;
 using M = Tekla.Structures.Model;
 using D = Tekla.Structures.Drawing;
+using G = Tekla.Structures.Geometry3d;
 
 namespace Tekla.Technology.Akit.UserScript
 {
@@ -24,7 +25,8 @@ namespace Tekla.Technology.Akit.UserScript
                 LastRunAudit = plan.Report();
                 int count = plan.Apply();
                 LastRunSucceeded = true;
-                LastRunMessage = "Neighbor: an " + count + " part trong " + plan.ViewCount
+                LastRunMessage = "Neighbor: an " + count + ", hien lai " + plan.RestoredCount + " plate, "
+                    + plan.RestoredSupportCount + " thep tham chieu trong " + plan.ViewCount
                     + " view. " + plan.Warnings.Count + " canh bao. "
                     + String.Join("; ", plan.Warnings.Take(3));
             }
@@ -63,6 +65,13 @@ namespace Tekla.Technology.Akit.UserScript
             public readonly List<string> Warnings = new List<string>();
             public readonly Dictionary<int, Node> Nodes = new Dictionary<int, Node>();
             public readonly List<Edge> Edges = new List<Edge>();
+            // Trạng thái lần chạy: chỉ hiện lại plate nối main-neighbor đã xác minh trong cùng view.
+            public readonly List<Item> RestorePlates = new List<Item>();
+            // Chỉ nhận support là primary input của Connection, secondary là plate nối cụm main.
+            public readonly Dictionary<int, HashSet<int>> ReferenceSupportPlates = new Dictionary<int, HashSet<int>>();
+            public readonly List<Item> RestoreSupports = new List<Item>();
+            public int RestoredCount { get; private set; }
+            public int RestoredSupportCount { get; private set; }
             public Dictionary<int, string> Keep;
             public string Report()
             {
@@ -75,6 +84,8 @@ namespace Tekla.Technology.Akit.UserScript
                         + " hidden=" + i.WasHidden + " " + i.Reason);
                 foreach (string w in Warnings) s.AppendLine("WARNING " + w);
                 s.AppendLine("WouldHide=" + Items.Count(i => !i.WasHidden && !Keep.ContainsKey(i.ModelId)));
+                s.AppendLine("WouldShow=" + (RestorePlates.Count + RestoreSupports.Count));
+                s.AppendLine("WouldShowSupports=" + RestoreSupports.Count);
                 return s.ToString();
             }
             public int Apply()
@@ -83,14 +94,21 @@ namespace Tekla.Technology.Akit.UserScript
                 var active = handler.GetActiveDrawing();
                 if (active == null || !active.IsSameDatabaseObject(Drawing))
                     throw new InvalidOperationException("Ban ve active da thay doi.");
-                // Revalidate every target before the first write. Pre-existing hidden states are untouched.
+                RestoredCount = 0;
+                RestoredSupportCount = 0;
+                // Hai danh sách đã có bằng chứng riêng; không hiện tất cả part thuộc Keep.
+                var toRestore = RestorePlates.Concat(RestoreSupports).ToList();
                 var targets = Items.Where(i => !i.WasHidden && !Keep.ContainsKey(i.ModelId)).ToList();
-                if (targets.Count == 0) return 0;
+                if (targets.Count == 0 && toRestore.Count == 0) return 0;
+                foreach (var i in toRestore)
+                    if (!i.Part.Select() || !i.Part.Hideable.IsHidden)
+                        throw new InvalidOperationException("Trang thai part can hien lai da thay doi; chay lai lenh.");
                 var changed = new List<Item>();
+                var restoredPlates = new List<Item>();
                 try
                 {
                     changed.AddRange(targets);
-                    RunBatchMacro(Drawing, targets);
+                    if (targets.Count > 0) RunBatchMacro(Drawing, targets);
                     // Verify in one enumeration per view instead of one remoting Select per part.
                     var verified = new HashSet<D.Part>();
                     foreach (var group in changed.GroupBy(i => i.ViewId))
@@ -106,8 +124,18 @@ namespace Tekla.Technology.Akit.UserScript
                         }
                     }
                     if (verified.Count != changed.Count) throw new InvalidOperationException("Hide read-back mismatch.");
-                    if (changed.Count > 0 && !Drawing.CommitChanges())
+                    // Chỉ hiện sau khi macro ẩn đã kết thúc; không đua với macro pending.
+                    foreach (var i in toRestore)
+                    {
+                        restoredPlates.Add(i);
+                        i.Part.Hideable.ShowInDrawingView();
+                        if (!i.Part.Modify() || !i.Part.Select() || i.Part.Hideable.IsHidden)
+                            throw new InvalidOperationException("Show part read-back mismatch.");
+                    }
+                    if ((changed.Count > 0 || restoredPlates.Count > 0) && !Drawing.CommitChanges())
                         throw new InvalidOperationException("Commit drawing that bai.");
+                    RestoredCount = RestorePlates.Count;
+                    RestoredSupportCount = RestoreSupports.Count;
                     return changed.Count;
                 }
                 catch (BatchPendingException) { throw; } // Never race a possibly running native command with rollback.
@@ -115,6 +143,15 @@ namespace Tekla.Technology.Akit.UserScript
                 catch
                 {
                     bool restored = true;
+                    foreach (var i in restoredPlates)
+                    {
+                        try
+                        {
+                            i.Part.Hideable.HideFromDrawingView();
+                            restored &= i.Part.Modify() && i.Part.Select() && i.Part.Hideable.IsHidden;
+                        }
+                        catch { restored = false; }
+                    }
                     foreach (var i in changed)
                     {
                         try
@@ -124,7 +161,7 @@ namespace Tekla.Technology.Akit.UserScript
                         }
                         catch { restored = false; }
                     }
-                    try { if (changed.Count > 0) restored &= Drawing.CommitChanges(); }
+                    try { if (changed.Count > 0 || restoredPlates.Count > 0) restored &= Drawing.CommitChanges(); }
                     catch { restored = false; }
                     if (!restored) throw new InvalidOperationException("Rollback chua duoc xac minh; kiem tra ban ve.");
                     throw;
@@ -301,7 +338,7 @@ namespace UserMacros
                 }
                 if (nodes[seed].Plate && !memberFound)
                 {
-                    warnings.Add("P" + seed + ": chua xac minh thep hinh noi truc tiep; chi giu plate da co bang chung.");
+                    warnings.Add(UnresolvedPlateWarning(seed));
                 }
             }
             if (seeds.Count == 0)
@@ -311,6 +348,9 @@ namespace UserMacros
             }
             return keep;
         }
+
+        private static string UnresolvedPlateWarning(int id)
+        { return "P" + id + ": chua xac minh thep hinh noi truc tiep; chi giu plate da co bang chung."; }
 
         private static bool CanFollow(Node from, Node to, Edge edge)
         {
@@ -362,9 +402,53 @@ namespace UserMacros
             }
             if (p.ViewCount == 0) throw new InvalidOperationException("Khong co view chua main part.");
             BuildConnections(p, primary);
+            p.RestorePlates.AddRange(ResolvePlateRestores(p.Nodes, p.Edges, primary, p.Keep, p.Items));
+            p.RestoreSupports.AddRange(ResolveReferenceSupportRestores(p.ReferenceSupportPlates, p.Nodes, primary, p.Items));
             foreach (var i in p.Items)
-                i.Reason = p.Keep.ContainsKey(i.ModelId) ? p.Keep[i.ModelId] : "HIDE outside local connection";
+                i.Reason = p.RestorePlates.Contains(i) ? "SHOW required connector plate; " + p.Keep[i.ModelId]
+                    : p.RestoreSupports.Contains(i) ? "SHOW verified reference support; " + p.Keep[i.ModelId]
+                    : p.Keep.ContainsKey(i.ModelId) ? p.Keep[i.ModelId] : "HIDE outside local connection";
             return p;
+        }
+
+        public static List<Item> ResolvePlateRestores(Dictionary<int, Node> nodes, List<Edge> edges,
+            HashSet<int> primary, Dictionary<int, string> keep, List<Item> items)
+        {
+            // Không đổi graph dùng chung với Check DIM. Cần đủ hai cạnh main-plate-neighbor,
+            // đồng thời cụm main và neighbor đang hiện trong chính view có plate bị ẩn.
+            var direct = new HashSet<int>();
+            foreach (var e in edges)
+            {
+                if (primary.Contains(e.A) && !nodes[e.A].Dummy && !primary.Contains(e.B)) direct.Add(e.B);
+                if (primary.Contains(e.B) && !nodes[e.B].Dummy && !primary.Contains(e.A)) direct.Add(e.A);
+            }
+            var receivers = new Dictionary<int, HashSet<int>>();
+            foreach (int id in direct)
+            {
+                Node plate = nodes[id];
+                if (!plate.Plate || plate.Dummy || !keep.ContainsKey(id)) continue;
+                var members = new HashSet<int>();
+                foreach (var e in edges.Where(e => e.A == id || e.B == id))
+                {
+                    int other = e.A == id ? e.B : e.A;
+                    Node member = nodes[other];
+                    if (!primary.Contains(other) && !member.Plate && !member.Dummy && keep.ContainsKey(other))
+                        members.Add(other);
+                }
+                if (members.Count > 0) receivers.Add(id, members);
+            }
+            var result = new List<Item>();
+            foreach (var view in items.GroupBy(i => i.ViewId))
+            {
+                var visible = new HashSet<int>(view.Where(i => !i.WasHidden).Select(i => i.ModelId));
+                if (!visible.Any(id => primary.Contains(id) && !nodes[id].Dummy)) continue;
+                foreach (var i in view.Where(i => i.WasHidden))
+                {
+                    HashSet<int> members;
+                    if (receivers.TryGetValue(i.ModelId, out members) && members.Overlaps(visible)) result.Add(i);
+                }
+            }
+            return result;
         }
 
         private static void BuildConnections(Plan p, HashSet<int> primary)
@@ -394,6 +478,340 @@ namespace UserMacros
             }
             p.Keep = Resolve(p.Nodes, p.Edges, primary, p.Warnings);
             RetainLocalDummies(p, primary);
+            RetainConnectionReferenceSupports(p, primary);
+        }
+
+        private static void RetainConnectionReferenceSupports(Plan p, HashSet<int> primary)
+        {
+            // Dầm tham chiếu có thể chỉ có Connection khoan plate, không có weld tới dầm.
+            // Không thêm cạnh graph: Check DIM và ranh giới mở rộng neighbor giữ nguyên.
+            // Chạy sau quy tắc cũ; không thay lý do Keep hoặc trạng thái ẩn cũ của dummy đã được giữ.
+            var geometry = new Dictionary<int, ReferenceShape>();
+            var colors = new Dictionary<int, int>();
+            G.Matrix toGlobal = null; // Chỉ đọc plane khi đã có Connection cần xử lý; cache trong lần Analyze.
+            foreach (var n in p.Nodes.Values.Where(n => n.Dummy && !n.Plate && !primary.Contains(n.Id)
+                && !p.Keep.ContainsKey(n.Id)))
+            {
+                try
+                {
+                    var proven = new HashSet<int>();
+                    var connections = new HashSet<int>();
+                    var components = n.Part.GetComponents();
+                    while (components.MoveNext())
+                    {
+                        var connection = components.Current as M.Connection;
+                        if (connection == null) continue;
+                        var support = connection.GetPrimaryObject() as M.Part;
+                        if (support == null || support.Identifier.ID != n.Id) continue;
+                        var secondary = new HashSet<int>();
+                        foreach (var obj in connection.GetSecondaryObjects())
+                        {
+                            var plate = obj as M.Part;
+                            if (plate != null) secondary.Add(plate.Identifier.ID);
+                        }
+                        var plates = ResolveReferenceSupportPlates(n.Id, support.Identifier.ID, secondary,
+                            p.Nodes, p.Edges, primary);
+                        if (plates.Count == 0) continue;
+                        proven.UnionWith(plates);
+                        connections.Add(connection.Identifier.ID);
+                    }
+                    // Chỉ công bố kế hoạch khi toàn bộ lần đọc thành công, tránh bằng chứng dở dang.
+                    if (proven.Count == 0) continue;
+                    int chosen;
+                    var protectedGroup = new HashSet<int> { n.Id };
+                    try
+                    {
+                        if (toGlobal == null) toGlobal = new M.Model().GetWorkPlaneHandler()
+                            .GetCurrentTransformationPlane().TransformationMatrixToGlobal;
+                        chosen = ChooseReferenceSupport(p, n, proven, primary, toGlobal, geometry, colors, protectedGroup);
+                    }
+                    catch (Exception ex)
+                    {
+                        ProtectReferenceSupports(p, protectedGroup, proven,
+                            "P" + n.Id + ": khong du du lieu, giu nhom reference da khoanh vung; " + ex.Message);
+                        continue;
+                    }
+                    if (chosen == 0) continue;
+                    // Không ghi đè Keep/ẩn thủ công của dummy đã được quy tắc cũ nhận.
+                    if (!p.Keep.ContainsKey(chosen))
+                    {
+                        p.ReferenceSupportPlates.Add(chosen, proven);
+                        p.Keep[chosen] = "KEEP reference support via Connection " + String.Join(",", connections.OrderBy(id => id))
+                            + (chosen == n.Id ? "" : " replacing unused gray P" + n.Id)
+                            + " and primary-linked plate " + String.Join(",", proven.OrderBy(id => id));
+                    }
+                    else if (p.ReferenceSupportPlates.ContainsKey(chosen)) p.ReferenceSupportPlates[chosen].UnionWith(proven);
+                    foreach (int id in proven) p.Warnings.Remove(UnresolvedPlateWarning(id));
+                }
+                catch (Exception ex)
+                {
+                    // Lỗi nhánh bổ sung không đổi kết quả Keep của quy tắc cũ, không tự hiện part.
+                    p.Warnings.Add("Reference support P" + n.Id + ": " + ex.Message);
+                }
+            }
+        }
+
+        // Quy ước người dùng: reference xám là chưa dùng. Chỉ dùng permanent representation,
+        // không dùng màu selection/temporary; không áp Class 1/1010 hoặc màu này vào graph/part thường.
+        // Ngưỡng chroma/saturation vô thứ nguyên; vùng giữa không đoán trạng thái sử dụng.
+        public static int ReferenceColorRole(double red, double green, double blue)
+        {
+            if (new[] { red, green, blue }.Any(v => Double.IsNaN(v) || Double.IsInfinity(v) || v < 0 || v > 1)) return 0;
+            double max = Math.Max(red, Math.Max(green, blue)), min = Math.Min(red, Math.Min(green, blue));
+            if (max < .15 || min > .95) return 0; // Đen/trắng có thể do chế độ hiển thị, không coi là màu kỹ thuật.
+            double chroma = max - min, saturation = chroma / max;
+            if (chroma <= .08 && saturation <= .15) return -1;
+            return chroma >= .15 && saturation >= .25 ? 1 : 0;
+        }
+
+        private static int ReadReferenceColor(Node node, Dictionary<int, int> cache)
+        {
+            int role;
+            if (!cache.TryGetValue(node.Id, out role))
+            {
+                var color = new M.UI.Color();
+                // Thiếu màu là mơ hồ: dùng hình học gom nhóm để giữ cả hai, không ép chọn.
+                role = M.UI.ModelObjectVisualization.GetRepresentation(node.Part, ref color)
+                    ? ReferenceColorRole(color.Red, color.Green, color.Blue) : 0;
+                cache.Add(node.Id, role);
+            }
+            return role;
+        }
+
+        private static int ChooseReferenceSupport(Plan p, Node source, HashSet<int> plates, HashSet<int> primary,
+            G.Matrix toGlobal, Dictionary<int, ReferenceShape> geometry, Dictionary<int, int> colors, HashSet<int> protectedGroup)
+        {
+            int role = ReadReferenceColor(source, colors);
+            // Màu mơ hồ: vẫn tìm nhóm chồng hình học để giữ/hiện cả nhóm, không dừng batch.
+            if (!(source.Part is M.Beam))
+            {
+                if (role == 1) return source.Id;
+                throw new InvalidOperationException("Reference xam khong phai dam thang, chua ho tro thay the.");
+            }
+            var oldShape = ReadReferenceShape(source, toGlobal, geometry);
+            var candidates = new List<int>();
+            var uncertain = new List<int>();
+            var peers = new List<int>();
+            var plateShapes = plates.Select(id => ReadReferenceShape(p.Nodes[id], toGlobal, geometry)).ToList();
+            if (role == 1) candidates.Add(source.Id);
+            foreach (var other in MatchingReferencePeers(p, source, primary, plates))
+            {
+                try
+                {
+                    var shape = ReadReferenceShape(other, toGlobal, geometry);
+                    if (!ReferenceAxesParallel(oldShape, shape)) continue;
+                    bool fullContact = plateShapes.All(plate => SharesPlateInterface(oldShape, shape, plate));
+                    // Bbox chỉ nhận vùng nghi vấn để GIỮ, tuyệt đối không dùng làm bằng chứng chọn/ẩn.
+                    if (!fullContact && !plateShapes.Any(plate => ReferenceBoundsOverlap(oldShape, shape)
+                        && ReferenceBoundsOverlap(oldShape, plate) && ReferenceBoundsOverlap(shape, plate))) continue;
+                    peers.Add(other.Id); protectedGroup.Add(other.Id);
+                    if (!fullContact) { uncertain.Add(other.Id); continue; }
+                    int otherRole = ReadReferenceColor(other, colors);
+                    if (otherRole == 1) candidates.Add(other.Id);
+                    else if (otherRole == 0) uncertain.Add(other.Id);
+                }
+                catch (Exception ex)
+                {
+                    // Chỉ bảo vệ ứng viên đọc lỗi, không giữ toàn bộ reference cùng profile khác.
+                    peers.Add(other.Id); protectedGroup.Add(other.Id); uncertain.Add(other.Id);
+                    p.Warnings.Add("P" + other.Id + ": khong doc duoc ung vien reference, giu rieng; " + ex.Message);
+                }
+            }
+            int selected = role != 0 ? UniqueReferenceReplacement(candidates, uncertain) : 0;
+            if (selected == 0)
+                ProtectReferenceSupports(p, peers.Concat(new[] { source.Id }), plates,
+                    "P" + source.Id + ": chua phan biet chac, giu/hien ca nhom reference; ung vien mau hop le="
+                    + String.Join(",", candidates.OrderBy(id => id)) + "; chua ro=" + String.Join(",", uncertain.OrderBy(id => id))
+                    + ". Cac neighbor khac van xu ly.");
+            return selected;
+        }
+
+        private static List<Node> MatchingReferencePeers(Plan p, Node source, HashSet<int> primary, HashSet<int> plates)
+        {
+            // Chỉ xét view của chính Connection đang xử lý, không kéo part từ section/mối nối khác.
+            var sourceViews = new HashSet<int>(p.Items.Where(i => i.ModelId == source.Id).Select(i => i.ViewId));
+            var plateViews = new HashSet<int>(p.Items.Where(i => plates.Contains(i.ModelId)).Select(i => i.ViewId));
+            sourceViews.IntersectWith(plateViews);
+            var drawingIds = new HashSet<int>(p.Items.Where(i => sourceViews.Contains(i.ViewId)).Select(i => i.ModelId));
+            return p.Nodes.Values.Where(n => n.Id != source.Id && n.Dummy && !n.Plate && !primary.Contains(n.Id)
+                && drawingIds.Contains(n.Id) && n.Part is M.Beam
+                && String.Equals(source.Part.Profile.ProfileString, n.Part.Profile.ProfileString, StringComparison.OrdinalIgnoreCase)
+                && String.Equals(source.Part.Material.MaterialString, n.Part.Material.MaterialString, StringComparison.OrdinalIgnoreCase)).ToList();
+        }
+
+        private static void ProtectReferenceSupports(Plan p, IEnumerable<int> ids, HashSet<int> plates, string reason)
+        {
+            foreach (int id in ids.Distinct())
+            {
+                // Giữ lý do Keep cũ. Riêng nhóm mơ hồ, người dùng yêu cầu hiện cả hai kể cả đã ẩn.
+                if (!p.Keep.ContainsKey(id))
+                {
+                    p.Keep.Add(id, "KEEP ambiguous reference group; " + reason);
+                }
+                if (!p.ReferenceSupportPlates.ContainsKey(id)) p.ReferenceSupportPlates.Add(id, new HashSet<int>(plates));
+                else p.ReferenceSupportPlates[id].UnionWith(plates);
+            }
+            p.Warnings.Add(reason);
+        }
+
+        public static int UniqueReferenceReplacement(IEnumerable<int> active, IEnumerable<int> uncertain)
+        {
+            var ids = active.Distinct().ToArray();
+            return ids.Length == 1 && !uncertain.Any() ? ids[0] : 0;
+        }
+
+        public sealed class ReferenceFace
+        {
+            public G.Vector Normal;
+            public G.Point[] Points;
+        }
+        public sealed class ReferenceShape
+        {
+            public G.Vector AxisX, AxisY;
+            public G.Point[] Vertices;
+            public readonly List<ReferenceFace> Faces = new List<ReferenceFace>();
+        }
+        // mm hình học thật, không nhân scale: mặt tiếp giáp lệch quá 0,05 mm thì không suy liên kết.
+        private const double ReferenceContactTolerance = .05;
+        // Cosine hướng: chỉ nhận trục song song/đảo chiều, không nhận dầm giao chéo.
+        private const double ReferenceParallelCosine = .999999;
+
+        private static ReferenceShape ReadReferenceShape(Node node, G.Matrix toGlobal, Dictionary<int, ReferenceShape> cache)
+        {
+            ReferenceShape shape;
+            if (cache.TryGetValue(node.Id, out shape)) return shape;
+            var cs = node.Part.GetCoordinateSystem();
+            shape = new ReferenceShape { AxisX = GlobalDirection(toGlobal, cs.AxisX), AxisY = GlobalDirection(toGlobal, cs.AxisY) };
+            var faces = node.Part.GetSolid().GetFaceEnumerator();
+            var allPoints = new List<G.Point>();
+            while (faces.MoveNext())
+            {
+                var face = faces.Current as Tekla.Structures.Solid.Face;
+                if (face == null) continue;
+                var loops = face.GetLoopEnumerator();
+                var polygons = new List<G.Point[]>();
+                while (loops.MoveNext())
+                {
+                    var loop = loops.Current as Tekla.Structures.Solid.Loop;
+                    if (loop == null) continue;
+                    var vertices = loop.GetVertexEnumerator(); var points = new List<G.Point>();
+                    while (vertices.MoveNext()) points.Add(toGlobal.Transform((G.Point)vertices.Current));
+                    allPoints.AddRange(points);
+                    polygons.Add(points.ToArray());
+                }
+                // Mặt có lỗ/lõm không dùng làm bằng chứng thay thế: tránh lấp phần rỗng bằng bbox.
+                if (polygons.Count != 1) continue;
+                var contact = new ReferenceFace { Normal = GlobalDirection(toGlobal, face.Normal), Points = polygons[0] };
+                if (ReferenceFaceIsConvex(contact)) shape.Faces.Add(contact);
+            }
+            if (shape.Faces.Count == 0) throw new InvalidOperationException("Khong doc duoc mat solid hop le P" + node.Id);
+            shape.Vertices = allPoints.ToArray();
+            cache.Add(node.Id, shape);
+            return shape;
+        }
+
+        private static G.Vector GlobalDirection(G.Matrix transform, G.Vector vector)
+        {
+            var zero = transform.Transform(new G.Point());
+            var point = transform.Transform(new G.Point(vector.X, vector.Y, vector.Z));
+            var result = new G.Vector(point.X-zero.X, point.Y-zero.Y, point.Z-zero.Z);
+            if (result.GetLength() < 1e-9) throw new InvalidOperationException("Huong hinh hoc khong hop le.");
+            result.Normalize(); return result;
+        }
+        private static G.Vector Delta(G.Point a, G.Point b) { return new G.Vector(b.X-a.X,b.Y-a.Y,b.Z-a.Z); }
+        private static double Dot(G.Vector a, G.Vector b) { return a.X*b.X+a.Y*b.Y+a.Z*b.Z; }
+
+        public static bool ReferenceAxesParallel(ReferenceShape a, ReferenceShape b)
+        {
+            return Math.Abs(Dot(a.AxisX,b.AxisX)) >= ReferenceParallelCosine
+                && Math.Abs(Dot(a.AxisY,b.AxisY)) >= ReferenceParallelCosine;
+        }
+
+        private static bool ReferenceFaceIsConvex(ReferenceFace face)
+        {
+            var points = face.Points;
+            if (points == null || points.Length < 3 || points.Any(p => p == null || new[] { p.X,p.Y,p.Z }
+                .Any(v => Double.IsNaN(v) || Double.IsInfinity(v)))) return false;
+            int sign = 0; double area = 0;
+            for (int i=0;i<points.Length;i++)
+            {
+                if (Math.Abs(Dot(Delta(points[0],points[i]),face.Normal)) > ReferenceContactTolerance) return false;
+                double turn = Dot(G.Vector.Cross(Delta(points[i],points[(i+1)%points.Length]),
+                    Delta(points[(i+1)%points.Length],points[(i+2)%points.Length])),face.Normal);
+                if (Math.Abs(turn)>1e-8) { int next = Math.Sign(turn); if(sign!=0 && sign!=next)return false; sign=next; }
+                if(i>0 && i+1<points.Length) area += Dot(G.Vector.Cross(Delta(points[0],points[i]),Delta(points[0],points[i+1])),face.Normal);
+            }
+            return sign != 0 && Math.Abs(area)*.5 > .01; // mm²; loại cạnh/điểm chạm và mặt suy biến.
+        }
+
+        public static bool ReferenceFaceCovers(ReferenceFace support, ReferenceFace plate)
+        {
+            if (!ReferenceFaceIsConvex(support) || !ReferenceFaceIsConvex(plate)
+                || Dot(support.Normal,plate.Normal)>-ReferenceParallelCosine) return false;
+            foreach (var point in plate.Points)
+            {
+                if (Math.Abs(Dot(Delta(support.Points[0],point),support.Normal))>ReferenceContactTolerance) return false;
+                int sign=0;
+                for(int i=0;i<support.Points.Length;i++)
+                {
+                    var edge=Delta(support.Points[i],support.Points[(i+1)%support.Points.Length]);
+                    double distance=Dot(G.Vector.Cross(edge,Delta(support.Points[i],point)),support.Normal)/Math.Max(1e-9,edge.GetLength());
+                    if(Math.Abs(distance)<=ReferenceContactTolerance)continue;
+                    int next=Math.Sign(distance); if(sign!=0 && sign!=next)return false; sign=next;
+                }
+            }
+            return true;
+        }
+
+        public static bool SharesPlateInterface(ReferenceShape oldSupport, ReferenceShape replacement, ReferenceShape plate)
+        {
+            return plate.Faces.Any(face => oldSupport.Faces.Any(oldFace => ReferenceFaceCovers(oldFace,face))
+                && replacement.Faces.Any(newFace => ReferenceFaceCovers(newFace,face)));
+        }
+
+        public static bool ReferenceBoundsOverlap(ReferenceShape a, ReferenceShape b)
+        {
+            var av = a.Vertices ?? a.Faces.SelectMany(f => f.Points).ToArray();
+            var bv = b.Vertices ?? b.Faces.SelectMany(f => f.Points).ToArray();
+            if (av.Length == 0 || bv.Length == 0) return false;
+            return av.Min(p=>p.X)<=bv.Max(p=>p.X)+ReferenceContactTolerance && bv.Min(p=>p.X)<=av.Max(p=>p.X)+ReferenceContactTolerance
+                && av.Min(p=>p.Y)<=bv.Max(p=>p.Y)+ReferenceContactTolerance && bv.Min(p=>p.Y)<=av.Max(p=>p.Y)+ReferenceContactTolerance
+                && av.Min(p=>p.Z)<=bv.Max(p=>p.Z)+ReferenceContactTolerance && bv.Min(p=>p.Z)<=av.Max(p=>p.Z)+ReferenceContactTolerance;
+        }
+
+        public static HashSet<int> ResolveReferenceSupportPlates(int candidate, int connectionPrimary,
+            HashSet<int> secondary, Dictionary<int, Node> nodes, List<Edge> edges, HashSet<int> primary)
+        {
+            var result = new HashSet<int>();
+            Node support;
+            if (candidate != connectionPrimary || primary.Contains(candidate)
+                || !nodes.TryGetValue(candidate, out support) || !support.Dummy || support.Plate) return result;
+            foreach (int id in secondary)
+            {
+                Node plate;
+                if (id == candidate || !nodes.TryGetValue(id, out plate) || !plate.Plate || plate.Dummy) continue;
+                // Plate thuộc primary vẫn cần cạnh thật tới part primary khác, không suy từ assembly.
+                if (edges.Any(e => (e.A == id && e.B != id && primary.Contains(e.B) && !nodes[e.B].Dummy)
+                    || (e.B == id && e.A != id && primary.Contains(e.A) && !nodes[e.A].Dummy))) result.Add(id);
+            }
+            return result;
+        }
+
+        public static List<Item> ResolveReferenceSupportRestores(Dictionary<int, HashSet<int>> supports,
+            Dictionary<int, Node> nodes, HashSet<int> primary, List<Item> items)
+        {
+            var result = new List<Item>();
+            foreach (var view in items.GroupBy(i => i.ViewId))
+            {
+                var visible = new HashSet<int>(view.Where(i => !i.WasHidden).Select(i => i.ModelId));
+                if (!visible.Any(id => primary.Contains(id) && !nodes[id].Dummy)) continue;
+                foreach (var i in view.Where(i => i.WasHidden))
+                {
+                    HashSet<int> plates;
+                    if (supports.TryGetValue(i.ModelId, out plates) && plates.Overlaps(visible)) result.Add(i);
+                }
+            }
+            return result;
         }
 
         private static void RetainLocalDummies(Plan p, HashSet<int> primary)

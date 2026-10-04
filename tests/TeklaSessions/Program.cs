@@ -347,7 +347,7 @@ internal static class Program
             {
                 var targetType = assembly.GetType("TTSK_AutoDim_Plates.TeklaSessionTarget");
                 foreach (string path in new[] { @"D:\27-000)HULIC_B", @"D:\Project - Tower A", @"\\server\models\Project - Tower B" })
-                foreach (string suffix in new[] { "  - View 1 - HS-3D", "  - W   [B-12]", " - View 1 - HS-3D", "" })
+                foreach (string suffix in new[] { "  - View 1 - HS-3D", "  - W   [B-12]", " - View 1 - HS-3D", "", " ", "   ", "\t" })
                 {
                     var target = Activator.CreateInstance(targetType, true);
                     string title = "Tekla Structures - Educational version - " + path + suffix;
@@ -356,7 +356,24 @@ internal static class Program
                     if (parsed != path || !(bool)call("MatchesModelTitle", new object[] { title, path })) throw new Exception("Bad model title parsing: " + title);
                     if ((bool)call("MatchesModelTitle", new object[] { title, path.Substring(0, path.Length - 1) })) throw new Exception("Path prefix incorrectly accepted");
                 }
-                Console.WriteLine("PASS: 12 title/path cases, spaces, separators, UNC and exact path boundaries");
+                Console.WriteLine("PASS: 21 title/path cases including trailing spaces, tabs, UNC and exact path boundaries");
+                if((bool)call("MatchesModelTitle",new object[]{@"Tekla Structures - D:\Model_A - Tower B ",@"D:\Model_A"}))
+                    throw new Exception("Hyphenated folder prefix accepted as same model");
+                if((bool)call("MatchesModelTitle",new object[]{null,@"D:\Model_A"}))throw new Exception("Null title accepted");
+                Func<string, int, long, string, object> make = (folder, id, started, session) => {
+                    var target = Activator.CreateInstance(targetType, true); var f=BindingFlags.NonPublic|BindingFlags.Instance;
+                    targetType.GetField("Title",f).SetValue(target,"Tekla Structures - Educational version - " + folder + " ");
+                    targetType.GetField("Id",f).SetValue(target,id); targetType.GetField("Started",f).SetValue(target,started);
+                    targetType.GetField("Session",f).SetValue(target,session); return target;
+                };
+                var bound=make(@"D:\Model_A",11,22,"Console");
+                Func<object,string,bool> same=(target,path)=>(bool)call("SameWorkspace",new object[]{target,bound,path});
+                if(!same(make(@"d:\model_a",11,22,"Console"),@"D:\Model_A\"))throw new Exception("Same model normalization failed");
+                foreach(var changed in new[]{make(@"D:\Model_B",11,22,"Console"),make(@"D:\Model_A",12,22,"Console"),
+                    make(@"D:\Model_A",11,23,"Console"),make(@"D:\Model_A",11,22,"Console-11"),make("",11,22,"Console")})
+                    if(same(changed,@"D:\Model_A"))throw new Exception("Changed workspace incorrectly accepted");
+                if(same(null,@"D:\Model_A")||same(bound,null))throw new Exception("Unavailable workspace accepted");
+                Console.WriteLine("PASS: workspace identity: same PID/new model, PID reuse, channel change, missing model, normalized same model");
                 return 0;
             }
             if (args.Length > 1 && args[1] == "benchmark")
@@ -399,10 +416,98 @@ internal static class Program
             Environment.SetEnvironmentVariable("TTSK_SESSION_PID", args[1]);
             Environment.SetEnvironmentVariable("TTSK_SESSION_START", args[2]);
             call("Prepare", null);
+            if (args.Length > 3 && args[3] == "inspect")
+            {
+                ReadApis();
+                using (var process = System.Diagnostics.Process.GetProcessById(int.Parse(args[1])))
+                    Console.WriteLine("WindowTitle=[" + process.MainWindowTitle + "]; length=" + process.MainWindowTitle.Length);
+                return 0;
+            }
             call("VerifyConnection", null);
             ReadApis();
             call("VerifyConnection", null); // Repeated preflight must stay on the same model/channel.
             Console.WriteLine("PASS: repeated session preflight");
+            if (args.Length > 3 && args[3] == "watch-snapshots")
+            {
+                Application.EnableVisualStyles();
+                using (var form=(Form)Activator.CreateInstance(assembly.GetType("TTSK_AutoDim_Plates.MainForm")))
+                {
+                    var flags=BindingFlags.NonPublic|BindingFlags.Instance;
+                    var targets=(System.Collections.IList)call("Discover",null); var listType=targets.GetType();
+                    var current=targets.Cast<object>().First(t=>(int)t.GetType().GetField("Id",flags).GetValue(t)==int.Parse(args[1]));
+                    var delegateType=typeof(Func<>).MakeGenericType(listType);
+                    var body=System.Linq.Expressions.Expression.Convert(System.Linq.Expressions.Expression.Call(typeof(Program).GetMethod("GetStartupSnapshot",BindingFlags.NonPublic|BindingFlags.Static)),listType);
+                    form.GetType().GetField("workspaceDiscovery",flags).SetValue(form,System.Linq.Expressions.Expression.Lambda(delegateType,body).Compile());
+                    Action<string,object> set=(name,value)=>form.GetType().GetField(name,flags).SetValue(form,value);
+                    Func<string,object> get=name=>form.GetType().GetField(name,flags).GetValue(form);
+                    Func<System.Threading.Tasks.Task> poll=()=> (System.Threading.Tasks.Task)form.GetType().GetMethod("PollTeklaWorkspaceAsync",flags).Invoke(form,null);
+                    Func<object,string,object> cloneTitle=(target,path)=> {
+                        var copy=target.GetType().GetMethod("MemberwiseClone",flags).Invoke(target,null);
+                        copy.GetType().GetField("Title",flags).SetValue(copy,"Tekla Structures - Educational version - " + path + " "); return copy;
+                    };
+                    Action<object[]> snapshot=items=> {var list=(System.Collections.IList)Activator.CreateInstance(listType);foreach(var item in items)list.Add(item);startupSnapshot=list;};
+                    form.Shown+=async delegate {
+                        ((Timer)get("sessionTimer")).Stop();
+                        snapshot(new[]{current}); await poll();
+                        if((bool)get("workspaceRefreshRequired")||get("sessionCandidateKey")!=null)throw new Exception("Unchanged workspace reconnects");
+                        snapshot(new object[0]); set("operationRunning",true); await poll();
+                        if((bool)get("workspaceRefreshRequired"))throw new Exception("Busy scan changed workspace state");
+                        set("operationRunning",false); await poll();
+                        if(!(bool)get("workspaceRefreshRequired"))throw new Exception("Closed workspace not blocked");
+                        if((bool)form.GetType().GetMethod("EnsureSessionCommandTarget",flags).Invoke(form,null))throw new Exception("Closed workspace command allowed");
+                        snapshot(new[]{cloneTitle(current,"Không có model")}); await poll();
+                        if(get("sessionCandidateKey")!=null)throw new Exception("Loading title treated as ready");
+                        snapshot(new[]{current}); await poll();
+                        if(get("sessionCandidateKey")==null)throw new Exception("Reopen same model after observed close not reconnected");
+                        set("workspaceRefreshRequired",false); set("sessionCandidateKey",null);
+                        snapshot(new[]{cloneTitle(current,@"Z:\model-B")}); await poll(); string first=(string)get("sessionCandidateKey");
+                        snapshot(new[]{cloneTitle(current,@"Z:\model-C")}); await poll();
+                        if(first==null||first==(string)get("sessionCandidateKey")||(bool)get("sessionSwitching"))throw new Exception("Changing title bypassed stabilization");
+                        set("workspaceRefreshRequired",false); set("sessionCandidateKey",null);
+                        snapshot(new[]{current}); await poll();
+                        if(get("sessionCandidateKey")!=null)throw new Exception("Return to original left a switch pending");
+                        set("sessionRetryAfterUtc",DateTime.UtcNow.AddSeconds(30)); snapshot(new object[0]); await poll();
+                        if((bool)get("workspaceRefreshRequired"))throw new Exception("Retry backoff ignored");
+                        Console.WriteLine("PASS: idle unchanged, busy, closed/loading, reopen same path, changing title stabilization, return-to-original, retry cooldown");
+                        set("sessionRetryAfterUtc",DateTime.MinValue); form.Close();
+                    };
+                    Application.Run(form);
+                }
+                return 0;
+            }
+            if (args.Length > 3 && args[3] == "same-pid")
+            {
+                Application.EnableVisualStyles();
+                using (var form=(Form)Activator.CreateInstance(assembly.GetType("TTSK_AutoDim_Plates.MainForm")))
+                using (var timeout=new Timer {Interval=100})
+                {
+                    var flags=BindingFlags.NonPublic|BindingFlags.Instance;
+                    var modelPath=coordinator.GetProperty("ModelPath",BindingFlags.NonPublic|BindingFlags.Static);
+                    string livePath=(string)modelPath.GetValue(null,null);
+                    modelPath.SetValue(null,@"Z:\previous-workspace-for-test",null); // Chỉ trạng thái TTSK, không đổi Tekla thật.
+                    coordinator.GetField("FollowForeground",BindingFlags.NonPublic|BindingFlags.Static).SetValue(null,false);
+                    var busy=form.GetType().GetField("operationRunning",flags); busy.SetValue(form,true);
+                    var watch=System.Diagnostics.Stopwatch.StartNew(); bool released=false,blocked=false;
+                    timeout.Tick+=delegate {
+                        if(watch.ElapsedMilliseconds>18000)throw new Exception("Same-PID monitor did not hand off");
+                        if(watch.ElapsedMilliseconds<1300) {
+                            if((bool)form.GetType().GetField("sessionSwitching",flags).GetValue(form))throw new Exception("Switched while busy");
+                        } else if(!released) {
+                            busy.SetValue(form,false); released=true;
+                            Console.WriteLine("PASS: model change deferred while operation busy");
+                        }
+                        if(!blocked && (bool)form.GetType().GetField("workspaceRefreshRequired",flags).GetValue(form)) {
+                            if((bool)form.GetType().GetMethod("EnsureSessionCommandTarget",flags).Invoke(form,null))throw new Exception("Stale workspace command allowed");
+                            blocked=true; Console.WriteLine("PASS: stale commands blocked before same-PID handoff");
+                        }
+                    };
+                    form.Shown+=delegate { timeout.Start(); };
+                    Application.Run(form);
+                    if(!released||!blocked)throw new Exception("Same-PID lifecycle was incomplete");
+                    Console.WriteLine("PASS: periodic detection with no foreground event; fixed mode; same PID -> " + livePath);
+                }
+                return 0;
+            }
             if (args.Length > 3 && args[3] == "ui")
             {
                 Application.EnableVisualStyles();

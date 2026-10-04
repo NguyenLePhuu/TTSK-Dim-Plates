@@ -143,6 +143,17 @@ function Assert-DriveManifest($Manifest) {
     if ($Manifest.zipFileId -eq $Manifest.sha256FileId -or $Manifest.zipSizeBytes -le 0 -or $Manifest.zipSizeBytes -gt 209715200 -or $Manifest.sha256SizeBytes -le 0 -or $Manifest.sha256SizeBytes -gt 4096) { throw 'Drive asset size/ID khong hop le.' }
 }
 
+function Get-ReleaseSeries {
+    return Get-Content -LiteralPath (Join-Path $PSScriptRoot '../update/release-series.json') -Raw | ConvertFrom-Json
+}
+
+function Test-LegacyDriveRelease($Manifest) {
+    # Chỉ bỏ qua đúng gói test đã chốt khi bắt đầu đợt phát hành chính thức.
+    $series = Get-ReleaseSeries
+    return ($Manifest -and $Manifest.version -ceq $series.legacyDriveVersion -and
+        $Manifest.zipFileId -ceq $series.legacyDriveZipFileId)
+}
+
 function Read-DriveManifest([string]$Id, [string]$ApiKey) {
     $manifest = Invoke-DriveApi -Uri (Get-DriveMediaUrl $Id $ApiKey) -Public
     if ($manifest -is [string]) { $manifest = $manifest | ConvertFrom-Json }

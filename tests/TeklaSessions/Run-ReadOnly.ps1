@@ -1,4 +1,4 @@
-param([string]$TeklaBinPath = 'C:\Program Files\Tekla Structures\2025.0\bin', [switch]$UiHandoff, [int]$StartPid = 0, [switch]$PreviewOnly, [switch]$NativePreview, [switch]$StartupWait)
+param([string]$TeklaBinPath = 'C:\Program Files\Tekla Structures\2025.0\bin', [switch]$UiHandoff, [int]$StartPid = 0, [switch]$PreviewOnly, [switch]$NativePreview, [switch]$StartupWait, [switch]$WorkspaceRecovery)
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $output = Join-Path $repo '.codex-artifacts\session-tests'
@@ -43,6 +43,22 @@ function Close-TestWorkspace {
     Write-Output "PASS: child visible: $($child.MainWindowTitle)"
     $null = $child.CloseMainWindow()
     if (!$child.WaitForExit(10000)) { throw 'Test child did not close normally' }
+}
+if ($WorkspaceRecovery) {
+    if (Get-Process 'TTSK Dim Plates' -ErrorAction SilentlyContinue) { throw 'Close TTSK before workspace recovery test' }
+    Copy-Item (Join-Path $repo 'portable\Resources') $output -Recurse -Force
+    & $exe $product audit-pure
+    if ($LASTEXITCODE) { throw 'Workspace identity regressions failed' }
+    & $exe $product readiness
+    if ($LASTEXITCODE) { throw 'A ready Tekla model is required' }
+    $target = Get-Process TeklaStructures | Where-Object { !$StartPid -or $_.Id -eq $StartPid } | Select-Object -First 1
+    if (!$target) { throw 'Requested Tekla process is unavailable' }
+    foreach ($mode in @('guard','watch-snapshots','same-pid')) {
+        & $exe $product $target.Id $target.StartTime.ToUniversalTime().Ticks $mode
+        if ($LASTEXITCODE) { throw "Workspace test failed: $mode" }
+    }
+    Close-TestWorkspace
+    return
 }
 if ($StartupWait) {
     if (Get-Process 'TTSK Dim Plates' -ErrorAction SilentlyContinue) { throw 'Close TTSK before startup lifecycle test' }

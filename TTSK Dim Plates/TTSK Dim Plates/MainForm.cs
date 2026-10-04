@@ -306,6 +306,13 @@ namespace TTSK_AutoDim_Plates
         private bool sessionHandoffAccepted;
         private int pendingTeklaProcess;
         private bool sessionDiscoveryRunning;
+        private bool workspaceRefreshRequired;
+        private DateTime sessionRetryAfterUtc;
+        private string sessionCandidateKey;
+        private DateTime sessionCandidateSinceUtc;
+        private bool workspaceSelectionCancelled;
+        private bool workspaceStatusWaiting;
+        private Func<System.Collections.Generic.List<TeklaSessionTarget>> workspaceDiscovery = TeklaSessionCoordinator.Discover;
         private readonly System.Collections.Generic.HashSet<string> knownTeklaSessions = new System.Collections.Generic.HashSet<string>();
         private System.Windows.Forms.Timer sessionTimer;
         private IntPtr sessionForegroundHook;
@@ -343,6 +350,7 @@ namespace TTSK_AutoDim_Plates
             mainBrandSubtitle.Click += async delegate
             {
                 if (!CanSwitchTeklaSession() || sessionDiscoveryRunning) return;
+                workspaceSelectionCancelled = false;
                 sessionDiscoveryRunning = true;
                 try
                 {
@@ -364,38 +372,7 @@ namespace TTSK_AutoDim_Plates
             // EVENT_SYSTEM_FOREGROUND, ngoài tiến trình: chỉ theo dõi, không kích hoạt/đổi cửa sổ Tekla.
             sessionForegroundHook = SetWinEventHook(3, 3, IntPtr.Zero, sessionForegroundCallback, 0, 0, 0);
             sessionTimer = new System.Windows.Forms.Timer { Interval = 500 }; // ms; chỉ chuyển khi không có lệnh/dialog.
-            sessionTimer.Tick += async delegate
-            {
-                if (sessionForegroundHook == IntPtr.Zero) ObserveTeklaForeground(TeklaSessionCoordinator.ForegroundProcessId());
-                if (!TeklaSessionCoordinator.FollowForeground || !CanSwitchTeklaSession() || pendingTeklaProcess == 0 || sessionDiscoveryRunning) return;
-                sessionDiscoveryRunning = true;
-                int requested = pendingTeklaProcess;
-                try
-                {
-                    var targets = await Task.Run(() => TeklaSessionCoordinator.Discover().Where(TeklaSessionCoordinator.IsReady).ToList());
-                    if (IsDisposed || !CanSwitchTeklaSession() || requested != pendingTeklaProcess) return;
-                    var target = targets.Find(t => t.Id == requested);
-                    if (target == null)
-                    {
-                        // Tekla mới còn ở màn hình khởi động: chờ model xuất hiện, không thử kết nối sớm.
-                        try { using (var process = System.Diagnostics.Process.GetProcessById(pendingTeklaProcess)) if (process.HasExited) pendingTeklaProcess = 0; }
-                        catch (ArgumentException) { pendingTeklaProcess = 0; }
-                        return;
-                    }
-                    if (!knownTeklaSessions.Contains(target.Id + ":" + target.Started))
-                    {
-                        pendingTeklaProcess = 0;
-                        foreach (var session in targets) knownTeklaSessions.Add(session.Id + ":" + session.Started);
-                        // Phiên vừa mở: cho người dùng chọn bằng thẻ; không tự chuyển trong lúc model đang tải.
-                        SetMainStatus("Chọn dự án Tekla.", MainStatusKind.Information);
-                        target = TeklaSessionCoordinator.Choose(this, targets);
-                        if (target == null) { SetMainStatus("Giữ dự án hiện tại.", MainStatusKind.Information); return; }
-                    }
-                    SwitchTeklaSession(target);
-                }
-                catch (Exception ex) { TTSK_AutoDim_Plates.Updater.UpdateSecurity.Log(Application.StartupPath, "Session scan: " + ex); }
-                finally { sessionDiscoveryRunning = false; }
-            };
+            sessionTimer.Tick += async delegate { await PollTeklaWorkspaceAsync(); };
             Shown += delegate { sessionTimer.Start(); };
             Disposed += delegate
             {
@@ -403,6 +380,81 @@ namespace TTSK_AutoDim_Plates
                 if (sessionForegroundHook != IntPtr.Zero) UnhookWinEvent(sessionForegroundHook);
                 GC.KeepAlive(sessionForegroundCallback);
             };
+        }
+
+        private async Task PollTeklaWorkspaceAsync()
+        {
+            if (sessionForegroundHook == IntPtr.Zero) ObserveTeklaForeground(TeklaSessionCoordinator.ForegroundProcessId());
+            if (IsDisposed || !CanSwitchTeklaSession() || sessionDiscoveryRunning || DateTime.UtcNow < sessionRetryAfterUtc) return;
+            // Theo dõi cả model trong PID đang gắn, kể cả không có sự kiện đổi foreground.
+            sessionDiscoveryRunning = true;
+            int requested = pendingTeklaProcess;
+            try
+            {
+                var snapshot = await Task.Run(() =>
+                {
+                    var all = workspaceDiscovery();
+                    return new { All = all, Ready = all.Where(TeklaSessionCoordinator.IsReady).ToList() };
+                });
+                if (IsDisposed || !CanSwitchTeklaSession() || requested != pendingTeklaProcess) return;
+                var bound = TeklaSessionCoordinator.Current;
+                var current = snapshot.Ready.Find(t => t.Id == bound.Id && t.Started == bound.Started);
+                if (current == null && !workspaceRefreshRequired)
+                {
+                    workspaceRefreshRequired = true;
+                    workspaceStatusWaiting = true;
+                    SetMainStatus("Đang chờ Tekla mở model…", MainStatusKind.Information);
+                }
+                TeklaSessionTarget target = null;
+                if (TeklaSessionCoordinator.FollowForeground && requested != 0)
+                {
+                    target = snapshot.Ready.Find(t => t.Id == requested);
+                    if (target == null)
+                    {
+                        if (!snapshot.All.Any(t => t.Id == requested)) pendingTeklaProcess = 0;
+                        sessionCandidateKey = null;
+                        return;
+                    }
+                }
+                else if (current != null)
+                {
+                    if (!workspaceRefreshRequired && TeklaSessionCoordinator.SameWorkspace(current, bound, TeklaSessionCoordinator.ModelPath))
+                    {
+                        sessionCandidateKey = null;
+                        if (workspaceStatusWaiting) { workspaceStatusWaiting = false; SetMainStatus("Sẵn sàng.", MainStatusKind.Information); }
+                        return;
+                    }
+                    workspaceRefreshRequired = true;
+                    target = current;
+                }
+                else
+                {
+                    // Phiên cũ đã đóng: một phiên sẵn sàng duy nhất thì đề xuất; nhiều phiên chờ người dùng chọn.
+                    if (!workspaceSelectionCancelled && !snapshot.All.Any(t => t.Id == bound.Id && t.Started == bound.Started) && snapshot.Ready.Count == 1)
+                        target = snapshot.Ready[0];
+                    else { sessionCandidateKey = null; return; }
+                }
+                string key = target.Id + ":" + target.Started + ":" + target.Session + ":" + target.ModelFolder;
+                // Chờ cùng identity ổn định ít nhất 500 ms qua hai lượt scan, tránh title trung gian lúc đổi model.
+                if (!string.Equals(sessionCandidateKey, key, StringComparison.Ordinal))
+                { sessionCandidateKey = key; sessionCandidateSinceUtc = DateTime.UtcNow; return; }
+                if ((DateTime.UtcNow - sessionCandidateSinceUtc).TotalMilliseconds < 500) return;
+                if (!knownTeklaSessions.Contains(target.Id + ":" + target.Started))
+                {
+                    pendingTeklaProcess = 0;
+                    foreach (var session in snapshot.Ready) knownTeklaSessions.Add(session.Id + ":" + session.Started);
+                    SetMainStatus("Chọn dự án Tekla.", MainStatusKind.Information);
+                    target = TeklaSessionCoordinator.Choose(this, snapshot.Ready);
+                    if (target == null) { workspaceSelectionCancelled = true; sessionCandidateKey = null; SetMainStatus("Chọn dự án khi sẵn sàng.", MainStatusKind.Information); return; }
+                }
+                SwitchTeklaSession(target);
+            }
+            catch (Exception ex)
+            {
+                sessionRetryAfterUtc = DateTime.UtcNow.AddSeconds(3);
+                TTSK_AutoDim_Plates.Updater.UpdateSecurity.Log(Application.StartupPath, "Workspace scan: " + ex);
+            }
+            finally { sessionDiscoveryRunning = false; }
         }
 
         private void UpdateTeklaSessionCaption()
@@ -421,8 +473,11 @@ namespace TTSK_AutoDim_Plates
             {
                 using (var process = System.Diagnostics.Process.GetProcessById(id))
                     if (string.Equals(process.ProcessName, "TeklaStructures", StringComparison.OrdinalIgnoreCase))
+                    {
+                        workspaceSelectionCancelled = false;
                         pendingTeklaProcess = id == TeklaSessionCoordinator.Current.Id
                             && process.StartTime.ToUniversalTime().Ticks == TeklaSessionCoordinator.Current.Started ? 0 : id;
+                    }
             }
             catch (ArgumentException) { }
             catch (System.ComponentModel.Win32Exception) { }
@@ -438,7 +493,7 @@ namespace TTSK_AutoDim_Plates
         private bool EnsureSessionCommandTarget()
         {
             if (sessionSwitching) return false;
-            if (TeklaSessionCoordinator.FollowForeground && pendingTeklaProcess != 0)
+            if (workspaceRefreshRequired || (TeklaSessionCoordinator.FollowForeground && pendingTeklaProcess != 0))
             {
                 SetMainStatus("Chờ chuyển dự án…", MainStatusKind.Information);
                 return false;
@@ -492,10 +547,14 @@ namespace TTSK_AutoDim_Plates
             {
                 if (child != null)
                     try { if (!child.HasExited) child.Kill(); } catch (Exception) { }
-                TeklaSessionCoordinator.FollowForeground = false; // Lỗi chỉ báo một lần; chọn lại bằng tên dự án.
+                // Tekla còn tải model: giữ theo dõi, retry có khoảng nghỉ; không tự tắt chế độ tự động.
+                sessionRetryAfterUtc = DateTime.UtcNow.AddSeconds(5);
+                workspaceStatusWaiting = true;
+                sessionCandidateKey = null;
+                if (TeklaSessionCoordinator.FollowForeground) pendingTeklaProcess = target.Id;
                 UpdateTeklaSessionCaption();
                 TTSK_AutoDim_Plates.Updater.UpdateSecurity.Log(Application.StartupPath, "Session handoff: " + ex);
-                SetMainStatus("Chưa chuyển được. Chọn lại dự án.", MainStatusKind.Error);
+                SetMainStatus("Tekla chưa sẵn sàng. Đang chờ…", MainStatusKind.Information);
             }
             finally
             {

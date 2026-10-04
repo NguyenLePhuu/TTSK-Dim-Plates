@@ -24,6 +24,10 @@ Thư mục RELEASE phải cho phép Anyone with the link / Viewer. Không đặt
 
 ## Phiên bản và giao diện
 
+Đợt chính thức bắt đầu từ **v1.0.0**. `update/release-series.json` đánh dấu `official-v1` và nhận diện chính xác gói test Drive cũ bằng version + ZIP ID; chỉ gói này được bỏ qua khi cấp số và thay chỉ mục ở lần publish sau. Không bỏ qua lỗi đọc nguồn hay các gói khác. Số giữ chỗ/yêu cầu không có releaseSeries thuộc đợt test cũ. Không đổi mã đợt sau khi đã phát hành chính thức.
+
+Yêu cầu v1.0.0 ban đầu có `pendingInitialRelease: true`: có thể push để Actions phát hành trực tiếp, hoặc chạy BAT để giữ chỗ v1.0.0. BAT ghi yêu cầu mới không còn cờ pending; số đã giữ chỗ vẫn được tính để tránh trùng. Khi chưa có bản chính thức/số giữ chỗ, bắt đầu từ patch 0; các lần sau tăng patch bình thường. Người dùng bản test 1.0.5/1.0.6 cần cài portable chính thức thủ công vì updater không tự hạ phiên bản.
+
 Ứng dụng kiểm tra hai nguồn song song, so sánh phiên bản theo số, ưu tiên GitHub nếu bằng nhau. Lỗi riêng một nguồn chỉ ghi log. Không tự đổi sang bản thấp hơn bản đã chọn khi kiểm tra lại. SHA256, kiểm tra đường dẫn, manifest và rollback vẫn giữ nguyên.
 
 Publisher cấp số lớn hơn phiên bản GitHub, Drive, yêu cầu GitHub đang chờ và số giữ chỗ tại máy. GitHub lưu số vào `update/release-request.json`, Actions dùng đúng số này. GitHub 1.0.10 đang chờ thì Drive tiếp theo lấy 1.0.11. Không đọc được nguồn đã cấu hình thì dừng cấp số. Phát hành lần lượt từ một checkout; chưa có khóa phân tán cho nhiều máy đồng thời.

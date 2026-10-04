@@ -962,10 +962,19 @@ namespace TTSK_AutoDim_Plates
 
         internal static bool MatchesModelTitle(string title, string path)
         {
-            int index = title.IndexOf(" - " + path, StringComparison.OrdinalIgnoreCase);
-            if (index < 0) return false;
-            string suffix = title.Substring(index + 3 + path.Length);
-            return suffix.Length == 0 || (char.IsWhiteSpace(suffix[0]) && suffix.TrimStart().StartsWith("-", StringComparison.Ordinal));
+            if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(path)) return false;
+            // Dùng chung parser với discovery; chỉ bỏ khoảng trắng thừa, không chấp nhận tên model là prefix của model khác.
+            string titlePath = new TeklaSessionTarget { Title = title }.ModelFolder;
+            return !string.IsNullOrEmpty(titlePath) && string.Equals(titlePath.Trim().TrimEnd('\\', '/'),
+                path.Trim().TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
+        }
+
+        internal static bool SameWorkspace(TeklaSessionTarget target, TeklaSessionTarget bound, string modelPath)
+        {
+            return target != null && bound != null && target.Id == bound.Id && target.Started == bound.Started
+                && string.Equals(target.Session, bound.Session, StringComparison.Ordinal)
+                && !string.IsNullOrWhiteSpace(target.ModelFolder) && !string.IsNullOrWhiteSpace(modelPath)
+                && string.Equals(target.ModelFolder.Trim().TrimEnd('\\', '/'), modelPath.Trim().TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
         }
 
         internal static bool AcceptHandoff()
