@@ -1,10 +1,14 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
+using TTSK_AutoDim_Plates.MeetingTranslation;
 
 namespace TTSK_AutoDim_Plates
 {
@@ -16,6 +20,23 @@ namespace TTSK_AutoDim_Plates
         private readonly Action<bool> _applyAutoSectionSetting;
         private readonly Dictionary<string, Keys> _workingShortcuts;
         private readonly Dictionary<string, ShortcutRow> _rows;
+        private readonly Action _openMeetingTranslation;
+        private ShortcutRoundPanel _nvidiaCard;
+        private ShortcutTextBox _txtNvidiaApiKey;
+        private ShortcutFlatButton _btnToggleShowKey;
+        private ShortcutFlatButton _btnSaveNvidiaKey;
+        private ShortcutFlatButton _btnDeleteNvidiaKey;
+        private Label _lblNvidiaStatus;
+        private bool _isNvidiaKeyVisible;
+        private bool _isNvidiaValidating;
+        private CancellationTokenSource _nvidiaValidation;
+        private MeetingTranslationProvider _keyProvider = MeetingTranslationProvider.Nvidia;
+        private ShortcutFlatButton _btnNvidiaProvider, _btnGoogleProvider;
+        private ShortcutTextBox _txtGoogleModel;
+        private ShortcutFlatButton _btnGoogleModels;
+        private ShortcutFlatButton _btnRecheckGoogleModels;
+        private ContextMenuStrip _googleModelMenu;
+        private Label _lblStoredProviders;
 
         private ShortcutTextBox txtSearch;
         private Panel rowsPanel;
@@ -57,13 +78,15 @@ namespace TTSK_AutoDim_Plates
             bool darkMode,
             bool autoSectionEnabled,
             bool autoSectionLocked,
-            Action<bool> applyAutoSectionSetting
+            Action<bool> applyAutoSectionSetting,
+            Action openMeetingTranslation = null
         )
         {
             _manager = manager;
             _darkMode = darkMode;
             _autoSectionLocked = autoSectionLocked;
             _applyAutoSectionSetting = applyAutoSectionSetting;
+            _openMeetingTranslation = openMeetingTranslation;
             _workingAutoSectionEnabled = autoSectionEnabled;
             _rows = new Dictionary<string, ShortcutRow>(StringComparer.OrdinalIgnoreCase);
             _workingShortcuts = new Dictionary<string, Keys>(StringComparer.OrdinalIgnoreCase);
@@ -177,6 +200,17 @@ namespace TTSK_AutoDim_Plates
             titleBar.Location = new Point(56, 16);
             titleBar.Size = new Size(240, 24);
             Controls.Add(titleBar);
+
+            ShortcutFlatButton quickMeeting = new ShortcutFlatButton();
+            quickMeeting.Name = "quickMeetingTranslation";
+            quickMeeting.Text = "訳  Dịch họp";
+            quickMeeting.AccessibleDescription = "Lưu phím tắt và mở cửa sổ dịch họp";
+            quickMeeting.IsPrimary = true;
+            quickMeeting.Location = new Point(568, 14);
+            quickMeeting.Size = new Size(164, 36);
+            quickMeeting.Enabled = _openMeetingTranslation != null;
+            quickMeeting.Click += delegate { LaunchMeetingTranslation(); };
+            Controls.Add(quickMeeting);
 
             ShortcutRoundPanel headerIcon = new ShortcutRoundPanel();
             headerIcon.BorderRadius = 12;
@@ -370,7 +404,484 @@ namespace TTSK_AutoDim_Plates
                 rowsPanel.Controls.Add(row.Panel);
             }
 
+            _nvidiaCard = CreateNvidiaConfigCard();
+            rowsPanel.Controls.Add(_nvidiaCard);
+
             ApplySearchFilter();
+        }
+
+        private ShortcutRoundPanel CreateNvidiaConfigCard()
+        {
+            ShortcutRoundPanel card = new ShortcutRoundPanel();
+            card.BorderRadius = 10;
+            card.Size = new Size(668, 322);
+            card.Location = new Point(0, 0);
+
+            ShortcutBadge badge = new ShortcutBadge();
+            badge.Text = "AI";
+            badge.Location = new Point(18, 12);
+            badge.Size = new Size(34, 34);
+            badge.BadgeColor = Color.FromArgb(234, 245, 238);
+            badge.TextColor = Color.FromArgb(52, 116, 81);
+            card.Controls.Add(badge);
+
+            Label title = new Label();
+            title.Text = "API dịch họp — NVIDIA / Google";
+            title.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
+            title.Location = new Point(72, 12);
+            title.Size = new Size(440, 20);
+            title.BackColor = Color.Transparent;
+            card.Controls.Add(title);
+
+            Label desc = new Label();
+            desc.Text = "Lưu nhiều key dự phòng. Tự nhận dạng NVIDIA hoặc Google.";
+            desc.Font = new Font("Segoe UI", 7.9F, FontStyle.Bold);
+            desc.Location = new Point(72, 32);
+            desc.Size = new Size(580, 16);
+            desc.BackColor = Color.Transparent;
+            card.Controls.Add(desc);
+
+            _txtNvidiaApiKey = new ShortcutTextBox();
+            // Lưới thẻ API (px, AutoScaleMode.None): hai nửa 312, khe 8; mỗi nửa phải gồm hai nút 152.
+            const int inputWidth = 312, actionWidth = 152, rightLeft = 338, lastLeft = 498;
+            _txtNvidiaApiKey.Location = new Point(18, 106);
+            _txtNvidiaApiKey.Size = new Size(inputWidth, 36);
+            _txtNvidiaApiKey.LeftPadding = 10;
+            _txtNvidiaApiKey.RightPadding = 58;
+            _txtNvidiaApiKey.UseSystemPasswordChar = true;
+            _txtNvidiaApiKey.PlaceholderText = "Nhập NVIDIA API key (nvapi-...)";
+            card.Controls.Add(_txtNvidiaApiKey);
+            _txtNvidiaApiKey.TextChanged += delegate
+            {
+                if (_isNvidiaValidating) return;
+                var detected = MeetingProviderSettings.DetectKey(_txtNvidiaApiKey.Text);
+                if (detected.HasValue && detected.Value != _keyProvider) SelectKeyProvider(detected.Value);
+            };
+
+            _btnNvidiaProvider = new ShortcutFlatButton { Text = "NVIDIA", Location = new Point(18, 60), Size = new Size(inputWidth, 36) };
+            _btnGoogleProvider = new ShortcutFlatButton { Text = "Google AI Studio", Location = new Point(rightLeft, 60), Size = new Size(inputWidth, 36) };
+            _btnNvidiaProvider.Click += delegate { SelectKeyProvider(MeetingTranslationProvider.Nvidia); };
+            _btnGoogleProvider.Click += delegate { SelectKeyProvider(MeetingTranslationProvider.Google); };
+            card.Controls.AddRange(new Control[] { _btnNvidiaProvider, _btnGoogleProvider });
+            _txtGoogleModel = new ShortcutTextBox { Location = new Point(18, 152), Size = new Size(inputWidth, 36), LeftPadding = 10,
+                PlaceholderText = GoogleMeetingSettings.DefaultModel, Text = GoogleApiKeyStore.Load().Model, AccessibleName = "Model Google Gemini" };
+            _btnGoogleModels = new ShortcutFlatButton { Location = new Point(rightLeft, 152), Size = new Size(actionWidth, 36),
+                Text = "Chọn model  ▾", UseNeutralStyle = true, AccessibleName = "Mở danh sách model đã xác minh" };
+            _btnGoogleModels.Click += async delegate { await LoadGoogleModelsAsync(); };
+            _btnRecheckGoogleModels = new ShortcutFlatButton { Location = new Point(lastLeft, 152), Size = new Size(actionWidth, 36),
+                Text = "Kiểm tra lại", UseNeutralStyle = true, AccessibleName = "Dịch thử lại các model với key Google hiện tại" };
+            _btnRecheckGoogleModels.Click += async delegate { await CheckGoogleModelsAsync(true); };
+            card.Controls.AddRange(new Control[] { _txtGoogleModel, _btnGoogleModels, _btnRecheckGoogleModels });
+
+            _btnToggleShowKey = new ShortcutFlatButton();
+            _btnToggleShowKey.Text = "Hiện";
+            _btnToggleShowKey.UseNeutralStyle = true;
+            _btnToggleShowKey.Location = new Point(inputWidth - 52, 4);
+            _btnToggleShowKey.Size = new Size(48, 28);
+            _btnToggleShowKey.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            _btnToggleShowKey.AccessibleName = "Hiện hoặc ẩn API key";
+            _btnToggleShowKey.Click += delegate { ToggleNvidiaKeyVisibility(); };
+            _txtNvidiaApiKey.Controls.Add(_btnToggleShowKey);
+
+            _btnSaveNvidiaKey = new ShortcutFlatButton();
+            _btnSaveNvidiaKey.Text = "Lưu && kiểm tra";
+            _btnSaveNvidiaKey.IsPrimary = true;
+            _btnSaveNvidiaKey.Location = new Point(rightLeft, 106);
+            _btnSaveNvidiaKey.Size = new Size(actionWidth, 36);
+            _btnSaveNvidiaKey.Click += async delegate { await SaveAndValidateNvidiaKeyAsync(); };
+            card.Controls.Add(_btnSaveNvidiaKey);
+
+            _btnDeleteNvidiaKey = new ShortcutFlatButton();
+            _btnDeleteNvidiaKey.Text = "Xóa key";
+            _btnDeleteNvidiaKey.UseNeutralStyle = true;
+            _btnDeleteNvidiaKey.Location = new Point(lastLeft, 106);
+            _btnDeleteNvidiaKey.Size = new Size(actionWidth, 36);
+            _btnDeleteNvidiaKey.Click += delegate { DeleteNvidiaKey(); };
+            card.Controls.Add(_btnDeleteNvidiaKey);
+
+            _lblNvidiaStatus = new Label();
+            _lblNvidiaStatus.UseMnemonic = false;
+            _lblNvidiaStatus.Location = new Point(18, 202);
+            _lblNvidiaStatus.Size = new Size(632, 38);
+            _lblNvidiaStatus.Font = new Font("Segoe UI", 8.5F, FontStyle.Bold);
+            _lblNvidiaStatus.BackColor = Color.Transparent;
+            card.Controls.Add(_lblNvidiaStatus);
+            var manageKeys = new ShortcutFlatButton { Text = "Quản lý / thêm key dự phòng", UseNeutralStyle = true,
+                Location = new Point(18, 246), Size = new Size(632, 36), AccessibleName = "Quản lý nhiều API key dự phòng" };
+            manageKeys.Click += delegate
+            {
+                if (_isNvidiaValidating) return;
+                using (var picker = new MeetingApiPickerForm(_keyProvider, GoogleMeetingSettings.FromSecureStore(), NvidiaMeetingSettings.FromSecureStore(), _darkMode))
+                {
+                    picker.Text = "Quản lý key dịch họp";
+                    if (picker.ShowDialog(this) == DialogResult.OK)
+                    {
+                        try
+                        {
+                            if (picker.Google != null) { GoogleApiKeyStore.Save(picker.Google); _txtGoogleModel.Text = picker.Google.Model; }
+                            else NvidiaApiKeyStore.Save(picker.Nvidia.ApiKey);
+                        }
+                        catch { _lblNvidiaStatus.Text = "Chưa lưu được key mặc định. Các key dự phòng đã lưu vẫn được giữ."; return; }
+                    }
+                    UpdateNvidiaStatusFromStore();
+                }
+            };
+            card.Controls.Add(manageKeys);
+            _lblStoredProviders = new Label { Location = new Point(18, 294), Size = new Size(632, 18), BackColor = Color.Transparent, Font = new Font("Segoe UI", 8F) };
+            card.Controls.Add(_lblStoredProviders);
+
+            SelectKeyProvider(MeetingTranslationProvider.Nvidia);
+            return card;
+        }
+
+        private void UpdateNvidiaStatusFromStore()
+        {
+            if (_lblNvidiaStatus == null) return;
+            bool nv = NvidiaApiKeyStore.HasKey(), az = GoogleApiKeyStore.Load().IsReady;
+            if (_lblStoredProviders != null) _lblStoredProviders.Text = "Windows bảo vệ key · NVIDIA: " + (nv ? "đã lưu" : "chưa có") + "  ·  Google: " + (az ? "đã lưu" : "chưa có");
+            try
+            {
+                var keys = MeetingApiKeyRing.Load();
+                if (_lblStoredProviders != null) _lblStoredProviders.Text = "Windows bảo vệ key · NVIDIA: " + keys.Count(p => p.Provider == MeetingTranslationProvider.Nvidia)
+                    + " key · Google: " + keys.Count(p => p.Provider == MeetingTranslationProvider.Google) + " key";
+            }
+            catch (System.IO.IOException) { if (_lblStoredProviders != null) _lblStoredProviders.Text = "Chưa đọc được kho dự phòng; key mặc định vẫn được giữ."; }
+            bool hasKey = _keyProvider == MeetingTranslationProvider.Google ? az : nv;
+            if (hasKey)
+            {
+                _lblNvidiaStatus.Text = "● Đã lưu key " + (_keyProvider == MeetingTranslationProvider.Google ? "Google" : "NVIDIA") + ". Để trống ô key để kiểm tra lại key đã lưu.";
+                _lblNvidiaStatus.ForeColor = _darkMode ? Color.FromArgb(74, 222, 128) : Color.FromArgb(46, 125, 50);
+            }
+            else
+            {
+                _lblNvidiaStatus.Text = "○ Chưa cấu hình API key";
+                _lblNvidiaStatus.ForeColor = _mutedTextColor;
+            }
+        }
+
+        private void SelectKeyProvider(MeetingTranslationProvider provider)
+        {
+            if (_isNvidiaValidating) return;
+            _keyProvider = provider;
+            bool google = provider == MeetingTranslationProvider.Google;
+            _btnNvidiaProvider.IsPrimary = !google; _btnNvidiaProvider.UseNeutralStyle = google;
+            _btnGoogleProvider.IsPrimary = google; _btnGoogleProvider.UseNeutralStyle = !google;
+            _txtGoogleModel.Visible = _btnGoogleModels.Visible = _btnRecheckGoogleModels.Visible = google;
+            _txtNvidiaApiKey.PlaceholderText = google ? "Nhập Google key (AQ.… hoặc AIza…)" : "Nhập NVIDIA API key (nvapi-...)";
+            _btnDeleteNvidiaKey.Text = google ? "Xóa Google" : "Xóa NVIDIA";
+            ApplyThemeToControl(_btnNvidiaProvider); ApplyThemeToControl(_btnGoogleProvider);
+            UpdateNvidiaStatusFromStore();
+        }
+
+        private void ToggleNvidiaKeyVisibility()
+        {
+            _isNvidiaKeyVisible = !_isNvidiaKeyVisible;
+            if (_txtNvidiaApiKey != null)
+                _txtNvidiaApiKey.UseSystemPasswordChar = !_isNvidiaKeyVisible;
+            if (_btnToggleShowKey != null)
+                _btnToggleShowKey.Text = _isNvidiaKeyVisible ? "Ẩn" : "Hiện";
+        }
+
+        private async Task SaveAndValidateNvidiaKeyAsync()
+        {
+            if (_isNvidiaValidating || _txtNvidiaApiKey == null) return;
+
+            string key = _txtNvidiaApiKey.Text != null ? _txtNvidiaApiKey.Text.Trim() : string.Empty;
+            bool google = _keyProvider == MeetingTranslationProvider.Google;
+            if (key.Length == 0) key = google ? GoogleApiKeyStore.Load().ApiKey : NvidiaApiKeyStore.Load();
+            if (string.IsNullOrEmpty(key))
+            {
+                _lblNvidiaStatus.Text = "⚠ Vui lòng nhập API key trước khi lưu.";
+                _lblNvidiaStatus.ForeColor = _dangerColor;
+                return;
+            }
+            var detected = MeetingProviderSettings.DetectKey(key);
+            if (detected.HasValue && detected.Value != _keyProvider)
+            {
+                _lblNvidiaStatus.Text = "Key không khớp nhà cung cấp đang chọn. Chọn đúng NVIDIA hoặc Google.";
+                _lblNvidiaStatus.ForeColor = _dangerColor;
+                return;
+            }
+
+            _isNvidiaValidating = true;
+            _btnNvidiaProvider.Enabled = _btnGoogleProvider.Enabled = _btnGoogleModels.Enabled = _btnRecheckGoogleModels.Enabled = _txtGoogleModel.Enabled = _txtNvidiaApiKey.Enabled = false;
+            _btnSaveNvidiaKey.Enabled = false;
+            _btnDeleteNvidiaKey.Enabled = false;
+            _lblNvidiaStatus.Text = "Đang kiểm tra kết nối tới " + (google ? "Google Gemini" : "NVIDIA") + "...";
+            _lblNvidiaStatus.ForeColor = _accentColor;
+
+            try
+            {
+                using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(google ? 50 : 90)))
+                {
+                    _nvidiaValidation = cts;
+                    GoogleMeetingSettings googleSettings = null;
+                    if (google)
+                    {
+                        googleSettings = await GoogleJapaneseVietnameseTranslator.ValidateAsync(key, _txtGoogleModel.Text, cts.Token);
+                    }
+                    else await NvidiaApiKeyValidator.ValidateAsync(key, cts.Token);
+                    if (IsDisposed || Disposing || cts.IsCancellationRequested) return;
+                    if (google)
+                    {
+                        GoogleApiKeyStore.Save(googleSettings);
+                        GoogleJapaneseVietnameseTranslator.RememberVerifiedModel(key, googleSettings.Model);
+                        _txtGoogleModel.Text = googleSettings.Model;
+                    }
+                    else NvidiaApiKeyStore.Save(key);
+                    _txtNvidiaApiKey.Text = string.Empty;
+                    UpdateNvidiaStatusFromStore();
+                    _lblNvidiaStatus.Text = "✓ Đã lưu key và kết nối " + (google ? googleSettings.Model : "NVIDIA") + " thành công.";
+                    _lblNvidiaStatus.ForeColor = _darkMode ? Color.FromArgb(74, 222, 128) : Color.FromArgb(46, 125, 50);
+                }
+            }
+            catch (Exception ex)
+            {
+                if (IsDisposed || Disposing) return;
+                _lblNvidiaStatus.Text = "✗ Lỗi kiểm tra API key: " + ex.Message;
+                _lblNvidiaStatus.ForeColor = _dangerColor;
+            }
+            finally
+            {
+                _isNvidiaValidating = false;
+                _nvidiaValidation = null;
+                if (!IsDisposed && !Disposing)
+                    _btnNvidiaProvider.Enabled = _btnGoogleProvider.Enabled = _btnGoogleModels.Enabled = _btnRecheckGoogleModels.Enabled = _txtGoogleModel.Enabled = _txtNvidiaApiKey.Enabled = true;
+                if (_btnSaveNvidiaKey != null && !_btnSaveNvidiaKey.IsDisposed)
+                    _btnSaveNvidiaKey.Enabled = true;
+                if (_btnDeleteNvidiaKey != null && !_btnDeleteNvidiaKey.IsDisposed)
+                    _btnDeleteNvidiaKey.Enabled = true;
+            }
+        }
+
+        private Task LoadGoogleModelsAsync()
+        {
+            // Mở menu chỉ đọc danh sách cục bộ, tuyệt đối không gọi API hoặc dịch thử.
+            if (_isNvidiaValidating || _keyProvider != MeetingTranslationProvider.Google) return Task.CompletedTask;
+            if (_googleModelMenu != null && _googleModelMenu.Visible) { _googleModelMenu.Close(); return Task.CompletedTask; }
+            string key = _txtNvidiaApiKey.Text.Trim();
+            if (key.Length == 0) key = GoogleApiKeyStore.Load().ApiKey;
+            var models = GoogleJapaneseVietnameseTranslator.GetSavedVerifiedModels(key);
+            if (models.Count > 0) ShowGoogleModelMenu(models);
+            else
+            {
+                _lblNvidiaStatus.Text = "Chưa có danh sách cho key này. Bấm Kiểm tra lại để xác minh model một lần.";
+                _lblNvidiaStatus.ForeColor = _mutedTextColor;
+            }
+            return Task.CompletedTask;
+        }
+
+        private async Task CheckGoogleModelsAsync(bool forceRefresh)
+        {
+            if (_isNvidiaValidating || _keyProvider != MeetingTranslationProvider.Google) return;
+            if (_googleModelMenu != null && _googleModelMenu.Visible) _googleModelMenu.Close();
+            string key = _txtNvidiaApiKey.Text.Trim();
+            if (key.Length == 0) key = GoogleApiKeyStore.Load().ApiKey;
+            var detected = MeetingProviderSettings.DetectKey(key);
+            if (key.Length == 0 || (detected.HasValue && detected != MeetingTranslationProvider.Google))
+            {
+                _lblNvidiaStatus.Text = "Nhập key Google trước khi tải model. Key NVIDIA không gửi sang Google.";
+                _lblNvidiaStatus.ForeColor = _dangerColor;
+                return;
+            }
+            _isNvidiaValidating = true;
+            _btnSaveNvidiaKey.Enabled = _btnDeleteNvidiaKey.Enabled = _btnNvidiaProvider.Enabled = _btnGoogleProvider.Enabled
+                = _btnGoogleModels.Enabled = _btnRecheckGoogleModels.Enabled = _txtGoogleModel.Enabled = _txtNvidiaApiKey.Enabled = false;
+            _lblNvidiaStatus.Text = "Đang kiểm tra khả năng dịch của các model với key hiện tại…";
+            _lblNvidiaStatus.ForeColor = _accentColor;
+            IReadOnlyList<string> models = null;
+            try
+            {
+                using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(120)))
+                {
+                    _nvidiaValidation = cts;
+                    var result = await GoogleJapaneseVietnameseTranslator.GetVerifiedModelsAsync(key, cts.Token, forceRefresh, (done, total) =>
+                    {
+                        if (IsDisposed || Disposing || !IsHandleCreated) return;
+                        try { BeginInvoke(new Action(() =>
+                        {
+                            if (!IsDisposed && !Disposing && _isNvidiaValidating)
+                                _lblNvidiaStatus.Text = "Đang dịch thử model " + done + "/" + total + "…";
+                        })); } catch (InvalidOperationException) { }
+                    });
+                    if (IsDisposed || Disposing || cts.IsCancellationRequested) return;
+                    models = result.Models;
+                    _lblNvidiaStatus.Text = models.Count > 0
+                        ? "Đã lưu " + models.Count + " model dịch thành công. Chọn model sẽ mở ngay danh sách này."
+                        : "Chưa có model nào dịch thành công. Kiểm tra key/quota/mạng rồi bấm Kiểm tra lại.";
+                }
+                _lblNvidiaStatus.ForeColor = _mutedTextColor;
+            }
+            catch (Exception ex)
+            {
+                if (IsDisposed || Disposing) return;
+                _lblNvidiaStatus.Text = ex is OperationCanceledException ? "Kiểm tra quá thời gian chờ. Bấm Kiểm tra lại để thử lại." : "Không tải được model: " + ex.Message;
+                _lblNvidiaStatus.ForeColor = _dangerColor;
+            }
+            finally
+            {
+                _isNvidiaValidating = false;
+                _nvidiaValidation = null;
+                if (!IsDisposed && !Disposing)
+                    _btnSaveNvidiaKey.Enabled = _btnDeleteNvidiaKey.Enabled = _btnNvidiaProvider.Enabled = _btnGoogleProvider.Enabled
+                        = _btnGoogleModels.Enabled = _btnRecheckGoogleModels.Enabled = _txtGoogleModel.Enabled = _txtNvidiaApiKey.Enabled = true;
+            }
+            if (models != null && models.Count > 0 && !IsDisposed && !Disposing && _keyProvider == MeetingTranslationProvider.Google)
+                ShowGoogleModelMenu(models);
+        }
+
+        private void ShowGoogleModelMenu(IReadOnlyList<string> models)
+        {
+            if (_googleModelMenu == null)
+            {
+                _googleModelMenu = new ShortcutModelDropDown(_borderColor, _darkMode)
+                {
+                    BackColor = _darkMode ? Color.FromArgb(35, 36, 43) : Color.FromArgb(249, 250, 252),
+                    ForeColor = _textColor, Font = Font, ShowImageMargin = false, ShowCheckMargin = false,
+                    Renderer = new ShortcutModelMenuRenderer(_darkMode, _textColor, _mutedTextColor, _accentColor)
+                };
+                _googleModelMenu.Opened += delegate { _btnGoogleModels.Text = "Chọn model  ▴"; };
+                _googleModelMenu.Closed += delegate { if (!_btnGoogleModels.IsDisposed) _btnGoogleModels.Text = "Chọn model  ▾"; };
+            }
+            _googleModelMenu.Close();
+            float scale = DeviceDpi / 96F;
+            int inset = (int)Math.Round(6 * scale);
+            int width = Math.Min(_txtGoogleModel.Width, Screen.FromControl(this).WorkingArea.Width);
+            _googleModelMenu.Padding = new Padding(inset);
+            _googleModelMenu.MinimumSize = new Size(width, 0);
+            _googleModelMenu.MaximumSize = new Size(width, 0);
+            while (_googleModelMenu.Items.Count > 0)
+            {
+                var old = _googleModelMenu.Items[0]; _googleModelMenu.Items.RemoveAt(0); old.Dispose();
+            }
+            foreach (string model in models)
+            {
+                string selected = model;
+                var item = new ToolStripMenuItem(model)
+                { Tag = model, Checked = string.Equals(_txtGoogleModel.Text, model, StringComparison.Ordinal),
+                    ForeColor = _textColor, AutoSize = false, Size = new Size(width - 2 * inset, (int)Math.Round(58 * scale)),
+                    ToolTipText = model, AccessibleName = model };
+                item.Click += delegate
+                {
+                    if (_isNvidiaValidating || IsDisposed || Disposing) return;
+                    _txtGoogleModel.Text = selected;
+                    _lblNvidiaStatus.Text = "Đã chọn " + (selected == "auto" ? "Tự chọn nhanh" : selected) + ". Nhấn Lưu & kiểm tra để áp dụng.";
+                    _lblNvidiaStatus.ForeColor = _accentColor;
+                };
+                _googleModelMenu.Items.Add(item);
+            }
+            // Cùng quy tắc menu provider: không Dispose ngay trong Closed/Click.
+            _googleModelMenu.Show(_txtGoogleModel, new Point(0, _txtGoogleModel.Height + (int)Math.Round(6 * scale)));
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _googleModelMenu?.Dispose();
+                try { _nvidiaValidation?.Cancel(); } catch (ObjectDisposedException) { }
+            }
+            base.Dispose(disposing);
+        }
+
+        private sealed class ShortcutModelDropDown : ContextMenuStrip
+        {
+            private readonly Color _outline;
+            private readonly bool _dark;
+            public ShortcutModelDropDown(Color outline, bool dark) { _outline = outline; _dark = dark; }
+            protected override CreateParams CreateParams
+            {
+                get { var p = base.CreateParams; p.Style |= 0x00C00000 | 0x00040000; return p; }
+            }
+            protected override void OnHandleCreated(EventArgs e)
+            {
+                base.OnHandleCreated(e);
+                try
+                {
+                    // Cùng khung DWM với popup Teams: góc bo, bóng và một viền ngoài.
+                    int round = 2, dark = _dark ? 1 : 0, color = _outline.R | (_outline.G << 8) | (_outline.B << 16);
+                    DwmSetWindowAttribute(Handle, 33, ref round, 4);
+                    DwmSetWindowAttribute(Handle, 20, ref dark, 4);
+                    DwmSetWindowAttribute(Handle, 34, ref color, 4);
+                }
+                catch { } // Windows cũ giữ menu tiêu chuẩn, không cắt góc bằng Region.
+            }
+            protected override void WndProc(ref Message m)
+            {
+                if (m.Msg == 0x0083) { m.Result = IntPtr.Zero; return; }
+                if (m.Msg == 0x0084) { m.Result = (IntPtr)1; return; }
+                base.WndProc(ref m);
+            }
+        }
+
+        private sealed class ShortcutModelMenuRenderer : ToolStripProfessionalRenderer
+        {
+            private readonly Color _hover, _text, _muted, _accent;
+            public ShortcutModelMenuRenderer(bool dark, Color text, Color muted, Color accent)
+            {
+                _hover = dark ? Color.FromArgb(58, 45, 35) : Color.FromArgb(237, 243, 252);
+                _text = text; _muted = muted; _accent = accent; RoundedEdges = false;
+            }
+            protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e) { e.Graphics.Clear(e.ToolStrip.BackColor); }
+            protected override void OnRenderImageMargin(ToolStripRenderEventArgs e) { }
+            protected override void OnRenderItemCheck(ToolStripItemImageRenderEventArgs e) { }
+            protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e) { }
+            protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e)
+            {
+                var item = e.Item as ToolStripMenuItem;
+                if (!e.Item.Selected && (item == null || !item.Checked)) return;
+                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                using (var path = RoundedRectF(new RectangleF(2, 2, e.Item.Width - 4, e.Item.Height - 4), 7))
+                using (var brush = new SolidBrush(_hover)) e.Graphics.FillPath(brush, path);
+            }
+            protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
+            {
+                float s = e.Graphics.DpiX / 96F;
+                int cy = e.Item.Height / 2, icon = (int)(32 * s), left = (int)(12 * s);
+                int width = Math.Min(e.Item.Width, e.ToolStrip.ClientSize.Width - e.Item.Bounds.Left);
+                var glyph = new Rectangle(left, cy - icon / 2, icon, icon);
+                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                using (var path = RoundedRectF(glyph, 9 * s))
+                using (var brush = new SolidBrush(_hover)) e.Graphics.FillPath(brush, path);
+                var flags = TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis;
+                using (var bold = new Font(e.TextFont, FontStyle.Bold))
+                {
+                    TextRenderer.DrawText(e.Graphics, "AI", bold, glyph, _accent, flags | TextFormatFlags.HorizontalCenter);
+                    int x = glyph.Right + (int)(12 * s), w = Math.Max(1, width - x - (int)(36 * s));
+                    TextRenderer.DrawText(e.Graphics, e.Text, bold, new Rectangle(x, cy - (int)(21 * s), w, (int)(23 * s)), _text, flags);
+                    bool selected = ((ToolStripMenuItem)e.Item).Checked;
+                    string detail = selected ? "Đang chọn · Đã xác minh" : "Đã xác minh · Nhật → Việt";
+                    TextRenderer.DrawText(e.Graphics, detail, e.TextFont, new Rectangle(x, cy + (int)(2 * s), w, (int)(21 * s)), _muted, flags);
+                    if (selected)
+                        using (var pen = new Pen(_accent, 1.8F * s))
+                            e.Graphics.DrawLines(pen, new[] { new PointF(width - 27 * s, cy), new PointF(width - 23 * s, cy + 4 * s), new PointF(width - 16 * s, cy - 4 * s) });
+                }
+            }
+        }
+
+        private void DeleteNvidiaKey()
+        {
+            if (_isNvidiaValidating) return;
+
+            try
+            {
+                string key = _keyProvider == MeetingTranslationProvider.Google ? GoogleApiKeyStore.Load().ApiKey : NvidiaApiKeyStore.Load();
+                MeetingApiKeyRing.Remove(MeetingApiKeyProfile.KeyId(_keyProvider, key));
+            }
+            catch (Exception)
+            {
+                _lblNvidiaStatus.Text = "Không thể xóa key. Vui lòng thử lại.";
+                _lblNvidiaStatus.ForeColor = _dangerColor;
+                return;
+            }
+            if (_txtNvidiaApiKey != null)
+                _txtNvidiaApiKey.Text = string.Empty;
+            if (_lblNvidiaStatus != null)
+            {
+                UpdateNvidiaStatusFromStore();
+                _lblNvidiaStatus.Text = "○ Đã xóa key " + (_keyProvider == MeetingTranslationProvider.Google ? "Google" : "NVIDIA") + ". Key còn lại được giữ nguyên.";
+                _lblNvidiaStatus.ForeColor = _mutedTextColor;
+            }
         }
 
         private ShortcutRow CreateRow(ShortcutActionDefinition def, int index)
@@ -433,6 +944,29 @@ namespace TTSK_AutoDim_Plates
             keyBox.Text = ShortcutManager.Format(GetWorkingShortcut(def.ActionId));
             card.Controls.Add(keyBox);
 
+            if (string.Equals(def.ActionId, ShortcutManager.ActionMeetingTranslation, StringComparison.OrdinalIgnoreCase))
+            {
+                // Pixel ở 96 DPI: tách vùng chữ, phím và nút bằng khoảng hở 10 px.
+                name.Width = 234;
+                name.Height = 20;
+                desc.Width = 234;
+                desc.Text = "Phụ đề Teams · Nhật → Việt";
+                desc.AccessibleDescription = def.Description;
+                keyBox.Location = new Point(316, 12);
+                keyBox.Size = new Size(154, 36);
+
+                ShortcutFlatButton btnOpen = new ShortcutFlatButton();
+                btnOpen.Text = "Mở";
+                btnOpen.IsPrimary = true;
+                btnOpen.Location = new Point(480, 12);
+                btnOpen.Size = new Size(82, 36);
+                btnOpen.Click += delegate
+                {
+                    LaunchMeetingTranslation();
+                };
+                card.Controls.Add(btnOpen);
+            }
+
             ShortcutFlatButton edit = new ShortcutFlatButton();
             edit.Text = "Sửa";
             edit.UseNeutralStyle = true;
@@ -474,6 +1008,25 @@ namespace TTSK_AutoDim_Plates
             row.EditButton = edit;
             row.Definition = def;
             return row;
+        }
+
+        private void LaunchMeetingTranslation()
+        {
+            if (_openMeetingTranslation == null) return;
+            Form owner = Owner;
+            SaveAndClose();
+            if (DialogResult != DialogResult.OK) return;
+            // Leave the modal settings loop before activating a modeless tool window.
+            if (owner != null && owner.IsHandleCreated && !owner.IsDisposed)
+                owner.BeginInvoke(_openMeetingTranslation);
+            else
+                _openMeetingTranslation();
+        }
+
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            if (_nvidiaValidation != null) _nvidiaValidation.Cancel();
+            base.OnFormClosed(e);
         }
 
         private Keys GetWorkingShortcut(string actionId)
@@ -592,6 +1145,13 @@ namespace TTSK_AutoDim_Plates
                 }
 
                 ApplyEditingShortcut(normalized);
+                return true;
+            }
+
+            Keys meetingKey = GetWorkingShortcut(ShortcutManager.ActionMeetingTranslation);
+            if (meetingKey != Keys.None && ShortcutManager.NormalizeShortcut(keyData) == meetingKey)
+            {
+                LaunchMeetingTranslation();
                 return true;
             }
 
@@ -792,6 +1352,29 @@ namespace TTSK_AutoDim_Plates
                 }
             }
 
+            if (_nvidiaCard != null)
+            {
+                bool showNvidia = _filterGroup != "Slots" &&
+                    (string.IsNullOrEmpty(filter)
+                     || "nvidia".IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0
+                     || "google".IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0
+                     || "gemini".IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0
+                     || "api".IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0
+                     || "dịch họp".IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0
+                     || "dich hop".IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0
+                     || "key".IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0);
+
+                _nvidiaCard.Visible = showNvidia;
+                if (showNvidia)
+                {
+                    if (customRowsPanel != null)
+                        customRowsPanel.SetChildTop(_nvidiaCard, y);
+                    else
+                        _nvidiaCard.Location = new Point(0, y);
+                    y += _nvidiaCard.Height + 10;
+                }
+            }
+
             if (customRowsPanel != null)
                 customRowsPanel.EndContentLayout(y);
 
@@ -871,6 +1454,7 @@ namespace TTSK_AutoDim_Plates
             UpdateAutoSectionStateLabel();
             RefreshRowsVisualState();
             ApplyWindowTitleBarTheme();
+            UpdateNvidiaStatusFromStore();
         }
 
         private void ApplyThemeToControl(Control control)
@@ -910,8 +1494,11 @@ namespace TTSK_AutoDim_Plates
                 textBox.ForeColor = _textColor;
                 textBox.BorderColor = _darkMode ? _borderColor : _accentColor;
                 textBox.PlaceholderColor = _mutedTextColor;
-                textBox.PlaceholderText = "Tìm chức năng hoặc phím…";
-                textBox.LeftPadding = 48;
+                if (textBox == txtSearch)
+                {
+                    textBox.PlaceholderText = "Tìm chức năng hoặc phím…";
+                    textBox.LeftPadding = 48;
+                }
                 textBox.Invalidate();
             }
 
@@ -1822,8 +2409,18 @@ namespace TTSK_AutoDim_Plates
                 {
                     _placeholderText = value ?? string.Empty;
                     if (_placeholder != null)
+                    {
                         _placeholder.Text = _placeholderText;
+                        _placeholder.Invalidate();
+                    }
                 }
+            }
+
+            private int _rightPadding = 10;
+            public int RightPadding
+            {
+                get { return _rightPadding; }
+                set { _rightPadding = Math.Max(10, value); LayoutEditor(); }
             }
 
             public int LeftPadding
@@ -1854,6 +2451,18 @@ namespace TTSK_AutoDim_Plates
                     if (_editor != null)
                         _editor.Text = value ?? string.Empty;
                 }
+            }
+
+            public char PasswordChar
+            {
+                get { return _editor == null ? '\0' : _editor.PasswordChar; }
+                set { if (_editor != null) _editor.PasswordChar = value; }
+            }
+
+            public bool UseSystemPasswordChar
+            {
+                get { return _editor == null ? false : _editor.UseSystemPasswordChar; }
+                set { if (_editor != null) _editor.UseSystemPasswordChar = value; }
             }
 
             public ShortcutTextBox()
@@ -2009,7 +2618,7 @@ namespace TTSK_AutoDim_Plates
                 int editorHeight = Math.Min(_editor.PreferredHeight, Math.Max(1, Height - 6));
                 int editorTop = Math.Max(3, (Height - editorHeight) / 2 + 1);
                 int placeholderTop = Math.Max(2, editorTop - 2);
-                int editorWidth = Math.Max(1, Width - LeftPadding - 10);
+                int editorWidth = Math.Max(1, Width - LeftPadding - RightPadding);
 
                 _editor.SetBounds(LeftPadding, editorTop, editorWidth, editorHeight);
                 _placeholder.SetBounds(LeftPadding, placeholderTop, editorWidth, editorHeight);

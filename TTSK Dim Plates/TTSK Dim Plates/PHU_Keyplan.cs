@@ -1,7 +1,7 @@
 ﻿// Slot 09 Keyplan: hướng nhìn, tính góc, đọc thiết lập và giao diện áp dụng.
 // LUỒNG: MainForm.RunKeyplanSlot09 → KeyplanForm → đọc frame/thiết lập → Geometry tìm góc hợp lệ → áp dụng thuộc tính.
 // ĐIỂM SỬA: hướng và góc ở Geometry; đọc/ghi ở DrawingSettingsReader và dịch vụ apply; giao diện ở region PHU_KeyplanForm.
-// THAM SỐ: ToleranceDegrees tính bằng độ; AllowedAngles chỉ cho X/Z=0,90,180,270 và Y=0,180.
+// THAM SỐ: ToleranceDegrees tính bằng độ; X=0/90/180/270, Y=0/180; Z liên tục, gợi ý theo độ chính xác nhập 0,001°.
 // LƯU Ý: vector hình học dùng hệ global; tọa độ bố trí trên giấy không được đưa vào phép tính góc.
 // TRA CỨU: PROJECT_MAP.md ở gốc repo; chỉ mục kiểu/hàm và điểm chỉnh thông số.
 // Mục lục:
@@ -60,12 +60,13 @@ using System.Linq;
     }
     public sealed class Angles
     {
-        public readonly int X, Y, Z;
+        public readonly int X, Y;
+        public readonly double Z;
         public Angles(int x,int y,double z)
         {
-            if(!Geometry.AllowedQuarter(x)||!(y==0||y==180)||!Geometry.AllowedQuarter(z))
-                throw new InvalidOperationException("X và Z chỉ nhận 0/90/180/270; Y chỉ nhận 0/180.");
-            X=x;Y=y;Z=(int)z;
+            if(!Geometry.AllowedQuarter(x)||!(y==0||y==180)||!Geometry.Finite(z))
+                throw new InvalidOperationException("X chỉ nhận 0/90/180/270; Y chỉ nhận 0/180; Z phải là góc hữu hạn.");
+            X=x;Y=y;Z=Geometry.Wrap(z);
         }
         public override string ToString() { return string.Format(CultureInfo.InvariantCulture,"Local | Around X = {0}° | Around Y = {1}° | Around Z = {2:0.######}°",X,Y,Z); }
     }
@@ -91,10 +92,13 @@ using System.Linq;
         // Never round a requested angle to the nearest allowed value.
         // CHỈNH SAI SỐ GÓC (độ): chỉ dung sai số học; không làm tròn yêu cầu thành một góc được phép.
         public const double ToleranceDegrees=0.0001;
+        // Số lẻ độ Z đọc lại từ ô native; chỉ giới hạn ứng viên gợi ý, không làm tròn góc gốc.
+        const int ZInputDecimals=3;
         public static bool Finite(double n) { return !double.IsNaN(n)&&!double.IsInfinity(n); }
         public static bool AllowedQuarter(double a) { return a==0||a==90||a==180||a==270; }
         public static IEnumerable<Angles> AllowedAngles()
         {
+            // Giữ API/tập 32 góc vuông cũ làm hạt giống; Search bổ sung Z liên tục theo target.
             foreach(int x in new[]{0,90,180,270})foreach(int y in new[]{0,180})foreach(int z in new[]{0,90,180,270})
                 yield return new Angles(x,y,z);
         }
@@ -118,14 +122,19 @@ using System.Linq;
             if(V.Dot(right,right)<1e-16||V.Dot(up,up)<1e-16)return 180;
             return Math.Max(Angle(right,new V(1,0,0)),Angle(up,new V(0,1,0)));
         }
-        // Signed permutations avoid trigonometric drift for the only permitted rotations.
+        // Giữ hoán vị chính xác tại góc vuông; Z khác góc vuông dùng sin/cos.
         static int Quarter(double a) { return ((int)a%360+360)%360; }
         static V Rx(V v,double a)
         { switch(Quarter(a)) { case 90:return new V(v.X,-v.Z,v.Y);case 180:return new V(v.X,-v.Y,-v.Z);case 270:return new V(v.X,v.Z,-v.Y);default:return v; } }
         static V Ry(V v,double a)
         { switch(Quarter(a)) { case 180:return new V(-v.X,v.Y,-v.Z);default:return v; } }
         static V Rz(V v,double a)
-        { switch(Quarter(a)) { case 90:return new V(-v.Y,v.X,v.Z);case 180:return new V(-v.X,-v.Y,v.Z);case 270:return new V(v.Y,-v.X,v.Z);default:return v; } }
+        {
+            double wrapped=Wrap(a);
+            if(AllowedQuarter(wrapped))switch((int)wrapped)
+            {case 90:return new V(-v.Y,v.X,v.Z);case 180:return new V(-v.X,-v.Y,v.Z);case 270:return new V(v.Y,-v.X,v.Z);default:return v;}
+            double angle=a*Math.PI/180,c=Math.Cos(angle),s=Math.Sin(angle);return new V(c*v.X-s*v.Y,s*v.X+c*v.Y,v.Z);
+        }
         // Measured from AssemblyDrawing.Insert using saved LOCAL View creation attributes.
         // Intrinsic clockwise X, Y, Z; applied to the common 3D basis BEFORE view projection.
         // Column vertical placing is a separate paper rotation after projection.
@@ -158,7 +167,10 @@ using System.Linq;
                 ||viewTypes.Distinct().Count()!=2||viewTypes.Any(t=>!IsStandardView(t)))
                 throw new InvalidOperationException("Cần hệ Local và hai loại view tiêu chuẩn xác định duy nhất.");
             var evaluated=new List<Candidate>();
-            foreach(var a in AllowedAngles())
+            // Giữ 32 ứng viên cũ để kết quả góc vuông ổn định; bổ sung nghiệm Z giải tích, không quét theo bước.
+            var candidates=AllowedAngles().Concat(SolveZCandidates(mainPart,verticalColumn,viewTypes,target))
+                .GroupBy(a=>a.ToString()).Select(g=>g.First());
+            foreach(var a in candidates)
             {
                 double error=Enumerable.Range(0,2).Max(i=>projection?KeyplanError(LocalView(mainPart,verticalColumn,viewTypes[i],a),target[i]):Error(LocalView(mainPart,verticalColumn,viewTypes[i],a),target[i]));
                 if(!Finite(error))throw new InvalidOperationException("Không xác định được sai lệch góc.");
@@ -168,6 +180,35 @@ using System.Linq;
                 .OrderBy(c=>(c.Angles.X==0?0:1)+(c.Angles.Y==0?0:1)+(c.Angles.Z==0?0:1))
                 .ThenBy(c=>c.Angles.X).ThenBy(c=>c.Angles.Y).ThenBy(c=>c.Angles.Z).ToList();
             return new RotationSearch(evaluated,matches);
+        }
+        static IEnumerable<Angles> SolveZCandidates(Frame mainPart,bool verticalColumn,string[] viewTypes,Frame[] target)
+        {
+            foreach(int x in new[]{0,90,180,270})foreach(int y in new[]{0,180})
+            {
+                var roots=new List<double>();
+                for(int i=0;i<2;i++)
+                {
+                    var zero=LocalView(mainPart,verticalColumn,viewTypes[i],new Angles(x,y,0));
+                    var quarter=LocalView(mainPart,verticalColumn,viewTypes[i],new Angles(x,y,90));
+                    var half=LocalView(mainPart,verticalColumn,viewTypes[i],new Angles(x,y,180));
+                    // Trục keyplan phải chiếu ngang/dọc trên giấy: hai tích vô hướng chéo bằng 0.
+                    AddSinusoidRoots(roots,V.Dot(target[i].Right,zero.Up),V.Dot(target[i].Right,quarter.Up),V.Dot(target[i].Right,half.Up));
+                    AddSinusoidRoots(roots,V.Dot(target[i].Up,zero.Right),V.Dot(target[i].Up,quarter.Right),V.Dot(target[i].Up,half.Right));
+                    // Cặp nhìn đối diện có thể cùng giữ chiều chiếu khi Z đổi; thêm ràng buộc pháp tuyến cho SearchLocal.
+                    AddSinusoidRoots(roots,V.Dot(target[i].Normal,zero.Right),V.Dot(target[i].Normal,quarter.Right),V.Dot(target[i].Normal,half.Right));
+                    AddSinusoidRoots(roots,V.Dot(target[i].Normal,zero.Up),V.Dot(target[i].Normal,quarter.Up),V.Dot(target[i].Normal,half.Up));
+                }
+                foreach(double z in roots.Select(value=>Wrap(Math.Round(value,ZInputDecimals,MidpointRounding.AwayFromZero))).Distinct())
+                    yield return new Angles(x,y,z); // Sau làm tròn vẫn bắt buộc qua kiểm toàn bộ hai frame ở Search.
+            }
+        }
+        static void AddSinusoidRoots(List<double> roots,double zero,double quarter,double half)
+        {
+            // f(Z)=a*cos(Z)+b*sin(Z)+c; không phụ thuộc tên/ID cấu kiện hoặc trục global cố định.
+            double c=(zero+half)*0.5,a=(zero-half)*0.5,b=quarter-c,r=Math.Sqrt(a*a+b*b);
+            if(r<1e-12||Math.Abs(c)>r+1e-12)return;
+            double phase=Math.Atan2(b,a),delta=Math.Acos(Math.Max(-1,Math.Min(1,-c/r)));
+            roots.Add(Wrap((phase+delta)*180/Math.PI));roots.Add(Wrap((phase-delta)*180/Math.PI));
         }
         public static Frame[] Targets(bool column,bool alongY,Frame grid)
         {
@@ -358,6 +399,7 @@ using Tekla.Technology.Akit.UserScript;
         public Frame Frame;
         public double SheetX, SheetY;
         public bool Unsupported;
+        public string ReadError;
         public override string ToString() { return Type+" "+Name+" · ID "+Id; }
     }
     public sealed class Snapshot
@@ -375,6 +417,8 @@ using Tekla.Technology.Akit.UserScript;
         public DrawingSettings Settings;
         public List<GridReference> Grids=new List<GridReference>();
         public List<ViewReference> Views=new List<ViewReference>();
+        // Views giữ đúng phạm vi solver cũ; AllViews chỉ dùng báo cáo mọi view trên sheet.
+        public List<ViewReference> AllViews=new List<ViewReference>();
         internal Snapshot WithViews(List<ViewReference> views) {var copy=(Snapshot)MemberwiseClone();copy.Views=views;return copy;}
     }
     public sealed class QuickResult
@@ -395,7 +439,18 @@ using Tekla.Technology.Akit.UserScript;
         public string FirstViewType, SecondViewType;
         public Frame FirstTarget, SecondTarget;
         public bool CompleteViews=true, CanApply=true;
+        public List<ViewAxisCheck> ViewChecks=new List<ViewAxisCheck>();
+        internal Frame ViewCheckKey;
         internal QuickResult Copy() {return (QuickResult)MemberwiseClone();}
+    }
+    public enum ViewAxisState { Correct, Misaligned, Unverified }
+    public sealed class ViewAxisCheck
+    {
+        public int Id;
+        public string Name, Type, Message, Axes;
+        public ViewAxisState State;
+        public double? PaperRotation;
+        public string Label {get {return Type.Replace("View","")+(string.IsNullOrWhiteSpace(Name)?"":" · "+Name)+" (#"+Id+")";}}
     }
     public enum QuickState { Correct, LayoutMismatch, MissingData, NoSolution, VerifiedSuggestion, IncompleteViews, Overview }
     public static class Reader
@@ -431,11 +486,15 @@ using Tekla.Technology.Akit.UserScript;
                 "Hướng grid đúng; cần đặt "+plan.FirstViewType.Replace("View","")+(plan.IsColumn?" bên trái, ":" ở dưới, ")+plan.SecondViewType.Replace("View","")+(plan.IsColumn?" bên phải.":" ở trên.");
             result.ActionNote=result.State==QuickState.Correct?"":result.Message;
             if(!result.CompleteViews)result.Angles=angles;
-            return result;
+            return AttachViewChecks(after,result,0,plan.ViewCheckKey);
         }
         // User overrides are independent. Never choose a mode just because it has
         // an easy angle solution or because the current (possibly wrong) views fit it.
         public static QuickResult Analyze(Snapshot s,bool? columnOverride=null,bool? alongYOverride=null,int gridId=0,int keyQuarterTurns=0)
+        {
+            return AttachViewChecks(s,AnalyzeMainViews(s,columnOverride,alongYOverride,gridId,keyQuarterTurns),keyQuarterTurns);
+        }
+        static QuickResult AnalyzeMainViews(Snapshot s,bool? columnOverride,bool? alongYOverride,int gridId,int keyQuarterTurns)
         {
             if(s==null)throw new InvalidOperationException("Chưa có dữ liệu bản vẽ.");
             if(s.Overview)return AnalyzeOverview(s,gridId,keyQuarterTurns);
@@ -446,10 +505,9 @@ using Tekla.Technology.Akit.UserScript;
             if(stacked)analysis=s.WithViews(s.Views.OrderBy(v=>v.Type).Select((v,i)=>new ViewReference {Id=v.Id,Name=v.Name,Type=v.Type,Frame=v.Frame,
                 Unsupported=v.Unsupported,SheetX=i*100,SheetY=v.SheetY}).ToList());
             var result=QuickAnalyze(analysis,column,alongYOverride??false,gridId,keyQuarterTurns,!alongYOverride.HasValue);
-            if(s.GenericMember&&column&&result.State==QuickState.NoSolution&&s.Views.Count==2&&s.Views.Select(v=>v.Type).Distinct().Count()==2)
+            if(column&&result.State==QuickState.NoSolution&&s.Views.Count==2&&s.Views.Select(v=>v.Type).Distinct().Count()==2)
             {
-                // A plate's views can be stacked. Their near-equal sheet X must
-                // not force the wrong Front/Top assignment into the angle solver.
+                // Thứ tự view trên giấy có thể ngược cặp có nghiệm; xét cả hai ánh xạ, báo cần sắp lại.
                 var ordered=analysis.Views.OrderBy(v=>v.SheetX).ToList();
                 var swapped=s.WithViews(ordered.Select((v,i)=>new ViewReference {Id=v.Id,Name=v.Name,Type=v.Type,Frame=v.Frame,
                     Unsupported=v.Unsupported,SheetX=i==0?100:0,SheetY=v.SheetY}).ToList());
@@ -485,6 +543,80 @@ using Tekla.Technology.Akit.UserScript;
                 (column?"Cột":"Dầm")+" · "+result.SelectionNote+(s.ShapeNote==null?"":" · "+s.ShapeNote);
             return result;
         }
+        static QuickResult AttachViewChecks(Snapshot s,QuickResult result,int turns=0,Frame checkedKey=null)
+        {
+            // Kiểm độc lập; tuyệt đối không đổi Angles/State/CanApply hoặc danh sách Views của solver.
+            var grid=s.Grids.Single(g=>g.Id==result.GridId);
+            var key=checkedKey??new Frame(grid.Axes.First(a=>a.Family=="Grid X").Direction,grid.Axes.First(a=>a.Family=="Grid Y").Direction).Spin(turns*90);
+            result.ViewCheckKey=key;
+            var views=s.AllViews.Count>0?s.AllViews:s.Views;
+            result.ViewChecks=views.OrderByDescending(v=>v.SheetY).ThenBy(v=>v.SheetX).ThenBy(v=>v.Id)
+                .Select(view=>CheckViewAxes(view,key,!result.IsColumn&&result.AlongY)).ToList();
+            return result;
+        }
+        public static ViewAxisCheck CheckViewAxes(ViewReference view,Frame key,bool alongY)
+        {return CheckViewAxesCore(view,key,alongY,true);}
+        // Combo chỉ kiểm hệ trục hiện có; không đọc Drawing properties, không tìm/gợi ý góc.
+        public static List<ViewAxisCheck> CheckCurrentViews(Snapshot snapshot)
+        {
+            if(snapshot==null)throw new InvalidOperationException("Chưa đọc được hình học bản vẽ.");
+            string note;var grid=SelectGrid(snapshot,0,out note);
+            var key=new Frame(grid.Axes.First(a=>a.Family=="Grid X").Direction,grid.Axes.First(a=>a.Family=="Grid Y").Direction);
+            bool alongY=!snapshot.Overview&&!RecognizeColumn(snapshot)&&BeamAlongY(snapshot,key);
+            var views=snapshot.AllViews.Count>0?snapshot.AllViews:snapshot.Views;
+            if(views.Count==0)throw new InvalidOperationException("Không có view để kiểm tra.");
+            return views.OrderByDescending(v=>v.SheetY).ThenBy(v=>v.SheetX).ThenBy(v=>v.Id)
+                .Select(view=>CheckViewAxesCore(view,key,alongY,false)).ToList();
+        }
+        static ViewAxisCheck CheckViewAxesCore(ViewReference view,Frame key,bool alongY,bool suggestRotation)
+        {
+            var check=new ViewAxisCheck {Id=view.Id,Name=view.Name,Type=view.Type??"View",State=ViewAxisState.Unverified};
+            if(view.ReadError!=null||view.Frame==null)
+            {check.Message=view.ReadError??"Chưa đọc được hệ trục view.";return check;}
+            check.Axes="Phải: "+AxisDirection(view.Frame.Right,key)+" · Lên: "+AxisDirection(view.Frame.Up,key);
+            if(view.Unsupported)
+            {check.Message="Đã đọc hệ trục; view phản chiếu/khai triển/undeformed chưa có quy tắc xác nhận.";return check;}
+            // Dùng cùng chuẩn mặt bằng với solver: hướng X là (+X,+Y), hướng Y là (+Y,−X).
+            // Trục ngang của section đi theo hướng chính đã chọn, không theo dấu normal đang kiểm.
+            Frame plan=Geometry.Targets(false,alongY,key)[1];
+            V normal=view.Frame.Normal;
+            double nx=V.Dot(normal,plan.Right),ny=V.Dot(normal,plan.Up),nz=V.Dot(normal,plan.Normal);
+            double[] facing={Math.Abs(nx),Math.Abs(ny),Math.Abs(nz)};
+            var order=Enumerable.Range(0,3).OrderByDescending(i=>facing[i]).ToArray();
+            if(facing[order[0]]<=facing[order[1]]+1e-8)
+            {check.Message="Hướng chiếu xiên giữa hai phương; chưa có chuẩn keyplan duy nhất.";return check;}
+            Frame target;
+            // Pháp tuyến chỉ chọn họ mặt chiếu trong chuẩn trên; không đảo chuẩn để chấp nhận view ngược.
+            if(order[0]==0)target=new Frame(plan.Up,plan.Normal);
+            else if(order[0]==1)target=new Frame(plan.Right,plan.Normal);
+            else target=plan;
+            if(Geometry.KeyplanError(view.Frame,target)<=Geometry.ToleranceDegrees)
+            {check.State=ViewAxisState.Correct;check.Message="Đúng chiều trục theo keyplan.";return check;}
+            check.State=ViewAxisState.Misaligned;
+            if(!suggestRotation)
+            {
+                check.Message=V.Dot(normal,target.Normal)<0?"Chiều nhìn ngược keyplan.":"Chiều trục view chưa đúng keyplan.";
+                return check;
+            }
+            if(V.Dot(normal,target.Normal)<0)
+            {
+                check.Message="Chiều nhìn ngược keyplan; cần đổi phía nhìn. Chuẩn phải: "+AxisDirection(target.Right,key)+" · lên: "+AxisDirection(target.Up,key)+".";
+                return check; // Quay trên giấy không đảo được pháp tuyến; không đưa góc sửa sai.
+            }
+            double angle=Math.Atan2(V.Dot(target.Right,view.Frame.Up),V.Dot(target.Right,view.Frame.Right))*180/Math.PI;
+            angle=Math.Round(angle,3,MidpointRounding.AwayFromZero);
+            if(Geometry.KeyplanError(view.Frame.Spin(angle),target)<=Geometry.ToleranceDegrees)
+            {check.PaperRotation=angle;check.Message="Chưa đúng chiều trục · xoay riêng view trên giấy "+angle.ToString("0.###",CultureInfo.InvariantCulture)+"°.";}
+            else check.Message="Hướng chiếu xiên không khớp đồng thời hai trục keyplan; cần kiểm tra riêng view.";
+            return check;
+        }
+        static string AxisDirection(V direction,Frame key)
+        {
+            var axes=new[]{key.Right,key.Up,key.Normal};var names=new[]{"X lưới","Y lưới","Z model"};
+            for(int i=0;i<axes.Length;i++)foreach(int sign in new[]{1,-1})
+                if(Geometry.Angle(direction,axes[i]*sign)<=Geometry.ToleranceDegrees)return (sign>0?"+":"−")+names[i];
+            return direction+" global";
+        }
         static QuickResult AnalyzeOverview(Snapshot s,int gridId,int turns)
         {
             if(turns<0||turns>3)throw new InvalidOperationException("Chuẩn keyplan chỉ xoay 0/90/180/270°.");
@@ -510,7 +642,7 @@ using Tekla.Technology.Akit.UserScript;
                 else {lines.Add("View "+view.Id+": hướng chiếu xiên hoặc biến dạng; không có phép xoay trên giấy 0/±90/180° khớp keyplan");brief.Add(view.Type.Replace("View","")+": cần kiểm tra hướng chiếu.");}
             }
             string message="Đã kiểm "+s.Views.Count+" view; "+matched+" view khớp keyplan.\n"+string.Join("\n",lines)+"\nCác góc trên là xoay riêng trên giấy, không phải Around X/Y/Z của Drawing properties.";
-            var result=new QuickResult {State=QuickState.Overview,CanApply=false,GridId=grid.Id,CompleteViews=false,DirectionsMatch=s.Views.Count>0&&matched==s.Views.Count,
+            var result=new QuickResult {ViewCheckKey=key,State=QuickState.Overview,CanApply=false,GridId=grid.Id,CompleteViews=false,DirectionsMatch=s.Views.Count>0&&matched==s.Views.Count,
                 BriefNote=(brief.Count<=3?string.Join("\n",brief):matched+"/"+s.Views.Count+" view đúng trục. Xem chi tiết khi rê chuột.")+"\nChưa có góc Local chung.",
                 ReferenceFirstCaption="KEYPLAN · X",ReferenceSecondCaption="KEYPLAN · Y",
                 Message=message,ActionNote=message,SelectionNote=note,Reference="Keyplan · "+grid.Name,ReferenceFirst=AxisLabels(s,grid,key.Right,false),ReferenceSecond=AxisLabels(s,grid,key.Up,false)};
@@ -592,7 +724,7 @@ using Tekla.Technology.Akit.UserScript;
             bool correct=Geometry.KeyplanError(first.Frame,targets[0])<=Geometry.ToleranceDegrees&&Geometry.KeyplanError(second.Frame,targets[1])<=Geometry.ToleranceDegrees;
             bool layout=Geometry.Finite(first.SheetX)&&Geometry.Finite(first.SheetY)&&Geometry.Finite(second.SheetX)&&Geometry.Finite(second.SheetY)
                 &&(column?first.SheetX+0.1<second.SheetX:second.SheetY>first.SheetY+0.1);
-            var result=new QuickResult { DirectionsMatch=correct,LayoutMatches=layout,GridId=grid.Id,AlongY=alongY,IsColumn=column,
+            var result=new QuickResult { ViewCheckKey=key,DirectionsMatch=correct,LayoutMatches=layout,GridId=grid.Id,AlongY=alongY,IsColumn=column,
                 FirstViewType=first.Type,SecondViewType=second.Type,FirstTarget=targets[0],SecondTarget=targets[1],
                 ReferenceFirst=AxisLabels(s,grid,column?targets[0].Right:targets[1].Right,false),
                 ReferenceSecond=AxisLabels(s,grid,column?targets[1].Right:targets[1].Up,!column),
@@ -633,7 +765,7 @@ using Tekla.Technology.Akit.UserScript;
                 result.ActionNote=(originalCorrect?"Góc gốc đúng nhưng view đã lệch; cần tái tạo view.\n":"")+
                     (layout?"":column?"Đặt view X bên trái, Y bên phải.":"Đặt Top ở trên Front.");
                 result.Message=mode+(search.Matches.Count==0
-                    ?"Đã dò đủ 32 tổ hợp Local. Không có bộ góc nào đúng keyplan."
+                    ?"Không có bộ góc Local đúng keyplan trong miền X/Y cho phép và độ chính xác Z 0,001°."
                     :"View creation · Local · Nhập X / Y / Z như trên."+(originalCorrect?"\nGóc gốc đúng nhưng view đã lệch; cần tái tạo view.":"")+(layout?"":column?"\nĐặt view X bên trái, Y bên phải.":"\nĐặt Top ở trên Front."));
             }
             return result;
@@ -889,16 +1021,29 @@ using Tekla.Technology.Akit.UserScript;
             {
                 var v=views.Current as D.View;if(v==null)continue;
                 string type=v.ViewType.ToString();
-                if(type.IndexOf("Section",StringComparison.OrdinalIgnoreCase)>=0 || type.IndexOf("Detail",StringComparison.OrdinalIgnoreCase)>=0)continue;
-                bool contains=false;var parts=v.GetAllObjects(typeof(D.Part));
-                while(parts.MoveNext()) { var p=parts.Current as D.Part;if(p!=null&&referenceIds.Contains(p.ModelIdentifier.ID))contains=true; }
-                if(!contains)continue;
-                var cs=v.DisplayCoordinateSystem;
-                var box=v.GetAxisAlignedBoundingBox();
-                if(box==null)throw new InvalidOperationException("Không đọc được khung view trên giấy.");
-                s.Views.Add(new ViewReference { Id=Id(v),Name=v.Name,Type=type,Frame=new Frame(Vec(cs.AxisX),Vec(cs.AxisY)),
-                    SheetX=(box.MinPoint.X+box.MaxPoint.X)/2,SheetY=(box.MinPoint.Y+box.MaxPoint.Y)/2,
-                    Unsupported=v.Attributes.ReflectedView||v.Attributes.UnfoldedView||v.Attributes.UndeformedView });
+                bool auxiliary=type.IndexOf("Section",StringComparison.OrdinalIgnoreCase)>=0 || type.IndexOf("Detail",StringComparison.OrdinalIgnoreCase)>=0;
+                bool contains=false;
+                if(!auxiliary)
+                {
+                    var parts=v.GetAllObjects(typeof(D.Part));
+                    while(parts.MoveNext()) { var p=parts.Current as D.Part;if(p!=null&&referenceIds.Contains(p.ModelIdentifier.ID))contains=true; }
+                }
+                var item=new ViewReference {Id=Id(v),Name=v.Name,Type=type};
+                try
+                {
+                    var cs=v.DisplayCoordinateSystem;item.Frame=new Frame(Vec(cs.AxisX),Vec(cs.AxisY));
+                    var box=v.GetAxisAlignedBoundingBox();
+                    if(box==null)throw new InvalidOperationException("Không đọc được khung view trên giấy.");
+                    item.SheetX=(box.MinPoint.X+box.MaxPoint.X)/2;item.SheetY=(box.MinPoint.Y+box.MaxPoint.Y)/2;
+                    item.Unsupported=v.Attributes.ReflectedView||v.Attributes.UnfoldedView||v.Attributes.UndeformedView;
+                }
+                catch(Exception ex)
+                {
+                    if(contains&&!auxiliary)throw; // Bảo toàn điều kiện dữ liệu bắt buộc của solver chính.
+                    item.ReadError="Chưa đọc đủ dữ liệu view: "+ex.GetBaseException().Message;
+                }
+                s.AllViews.Add(item);
+                if(contains&&!auxiliary)s.Views.Add(item);
             }
             var grids=model.GetModelObjectSelector().GetAllObjectsWithType(M.ModelObject.ModelObjectEnum.GRID);
             while(grids.MoveNext())
@@ -955,7 +1100,7 @@ using System.Threading;
         public bool IsLocal { get { return Error==null&&CoordinateSystem=="Local"; } }
         public Angles AllowedAngles
         {
-            get { return Geometry.AllowedQuarter(X)&&(Y==0||Y==180)&&Geometry.AllowedQuarter(Z)?new Angles((int)X,(int)Y,Z):null; }
+            get { return Geometry.AllowedQuarter(X)&&(Y==0||Y==180)&&Geometry.Finite(Z)?new Angles((int)X,(int)Y,Z):null; }
         }
     }
 
@@ -1202,7 +1347,8 @@ using D = Tekla.Structures.Drawing;
     public static class KeyplanApply
     {
         public static bool Same(DrawingSettings settings,Angles angles)
-        { return settings!=null&&settings.IsLocal&&angles!=null&&settings.X==angles.X&&settings.Y==angles.Y&&settings.Z==angles.Z; }
+        { return settings!=null&&settings.IsLocal&&angles!=null&&settings.X==angles.X&&settings.Y==angles.Y&&Geometry.Finite(settings.Z)
+            &&Math.Min(Geometry.Wrap(settings.Z-angles.Z),Geometry.Wrap(angles.Z-settings.Z))<=Geometry.ToleranceDegrees; }
         public static void Validate(ApplyRequest request,Snapshot fresh,QuickResult result)
         {
             if(request==null||request.Angles==null||fresh==null||fresh.Identity!=request.Identity)
@@ -1506,7 +1652,7 @@ namespace TTSK_AutoDim_Plates.Keyplan
         readonly Action<bool> saveAutoApply;
         readonly SlideToggle applyToggle;
         readonly Palette palette;
-        readonly Label drawing, status;
+        readonly Label drawing, status, currentViewStatus, angleTitle;
         readonly CoordinateBadge calibration;
         readonly ReferenceCard referenceFirst, referenceSecond;
         readonly TableLayoutPanel referencesPanel, stack;
@@ -1530,7 +1676,7 @@ namespace TTSK_AutoDim_Plates.Keyplan
         internal KeyplanForm(Func<KeyplanRunRequest,Task<KeyplanRunResult>> run,bool dark,bool autoApply=false,Action<bool> saveAutoApply=null)
         {
             this.run=run;this.saveAutoApply=saveAutoApply;savedAutoApply=autoApply;palette=new Palette(dark);
-            Text="TTSK · Keyplan";Name="KeyplanForm";ClientSize=new Size(660,550);
+            Text="TTSK · Keyplan";Name="KeyplanForm";ClientSize=new Size(660,590);
             FormBorderStyle=FormBorderStyle.None;StartPosition=FormStartPosition.CenterParent;
             ShowInTaskbar=false;AutoScaleMode=AutoScaleMode.Dpi;AutoScaleDimensions=new SizeF(96,96);
             BackColor=palette.Border;ForeColor=palette.Ink;Padding=new Padding(1);
@@ -1553,9 +1699,9 @@ namespace TTSK_AutoDim_Plates.Keyplan
             footer.Controls.Add(settings);footer.Controls.Add(copy);footer.Controls.Add(gap);footer.Controls.Add(refresh);
 
             var body=new Panel { Dock=DockStyle.Fill,BackColor=palette.Background,Padding=new Padding(24,18,24,16) };
-            stack=new TableLayoutPanel { Dock=DockStyle.Fill,ColumnCount=1,RowCount=7,Margin=Padding.Empty };
+            stack=new TableLayoutPanel { Dock=DockStyle.Fill,ColumnCount=1,RowCount=8,Margin=Padding.Empty,AutoScroll=true };
             stack.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-            foreach(int height in new[]{32,48,44,34,154,90,16})stack.RowStyles.Add(new RowStyle(SizeType.Absolute,height));
+            foreach(int height in new[]{32,48,44,40,34,154,90,16})stack.RowStyles.Add(new RowStyle(SizeType.Absolute,height));
             var heading=new Panel { Dock=DockStyle.Fill,Margin=Padding.Empty };
             heading.Controls.Add(TextLabel("KEYPLAN",16,palette.Accent,true));
             drawing=TextLabel("Đang đọc bản vẽ…",10,palette.Muted);drawing.Dock=DockStyle.Right;drawing.Width=250;drawing.TextAlign=ContentAlignment.MiddleRight;
@@ -1574,24 +1720,26 @@ namespace TTSK_AutoDim_Plates.Keyplan
             modes.Controls.Add(applyToggle);
             tips.SetToolTip(applyToggle,"Ghi nhớ bật/tắt cho những lần mở Slot 09 sau, kể cả khi đóng chương trình. Khi bật, tự áp dụng Local và X/Y/Z, tự xác nhận Yes nếu Tekla cần tái tạo bản vẽ.");
             var angleHeading=new Panel {Dock=DockStyle.Fill,Margin=new Padding(0,4,0,4)};
-            angleHeading.Controls.Add(TextLabel("GÓC XOAY",9,palette.Muted,true));
+            angleTitle=TextLabel("GÓC XOAY",9,palette.Muted,true);angleTitle.Name="AngleTitle";angleHeading.Controls.Add(angleTitle);
             calibration=new CoordinateBadge(palette) {Dock=DockStyle.Right,Width=250,Name="CoordinateBadge",Text="Đang đọc…"};
-            angleHeading.Controls.Add(calibration);stack.Controls.Add(angleHeading,0,3);
+            angleHeading.Controls.Add(calibration);stack.Controls.Add(angleHeading,0,4);
             tips.SetToolTip(calibration,"Drawing properties → View creation → Attributes → Coordinate system.");
             choices.Controls.AddRange(new Control[]{separator,auto,x,y});
             stack.Controls.Add(modes,0,1);stack.Controls.Add(choices,0,2);
+            currentViewStatus=TextLabel("View hiện tại: Chưa xác minh",11,palette.Muted,true);
+            currentViewStatus.Name="CurrentViewStatus";stack.Controls.Add(currentViewStatus,0,3);
             values=new TableLayoutPanel { Dock=DockStyle.Fill,ColumnCount=3,RowCount=1,Margin=Padding.Empty,Visible=false };
             cards=new[]{new AngleCard("X",palette),new AngleCard("Y",palette),new AngleCard("Z",palette)};
             for(int i=0;i<3;i++) { values.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100F/3));cards[i].Dock=DockStyle.Fill;cards[i].Margin=new Padding(i==0?0:5,0,i==2?0:5,0);values.Controls.Add(cards[i],i,0); }
             var resultHost=new Panel { Dock=DockStyle.Fill,Margin=Padding.Empty,BackColor=palette.Background };
             outcome=new OutcomeBadge(palette) { Dock=DockStyle.Fill,Name="Outcome",Text="Đang kiểm tra…" };
-            resultHost.Controls.Add(values);resultHost.Controls.Add(outcome);stack.Controls.Add(resultHost,0,4);
+            resultHost.Controls.Add(values);resultHost.Controls.Add(outcome);stack.Controls.Add(resultHost,0,5);
             referencesPanel=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=2,RowCount=1,Margin=new Padding(0,14,0,0),Visible=false};
             referencesPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,50));referencesPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,50));
             referenceFirst=new ReferenceCard(palette) {Dock=DockStyle.Fill,Margin=new Padding(0,0,5,0),Name="ReferenceFirst"};
             referenceSecond=new ReferenceCard(palette) {Dock=DockStyle.Fill,Margin=new Padding(5,0,0,0),Name="ReferenceSecond"};
-            referencesPanel.Controls.Add(referenceFirst,0,0);referencesPanel.Controls.Add(referenceSecond,1,0);stack.Controls.Add(referencesPanel,0,5);
-            status=TextLabel("",9,palette.Amber);status.Name="ResultStatus";status.Padding=new Padding(0,4,0,0);status.TextAlign=ContentAlignment.MiddleCenter;stack.Controls.Add(status,0,6);body.Controls.Add(stack);
+            referencesPanel.Controls.Add(referenceFirst,0,0);referencesPanel.Controls.Add(referenceSecond,1,0);stack.Controls.Add(referencesPanel,0,6);
+            status=TextLabel("",9,palette.Amber);status.Name="ResultStatus";status.Padding=new Padding(0,4,0,0);status.TextAlign=ContentAlignment.MiddleCenter;stack.Controls.Add(status,0,7);body.Controls.Add(stack);
 
             options=new Panel { Dock=DockStyle.Bottom,Height=92,Visible=false,BackColor=palette.Surface,Padding=new Padding(24,10,24,10) };
             var rows=new TableLayoutPanel { Dock=DockStyle.Fill,ColumnCount=1,RowCount=2 };
@@ -1616,7 +1764,7 @@ namespace TTSK_AutoDim_Plates.Keyplan
                 if(applyToggle.Checked&&!busy)await CheckNow();
             };
             FormClosing+=(s,e)=> { if(busy)e.Cancel=true; };
-            settings.Click+=delegate { bool show=!options.Visible;options.Visible=show;ClientSize=new Size(ClientSize.Width,ClientSize.Height+(show?options.Height:-options.Height));settings.Text=show?"Thu gọn":"Hiệu chỉnh"; };
+            settings.Click+=delegate { bool show=!options.Visible;options.Visible=show;ResizeForContent();settings.Text=show?"Thu gọn":"Hiệu chỉnh"; };
             rotate.Click+=async delegate { quarterTurns=(quarterTurns+1)%4;rotate.Text="Xoay chuẩn keyplan: "+quarterTurns*90+"°";await CheckNow(); };
             gridButton.Click+=delegate
             {
@@ -1656,6 +1804,8 @@ namespace TTSK_AutoDim_Plates.Keyplan
             result=null;displayedState=null;copy.Enabled=false;copy.Visible=false;values.Visible=false;
             copy.Text="Sao chép";referencesPanel.Visible=false;
             calibration.Text="Chưa xác minh";calibration.NeedsChange=false;
+            currentViewStatus.Text="View hiện tại: Chưa xác minh";currentViewStatus.ForeColor=palette.Muted;
+            currentViewStatus.AccessibleDescription="";tips.SetToolTip(currentViewStatus,null);angleTitle.Text="GÓC XOAY";
             outcome.Correct=false;outcome.Visible=true;outcome.Text="Đang kiểm tra…";foreach(var c in cards)c.Value="—";
         }
         async Task CheckNow()
@@ -1696,6 +1846,8 @@ namespace TTSK_AutoDim_Plates.Keyplan
         {
                 snapshot=fresh;drawing.Text=fresh.Mark;tips.SetToolTip(drawing,fresh.Mark);
                 calibration.Text=fresh.Settings==null||fresh.Settings.Error!=null?"Chưa xác minh":"Hệ tọa độ · "+fresh.Settings.CoordinateSystem;
+                calibration.NeedsChange=false;
+                RenderCurrentViewStatus(fresh,output);
                 var grid=fresh.Grids.SingleOrDefault(g=>g.Id==gridId);gridButton.Text=grid==null?"Lưới: tự động":"Lưới: "+grid.Name+" · "+grid.Id;
                 isColumn=output.IsColumn;
                 if(!isColumn)alongY=output.AlongY;
@@ -1716,17 +1868,60 @@ namespace TTSK_AutoDim_Plates.Keyplan
                 referencesPanel.Visible=true;
                 tips.SetToolTip(referenceFirst,output.Reference+"\n"+output.SelectionNote);tips.SetToolTip(referenceSecond,output.Reference+"\n"+output.SelectionNote);
                 outcome.Correct=output.State==QuickState.Correct;
-                outcome.Text=outcome.Correct?"Đúng trục theo keyplan":output.State==QuickState.Overview?"Đối chiếu theo từng view":output.State==QuickState.LayoutMismatch?"Cần sắp lại view":output.State==QuickState.IncompleteViews?"Góc đúng · cần bổ sung view":output.State==QuickState.NoSolution?"Không có bộ góc phù hợp":"Chưa thể xuất góc quay";
+                outcome.Text=outcome.Correct?"Góc view chính đã đúng":output.State==QuickState.Overview?"Chưa có góc chung cho view chính":output.State==QuickState.LayoutMismatch?"Cần sắp lại view chính":output.State==QuickState.IncompleteViews?"Góc theo view chính hiện có":output.State==QuickState.NoSolution?"Không có bộ góc phù hợp":"Chưa thể xuất góc quay";
                 SetStatus(outcome.Correct?"":CompactNote(output),output.Message+"\n"+output.ActionNote);
-                tips.SetToolTip(calibration,output.Message+"\nDrawing properties → View creation → Attributes → Coordinate system.");
+                tips.SetToolTip(calibration,"Hệ tọa độ hiện đang lưu trong bản vẽ; độc lập với kết quả đối chiếu hướng view.\nDrawing properties → View creation → Attributes → Coordinate system.");
+                angleTitle.Text=result==null?"GÓC VIEW CHÍNH":"GÓC VIEW CHÍNH · LOCAL";
                 if(result!=null)
                 {
                     double[] numbers={result.X,result.Y,result.Z};
                     for(int i=0;i<3;i++)cards[i].Value=numbers[i].ToString("0.###",CultureInfo.InvariantCulture)+"°";
                     copy.Enabled=copy.Visible=true;values.Visible=true;outcome.Visible=false;
-                    calibration.NeedsChange=!fresh.Settings.IsLocal;
-                    calibration.Text=fresh.Settings.IsLocal?"LOCAL":"Đổi "+fresh.Settings.CoordinateSystem+" → Local";
                 }
+        }
+        void RenderCurrentViewStatus(Snapshot fresh,QuickResult output)
+        {
+            var checks=output.ViewChecks;
+            var wrong=checks.Where(c=>c.State==ViewAxisState.Misaligned).ToList();
+            var unknown=checks.Where(c=>c.State==ViewAxisState.Unverified).ToList();
+            bool correct=checks.Count>0&&wrong.Count==0&&unknown.Count==0;
+            // Một dòng kết luận; chỉ nêu view cần xử lý, không tạo bảng làm dài form.
+            currentViewStatus.Text=correct?"✓ Đúng trục theo keyplan":checks.Count==0?"Chưa có view để kiểm":
+                (wrong.Count>0?"Sai trục: "+ViewIssueNames(fresh,wrong):"")+
+                (unknown.Count>0?(wrong.Count>0?" · ":"")+"Chưa xác minh: "+ViewIssueNames(fresh,unknown):"");
+            currentViewStatus.ForeColor=correct?palette.Green:palette.Amber;
+            string details=correct?"Đã kiểm toàn bộ "+checks.Count+" view, gồm Section/Detail.":
+                string.Join("\n",checks.Where(c=>c.State!=ViewAxisState.Correct).Select(c=>c.Label+": "+c.Message));
+            currentViewStatus.AccessibleDescription=details;tips.SetToolTip(currentViewStatus,details);
+        }
+        static string ViewIssueNames(Snapshot snapshot,System.Collections.Generic.List<ViewAxisCheck> issues)
+        {
+            var views=snapshot.AllViews.Count>0?snapshot.AllViews:snapshot.Views;
+            var names=issues.Take(2).Select(check=>
+            {
+                string name=check.Type.Replace("View","")+(string.IsNullOrWhiteSpace(check.Name)?"":" "+check.Name.Trim());
+                var same=views.Where(v=>v.Type==check.Type&&v.Name==check.Name).ToList();
+                var current=same.FirstOrDefault(v=>v.Id==check.Id);
+                if(same.Count==2&&current!=null&&same.All(v=>Geometry.Finite(v.SheetX)&&Geometry.Finite(v.SheetY)))
+                {
+                    var other=same.FirstOrDefault(v=>v.Id!=check.Id);
+                    if(other!=null)
+                    {
+                        double dx=current.SheetX-other.SheetX,dy=current.SheetY-other.SheetY;
+                        if(Math.Max(Math.Abs(dx),Math.Abs(dy))>0.1)
+                            return name+(Math.Abs(dx)>Math.Abs(dy)?(dx<0?" (trái)":" (phải)"):(dy>0?" (trên)":" (dưới)"));
+                    }
+                }
+                return name;
+            });
+            return string.Join(", ",names)+(issues.Count>2?" + "+(issues.Count-2)+" view":"");
+        }
+        void ResizeForContent()
+        {
+            // Giữ form trong màn hình khi mở Hiệu chỉnh hoặc có cảnh báo dài.
+            int height=(int)Math.Ceiling(stack.RowStyles.Cast<RowStyle>().Sum(r=>r.Height))+stack.Parent.Padding.Vertical+Padding.Vertical;
+            foreach(Control control in Controls)if(control.Visible&&(control.Dock==DockStyle.Top||control.Dock==DockStyle.Bottom))height+=control.Height;
+            ClientSize=new Size(ClientSize.Width,Math.Min(height,Math.Max(400,Screen.FromControl(this).WorkingArea.Height-24)));
         }
         static string CompactNote(QuickResult output)
         {
@@ -1737,10 +1932,10 @@ namespace TTSK_AutoDim_Plates.Keyplan
             {
                 case QuickState.Correct:return "Các view đúng keyplan.";
                 case QuickState.LayoutMismatch:return output.IsColumn?"Đặt "+first+" bên trái, "+second+" bên phải.":"Đặt "+second+" trên "+first+".";
-                case QuickState.IncompleteViews:return "Góc Local đúng. Cần đủ "+first+" / "+second+" để xác nhận.";
+                case QuickState.IncompleteViews:return "Góc theo view chính hiện có; chưa xác nhận đủ cặp "+first+" / "+second+".";
                 case QuickState.NoSolution:return "Không tìm được góc phù hợp với các view hiện có.";
                 case QuickState.VerifiedSuggestion:
-                    if(!output.CompleteViews)return "Góc đề xuất; cần bổ sung view để xác nhận.";
+                    if(!output.CompleteViews)return "Góc đề xuất theo view chính; chưa xác nhận đủ cặp "+first+" / "+second+".";
                     return output.ActionNote??"";
                 default:return output.Message??"";
             }
@@ -1752,9 +1947,9 @@ namespace TTSK_AutoDim_Plates.Keyplan
             status.Text=brief;status.ForeColor=palette.Amber;tips.SetToolTip(status,full);status.AccessibleDescription=full;
             float scale=DeviceDpi/96F;
             float height=status.Text.Length==0?16*scale:Math.Max(44*scale,TextRenderer.MeasureText(status.Text,status.Font,new Size(Math.Max(150,status.Width-8),int.MaxValue),TextFormatFlags.WordBreak).Height+14*scale);
-            int delta=(int)(height-stack.RowStyles[6].Height);
-            stack.RowStyles[6].Height=height;
-            ClientSize=new Size(ClientSize.Width,ClientSize.Height+delta);
+            int row=stack.GetRow(status);
+            stack.RowStyles[row].Height=height;
+            ResizeForContent();
         }
         protected override void Dispose(bool disposing) { if(disposing)tips.Dispose();base.Dispose(disposing); }
 

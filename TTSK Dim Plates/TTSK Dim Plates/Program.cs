@@ -489,7 +489,13 @@ namespace TTSK_AutoDim_Plates
         private readonly Font captionFont = new Font("Segoe UI", 13F, FontStyle.Regular, GraphicsUnit.Pixel);
         private string status = "Đang khởi động…";
         private Process child;
-        private bool handedOff, chooseAgain;
+        private bool handedOff;
+        private readonly ShortcutManager startupShortcuts;
+        private bool entryRequested;
+        internal bool OpenWithoutConnection { get; private set; }
+        internal bool OpenMeetingTranslation { get; private set; }
+        internal bool OpenWorkJournal { get; private set; }
+        internal bool DarkMode { get; private set; }
         internal long FirstPaintMilliseconds { get; private set; }
         internal string StatusText { get { return status; } }
         internal int ExitCode { get; private set; }
@@ -497,11 +503,14 @@ namespace TTSK_AutoDim_Plates
         internal TeklaStartupForm(Func<List<TeklaSessionTarget>> discover)
         {
             this.discover = discover;
+            startupShortcuts = new ShortcutManager(AppDomain.CurrentDomain.BaseDirectory);
+            startupShortcuts.Load();
             SuspendLayout();
             bool dark = false;
             try { dark = File.ReadAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "theme.cfg")).Trim().Equals("DARK", StringComparison.OrdinalIgnoreCase); }
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }
+            DarkMode = dark;
             BackColor = dark ? Color.FromArgb(19, 21, 26) : Color.FromArgb(245, 247, 251);
             ForeColor = dark ? Color.FromArgb(241, 239, 235) : Color.FromArgb(25, 36, 55);
             accent = dark ? Color.FromArgb(222, 150, 89) : Color.FromArgb(37, 79, 169);
@@ -509,7 +518,7 @@ namespace TTSK_AutoDim_Plates
             Text = "TTSK · Khởi động";
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(460, 470);
+            ClientSize = new Size(460, 558);
             Opacity = 0; // Form chờ chỉ hiện sau khi xác định Tekla/model chưa sẵn sàng.
             ShowInTaskbar = false;
             MaximizeBox = MinimizeBox = false;
@@ -529,11 +538,17 @@ namespace TTSK_AutoDim_Plates
                 Cursor = Cursors.Hand, AccessibleName = "Đóng TTSK", Anchor = AnchorStyles.Top | AnchorStyles.Right };
             close.FlatAppearance.BorderSize = 0;
             close.Click += delegate { Close(); };
-            var select = new Button { Text = "Chọn dự án", FlatStyle = FlatStyle.Flat, ForeColor = accent, BackColor = BackColor,
-                Size = new Size(132, 32), Location = new Point(164, 420), Cursor = Cursors.Hand, AccessibleName = "Chọn lại dự án Tekla" };
-            select.FlatAppearance.BorderSize = 0;
-            select.Click += delegate { chooseAgain = true; };
-            Controls.AddRange(new Control[] { close, select });
+            // Hai lối vào độc lập; kích thước pixel ở 96 DPI, cùng phong cách thẻ ACTIVE/BATCH.
+            var select = new StartupEntryButton(dark, false) { Text = "Vào phần mềm",
+                Size = new Size(200, 114), Location = new Point(24, 422), TabIndex = 0,
+                AccessibleName = "Vào phần mềm", AccessibleDescription = "Mở công cụ và nhật ký, tiếp tục chờ kết nối Tekla" };
+            select.Click += delegate { RequestStartupEntry(null); };
+            var meeting = new StartupEntryButton(dark, true) { Text = "Dịch họp",
+                Size = new Size(200, 114), Location = new Point(236, 422), TabIndex = 1,
+                AccessibleName = "Dịch họp", AccessibleDescription = "Mở dịch họp Teams độc lập, không cần Tekla" };
+            meeting.Click += delegate { RequestStartupEntry(ShortcutManager.ActionMeetingTranslation); };
+            close.TabIndex = 2;
+            Controls.AddRange(new Control[] { close, select, meeting });
             animation.Tick += delegate { Invalidate(); };
             Shown += async delegate
             {
@@ -556,6 +571,27 @@ namespace TTSK_AutoDim_Plates
             KeyDown += delegate(object sender, KeyEventArgs e) { if (e.KeyCode == Keys.Escape) Close(); };
             AutoScaleDimensions = new SizeF(96, 96); AutoScaleMode = AutoScaleMode.Dpi;
             ResumeLayout(true);
+        }
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            string actionId;
+            // Chỉ hai công cụ độc lập được chạy lúc chờ; giữ phím cấu hình, không mở lệnh bản vẽ.
+            if (startupShortcuts.TryFindAction(keyData, out actionId)
+                && (actionId == ShortcutManager.ActionMeetingTranslation || actionId == ShortcutManager.ActionWorkJournal))
+            {
+                RequestStartupEntry(actionId);
+                return true;
+            }
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+        private void RequestStartupEntry(string actionId)
+        {
+            if (entryRequested || handedOff || IsDisposed) return;
+            entryRequested = true;
+            OpenMeetingTranslation = actionId == ShortcutManager.ActionMeetingTranslation;
+            OpenWorkJournal = actionId == ShortcutManager.ActionWorkJournal;
+            OpenWithoutConnection = !OpenMeetingTranslation && !OpenWorkJournal;
+            Close(); // Hủy dò/bàn giao đang chờ bằng đường đóng hiện hữu trước khi mở công cụ.
         }
         protected override CreateParams CreateParams
         { get { var p = base.CreateParams; p.Style |= 0x00C00000 | 0x00040000; return p; } }
@@ -643,9 +679,8 @@ namespace TTSK_AutoDim_Plates
                     {
                         selected = selected == null ? null : ready.Find(t => t.Id == selected.Id && t.Started == selected.Started
                             && string.Equals(t.ModelFolder, selected.ModelFolder, StringComparison.OrdinalIgnoreCase));
-                        if (selected == null || chooseAgain)
+                        if (selected == null)
                         {
-                            chooseAgain = false;
                             SetStatus("Chọn dự án để bắt đầu.");
                             if (ready.Count > 1 && logoWindow != null) logoWindow.HideLogo();
                             selected = ready.Count == 1 ? ready[0] : TeklaSessionCoordinator.Choose(this, ready);
@@ -678,7 +713,7 @@ namespace TTSK_AutoDim_Plates
         private async System.Threading.Tasks.Task WaitForRetryAsync(int milliseconds)
         {
             var elapsed = Stopwatch.StartNew();
-            while (!chooseAgain && elapsed.ElapsedMilliseconds < milliseconds)
+            while (elapsed.ElapsedMilliseconds < milliseconds)
                 await System.Threading.Tasks.Task.Delay(200, lifetime.Token);
         }
         private async System.Threading.Tasks.Task<bool> StartWorkspaceAsync(TeklaSessionTarget target, List<TeklaSessionTarget> targets)
@@ -698,7 +733,7 @@ namespace TTSK_AutoDim_Plates
                     var timeout = Stopwatch.StartNew();
                     while (!ready.WaitOne(0))
                     {
-                        if (chooseAgain || child.HasExited || timeout.ElapsedMilliseconds >= 30000) return false;
+                        if (child.HasExited || timeout.ElapsedMilliseconds >= 30000) return false;
                         await System.Threading.Tasks.Task.Delay(50, lifetime.Token);
                     }
                     if (child.HasExited) return false;
@@ -759,6 +794,90 @@ namespace TTSK_AutoDim_Plates
             base.Dispose(disposing);
         }
         [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr window, int attribute, ref int value, int size);
+
+        private sealed class StartupEntryButton : Button
+        {
+            private readonly bool dark, meeting;
+            private bool hover, pressed;
+            internal StartupEntryButton(bool dark, bool meeting)
+            {
+                this.dark = dark; this.meeting = meeting;
+                Cursor = Cursors.Hand;
+                FlatStyle = FlatStyle.Flat;
+                FlatAppearance.BorderSize = 0;
+                SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                    ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            }
+            protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
+            protected override void OnMouseLeave(EventArgs e) { hover = false; pressed = false; Invalidate(); base.OnMouseLeave(e); }
+            protected override void OnMouseDown(MouseEventArgs e) { pressed = e.Button == MouseButtons.Left; Invalidate(); base.OnMouseDown(e); }
+            protected override void OnMouseUp(MouseEventArgs e) { pressed = false; Invalidate(); base.OnMouseUp(e); }
+            protected override void OnKeyDown(KeyEventArgs e) { if (e.KeyCode == Keys.Space) { pressed = true; Invalidate(); } base.OnKeyDown(e); }
+            protected override void OnKeyUp(KeyEventArgs e) { pressed = false; Invalidate(); base.OnKeyUp(e); }
+            protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
+            protected override void OnLostFocus(EventArgs e) { pressed = false; Invalidate(); base.OnLostFocus(e); }
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                var g = e.Graphics;
+                g.Clear(Parent == null ? BackColor : Parent.BackColor);
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                // Toàn bộ hình/chữ co theo DPI của ô; viền nổi nhẹ, không gạch chân hay dấu chọn.
+                g.ScaleTransform(Width / 200F, Height / 114F);
+                bool active = hover || Focused;
+                Color ink = dark ? Color.FromArgb(239, 176, 120) : Color.FromArgb(37, 79, 169);
+                Color fill = dark ? (meeting ? Color.FromArgb(22, 25, 31) : Color.FromArgb(43, 33, 27))
+                    : (meeting ? Color.White : Color.FromArgb(230, 240, 255));
+                if (active) fill = dark ? Color.FromArgb(51, 39, 31) : Color.FromArgb(221, 235, 255);
+                if (pressed) fill = dark ? Color.FromArgb(31, 26, 23) : Color.FromArgb(207, 225, 250);
+                Color edge = dark ? Color.FromArgb(active ? 195 : 139, active ? 137 : 104, active ? 88 : 77)
+                    : Color.FromArgb(active ? 95 : 153, active ? 142 : 176, active ? 211 : 207);
+                using (var shadow = Rounded(new RectangleF(1, 5, 198, 108), 14))
+                using (var shadowBrush = new SolidBrush(dark ? Color.FromArgb(75, Color.Black) : Color.FromArgb(22, 45, 60, 82)))
+                    g.FillPath(shadowBrush, shadow);
+                using (var outline = Rounded(new RectangleF(1, 1, 198, 107), 14))
+                using (var brush = new SolidBrush(fill))
+                using (var pen = new Pen(edge, active ? 1.5F : 1F))
+                {
+                    g.FillPath(brush, outline); g.DrawPath(pen, outline);
+                }
+                using (var pen = new Pen(ink, 1.6F) { LineJoin = System.Drawing.Drawing2D.LineJoin.Round })
+                {
+                    if (meeting)
+                    {
+                        g.DrawLines(pen, new[] { new PointF(88, 64), new PointF(112, 64), new PointF(112, 81),
+                            new PointF(99, 81), new PointF(93, 87), new PointF(93, 81), new PointF(88, 81), new PointF(88, 64) });
+                        g.DrawLine(pen, 94, 70, 106, 70); g.DrawLine(pen, 94, 75, 102, 75);
+                    }
+                    else
+                    {
+                        g.DrawRectangle(pen, 87, 64, 26, 19);
+                        g.DrawLine(pen, 92, 88, 108, 88); g.DrawLine(pen, 100, 83, 100, 88);
+                        g.DrawLine(pen, 92, 70, 98, 70); g.DrawLine(pen, 92, 75, 105, 75);
+                    }
+                    g.DrawLine(pen, 170, 76, 181, 76);
+                    g.DrawLines(pen, new[] { new PointF(177, 72), new PointF(181, 76), new PointF(177, 80) });
+                }
+                // Tiêu đề trên biểu tượng, chừa 12 px hai bên và đủ chiều cao cho dấu tiếng Việt.
+                using (var titleFont = new Font("Segoe UI", 17F, FontStyle.Bold, GraphicsUnit.Pixel))
+                using (var titleBrush = new SolidBrush(ink))
+                using (var format = new StringFormat { Alignment = StringAlignment.Center,
+                    LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap })
+                {
+                    g.DrawString(Text, titleFont, titleBrush, new RectangleF(12, 14, 176, 34), format);
+                }
+                g.ResetTransform();
+            }
+            private static System.Drawing.Drawing2D.GraphicsPath Rounded(RectangleF rect, float radius)
+            {
+                var path = new System.Drawing.Drawing2D.GraphicsPath();
+                float d = radius * 2;
+                path.AddArc(rect.Left, rect.Top, d, d, 180, 90);
+                path.AddArc(rect.Right - d, rect.Top, d, d, 270, 90);
+                path.AddArc(rect.Right - d, rect.Bottom - d, d, d, 0, 90);
+                path.AddArc(rect.Left, rect.Bottom - d, d, d, 90, 90);
+                path.CloseFigure(); return path;
+            }
+        }
     }
 
     internal static class TeklaSessionCoordinator
@@ -977,6 +1096,39 @@ namespace TTSK_AutoDim_Plates
                 && string.Equals(target.ModelFolder.Trim().TrimEnd('\\', '/'), modelPath.Trim().TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
         }
 
+        internal static bool HasProcessExited(TeklaSessionTarget target)
+        {
+            if (target == null) return false;
+            try
+            {
+                using (var process = Process.GetProcessById(target.Id))
+                    return process.HasExited || process.StartTime.ToUniversalTime().Ticks != target.Started
+                        || !string.Equals(process.ProcessName, "TeklaStructures", StringComparison.OrdinalIgnoreCase);
+            }
+            catch (ArgumentException) { return true; }
+            catch (Exception) { return false; } // Không đọc được process không đồng nghĩa phiên đã thoát.
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        internal static bool IsBoundModelClosed()
+        {
+            try
+            {
+                using (var process = GetBoundProcess())
+                {
+                    // Chỉ nhận đóng thật khi cửa sổ Tekla còn phản hồi, hết model trong title và API xác nhận hết model.
+                    string title = process.MainWindowTitle;
+                    if (!process.Responding || string.IsNullOrWhiteSpace(title)
+                        || !title.StartsWith("Tekla Structures", StringComparison.OrdinalIgnoreCase)
+                        || !string.IsNullOrWhiteSpace(new TeklaSessionTarget { Title = title }.ModelFolder)) return false;
+                    var model = new Tekla.Structures.Model.Model();
+                    var info = model.GetInfo();
+                    return info != null && string.IsNullOrWhiteSpace(info.ModelPath) && !model.GetConnectionStatus();
+                }
+            }
+            catch (Exception) { return false; } // Timeout/lỗi quyền/title trung gian: chưa có bằng chứng đóng model.
+        }
+
         internal static bool AcceptHandoff()
         {
             string token = Environment.GetEnvironmentVariable(Prefix + "HANDOFF");
@@ -1128,6 +1280,8 @@ namespace TTSK_AutoDim_Plates
                         bool apiWorker = args != null && args.Length > 0
                             && (string.Equals(args[0], "--hole-mark-post-dim-worker", StringComparison.OrdinalIgnoreCase)
                                 || string.Equals(args[0], "--print-color-worker", StringComparison.OrdinalIgnoreCase));
+                        apiWorker = apiWorker || (args != null && args.Length > 0
+                            && string.Equals(args[0], "--print-list-worker", StringComparison.OrdinalIgnoreCase));
                         if (!snapshotWorker && !apiWorker)
                         {
                             // Phải cấu hình WinForms trước cả hộp chọn phiên đầu tiên.
@@ -1141,6 +1295,10 @@ namespace TTSK_AutoDim_Plates
                             using (var startup = new TeklaStartupForm())
                             {
                                 Application.Run(startup);
+                                if (startup.OpenMeetingTranslation) return RunMeetingTranslation(startup.DarkMode);
+                                if (startup.OpenWorkJournal) return RunWorkJournal(startup.DarkMode);
+                                // Vào UI/nhật ký ngay; phiên Tekla sẽ được bàn giao sau khi sẵn sàng.
+                                if (startup.OpenWithoutConnection) return ProgramTeklaStartup.Run(args, true);
                                 return startup.ExitCode;
                             }
                         }
@@ -1156,6 +1314,34 @@ namespace TTSK_AutoDim_Plates
                 MessageBox.Show("Không thể mở TTSK an toàn: " + ex.Message, "TTSK Dim Plates");
                 return 1;
             }
+        }
+        // Dịch họp có vòng đời riêng; không nạp MainForm hoặc dò thư viện/kết nối Tekla.
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static int RunMeetingTranslation(bool darkMode)
+        {
+            using (var meeting = new MeetingTranslation.MeetingTranslatorForm(darkMode))
+            {
+                meeting.StartPosition = FormStartPosition.CenterScreen;
+                Application.Run(meeting);
+            }
+            return 0;
+        }
+        // Nhật ký đã lưu mở độc lập từ màn chờ; không cần MainForm hay truy cập model Tekla.
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static int RunWorkJournal(bool darkMode)
+        {
+            using (var journal = new WorkJournalReportForm(() =>
+            {
+                int unreadable;
+                var sessions = WorkJournal.Read(WorkJournal.Folder, out unreadable);
+                if (unreadable > 0) throw new IOException("Không đọc được " + unreadable + " tệp nhật ký.");
+                return sessions;
+            }, darkMode))
+            {
+                journal.StartPosition = FormStartPosition.CenterScreen;
+                Application.Run(journal);
+            }
+            return 0;
         }
     }
 }
@@ -1181,6 +1367,12 @@ namespace TTSK_AutoDim_Plates
         [MethodImpl(MethodImplOptions.NoInlining)]
         public static int Run(string[] args)
         {
+            return Run(args, false);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static int Run(string[] args, bool openWithoutConnection)
+        {
             string teklaBinPath = FindTeklaBinPath();
             if (string.IsNullOrEmpty(teklaBinPath))
             {
@@ -1201,7 +1393,7 @@ namespace TTSK_AutoDim_Plates
             if (args != null && args.Length == 2 && args[0] == "--snapshot-png-worker")
                 return Tekla.Technology.Akit.UserScript.PHU_CopyDrawingSnapshot_Temp.RenderFolder(args[1], teklaBinPath);
 
-            TeklaSessionCoordinator.VerifyConnection();
+            if (!openWithoutConnection) TeklaSessionCoordinator.VerifyConnection();
 
             if (
                 args != null
@@ -1234,6 +1426,10 @@ namespace TTSK_AutoDim_Plates
             {
                 return DrawingPdfPrinter.ExecuteColorPrintWorker(args[1], args[2]);
             }
+
+            // Worker chỉ dành cho danh sách cộng dồn; nhánh --print-color-worker cũ giữ nguyên.
+            if (args != null && args.Length >= 3 && string.Equals(args[0], "--print-list-worker", StringComparison.OrdinalIgnoreCase))
+                return DrawingPdfPrinter.ExecuteListColorPrintWorker(args[1], args[2]);
 
             using (var form = new MainForm())
             {

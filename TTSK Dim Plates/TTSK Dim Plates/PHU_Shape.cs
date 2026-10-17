@@ -16954,9 +16954,9 @@ namespace Tekla.Technology.Akit.UserScript
 
                 if (isAssemblyDrawing && isVerticalHMember)
                 {
-                    // ASSEMBLY H/I dọng, không rãnh: chỉ đổi nhánh này.
-                    // Mỗi đầu dùng một lỗ đại diện cho cụm; rule H/I ngang bên dưới giữ nguyên.
-                    holeCount += CreateAssemblyFrontVerticalMemberHoleDims(
+                    // H/I dọc: cùng điều phối Dummy hai đầu, giữ neo rãnh và hướng DIM dọc riêng.
+                    holeCount += CreateAssemblyFrontVerticalHoleDimsByDummy(
+                        model,
                         handler,
                         view,
                         frontHoles,
@@ -16979,18 +16979,16 @@ namespace Tekla.Technology.Akit.UserScript
                 }
                 else if (isAssemblyDrawing)
                 {
-                    // ASSEMBLY - FRONT:
-                    // Mỗi phía chỉ định vị một lỗ gần mép nhất.
-                    // DIM ngang: mép bên -> lỗ.
-                    // DIM dọc: luôn mép trên -> lỗ gần mép trên nhất của phía đó.
-                    // PointList chỉ có hai điểm nên không tạo chain qua các lỗ còn lại.
-                    holeCount += CreateAssemblyFrontNearestEdgeHoleDimsByPhiAndM(
+                    // Front H/I ngang dùng cùng X/Y với single; Dummy chỉ là ngoại lệ tại mép.
+                    holeCount += CreateAssemblyFrontHoleDimsByDummy(
+                        model,
                         handler,
                         view,
                         frontHoles,
                         frontHoleCandidates,
                         minX,
                         maxX,
+                        minY,
                         maxY,
                         frontEdgeAnchors,
                         offsetAnchors,
@@ -16998,6 +16996,8 @@ namespace Tekla.Technology.Akit.UserScript
                         frontReservedNotchXTier,
                         leftStartTier,
                         rightStartTier,
+                        frontNotchCount > 0,
+                        frontNotchProfile,
                         out frontHorizontalHoleTierCount,
                         out frontHorizontalHoleHighestTier,
                         out frontLeftVerticalHoleTierCount,
@@ -17623,6 +17623,484 @@ namespace Tekla.Technology.Akit.UserScript
             }
         }
 
+        // Snapshot theo lần/view, tọa độ mm trong DisplayCoordinateSystem, không lưu static.
+        private class AssemblyFrontDummy
+        {
+            public Point Min;
+            public Point Max;
+        }
+
+        private class AssemblyFrontHoleRoute
+        {
+            // Ngang: phải; dọc: trên. Đây là đầu cao theo trục dọc thanh, không phải hướng DIM.
+            public bool Right;
+            public bool Representative;
+            public List<HHoleCandidate> Holes = new List<HHoleCandidate>();
+        }
+
+        private static bool IsAssemblyFrontDummySymbol(string name, string material, string position)
+        {
+            // DUMMY-* còn dùng cho thép/tấm tham chiếu: riêng PART_POS này không chứng minh ký hiệu BJ.
+            return System.Text.RegularExpressions.Regex.IsMatch(
+                (name ?? "") + " " + (material ?? "") + " " + (position ?? ""),
+                @"(?i)(^|[^A-Z0-9])(BJ(?=\d|[^A-Z0-9]|$)|JOINT(?=\d|[^A-Z0-9]|$)|JOYCON(?=\d|[^A-Z0-9]|$))");
+        }
+
+        private static List<AssemblyFrontDummy> ReadAssemblyFrontDummies(Model model, View view)
+        {
+            var result = new List<AssemblyFrontDummy>();
+            try
+            {
+                // Chuẩn hóa cả khi audit không đổi work plane: current -> global -> view.
+                var toGlobal = model.GetWorkPlaneHandler().GetCurrentTransformationPlane().TransformationMatrixToGlobal;
+                var toView = MatrixFactory.ToCoordinateSystem(view.DisplayCoordinateSystem);
+                var objects = view.GetAllObjects(typeof(DrawingPart));
+                if (objects == null) return null;
+                var seen = new HashSet<int>();
+                while (objects.MoveNext())
+                {
+                    var drawingPart = objects.Current as DrawingPart;
+                    if (drawingPart == null || drawingPart.ModelIdentifier == null) return null;
+                    if (!seen.Add(drawingPart.ModelIdentifier.ID)) continue;
+                    var part = model.SelectModelObject(drawingPart.ModelIdentifier) as ModelPart;
+                    if (part == null) return null;
+                    string position = "";
+                    if (!part.GetReportProperty("PART_POS", ref position)) return null;
+                    if (!IsAssemblyFrontDummySymbol(part.Name, part.Material.MaterialString, position))
+                        continue;
+                    Solid solid = part.GetSolid();
+                    if (solid == null) return null;
+                    Point min = new Point(Double.PositiveInfinity, Double.PositiveInfinity, Double.PositiveInfinity);
+                    Point max = new Point(Double.NegativeInfinity, Double.NegativeInfinity, Double.NegativeInfinity);
+                    var edges = solid.GetEdgeEnumerator();
+                    while (edges.MoveNext())
+                    {
+                        var edge = edges.Current as Tekla.Structures.Solid.Edge;
+                        if (edge == null) continue;
+                        foreach (Point endpoint in new[] { edge.StartPoint, edge.EndPoint })
+                        {
+                            Point p = toView.Transform(toGlobal.Transform(endpoint));
+                            if (!IsAssemblyFrontFinitePoint(p)) return null;
+                            min.X = Math.Min(min.X, p.X); min.Y = Math.Min(min.Y, p.Y); min.Z = Math.Min(min.Z, p.Z);
+                            max.X = Math.Max(max.X, p.X); max.Y = Math.Max(max.Y, p.Y); max.Z = Math.Max(max.Z, p.Z);
+                        }
+                    }
+                    if (!IsAssemblyFrontFinitePoint(min) || !IsAssemblyFrontFinitePoint(max)) return null;
+                    if (max.Z < view.RestrictionBox.MinPoint.Z - TOL
+                        || min.Z > view.RestrictionBox.MaxPoint.Z + TOL) continue;
+                    result.Add(new AssemblyFrontDummy { Min = min, Max = max });
+                }
+            }
+            catch
+            {
+                // Không biến lỗi đọc thành kết luận "không có Dummy"; giữ rule cũ cho view.
+                return null;
+            }
+            return result;
+        }
+
+        private static bool IsAssemblyFrontFinitePoint(Point p)
+        {
+            return p != null && !Double.IsNaN(p.X) && !Double.IsInfinity(p.X)
+                && !Double.IsNaN(p.Y) && !Double.IsInfinity(p.Y)
+                && !Double.IsNaN(p.Z) && !Double.IsInfinity(p.Z);
+        }
+
+        private static double AssemblyFrontDummyMatchDistance(
+            AssemblyFrontHoleRoute route, AssemblyFrontDummy dummy,
+            double min, double max, bool vertical)
+        {
+            // 2 mm model: chạm mặt đầu + vùng ngang cụm + chiều sâu, độc lập scale giấy.
+            const double matchTolerance = 2.0;
+            double edge = route.Right ? max : min;
+            double dummyLow = vertical ? dummy.Min.Y : dummy.Min.X;
+            double dummyHigh = vertical ? dummy.Max.Y : dummy.Max.X;
+            // Dummy chỉ có giá trị tại hai mép thanh; không nhận ký hiệu bên trong hành lang tới lỗ.
+            if (dummyLow > edge + matchTolerance || dummyHigh < edge - matchTolerance)
+                return Double.PositiveInfinity;
+            double transverseMin = Double.PositiveInfinity, transverseMax = Double.NegativeInfinity;
+            double distance = Double.PositiveInfinity;
+            foreach (var hole in route.Holes)
+            {
+                if (hole == null || !IsAssemblyFrontFinitePoint(hole.Point) || hole.BoltGroupId <= 0)
+                    return Double.PositiveInfinity;
+                double longitudinal = vertical ? hole.Point.Y : hole.Point.X;
+                double transverse = vertical ? hole.Point.X : hole.Point.Y;
+                transverseMin = Math.Min(transverseMin, transverse);
+                transverseMax = Math.Max(transverseMax, transverse);
+                distance = Math.Min(distance, Math.Abs(longitudinal - edge));
+                if (hole.Point.Z < dummy.Min.Z - matchTolerance || hole.Point.Z > dummy.Max.Z + matchTolerance)
+                    return Double.PositiveInfinity;
+            }
+            double dummyTransverse = vertical
+                ? (dummy.Min.X + dummy.Max.X) * 0.5 : (dummy.Min.Y + dummy.Max.Y) * 0.5;
+            // Ký hiệu có thể nằm giữa hai hàng lỗ trong cùng BoltGroup.
+            if (dummyTransverse < transverseMin - matchTolerance || dummyTransverse > transverseMax + matchTolerance
+                || distance > FRONT_END_HOLE_ZONE + matchTolerance)
+                return Double.PositiveInfinity;
+            return distance;
+        }
+
+        private static List<AssemblyFrontHoleRoute> BuildAssemblyFrontHoleRoutes(
+            List<HHoleCandidate> candidates, List<AssemblyFrontDummy> dummies,
+            double minX, double maxX)
+        {
+            return BuildAssemblyFrontHoleRoutesCore(candidates, dummies, minX, maxX, false);
+        }
+
+        private static List<AssemblyFrontHoleRoute> BuildAssemblyFrontHoleRoutesCore(
+            List<HHoleCandidate> candidates, List<AssemblyFrontDummy> dummies,
+            double min, double max, bool vertical)
+        {
+            var routes = new List<AssemblyFrontHoleRoute>();
+            if (candidates == null || candidates.Count == 0) return routes;
+            // Lỗi snapshot phải về legacy trước mọi writer, không để mất lỗ do lọc một phần input.
+            if (candidates.Exists(h => h == null || !IsAssemblyFrontFinitePoint(h.Point)
+                || h.BoltGroupId <= 0 || Double.IsNaN(h.HoleDiameter) || Double.IsInfinity(h.HoleDiameter)
+                || Double.IsNaN(h.BoltSize) || Double.IsInfinity(h.BoltSize))) return routes;
+            var ordered = new List<HHoleCandidate>(candidates);
+            ordered.Sort((a, b) =>
+            {
+                int c = a.HoleDiameter.CompareTo(b.HoleDiameter);
+                if (c == 0) c = a.BoltSize.CompareTo(b.BoltSize);
+                if (c == 0) c = a.Point.X.CompareTo(b.Point.X);
+                if (c == 0) c = a.Point.Y.CompareTo(b.Point.Y);
+                if (c == 0) c = a.Point.Z.CompareTo(b.Point.Z);
+                return c != 0 ? c : a.BoltGroupId.CompareTo(b.BoltGroupId);
+            });
+            // Giữ splitter mép/giữa riêng từng hướng; không xét Dummy hoặc thêm DIM cho lỗ giữa.
+            foreach (var family in GroupHHoleCandidatesByPhiAndM(ordered))
+            {
+                List<Point> left, right, middle;
+                if (vertical)
+                    SplitAssemblyFrontHolesByY(ConvertHHoleCandidatesToDimPoints(family.Holes), min, max,
+                        out left, out right);
+                else
+                    SplitFrontHolesByX(ConvertHHoleCandidatesToDimPoints(family.Holes), min, max,
+                        out left, out right, out middle);
+                for (int side = 0; side < 2; side++)
+                {
+                    var edgeHoles = side == 0 ? left : right;
+                    var groups = new SortedDictionary<int, List<HHoleCandidate>>();
+                    foreach (var hole in family.Holes)
+                    {
+                        if (hole == null || hole.Point == null) continue;
+                        bool belongs = edgeHoles.Exists(p => Math.Abs(p.X - hole.Point.X) <= TOL
+                            && Math.Abs(p.Y - hole.Point.Y) <= TOL);
+                        if (!belongs) continue;
+                        List<HHoleCandidate> group;
+                        if (!groups.TryGetValue(hole.BoltGroupId, out group))
+                            groups.Add(hole.BoltGroupId, group = new List<HHoleCandidate>());
+                        group.Add(hole);
+                    }
+                    foreach (var group in groups.Values)
+                    {
+                        double edge = side == 1 ? max : min;
+                        bool nearEnd = group.Exists(h => Math.Abs((vertical ? h.Point.Y : h.Point.X) - edge)
+                            <= FRONT_END_HOLE_ZONE + TOL);
+                        // Family riêng ở giữa có thể bị splitter cũ coi là đầu; giữ DIM đại diện cũ,
+                        // không nâng cấp lỗ giữa chỉ vì nó khác phi/M các cụm mép.
+                        routes.Add(new AssemblyFrontHoleRoute
+                        { Right = side == 1, Representative = dummies == null || !nearEnd, Holes = group });
+                    }
+                }
+            }
+            if (dummies == null) return routes;
+            foreach (var dummy in dummies)
+            {
+                double best = Double.PositiveInfinity;
+                AssemblyFrontHoleRoute selected = null;
+                foreach (var route in routes)
+                {
+                    double distance = AssemblyFrontDummyMatchDistance(route, dummy, min, max, vertical);
+                    if (Double.IsInfinity(distance)) continue;
+                    if (distance < best) { best = distance; selected = route; }
+                }
+                // Một ký hiệu chỉ rút gọn một nhóm duy nhất; hòa điểm giữ đủ lỗ.
+                if (selected != null && routes.FindAll(r =>
+                    Math.Abs(AssemblyFrontDummyMatchDistance(r, dummy, min, max, vertical) - best) <= TOL).Count == 1)
+                    selected.Representative = true;
+            }
+            routes.Sort((a, b) =>
+            {
+                int c = a.Right.CompareTo(b.Right);
+                HHoleCandidate ah = a.Holes[0], bh = b.Holes[0];
+                if (c == 0) c = ah.HoleDiameter.CompareTo(bh.HoleDiameter);
+                if (c == 0) c = ah.BoltSize.CompareTo(bh.BoltSize);
+                if (c == 0) c = ah.Point.X.CompareTo(bh.Point.X);
+                if (c == 0) c = ah.Point.Y.CompareTo(bh.Point.Y);
+                if (c == 0) c = ah.Point.Z.CompareTo(bh.Point.Z);
+                return c != 0 ? c : ah.BoltGroupId.CompareTo(bh.BoltGroupId);
+            });
+            return routes;
+        }
+
+        private static bool AssemblyFrontRoutesNeedLegacy(
+            List<AssemblyFrontHoleRoute> routes, double min, double max, bool vertical)
+        {
+            if (routes.Count == 0 || routes.TrueForAll(r => r.Representative)) return true;
+            // Không để writer single tự suy lại phía khác splitter legacy, hoặc hai chuỗi chồng ngang nhau.
+            double center = (min + max) * 0.5;
+            return routes.Exists(r => r.Holes.Exists(h =>
+            {
+                double value = vertical ? h.Point.Y : h.Point.X;
+                return r.Right ? value < center - TOL : value > center + TOL;
+            }));
+        }
+
+        private static int CreateAssemblyFrontHoleDimsByDummy(
+            Model model, StraightDimensionSetHandler handler, View view,
+            List<Point> holes, List<HHoleCandidate> candidates,
+            double minX, double maxX, double minY, double maxY,
+            ChamferEdgeAnchors edges, DimOffsetAnchor4 anchors,
+            int firstTier, int reservedTier, int leftStartTier, int rightStartTier,
+            bool hasNotch, List<Point> notchProfile,
+            out int horizontalUsed, out int horizontalHighest, out int leftUsed, out int rightUsed)
+        {
+            var dummies = ReadAssemblyFrontDummies(model, view);
+            var routes = BuildAssemblyFrontHoleRoutes(candidates, dummies, minX, maxX);
+            // Tập lỗ lỗi không phân tuyến được: giữ fallback đã có.
+            if (candidates != null && candidates.Count > 0 && routes.Count == 0)
+                return CreateAssemblyFrontNearestEdgeHoleDimsByPhiAndM(handler, view, holes, candidates,
+                    minX, maxX, maxY, edges, anchors, firstTier, reservedTier, leftStartTier, rightStartTier,
+                    out horizontalUsed, out horizontalHighest, out leftUsed, out rightUsed);
+
+            // Representative của router còn có nghĩa legacy cho lỗ xa mép. Chỉ rút gọn
+            // nhóm thực sự ở đầu và đã ghép Dummy; phần còn lại chạy đúng writer single X/Y.
+            // Reader Dummy lỗi chỉ giữ đại diện tại mép, không làm mất DIM lỗ giữa.
+            var representativeRoutes = routes.FindAll(route => route.Representative && route.Holes.Exists(h =>
+                Math.Abs(h.Point.X - (route.Right ? maxX : minX)) <= FRONT_END_HOLE_ZONE + TOL));
+
+            int count = 0;
+            horizontalUsed = leftUsed = rightUsed = 0;
+            horizontalHighest = -1;
+            var fullCandidates = candidates;
+            var fullHoles = holes;
+            if (representativeRoutes.Count > 0)
+            {
+                var excluded = new HashSet<HHoleCandidate>();
+                int[] horizontalBySide = new int[2];
+                foreach (var route in representativeRoutes)
+                {
+                    int side = route.Right ? 1 : 0;
+                    int x, highest, left, right;
+                    count += CreateAssemblyFrontNearestEdgeHoleDimsByPhiAndM(handler, view,
+                        ConvertHHoleCandidatesToDimPoints(route.Holes), route.Holes,
+                        minX, maxX, maxY, edges, anchors, firstTier + horizontalBySide[side], reservedTier,
+                        leftStartTier + leftUsed, rightStartTier + rightUsed,
+                        out x, out highest, out left, out right);
+                    horizontalBySide[side] += x;
+                    horizontalHighest = Math.Max(horizontalHighest, highest);
+                    leftUsed += left;
+                    rightUsed += right;
+                    foreach (var hole in route.Holes) excluded.Add(hole);
+                }
+                horizontalUsed = Math.Max(horizontalBySide[0], horizontalBySide[1]);
+                fullCandidates = candidates.FindAll(h => !excluded.Contains(h));
+                fullHoles = ConvertHHoleCandidatesToDimPoints(fullCandidates);
+            }
+
+            // Cùng mặt hình học phải cùng thuật toán, không phụ thuộc Single/Assembly/ViewType.
+            // Giữ toàn bộ tập lỗ làm ngữ cảnh để nhóm còn lại không bị nhận nhầm là mép.
+            int xUsed, xHighest, yLeft, yRight;
+            count += CreateFrontHoleXDimsWithViewContext(handler, view, fullHoles, fullCandidates,
+                minX, maxX, maxY, edges, anchors, maxX - minX, firstTier + horizontalUsed, reservedTier,
+                hasNotch, notchProfile, out xUsed, out xHighest, holes);
+            count += CreateFrontHoleYDimsWithViewContext(handler, view, fullHoles, fullCandidates,
+                minX, maxX, minY, maxY, edges, anchors, maxX - minX,
+                leftStartTier + leftUsed, rightStartTier + rightUsed, out yLeft, out yRight, holes);
+            horizontalUsed += xUsed;
+            horizontalHighest = Math.Max(horizontalHighest, xHighest);
+            leftUsed += yLeft;
+            rightUsed += yRight;
+            return count;
+        }
+
+        private static List<List<HHoleCandidate>> BuildAssemblyFrontFullHoleClusters(AssemblyFrontHoleRoute route)
+        {
+            var result = new List<List<HHoleCandidate>>();
+            var points = ConvertHHoleCandidatesToDimPoints(route.Holes);
+            foreach (var family in BuildHoleFamiliesByColumnYPattern(points, route.Holes, Math.Max(2.0, TOL + 1.0)))
+                foreach (var cluster in family.Clusters)
+                    result.Add(route.Holes.FindAll(h => cluster.Exists(p =>
+                        Math.Abs(p.X - h.Point.X) <= TOL && Math.Abs(p.Y - h.Point.Y) <= TOL)));
+            return result;
+        }
+
+        private static int CreateAssemblyFrontFullHoleDims(
+            StraightDimensionSetHandler handler, View view, AssemblyFrontHoleRoute route,
+            double minX, double maxX, double minY, double maxY,
+            ChamferEdgeAnchors edges, DimOffsetAnchor4 anchors,
+            int firstTier, int reservedTier, int leftStart, int rightStart, bool hasNotch, List<Point> notchProfile,
+            out int xUsed, out int xHighest, out int yLeft, out int yRight)
+        {
+            int count = 0;
+            xUsed = yLeft = yRight = 0;
+            xHighest = -1;
+            // Single suy lại phía từ tập input. Truyền từng cụm/mẫu hàng để cụm thứ hai cùng đầu
+            // không bị hiểu nhầm là "mép đối diện". Các writer single không thay đổi.
+            foreach (var cluster in BuildAssemblyFrontFullHoleClusters(route))
+            {
+                var points = ConvertHHoleCandidatesToDimPoints(cluster);
+                int localX, localHighest, localLeft, localRight;
+                count += CreateFrontHoleXDimsByGeometry(handler, view, points, cluster,
+                    minX, maxX, maxY, edges, anchors, maxX - minX, firstTier + xUsed, reservedTier,
+                    hasNotch, notchProfile, out localX, out localHighest);
+                count += CreateFrontHoleYDimsByGeometry(handler, view, points, cluster,
+                    minX, maxX, minY, maxY, edges, anchors, maxX - minX,
+                    leftStart + yLeft, rightStart + yRight, out localLeft, out localRight);
+                xUsed += localX; xHighest = Math.Max(xHighest, localHighest);
+                yLeft += localLeft; yRight += localRight;
+            }
+            return count;
+        }
+
+        private sealed class AssemblyVerticalFullHolePlan
+        {
+            public PointList Horizontal;
+            public PointList Longitudinal;
+        }
+
+        private static AssemblyVerticalFullHolePlan BuildAssemblyVerticalFullHolePlan(
+            AssemblyFrontHoleRoute route, ChamferEdgeAnchors edges)
+        {
+            var holes = ConvertHHoleCandidatesToDimPoints(route.Holes);
+            Point left = route.Right ? edges.TopLeft : edges.BottomLeft;
+            Point right = route.Right ? edges.TopRight : edges.BottomRight;
+            Point end = ResolveAssemblyVerticalMemberHoleOuterEndEdge(route.Right, edges);
+            if (holes.Count == 0 || !IsAssemblyFrontFinitePoint(left) || !IsAssemblyFrontFinitePoint(right)
+                || !IsAssemblyFrontFinitePoint(end) || right.X - left.X <= TOL) return null;
+            var plan = new AssemblyVerticalFullHolePlan
+            { Horizontal = new PointList(), Longitudinal = new PointList() };
+            plan.Horizontal.Add(Clone2D(left));
+            // Bề ngang: mép trái -> từng cột X -> mép phải, lấy hàng xa đường DIM nhất.
+            holes.Sort((a, b) => a.X != b.X ? a.X.CompareTo(b.X) : a.Y.CompareTo(b.Y));
+            for (int i = 0; i < holes.Count;)
+            {
+                Point chosen = holes[i];
+                double x = chosen.X;
+                int next = i + 1;
+                while (next < holes.Count && Math.Abs(holes[next].X - x) <= TOL)
+                {
+                    if (route.Right ? holes[next].Y < chosen.Y : holes[next].Y > chosen.Y)
+                        chosen = holes[next];
+                    next++;
+                }
+                if (chosen.X < left.X - TOL || chosen.X > right.X + TOL) return null;
+                if (chosen.X > left.X + TOL && chosen.X < right.X - TOL)
+                    plan.Horizontal.Add(new Point(chosen.X,
+                        chosen.Y + (route.Right ? 1 : -1) * GetHoleDimGap(chosen), 0));
+                i = next;
+            }
+            plan.Horizontal.Add(Clone2D(right));
+            // Dọc thanh: mép đầu thật -> mọi hàng Y đi vào trong; hướng DIM vẫn bên trái như legacy.
+            plan.Longitudinal.Add(Clone2D(end));
+            holes.Sort((a, b) => a.Y != b.Y
+                ? (route.Right ? b.Y.CompareTo(a.Y) : a.Y.CompareTo(b.Y)) : b.X.CompareTo(a.X));
+            for (int i = 0; i < holes.Count;)
+            {
+                Point chosen = holes[i];
+                double y = chosen.Y;
+                int next = i + 1;
+                while (next < holes.Count && Math.Abs(holes[next].Y - y) <= TOL)
+                {
+                    if (holes[next].X > chosen.X) chosen = holes[next];
+                    next++;
+                }
+                if (route.Right ? chosen.Y > end.Y + TOL : chosen.Y < end.Y - TOL) return null;
+                if (Math.Abs(chosen.Y - end.Y) > TOL)
+                    plan.Longitudinal.Add(new Point(chosen.X - GetHoleDimGap(chosen), chosen.Y, 0));
+                i = next;
+            }
+            if (plan.Horizontal.Count < 2 || plan.Longitudinal.Count < 2) return null;
+            return plan;
+        }
+
+        private static int AssemblyFrontNextTier(int first, int used, int reserved)
+        {
+            int tier = first + used;
+            return reserved >= 0 && tier >= reserved ? tier + 1 : tier;
+        }
+
+        private static int CreateAssemblyFrontPlannedDimension(
+            StraightDimensionSetHandler handler, View view, PointList feet, Vector direction,
+            DimOffsetAnchor4 anchors, int tier)
+        {
+            try
+            {
+                double offset = ResolveDimDistanceByAnchor4(feet, direction, anchors, GetSteelDimOffsetByTier(tier));
+                return handler.CreateDimensionSet(view, feet, direction, offset) != null ? 1 : 0;
+            }
+            catch (Exception ex)
+            {
+                // Giữ phạm vi lỗi như writer legacy: lỗi một set không bỏ DIM đầu kia/tổng.
+                System.Diagnostics.Trace.WriteLine("Assembly Front DIM: " + ex.Message);
+                return 0;
+            }
+        }
+
+        private static int CreateAssemblyFrontVerticalHoleDimsByDummy(
+            Model model, StraightDimensionSetHandler handler, View view,
+            List<Point> holes, List<HHoleCandidate> candidates,
+            double minX, double maxX, double minY, double maxY,
+            ChamferEdgeAnchors edges, DimOffsetAnchor4 anchors,
+            int horizontalFirst, int horizontalReserved, int verticalFirst, int verticalReserved,
+            out int horizontalUsed, out int horizontalHighest, out int verticalUsed, out int verticalHighest)
+        {
+            var dummies = ReadAssemblyFrontDummies(model, view);
+            var routes = BuildAssemblyFrontHoleRoutesCore(candidates, dummies, minY, maxY, true);
+            bool legacy = dummies == null || AssemblyFrontRoutesNeedLegacy(routes, minY, maxY, true);
+            var plans = new Dictionary<AssemblyFrontHoleRoute, AssemblyVerticalFullHolePlan>();
+            if (!legacy)
+                foreach (var route in routes)
+                    if (!route.Representative)
+                    {
+                        var plan = BuildAssemblyVerticalFullHolePlan(route, edges);
+                        if (plan == null) { legacy = true; break; }
+                        plans.Add(route, plan);
+                    }
+            if (legacy)
+                return CreateAssemblyFrontVerticalMemberHoleDims(handler, view, holes, candidates,
+                    minX, maxX, minY, maxY, edges, anchors,
+                    horizontalFirst, horizontalReserved, verticalFirst, verticalReserved,
+                    out horizontalUsed, out horizontalHighest, out verticalUsed, out verticalHighest);
+
+            int count = 0;
+            int[] xUsed = new int[2], yUsed = new int[2];
+            horizontalHighest = verticalHighest = -1;
+            foreach (var route in routes)
+            {
+                int side = route.Right ? 1 : 0;
+                int xTier = AssemblyFrontNextTier(horizontalFirst, xUsed[side], horizontalReserved);
+                int yTier = AssemblyFrontNextTier(verticalFirst, yUsed[side], verticalReserved);
+                int xCount, yCount;
+                var points = ConvertHHoleCandidatesToDimPoints(route.Holes);
+                if (route.Representative)
+                {
+                    Point representative = FindAssemblyVerticalMemberRepresentativeHole(points, !route.Right, 2.0);
+                    xCount = CreateAssemblyVerticalMemberHorizontalRepresentativeDim(handler, view, points,
+                        representative, minX, maxX, minY, maxY, edges, anchors,
+                        GetSteelDimOffsetByTier(xTier), !route.Right);
+                    yCount = CreateAssemblyVerticalMemberNearestEndDim(handler, view, points, route.Right,
+                        edges, anchors, GetSteelDimOffsetByTier(yTier), 2.0);
+                }
+                else
+                {
+                    var plan = plans[route];
+                    var xDirection = new Vector(0, route.Right ? 1 : -1, 0);
+                    var yDirection = new Vector(-1, 0, 0);
+                    xCount = CreateAssemblyFrontPlannedDimension(handler, view, plan.Horizontal, xDirection, anchors, xTier);
+                    yCount = CreateAssemblyFrontPlannedDimension(handler, view, plan.Longitudinal, yDirection, anchors, yTier);
+                }
+                if (xCount > 0) { xUsed[side]++; horizontalHighest = Math.Max(horizontalHighest, xTier); }
+                if (yCount > 0) { yUsed[side]++; verticalHighest = Math.Max(verticalHighest, yTier); }
+                count += xCount + yCount;
+            }
+            horizontalUsed = Math.Max(xUsed[0], xUsed[1]);
+            verticalUsed = Math.Max(yUsed[0], yUsed[1]);
+            return count;
+        }
+
         private static int CreateAssemblyFrontNearestEdgeHoleDimsByPhiAndM(
             StraightDimensionSetHandler handler,
             View view,
@@ -18184,6 +18662,20 @@ namespace Tekla.Technology.Akit.UserScript
         }
 
         private static int CreateFrontHoleXDimsByGeometry(
+            StraightDimensionSetHandler handler, View view,
+            List<Point> holes, List<HHoleCandidate> holeCandidates,
+            double minX, double maxX, double maxY,
+            ChamferEdgeAnchors edgeAnchors, DimOffsetAnchor4 offsetAnchors,
+            double beamLength, int firstTier, int reservedTier,
+            bool hasFrontNotch, List<Point> frontNotchProfile,
+            out int usedTierCount, out int highestUsedTier)
+        {
+            return CreateFrontHoleXDimsWithViewContext(handler, view, holes, holeCandidates,
+                minX, maxX, maxY, edgeAnchors, offsetAnchors, beamLength, firstTier, reservedTier,
+                hasFrontNotch, frontNotchProfile, out usedTierCount, out highestUsedTier, holes);
+        }
+
+        private static int CreateFrontHoleXDimsWithViewContext(
             StraightDimensionSetHandler handler,
             View view,
             List<Point> holes,
@@ -18199,7 +18691,8 @@ namespace Tekla.Technology.Akit.UserScript
             bool hasFrontNotch,
             List<Point> frontNotchProfile,
             out int usedTierCount,
-            out int highestUsedTier
+            out int highestUsedTier,
+            List<Point> viewHoles
         )
         {
             int count = 0;
@@ -18221,8 +18714,8 @@ namespace Tekla.Technology.Akit.UserScript
                 families.Sort(
                     delegate(HoleColumnYPatternFamily a, HoleColumnYPatternFamily b)
                     {
-                        bool aSpans = HoleFamilySpansOuterHoles(a, holes, tol);
-                        bool bSpans = HoleFamilySpansOuterHoles(b, holes, tol);
+                        bool aSpans = HoleFamilySpansOuterHoles(a, viewHoles ?? holes, tol);
+                        bool bSpans = HoleFamilySpansOuterHoles(b, viewHoles ?? holes, tol);
 
                         if (aSpans != bSpans)
                             return aSpans ? -1 : 1;
@@ -18262,13 +18755,9 @@ namespace Tekla.Technology.Akit.UserScript
                         }
                     );
 
-                    int allocationTier = firstTier + usedTierCount;
-                    if (reservedTier >= 0 && allocationTier >= reservedTier)
-                        allocationTier++;
-
-                    // Giu nguyen tier cap phat cho DIM tong/layout; chi dong bo cao do
-                    // cua hai DIM lo hai mep khi dieu kien hep o tren duoc thoa.
-                    int drawTier = shareOppositeEndFamilyTier ? firstTier : allocationTier;
+                    // Chỉ ánh xạ thứ tự nhóm sang tầng thực một lần; hai mép có thể chung tầng.
+                    // Tầng thực này dùng cả để vẽ và báo cho DIM tổng/layout (chỉ số, không phải mm).
+                    int drawTier = firstTier + (shareOppositeEndFamilyTier ? 0 : usedTierCount);
                     if (reservedTier >= 0 && drawTier >= reservedTier)
                         drawTier++;
 
@@ -18282,7 +18771,7 @@ namespace Tekla.Technology.Akit.UserScript
                     bool hasOtherHoleOnLeft = false;
                     bool hasOtherHoleOnRight = false;
 
-                    foreach (Point h in holes)
+                    foreach (Point h in viewHoles ?? holes)
                     {
                         if (h == null)
                             continue;
@@ -18350,7 +18839,7 @@ namespace Tekla.Technology.Akit.UserScript
                     {
                         count += created;
                         usedTierCount++;
-                        highestUsedTier = Math.Max(highestUsedTier, allocationTier);
+                        highestUsedTier = Math.Max(highestUsedTier, drawTier);
                     }
                 }
             }
@@ -18959,6 +19448,19 @@ namespace Tekla.Technology.Akit.UserScript
         }
 
         private static int CreateFrontHoleYDimsByGeometry(
+            StraightDimensionSetHandler handler, View view,
+            List<Point> holes, List<HHoleCandidate> holeCandidates,
+            double minX, double maxX, double minY, double maxY,
+            ChamferEdgeAnchors edgeAnchors, DimOffsetAnchor4 offsetAnchors,
+            double beamLength, int leftStartTier, int rightStartTier,
+            out int usedLeftTierCount, out int usedRightTierCount)
+        {
+            return CreateFrontHoleYDimsWithViewContext(handler, view, holes, holeCandidates,
+                minX, maxX, minY, maxY, edgeAnchors, offsetAnchors, beamLength,
+                leftStartTier, rightStartTier, out usedLeftTierCount, out usedRightTierCount, holes);
+        }
+
+        private static int CreateFrontHoleYDimsWithViewContext(
             StraightDimensionSetHandler handler,
             View view,
             List<Point> holes,
@@ -18973,7 +19475,8 @@ namespace Tekla.Technology.Akit.UserScript
             int leftStartTier,
             int rightStartTier,
             out int usedLeftTierCount,
-            out int usedRightTierCount
+            out int usedRightTierCount,
+            List<Point> viewHoles
         )
         {
             int count = 0;
@@ -18991,7 +19494,7 @@ namespace Tekla.Technology.Akit.UserScript
                     edgeAnchors.BottomMost != null ? edgeAnchors.BottomMost.Y : minY;
                 double globalMinHoleX;
                 double globalMaxHoleX;
-                GetHoleRangeX(holes, out globalMinHoleX, out globalMaxHoleX);
+                GetHoleRangeX(viewHoles ?? holes, out globalMinHoleX, out globalMaxHoleX);
 
                 double middleOffset = GetSteelDimOffsetByTier(1);
 

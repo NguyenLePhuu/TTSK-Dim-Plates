@@ -360,6 +360,13 @@ namespace UserMacros
         }
 
         public static Plan Analyze()
+        { return AnalyzeCore(true); }
+
+        // Check DIM chỉ dùng Nodes/Edges và primary; không cần phương án ẩn/hiện.
+        internal static Plan AnalyzeDimensionConnections()
+        { return AnalyzeCore(false); }
+
+        private static Plan AnalyzeCore(bool planVisibility)
         {
             var model = new M.Model();
             var handler = new D.DrawingHandler();
@@ -401,7 +408,9 @@ namespace UserMacros
                 p.Items.AddRange(local);
             }
             if (p.ViewCount == 0) throw new InvalidOperationException("Khong co view chua main part.");
-            BuildConnections(p, primary);
+            if (planVisibility) BuildConnections(p, primary);
+            else BuildConnectionGraph(p, primary);
+            if (!planVisibility) return p;
             p.RestorePlates.AddRange(ResolvePlateRestores(p.Nodes, p.Edges, primary, p.Keep, p.Items));
             p.RestoreSupports.AddRange(ResolveReferenceSupportRestores(p.ReferenceSupportPlates, p.Nodes, primary, p.Items));
             foreach (var i in p.Items)
@@ -453,6 +462,12 @@ namespace UserMacros
 
         private static void BuildConnections(Plan p, HashSet<int> primary)
         {
+            BuildConnectionGraph(p, primary);
+            RetainVisibilitySupports(p, primary);
+        }
+
+        private static void BuildConnectionGraph(Plan p, HashSet<int> primary)
+        {
             // Discover direct connections from ALL primary assembly parts, including parts absent in 2D.
             var edgeKeys = new HashSet<string>();
             foreach (int id in primary.Where(id => !p.Nodes[id].Dummy)) ReadEdges(p, p.Nodes[id].Part, edgeKeys, false);
@@ -477,8 +492,98 @@ namespace UserMacros
                 }
             }
             p.Keep = Resolve(p.Nodes, p.Edges, primary, p.Warnings);
+        }
+
+        private static void RetainVisibilitySupports(Plan p, HashSet<int> primary)
+        {
             RetainLocalDummies(p, primary);
             RetainConnectionReferenceSupports(p, primary);
+            RetainPlateContactReferenceSupports(p, primary);
+        }
+
+        // Interface hình học không phụ thuộc Connection còn tồn tại hay mark plate có chữ DUMMY.
+        // Chỉ bù plate đã gắn primary bằng bolt/weld thật nhưng thiếu receiver, không đổi graph nền.
+        public static HashSet<int> UnresolvedPrimaryInterfacePlates(Plan p, HashSet<int> primary)
+        {
+            var plates = new HashSet<int>();
+            foreach (var e in p.Edges)
+            {
+                if (e.A == e.B) continue;
+                if (primary.Contains(e.A) && !p.Nodes[e.A].Dummy && p.Nodes[e.B].Plate) plates.Add(e.B);
+                if (primary.Contains(e.B) && !p.Nodes[e.B].Dummy && p.Nodes[e.A].Plate) plates.Add(e.A);
+            }
+            plates.RemoveWhere(id => !p.Keep.ContainsKey(id)
+                || p.ReferenceSupportPlates.Values.Any(proof => proof.Contains(id))
+                || p.Edges.Any(e => (e.A == id && !primary.Contains(e.B) && !p.Nodes[e.B].Plate && !p.Nodes[e.B].Dummy)
+                    || (e.B == id && !primary.Contains(e.A) && !p.Nodes[e.A].Plate && !p.Nodes[e.A].Dummy)));
+            return plates;
+        }
+
+        private static void RetainPlateContactReferenceSupports(Plan p, HashSet<int> primary)
+        {
+            var plates = UnresolvedPrimaryInterfacePlates(p, primary);
+            if (plates.Count == 0) return;
+            var geometry = new Dictionary<int, ReferenceShape>();
+            var colors = new Dictionary<int, int>();
+            G.Matrix toGlobal = null;
+            foreach (int plateId in plates.OrderBy(id => id))
+            {
+                var contacts = new List<Node>();
+                try
+                {
+                    if (toGlobal == null) toGlobal = new M.Model().GetWorkPlaneHandler().GetCurrentTransformationPlane().TransformationMatrixToGlobal;
+                    var plateShape = ReadReferenceShape(p.Nodes[plateId], toGlobal, geometry);
+                    var views = new HashSet<int>(p.Items.Where(i => i.ModelId == plateId).Select(i => i.ViewId));
+                    var ids = new HashSet<int>(p.Items.Where(i => views.Contains(i.ViewId)).Select(i => i.ModelId));
+                    bool incomplete = false;
+                    foreach (var node in p.Nodes.Values.Where(n => ids.Contains(n.Id) && n.Dummy && !n.Plate
+                        && !primary.Contains(n.Id) && n.Part is M.Beam))
+                    {
+                        try
+                        {
+                            var shape = ReadReferenceShape(node, toGlobal, geometry);
+                            if (plateShape.Faces.Any(face => shape.Faces.Any(support => ReferenceFaceCovers(support, face)))) contacts.Add(node);
+                        }
+                        catch (Exception ex)
+                        {
+                            incomplete = true;
+                            p.Warnings.Add("Plate P" + plateId + ": chua doc du reference P" + node.Id + "; " + ex.Message);
+                        }
+                    }
+                    if (contacts.Count == 0) continue; // Khoảng gần/bbox không tự tạo mối liên kết.
+                    var active = new List<int>(); var uncertain = new List<int>();
+                    foreach (var node in contacts)
+                    {
+                        int role = ReadReferenceColor(node, colors);
+                        if (role == 1) active.Add(node.Id);
+                        else if (role == 0) uncertain.Add(node.Id);
+                    }
+                    var first = contacts[0];
+                    bool sameGroup = contacts.All(n => String.Equals(n.Part.Profile.ProfileString, first.Part.Profile.ProfileString, StringComparison.OrdinalIgnoreCase)
+                        && String.Equals(n.Part.Material.MaterialString, first.Part.Material.MaterialString, StringComparison.OrdinalIgnoreCase)
+                        && ReferenceAxesParallel(geometry[first.Id], geometry[n.Id])
+                        && SharesPlateInterface(geometry[first.Id], geometry[n.Id], plateShape));
+                    int selected = sameGroup && !incomplete ? UniqueReferenceReplacement(active, uncertain) : 0;
+                    var proof = new HashSet<int> { plateId };
+                    if (selected == 0)
+                        ProtectReferenceSupports(p, contacts.Select(n => n.Id), proof,
+                            "Plate P" + plateId + ": nhieu reference tiep giap/chua ro mau, giu/hien ca nhom; khong dung batch.");
+                    else if (!p.Keep.ContainsKey(selected))
+                    {
+                        p.Keep.Add(selected, "KEEP reference support by solid interface with primary-attached plate " + plateId);
+                        p.ReferenceSupportPlates.Add(selected, proof);
+                    }
+                    else if (p.ReferenceSupportPlates.ContainsKey(selected)) p.ReferenceSupportPlates[selected].Add(plateId);
+                    p.Warnings.Remove(UnresolvedPlateWarning(plateId));
+                }
+                catch (Exception ex)
+                {
+                    // Chỉ bảo vệ contact đã chứng minh; lỗi của nhánh mới không kéo reference ở xa.
+                    if (contacts.Count > 0) ProtectReferenceSupports(p, contacts.Select(n => n.Id), new HashSet<int> { plateId },
+                        "Plate P" + plateId + ": giu contact da xac minh do doc thieu; " + ex.Message);
+                    else p.Warnings.Add("Plate P" + plateId + ": chua doc du interface reference; " + ex.Message);
+                }
+            }
         }
 
         private static void RetainConnectionReferenceSupports(Plan p, HashSet<int> primary)

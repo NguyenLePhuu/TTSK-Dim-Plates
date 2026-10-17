@@ -133,6 +133,8 @@
     <Reference Include="System.IO.Compression" />
     <Reference Include="System.IO.Compression.FileSystem" />
     <Reference Include="System.Web.Extensions" />
+    <Reference Include="UIAutomationClient" />
+    <Reference Include="UIAutomationTypes" />
     <Reference Include="Tekla.Structures, Version=2025.0.0.0, Culture=neutral, PublicKeyToken=2f04dbe497b71114, processorArchitecture=MSIL">
       <SpecificVersion>True</SpecificVersion>
       <HintPath>$(TeklaBinPath)\Tekla.Structures.dll</HintPath>
@@ -167,12 +169,15 @@
       <HintPath>$(TeklaBinPath)\DPMPrinter.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <!-- Kiểu khổ/lề của DPM Tekla; alias tránh trùng PDFsharp 6 dùng để merge. -->
+    <Reference Include="PdfSharp-Hybrid">
+      <HintPath>$(TeklaBinPath)\PdfSharp-Hybrid.dll</HintPath>
+      <Aliases>DpmPdf</Aliases>
+      <Private>False</Private>
+    </Reference>
   </ItemGroup>
   <ItemGroup>
     <Compile Include="JapaneseDictionary.cs" />
-    <Compile Include="MainForm.BatchShortcuts.cs" />
-    <Compile Include="MainForm.DrawingTargets.cs" />
-    <Compile Include="DrawingTargetSelection.cs" />
     <Compile Include="TeklaOperationDispatcher.cs" />
     <Compile Include="MainForm.cs">
       <SubType>Form</SubType>
@@ -203,6 +208,11 @@
     <Compile Include="PHU_DimensionBatch.cs" />
     <Compile Include="PHU_DimensionRevision.cs" />
     <Compile Include="WorkJournal.cs" />
+    <Compile Include="MeetingTranslation\MeetingTranslationService.cs" />
+    <Compile Include="MeetingTranslation\GoogleLiveTranslation.cs" />
+    <Compile Include="MeetingTranslation\MeetingTranslatorForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="PHU_DimensionReportForm.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -226,7 +236,9 @@
     <Compile Include="PHU_Keyplan.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Updater\UpdateSources.cs" />
-    <Compile Include="Updater\UpdateManager.cs" />
+    <Compile Include="Updater\UpdateManager.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="Updater\UpdateManifest.cs" />
     <Compile Include="Updater\UpdateTransaction.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />

@@ -1,11 +1,14 @@
-﻿// Giao diện chính và điều phối các lệnh Tekla, DIM, kiểm tra, batch, keyplan, updater.
+// Giao diện chính và điều phối các lệnh Tekla, DIM, kiểm tra, batch, keyplan, updater.
 // LUỒNG DIM: RunActiveDrawing/RunBatchDrawings → RunCurrentAutoDimScript → nhận part → Auto Section tùy chọn → engine tương ứng.
 // LUỒNG SLOT 07: RunDataCenterCurrentDrawing; cột H/C/L qua RunDataCenterLegacyColumn, cột hộp và dầm qua nhánh riêng.
 // ĐIỂM SỬA: route ở RunVisibleAutoDimSlot/RunExternalAutoDimSlot; thứ tự DIM ở RunCurrentAutoDimScript; giao diện ở Build*/Initialize*.
 // THAM SỐ: DATA_CENTER_GRID_AXIS_COUNT, DATA_CENTER_FIT_PADDING, DEFAULT_AUTO_SECTION_ENABLED; setting đã lưu có thể thay mặc định.
-// TÁCH LUỒNG: UI dùng Ui/ReadUi; lệnh Tekla qua dispatcher. Phím tắt/batch chọn target còn ở các MainForm.*.cs riêng.
+// TÁCH LUỒNG: UI dùng Ui/ReadUi; lệnh Tekla qua dispatcher. Phím tắt/batch và chọn target ở các region trong file này.
 // TRA CỨU: PROJECT_MAP.md ở gốc repo; chỉ mục kiểu/hàm và điểm chỉnh thông số.
 // Mục lục:
+//   MainForm.BatchShortcuts
+//   MainForm.DrawingTargets
+//   DrawingTargetSelection
 //   MainForm.CheckMenu.cs
 //   MainForm.Operations.cs
 //   MainForm.cs
@@ -13,6 +16,1142 @@
 //   MainForm.WorkJournal.cs
 //   MainForm.Keyplan.cs
 //   MainForm.Updater.cs
+
+#region MainForm.BatchShortcuts
+
+namespace TTSK_AutoDim_Plates
+{
+    using System;
+    using System.Threading.Tasks;
+
+    public partial class MainForm
+    {
+        private bool batchShortcutPending;
+
+        private async void RunDimensionCheckShortcut()
+        {
+            await RunLoadedBatchShortcutAsync("Check DIM", RunDimensionCheckCore);
+        }
+        private async void RunComboCheckShortcut()
+        {
+            await RunLoadedBatchShortcutAsync("Check bản vẽ", RunComboCheckCore);
+        }
+
+        private async void RunCheckScaleShortcut()
+        {
+            await RunLoadedBatchShortcutAsync("Check Scale", () =>
+                StartTeklaCommand("Check Scale", RunScaleCheck));
+        }
+
+        // Finish loading on the Tekla worker before opening a UI report or
+        // starting another operation. Never consume a stale previous selection.
+        private async Task RunLoadedBatchShortcutAsync(string name, Action run)
+        {
+            if (batchShortcutPending || !CanApplyUpdateNow() || dimensionCheckOpen
+                || _updateDialogOpen || _updaterHandoffClosing || IsDisposed || Disposing) return;
+            batchShortcutPending = true;
+            try
+            {
+                HideCheckMenu();
+                HidePrintMenu();
+                bool ready = false;
+                await ExecuteTeklaCommandAsync("Load / " + name, () =>
+                {
+                    LoadContextDrawingsCore();
+                    ready = _selectedDrawings.Count > 0;
+                });
+                if (!ready || IsDisposed || Disposing || !CanApplyUpdateNow()
+                    || dimensionCheckOpen || _updateDialogOpen || _updaterHandoffClosing) return;
+                run();
+            }
+            catch (Exception ex)
+            {
+                SetMainStatus("Shortcut " + name + ": " + ex.GetBaseException().Message, MainStatusKind.Error);
+            }
+            finally { batchShortcutPending = false; }
+        }
+    }
+}
+#endregion
+
+#region MainForm.DrawingTargets
+
+namespace TTSK_AutoDim_Plates
+{
+    using System;
+    using System.Collections.Generic;
+    using System.Drawing;
+    using System.Linq;
+    using System.Threading.Tasks;
+    using System.Windows.Forms;
+    using D = Tekla.Structures.Drawing;
+
+    public partial class MainForm
+    {
+        private void OpenContextDrawingCore(D.Drawing drawing,string modelPath)
+        {
+            if(string.IsNullOrEmpty(modelPath))
+                throw new InvalidOperationException("Danh sách chưa có model nguồn. Hãy Load Selected lại.");
+            var adapter=new Tekla.Technology.Akit.UserScript.PHU_DimensionBatch.TeklaAdapter(modelPath);
+            adapter.Open(new Tekla.Technology.Akit.UserScript.PHU_DimensionBatch.Entry {Drawing=drawing},true);
+            SetMainStatus("Opened drawing: "+SafeDrawingName(drawing),MainStatusKind.Success);
+        }
+
+        // Một bản được chọn chỉ chuyển sang Active sau khi mở đúng model/định danh.
+        private void ActivateSingleContextDrawingCore(D.Drawing drawing,string modelPath)
+        {
+            if(string.IsNullOrEmpty(modelPath))
+                throw new InvalidOperationException("Chưa xác định được model nguồn của bản vẽ.");
+            var adapter=new Tekla.Technology.Akit.UserScript.PHU_DimensionBatch.TeklaAdapter(modelPath);
+            var entry=new Tekla.Technology.Akit.UserScript.PHU_DimensionBatch.Entry {Drawing=drawing};
+            adapter.Open(entry,true);
+            adapter.ValidateActive(entry);
+        }
+
+        private void LoadContextDrawingsCore()
+        {LoadContextDrawingsCore(true);}
+
+        private List<D.Drawing> ReadSelectedContextRowsCore(string modelPath)
+        {
+            int[] indices=ReadUi(()=>dgvDrawings.SelectedRows.Cast<DataGridViewRow>()
+                .Where(r=>!r.IsNewRow).Select(r=>r.Index).OrderBy(i=>i).ToArray());
+            var selected=new List<D.Drawing>();
+            if(indices.Length==0)return selected;
+            if(!string.Equals(modelPath,dimensionCheckModelPath,StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Danh sách thuộc model khác. Hãy Load Selected lại.");
+            foreach(int i in indices)
+            {
+                if(i<0||i>=_selectedDrawings.Count||_selectedDrawings[i]==null)
+                    throw new InvalidOperationException("Dòng đã chọn không còn hợp lệ. Hãy Load Selected lại.");
+                selected.Add(_selectedDrawings[i]);
+            }
+            return selected;
+        }
+
+        private static List<D.Drawing> ReadDocumentManagerDrawingsCore(D.DrawingHandler handler)
+        {
+            var selected=new List<D.Drawing>();
+            var enumerator=handler.GetDrawingSelector().GetSelected();
+            while(enumerator.MoveNext())if(enumerator.Current!=null)selected.Add(enumerator.Current);
+            return selected;
+        }
+
+        private sealed class PdfDrawingRequest
+        {
+            internal string ModelPath,Source;
+            internal bool SameCheckTargets;
+            internal readonly List<DrawingPdfPrintJob> Jobs=new List<DrawingPdfPrintJob>();
+            internal readonly List<string> Changes=new List<string>();
+        }
+
+        // Snapshot in trong RAM; bảng chính là nguồn chung, không ghi dữ liệu vào model.
+        private PdfDrawingRequest accumulatedPdfQueue;
+        private PdfAccumulationForm pdfQueueForm;
+        private bool pdfDrawerOpen;
+        // Pixel theo hệ tọa độ MainForm; màn hẹp dùng drawer phủ bên phải thay vì vượt màn hình.
+        private const int PdfDrawerWidth = 470;
+
+        private bool PdfDrawerFitsBesideMain()
+        {
+            return MainClientWidth + SlidePanelGap + PdfDrawerWidth + SlideRightMargin
+                <= Screen.FromControl(this).WorkingArea.Width - (Width - ClientSize.Width);
+        }
+
+        private void ClosePdfDrawer()
+        {
+            pdfDrawerOpen = false;
+            if (pdfQueueForm != null) pdfQueueForm.Hide();
+            LayoutSlidePanels();
+        }
+
+        // Chỉ đọc dữ liệu đã nạp trên UI; metadata Tekla được xác minh lại trên worker trước in.
+        private PdfDrawingRequest ReadMainPdfQueue()
+        {
+            if (_selectedDrawings.Count != dgvDrawings.Rows.Count) return null;
+            var request = new PdfDrawingRequest { ModelPath = dimensionCheckModelPath, Source = "danh sách đồng bộ MainForm" };
+            for (int i = 0; i < _selectedDrawings.Count; i++)
+            {
+                var row = dgvDrawings.Rows[i];
+                request.Jobs.Add(new DrawingPdfPrintJob { Drawing = _selectedDrawings[i],
+                    Mark = Convert.ToString(row.Cells["MARK"].Value), Revision = Convert.ToString(row.Cells["REV"].Value) });
+                request.Changes.Add(Convert.ToString(row.Cells["CHANGES"].Value));
+            }
+            return request;
+        }
+
+        // Thêm/bỏ/đổi thứ tự chỉ sửa danh sách UI; giữ kết quả theo đối tượng, không ghép bằng tên bản vẽ.
+        private void PublishPdfQueue(PdfDrawingRequest request)
+        {
+            var drawings = _selectedDrawings.ToArray();
+            var rows = dgvDrawings.Rows.Cast<DataGridViewRow>().ToArray();
+            var states = request.Jobs.Select(job =>
+            {
+                int index = Array.FindIndex(drawings, drawing => ReferenceEquals(drawing, job.Drawing));
+                return index >= 0 && index < rows.Length
+                    ? new[] { "STATUS", "RESULT" }.Select(name => new {
+                        Value = rows[index].Cells[name].Value, Tip = rows[index].Cells[name].ToolTipText,
+                        Style = rows[index].Cells[name].Style.Clone() }).ToArray() : null;
+            }).ToArray();
+            ShowPdfDrawingRequest(request);
+            for (int i = 0; i < states.Length; i++)
+            {
+                var row = dgvDrawings.Rows[i];
+                for (int c = 0; c < 2; c++)
+                {
+                    string name = c == 0 ? "STATUS" : "RESULT";
+                    if (states[i] != null)
+                    {
+                        row.Cells[name].Value = states[i][c].Value;
+                        row.Cells[name].ToolTipText = states[i][c].Tip;
+                        row.Cells[name].Style = states[i][c].Style;
+                    }
+                    else row.Cells[name].Value = name == "STATUS" ? "QUEUED" : "PENDING";
+                }
+            }
+            accumulatedPdfQueue = request;
+        }
+
+        // Nút custom phát Click trước MouseUp: chuột phải chỉ mở list, không kích hoạt lệnh Print cũ.
+        private sealed class PdfPrintEntryButton : SafeRoundedButton
+        {
+            private bool rightPress;
+            protected override void OnMouseDown(MouseEventArgs e){rightPress=e.Button==MouseButtons.Right;base.OnMouseDown(e);}
+            protected override void OnClick(EventArgs e){if(!rightPress)base.OnClick(e);}
+            protected override void OnMouseUp(MouseEventArgs e){try{base.OnMouseUp(e);}finally{rightPress=false;}}
+            protected override void OnKeyDown(KeyEventArgs e){rightPress=false;base.OnKeyDown(e);}
+        }
+
+        private void InitializePdfAccumulationMenu()
+        {
+            // Chuột phải mở thẳng; chuột trái và hover Print giữ luồng cũ.
+            btnPrint.MouseUp+=(s,e)=>{if(e.Button==MouseButtons.Right)ShowPdfAccumulation();};
+        }
+
+        private void ShowPdfAccumulation()
+        {
+            if(!CanApplyUpdateNow() || dimensionCheckOpen || batchShortcutPending
+                || _updateDialogOpen || _updaterHandoffClosing || !EnsureSessionCommandTarget())return;
+            try
+            {
+            HideCheckMenu();HidePrintMenu();
+            CloseSlideTools();
+            if (pdfQueueForm == null || pdfQueueForm.IsDisposed)
+            {
+                pdfQueueForm = new PdfAccumulationForm(this);
+                Controls.Add(pdfQueueForm);
+            }
+            pdfDrawerOpen = true;
+            pdfQueueForm.RefreshFromMain();
+            pdfQueueForm.ApplyTheme();
+            pdfQueueForm.Show();
+            LayoutSlidePanels();
+            var area = Screen.FromControl(this).WorkingArea;
+            int targetWidth = slideTargetWidth + Width - ClientSize.Width;
+            if (Left + targetWidth > area.Right) Left = Math.Max(area.Left, area.Right - targetWidth);
+            pdfQueueForm.FocusList();
+            }
+            catch (Exception ex) { ReportPdfQueueError(ex); }
+        }
+
+        // Lỗi UI được giữ kèm stack trace ngoài model để tra đúng nguyên nhân nếu tái diễn.
+        private void ReportPdfQueueError(Exception error)
+        {
+            string message = "Danh sách in: " + error.GetBaseException().Message;
+            SetMainStatus(message, MainStatusKind.Error);
+            try
+            {
+                string folder = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "TTSK", "Logs");
+                System.IO.Directory.CreateDirectory(folder);
+                System.IO.File.AppendAllText(System.IO.Path.Combine(folder, "pdf-list-ui.log"),
+                    DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + Environment.NewLine + error + Environment.NewLine);
+            }
+            catch (System.IO.IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+
+        // Đọc trọn lượt mới rồi mới trả hàng đợi thay thế; lỗi/rỗng giữ nguyên các lượt đã gom.
+        private PdfDrawingRequest CapturePdfAdditionCore(PdfDrawingRequest current)
+        {
+            var model=new Tekla.Structures.Model.Model();
+            var handler=new D.DrawingHandler();
+            if(!model.GetConnectionStatus() || !handler.GetConnectionStatus())
+                throw new InvalidOperationException("Chưa kết nối được Tekla Model/Drawing.");
+            string modelPath=model.GetInfo().ModelPath;
+            if(string.IsNullOrEmpty(modelPath))throw new InvalidOperationException("Chưa xác định được model nguồn.");
+            if(current!=null && !string.Equals(current.ModelPath,modelPath,StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Danh sách in thuộc model khác. Xóa danh sách để gom cho model hiện tại.");
+            var selected=ReadDocumentManagerDrawingsCore(handler);
+            if(selected.Count==0)throw new InvalidOperationException("Chọn bản vẽ trong Document Manager rồi bấm Load thêm. Danh sách đã gom được giữ nguyên.");
+            var next=new PdfDrawingRequest {ModelPath=modelPath,Source="danh sách in cộng dồn"};
+            if(current!=null){next.Jobs.AddRange(current.Jobs);next.Changes.AddRange(current.Changes);}
+            foreach(var drawing in selected)
+            {
+                if(next.Jobs.Any(job=>job.Drawing.IsSameDatabaseObject(drawing)))continue;
+                next.Jobs.Add(new DrawingPdfPrintJob {Drawing=drawing,Mark=SafeDrawingMark(drawing),
+                    Revision=SafeDrawingRevision(drawing),DrawnBy=DrawingPdfPrinter.GetDrawingDrawnBy(drawing)});
+                next.Changes.Add(string.Empty);
+            }
+            new Tekla.Technology.Akit.UserScript.PHU_DimensionBatch.TeklaAdapter(modelPath).EnsureContext();
+            return next;
+        }
+
+        // Select đọc lại đúng đối tượng DB, không chọn dòng DM/mở editor; không quét cả model trước in.
+        private PdfDrawingRequest CaptureAccumulatedPdfRequestCore(PdfDrawingRequest queue)
+        {
+            if(queue==null || queue.Jobs.Count==0)throw new InvalidOperationException("Danh sách in cộng dồn đang rỗng.");
+            var adapter=new Tekla.Technology.Akit.UserScript.PHU_DimensionBatch.TeklaAdapter(queue.ModelPath);
+            adapter.EnsureContext();
+            var request=new PdfDrawingRequest {ModelPath=queue.ModelPath,Source="danh sách in cộng dồn"};
+            foreach(var job in queue.Jobs)
+            {
+                var drawing=job.Drawing;
+                if(drawing==null || !drawing.Select())throw new InvalidOperationException("Bản vẽ "+job.Mark+" không còn trong model. Bỏ dòng này và Load thêm lại trước khi in.");
+                request.Jobs.Add(new DrawingPdfPrintJob {Drawing=drawing,Mark=SafeDrawingMark(drawing),
+                    Revision=SafeDrawingRevision(drawing),DrawnBy=DrawingPdfPrinter.GetDrawingDrawnBy(drawing)});
+                request.Changes.Add(string.Empty);
+            }
+            adapter.EnsureContext();
+            return request;
+        }
+
+        private sealed class PdfAccumulationForm : UserControl
+        {
+            private readonly MainForm owner;
+            private readonly DataGridView grid;
+            private readonly Label notice, subtitle, empty;
+            private readonly Button load, remove, clear, print, merge, close;
+            private readonly Panel listHost, progress;
+            private readonly TableLayoutPanel layout;
+            private readonly PdfQueueScroll scroll;
+            private readonly ToolTip tips = new ToolTip();
+            private readonly System.Windows.Forms.Timer refreshTimer = new System.Windows.Forms.Timer();
+            private readonly Font bold = new Font("Segoe UI Semibold", 10F);
+            private readonly Font uiFont = new Font("Segoe UI", 10F);
+            private readonly Font titleFont = new Font("Segoe UI Semibold", 17F);
+            private Color surface, ink, muted, border, accent, soft, success, error;
+            private bool busy, syncing, dirty, ready;
+            private int completed, total;
+            private Point dragStart;
+            private bool dragCandidate;
+            private int dropIndex = -1;
+            private readonly string dragFormat = "TTSK.PdfQueue." + Guid.NewGuid().ToString("N");
+            private PdfQueueDrag activeDrag;
+
+            internal PdfAccumulationForm(MainForm owner)
+            {
+                this.owner = owner;
+                SuspendLayout();
+                Name = "PdfListDrawer";
+                Font = uiFont;
+                AutoScaleMode = AutoScaleMode.None;
+                Size = new Size(PdfDrawerWidth, MainBaseHeight - 12);
+                Padding = new Padding(1);
+                DoubleBuffered = true;
+                SetStyle(ControlStyles.SupportsTransparentBackColor | ControlStyles.ResizeRedraw, true);
+                layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(20, 16, 20, 12),
+                    ColumnCount = 1, RowCount = 6, Margin = Padding.Empty };
+                layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+                foreach (int height in new[] { 58, 44, 0, 6, 32, 46 })
+                    layout.RowStyles.Add(new RowStyle(height == 0 ? SizeType.Percent : SizeType.Absolute, height == 0 ? 100 : height));
+                Controls.Add(layout);
+
+                var heading = new Panel { Dock = DockStyle.Fill, Margin = Padding.Empty };
+                var title = new Label { Text = "In theo danh sách", AutoSize = true, Location = new Point(0, 2),
+                    Font = titleFont };
+                subtitle = new Label { Text = "Đồng bộ với bảng chính", Location = new Point(1, 37), AutoSize = true };
+                close = MakeButton("", 32); close.Size = new Size(32, 32); close.AccessibleName = "Thu gọn danh sách in";
+                heading.SizeChanged += (s, e) => close.Location = new Point(Math.Max(0, heading.ClientSize.Width - close.Width), 2);
+                ((PdfQueueButton)close).Icon = "close"; ((PdfQueueButton)close).Quiet = true;
+                heading.Controls.AddRange(new Control[] { title, subtitle, close }); layout.Controls.Add(heading, 0, 0);
+
+                var actions = Row();
+                load = MakeButton("Thêm bản vẽ", 164); clear = MakeButton("Xóa hết", 98);
+                ((PdfQueueButton)load).Icon = "plus"; ((PdfQueueButton)clear).Quiet = true;
+                remove = MakeButton("Bỏ dòng", 96); ((PdfQueueButton)remove).Quiet = true;
+                actions.Controls.AddRange(new Control[] { load, remove, clear }); layout.Controls.Add(actions, 0, 1);
+                grid = new PdfQueueGrid { Dock = DockStyle.Fill, ReadOnly = true, AllowUserToAddRows = false,
+                    AllowUserToDeleteRows = false, AllowUserToResizeRows = false, RowHeadersVisible = false,
+                    SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = true,
+                    BorderStyle = BorderStyle.None, EnableHeadersVisualStyles = false,
+                    CellBorderStyle = DataGridViewCellBorderStyle.None, ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.None,
+                    ColumnHeadersHeight = 32, ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing,
+                    AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill };
+                grid.RowTemplate.Height = 37;
+                grid.DefaultCellStyle.Padding = new Padding(7, 0, 2, 0);
+                grid.ColumnHeadersDefaultCellStyle.Padding = new Padding(7, 0, 2, 0);
+                grid.Columns.Add("STT", "#"); grid.Columns.Add("MARK", "Bản vẽ"); grid.Columns.Add("REV", "Rev"); grid.Columns.Add("RESULT", "Trạng thái");
+                grid.Columns["STT"].AutoSizeMode = DataGridViewAutoSizeColumnMode.None; grid.Columns["STT"].Width = 55;
+                grid.Columns["MARK"].DefaultCellStyle.Font = uiFont;
+                grid.Columns["REV"].AutoSizeMode = DataGridViewAutoSizeColumnMode.None; grid.Columns["REV"].Width = 43;
+                grid.Columns["RESULT"].AutoSizeMode = DataGridViewAutoSizeColumnMode.None; grid.Columns["RESULT"].Width = 110;
+                foreach (DataGridViewColumn column in grid.Columns) column.SortMode = DataGridViewColumnSortMode.NotSortable;
+                grid.CellPainting += PaintStatus;
+                grid.SelectionChanged += (s, e) => SyncSelection(false);
+                grid.AllowDrop = true;
+                grid.MouseDown += BeginQueueDrag; grid.MouseMove += ContinueQueueDrag;
+                ((PdfQueueGrid)grid).GripPressed = e => BeginQueueDrag(grid, e);
+                grid.MouseUp += (s, e) => dragCandidate = false;
+                grid.DragOver += QueueDragOver; grid.DragDrop += QueueDragDrop;
+                grid.DragLeave += (s, e) => { dropIndex = -1; grid.Invalidate(); };
+                grid.Paint += PaintDropMarker;
+                listHost = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0), Margin = Padding.Empty };
+                scroll = new PdfQueueScroll(grid) { Dock = DockStyle.Right, Width = 10 };
+                listHost.Controls.Add(grid);
+                listHost.Controls.Add(scroll);
+                empty = new Label { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, Font = uiFont };
+                listHost.Controls.Add(empty); layout.Controls.Add(listHost, 0, 2);
+
+                progress = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0, 3, 0, 2) };
+                progress.Paint += (s, e) => { if (total > 0) using (var brush = new SolidBrush(accent)) e.Graphics.FillRectangle(brush, 0, 0, progress.Width * completed / total, progress.Height); };
+                layout.Controls.Add(progress, 0, 3);
+                notice = new Label { Dock = DockStyle.Fill, AutoEllipsis = true, Padding = new Padding(0, 5, 0, 0), Margin = Padding.Empty };
+                layout.Controls.Add(notice, 0, 4);
+                var output = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty };
+                output.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50)); output.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+                print = MakeButton("In PDF", 180, true); merge = MakeButton("Gộp PDF", 180);
+                ((PdfQueueButton)print).Icon = "print"; ((PdfQueueButton)merge).Icon = "pages";
+                print.Dock = merge.Dock = DockStyle.Fill; print.Margin = new Padding(0, 3, 5, 3); merge.Margin = new Padding(5, 3, 0, 3);
+                output.Controls.Add(print, 0, 0); output.Controls.Add(merge, 1, 0); layout.Controls.Add(output, 0, 5);
+
+                tips.SetToolTip(load, "Thêm selection mới từ Document Manager, giữ thứ tự và bỏ trùng");
+                tips.SetToolTip(clear, "Xóa toàn bộ danh sách chung, không xóa bản vẽ Tekla");
+                tips.SetToolTip(remove, "Bỏ các dòng đã chọn khỏi cả hai bảng · Delete");
+                tips.SetToolTip(grid, "Kéo phần chấm ở đầu dòng để đổi thứ tự in · Alt+↑/↓ cũng di chuyển dòng đã chọn");
+                tips.SetToolTip(close, "Thu gọn panel · Esc · giữ danh sách và kết quả");
+                tips.SetToolTip(print, "In toàn bộ danh sách thành các PDF riêng"); tips.SetToolTip(merge, "In và gộp toàn bộ danh sách thành một PDF");
+                load.Click += async (s, e) => await LoadMoreAsync();
+                remove.Click += (s, e) => EditQueue(RemoveSelected);
+                clear.Click += (s, e) => EditQueue(ClearRows);
+                print.Click += async (s, e) => await PrintAsync(false); merge.Click += async (s, e) => await PrintAsync(true);
+                close.Click += (s, e) => owner.ClosePdfDrawer();
+                owner.dgvDrawings.RowsAdded += MainRowsAdded; owner.dgvDrawings.RowsRemoved += MainRowsRemoved;
+                owner.dgvDrawings.CellValueChanged += MainCellChanged; owner.dgvDrawings.SelectionChanged += MainSelectionChanged;
+                // Gộp thay đổi nhiều cell; chỉ nhận list mới khi worker đã hoàn tất nạp.
+                refreshTimer.Interval = 160;
+                refreshTimer.Tick += (s, e) =>
+                {
+                    if (!Visible) return;
+                    if (!busy && (owner.CanApplyUpdateNow() || owner._pdfCommandRunning) && dirty) RefreshFromMain();
+                    UpdateActions();
+                };
+                refreshTimer.Start();
+                VisibleChanged += (s, e) => { if (Visible && !busy && owner.CanApplyUpdateNow()) RefreshFromMain(); };
+                ready = true;
+                ApplyTheme(); RefreshFromMain();
+                ResumeLayout(true);
+            }
+
+            private static FlowLayoutPanel Row()
+            { return new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Margin = Padding.Empty }; }
+
+            private Button MakeButton(string text, int width, bool primary = false)
+            {
+                return new PdfQueueButton { Text = text, Size = new Size(width, 36), Margin = new Padding(0, 0, 8, 0),
+                    Font = bold, FlatStyle = FlatStyle.Flat, UseVisualStyleBackColor = false, Cursor = Cursors.Hand, Primary = primary };
+            }
+
+            private static System.Drawing.Drawing2D.GraphicsPath RoundedBox(RectangleF r, float radius)
+            {
+                var path = new System.Drawing.Drawing2D.GraphicsPath();
+                float d = Math.Max(1F, Math.Min(radius * 2F, Math.Min(r.Width, r.Height)));
+                path.AddArc(r.Left, r.Top, d, d, 180, 90); path.AddArc(r.Right - d, r.Top, d, d, 270, 90);
+                path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90); path.AddArc(r.Left, r.Bottom - d, d, d, 90, 90); path.CloseFigure();
+                return path;
+            }
+
+            // Icon nét vector, không phụ thuộc glyph/emoji của font Windows.
+            private static void PaintIcon(Graphics g, string icon, RectangleF r, Color color)
+            {
+                var state = g.Save(); g.TranslateTransform(r.X, r.Y); g.ScaleTransform(r.Width / 20F, r.Height / 20F);
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                using (var pen = new Pen(color, 1.6F) { StartCap = System.Drawing.Drawing2D.LineCap.Round, EndCap = System.Drawing.Drawing2D.LineCap.Round, LineJoin = System.Drawing.Drawing2D.LineJoin.Round })
+                {
+                    switch (icon)
+                    {
+                        case "close": g.DrawLine(pen, 5, 5, 15, 15); g.DrawLine(pen, 15, 5, 5, 15); break;
+                        case "plus": g.DrawLine(pen, 4, 10, 16, 10); g.DrawLine(pen, 10, 4, 10, 16); break;
+                        case "up": case "down":
+                            float a = icon == "up" ? 5 : 15, b = icon == "up" ? 10 : 10;
+                            g.DrawLine(pen, 10, 5, 10, 15); g.DrawLines(pen, new[] { new PointF(5, b), new PointF(10, a), new PointF(15, b) }); break;
+                        case "search": g.DrawEllipse(pen, 3, 3, 10, 10); g.DrawLine(pen, 12, 12, 17, 17); break;
+                        case "print":
+                            g.DrawRectangle(pen, 5, 2, 10, 5); g.DrawLines(pen, new[] { new PointF(5, 14), new PointF(2, 14), new PointF(2, 7), new PointF(18, 7), new PointF(18, 14), new PointF(15, 14) });
+                            g.DrawRectangle(pen, 5, 11, 10, 7); break;
+                        case "pages": g.DrawRectangle(pen, 6, 6, 11, 12); g.DrawLines(pen, new[] { new PointF(3, 14), new PointF(3, 2), new PointF(14, 2) }); break;
+                    }
+                }
+                g.Restore(state);
+            }
+
+            private sealed class PdfQueueButton : Button
+            {
+                internal Color BorderTone, DisabledInk, DisabledFill;
+                internal bool Primary, Quiet;
+                internal string Icon;
+                private bool hover;
+                internal PdfQueueButton() { DoubleBuffered = true; ResizeRedraw = true; FlatAppearance.BorderSize = 0; }
+                protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); hover = true; Invalidate(); }
+                protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); hover = false; Invalidate(); }
+                protected override void OnPaint(PaintEventArgs e)
+                {
+                    e.Graphics.Clear(Parent == null ? BackColor : Parent.BackColor);
+                    e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                    var r = new RectangleF(1F, 1F, Math.Max(1, Width - 2F), Math.Max(1, Height - 2F));
+                    using (var path = RoundedBox(r, 8F))
+                    {
+                        Color fill = !Enabled && !Quiet ? DisabledFill : Enabled && hover ? FlatAppearance.MouseOverBackColor : BackColor;
+                        using (var brush = new SolidBrush(fill)) e.Graphics.FillPath(brush, path);
+                        if (!Quiet) using (var pen = new Pen(BorderTone)) e.Graphics.DrawPath(pen, path);
+                    }
+                    Color ink = Enabled ? ForeColor : DisabledInk;
+                    e.Graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+                    using (var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
+                    using (var brush = new SolidBrush(ink))
+                    {
+                        float iconSize = string.IsNullOrEmpty(Icon) ? 0 : 17F;
+                        float textWidth = Text.Length == 0 ? 0 : e.Graphics.MeasureString(Text, Font).Width + 2F;
+                        float gap = iconSize > 0 && textWidth > 0 ? 9F : 0F;
+                        float width = Math.Min(r.Width - 16F, textWidth + iconSize + gap);
+                        float left = r.Left + (r.Width - width) / 2F;
+                        if (iconSize > 0) PaintIcon(e.Graphics, Icon, new RectangleF(left, (Height - iconSize) / 2F, iconSize, iconSize), ink);
+                        if (textWidth > 0) e.Graphics.DrawString(Text, Font, brush, new RectangleF(left + iconSize + gap, r.Top, Math.Max(1, width - iconSize - gap), r.Height), format);
+                    }
+                    if (Focused && ShowFocusCues) { r.Inflate(-4, -4); using (var path = RoundedBox(r, 5)) using (var pen = new Pen(ink)) e.Graphics.DrawPath(pen, path); }
+                }
+            }
+
+            private sealed class PdfQueueGrid : DataGridView
+            {
+                internal Action<MouseEventArgs> GripPressed;
+                internal PdfQueueGrid() { DoubleBuffered = true; ScrollBars = ScrollBars.None; }
+                protected override void OnMouseDown(MouseEventArgs e)
+                {
+                    var hit = HitTest(e.X, e.Y);
+                    if (e.Button == MouseButtons.Left && ModifierKeys == Keys.None && hit.RowIndex >= 0 && hit.ColumnIndex == 0 && Rows[hit.RowIndex].Selected && GripPressed != null)
+                    { GripPressed(e); return; }
+                    base.OnMouseDown(e);
+                }
+                internal int[] VisibleIndices() { return Rows.Cast<DataGridViewRow>().Where(r => r.Visible).Select(r => r.Index).ToArray(); }
+                internal void ScrollToOffset(int offset)
+                {
+                    int[] rows = VisibleIndices(); if (rows.Length == 0) return;
+                    int visible = Math.Max(1, DisplayedRowCount(false));
+                    offset = Math.Max(0, Math.Min(offset, Math.Max(0, rows.Length - visible)));
+                    FirstDisplayedScrollingRowIndex = rows[offset];
+                }
+                protected override void OnMouseWheel(MouseEventArgs e)
+                {
+                    int[] rows = VisibleIndices();
+                    ScrollToOffset(Math.Max(0, Array.IndexOf(rows, FirstDisplayedScrollingRowIndex)) + (e.Delta < 0 ? 3 : -3));
+                }
+            }
+
+            private sealed class PdfQueueScroll : Control
+            {
+                private readonly DataGridView table;
+                private int dragOffset;
+                internal Color ThumbColor;
+                internal PdfQueueScroll(DataGridView table)
+                {
+                    this.table = table; DoubleBuffered = true; TabStop = false;
+                    table.Scroll += OnScroll; table.Resize += OnTableResize;
+                }
+                private void OnScroll(object sender, ScrollEventArgs e) { Invalidate(); }
+                private void OnTableResize(object sender, EventArgs e) { Invalidate(); }
+                private Rectangle Thumb()
+                {
+                    int[] rows = ((PdfQueueGrid)table).VisibleIndices();
+                    int visible = Math.Max(1, table.DisplayedRowCount(false)), track = Math.Max(1, Height - table.ColumnHeadersHeight - 8);
+                    if (rows.Length <= visible) return Rectangle.Empty;
+                    int height = Math.Min(track, Math.Max(28, track * visible / rows.Length));
+                    int first = Math.Max(0, Array.IndexOf(rows, table.FirstDisplayedScrollingRowIndex));
+                    int y = table.ColumnHeadersHeight + 4 + (track - height) * first / Math.Max(1, rows.Length - visible);
+                    return new Rectangle(2, y, Math.Max(3, Width - 4), height);
+                }
+                protected override void OnPaint(PaintEventArgs e)
+                {
+                    base.OnPaint(e); if (table.IsDisposed) return;
+                    Rectangle r = Thumb(); if (r.IsEmpty) return;
+                    e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                    using (var path = RoundedBox(r, 3)) using (var brush = new SolidBrush(ThumbColor)) e.Graphics.FillPath(brush, path);
+                }
+                private void ScrollAt(int y)
+                {
+                    Rectangle thumb = Thumb(); if (thumb.IsEmpty) return;
+                    int max = ((PdfQueueGrid)table).VisibleIndices().Length - Math.Max(1, table.DisplayedRowCount(false));
+                    int track = Math.Max(1, Height - table.ColumnHeadersHeight - 8 - thumb.Height);
+                    ((PdfQueueGrid)table).ScrollToOffset((y - dragOffset - table.ColumnHeadersHeight - 4) * max / track);
+                }
+                protected override void OnMouseDown(MouseEventArgs e)
+                { base.OnMouseDown(e); if (e.Button != MouseButtons.Left) return; Rectangle thumb = Thumb(); dragOffset = thumb.Contains(e.Location) ? e.Y - thumb.Y : thumb.Height / 2; Capture = true; ScrollAt(e.Y); }
+                protected override void OnMouseMove(MouseEventArgs e) { base.OnMouseMove(e); if (Capture) ScrollAt(e.Y); }
+                protected override void OnMouseUp(MouseEventArgs e) { Capture = false; base.OnMouseUp(e); }
+                protected override void Dispose(bool disposing)
+                { if (disposing) { table.Scroll -= OnScroll; table.Resize -= OnTableResize; } base.Dispose(disposing); }
+            }
+
+            internal void ApplyTheme()
+            {
+                if (!ready || IsDisposed || Disposing) return;
+                bool dark = owner._darkMode;
+                surface = dark ? Color.FromArgb(22, 25, 31) : Color.White;
+                ink = dark ? Color.FromArgb(235, 238, 244) : Color.FromArgb(26, 36, 52);
+                muted = dark ? Color.FromArgb(163, 176, 195) : Color.FromArgb(99, 115, 136);
+                border = dark ? Color.FromArgb(53, 60, 71) : Color.FromArgb(222, 228, 237);
+                accent = dark ? owner.ThemeAccentTextColor : Color.FromArgb(37, 99, 210);
+                soft = dark ? Color.FromArgb(48, 38, 30) : Color.FromArgb(233, 241, 254);
+                success = dark ? Color.FromArgb(103, 211, 159) : Color.FromArgb(21, 128, 79);
+                error = dark ? Color.FromArgb(255, 139, 139) : Color.FromArgb(190, 45, 56);
+                ThemeChildren(this);
+                // Layout trong suốt để không phủ phần bo góc của panel cha.
+                layout.BackColor = Color.Transparent;
+                subtitle.ForeColor = notice.ForeColor = muted;
+                listHost.BackColor = surface; progress.BackColor = soft;
+                scroll.BackColor = surface; scroll.ThumbColor = ListScrollThumbColor(dark);
+                grid.BackgroundColor = surface; grid.GridColor = border;
+                grid.DefaultCellStyle.BackColor = surface; grid.DefaultCellStyle.ForeColor = ink;
+                grid.DefaultCellStyle.SelectionBackColor = soft; grid.DefaultCellStyle.SelectionForeColor = ink;
+                grid.ColumnHeadersDefaultCellStyle.BackColor = dark ? Color.FromArgb(30, 35, 44) : Color.FromArgb(244, 247, 251);
+                grid.ColumnHeadersDefaultCellStyle.ForeColor = dark ? accent : muted;
+                grid.ColumnHeadersDefaultCellStyle.SelectionBackColor = grid.ColumnHeadersDefaultCellStyle.BackColor;
+                grid.ColumnHeadersDefaultCellStyle.SelectionForeColor = grid.ColumnHeadersDefaultCellStyle.ForeColor;
+                empty.ForeColor = muted;
+                Invalidate(true);
+            }
+
+            private void ThemeChildren(Control root)
+            {
+                root.BackColor = surface; root.ForeColor = ink;
+                foreach (Control child in root.Controls)
+                {
+                    ThemeChildren(child);
+                    var button = child as PdfQueueButton;
+                    if (button == null) continue;
+                    button.FlatStyle = FlatStyle.Flat; button.FlatAppearance.BorderSize = 0;
+                    button.BackColor = button.Primary ? accent : surface;
+                    button.ForeColor = button.Primary ? (owner._darkMode ? Color.FromArgb(30, 25, 21) : Color.White) : owner._darkMode ? accent : ink;
+                    button.BorderTone = button.Primary ? accent : owner._darkMode ? owner.mainListSurface.BorderColor : border;
+                    button.DisabledInk = muted; button.DisabledFill = owner._darkMode ? Color.FromArgb(30, 34, 41) : Color.FromArgb(240, 243, 248);
+                    button.FlatAppearance.MouseOverBackColor = button.Primary ? ControlPaint.Light(accent, .12F) : soft;
+                }
+            }
+
+            private static int StateGroup(string state)
+            { return state == "PDF OK" || state == "MERGED" ? 2 : state == "PRINT FAIL" ? 3 : 1; }
+
+            private static string StateText(string state, string result)
+            {
+                if (result == "CANCELLED") return "Đã hủy";
+                switch (state)
+                {
+                    case "PDF OK": return "Đã in";
+                    case "MERGED": return "Đã gộp";
+                    case "PRINT FAIL": return "Lỗi in";
+                    case "PRINTING": return "Đang in…";
+                    case "VERIFYING": return "Kiểm tra…";
+                    default: return "Chờ in";
+                }
+            }
+
+            private void PaintStatus(object sender, DataGridViewCellPaintingEventArgs e)
+            {
+                if (!ready || grid.IsDisposed || e.RowIndex < 0 || e.RowIndex >= grid.Rows.Count || e.ColumnIndex < 0) return;
+                // Mỗi ô giữ riêng clip/Graphics; AntiAlias của badge không lan sang ô hoặc hàng sau.
+                var graphicsState = e.Graphics.Save();
+                try
+                {
+                    var clip = Rectangle.Intersect(e.CellBounds, e.ClipBounds);
+                    clip.Intersect(new Rectangle(0, grid.ColumnHeadersHeight, grid.ClientSize.Width,
+                        Math.Max(0, grid.ClientSize.Height - grid.ColumnHeadersHeight)));
+                    e.Graphics.SetClip(clip, System.Drawing.Drawing2D.CombineMode.Intersect);
+                    e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.None;
+                    e.PaintBackground(e.ClipBounds, true);
+                    if (e.ColumnIndex == 0)
+                    {
+                        using (var dot = new SolidBrush(CanReorder ? muted : border))
+                            for (int x = 0; x < 2; x++) for (int y = 0; y < 3; y++)
+                                e.Graphics.FillEllipse(dot, e.CellBounds.Left + 6 + x * 4, e.CellBounds.Top + e.CellBounds.Height / 2 - 5 + y * 4, 2, 2);
+                        var number = e.CellBounds; number.X += 19; number.Width -= 21;
+                        TextRenderer.DrawText(e.Graphics, Convert.ToString(e.FormattedValue), Font, number, muted,
+                            TextFormatFlags.VerticalCenter | TextFormatFlags.Right | TextFormatFlags.PreserveGraphicsClipping
+                            | TextFormatFlags.PreserveGraphicsTranslateTransform);
+                    }
+                    else if (e.ColumnIndex == grid.Columns["RESULT"].Index)
+                    {
+                        string state = Convert.ToString(grid.Rows[e.RowIndex].Cells["RESULT"].Tag);
+                        Color tone = StateGroup(state) == 2 ? success : StateGroup(state) == 3 ? error : owner._darkMode || state == "PRINTING" || state == "VERIFYING" ? accent : muted;
+                        var r = e.CellBounds; r.Inflate(-7, -8);
+                        e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                        using (var path = RoundedBox(r, 5)) using (var fill = new SolidBrush(Color.FromArgb(owner._darkMode ? 26 : 16, tone))) e.Graphics.FillPath(fill, path);
+                        e.Graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+                        using (var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
+                        using (var brush = new SolidBrush(tone)) e.Graphics.DrawString(Convert.ToString(e.FormattedValue), Font, brush, r, format);
+                    }
+                    else e.Paint(e.ClipBounds, DataGridViewPaintParts.ContentForeground);
+
+                    // Vạch ngang 1 pixel thiết bị, liền qua mọi cột và cả dòng chọn; không vẽ viền dọc native.
+                    e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.None;
+                    using (var line = new SolidBrush(grid.GridColor))
+                        e.Graphics.FillRectangle(line, e.CellBounds.Left, e.CellBounds.Bottom - 1, e.CellBounds.Width, 1);
+                }
+                finally { e.Graphics.Restore(graphicsState); }
+                e.Handled = true;
+            }
+
+            // Bo góc 16 px theo kích thước thiết kế; vẽ khử răng cưa, không cắt Region nhị phân.
+            protected override void OnPaintBackground(PaintEventArgs e)
+            {
+                Color outside = Parent == null ? (owner._darkMode ? Color.FromArgb(11, 14, 19) : Color.FromArgb(232, 239, 248)) : Parent.BackColor;
+                e.Graphics.Clear(outside);
+                e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                using (var path = RoundedBox(new RectangleF(1F, 1F, Math.Max(1, Width - 3F), Math.Max(1, Height - 3F)), 16F))
+                using (var fill = new SolidBrush(surface)) e.Graphics.FillPath(fill, path);
+            }
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                base.OnPaint(e); e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                using (var path = RoundedBox(new RectangleF(1F, 1F, Math.Max(1, Width - 3F), Math.Max(1, Height - 3F)), 16F))
+                using (var pen = new Pen(border)) e.Graphics.DrawPath(pen, path);
+            }
+
+            internal void FocusList() { if (ready) grid.Focus(); }
+            private bool CanEdit { get { return ready && !IsDisposed && !Disposing && !owner.IsDisposed && !owner.Disposing && !busy && owner.CanApplyUpdateNow() && !owner.dimensionCheckOpen && !owner.batchShortcutPending && !owner._updateDialogOpen && !owner._updaterHandoffClosing; } }
+            private void MainRowsAdded(object sender, DataGridViewRowsAddedEventArgs e) { dirty = true; }
+            private void MainRowsRemoved(object sender, DataGridViewRowsRemovedEventArgs e) { dirty = true; }
+            private void MainCellChanged(object sender, DataGridViewCellEventArgs e) { dirty = true; }
+            private void MainSelectionChanged(object sender, EventArgs e) { if (!dirty) SyncSelection(true); }
+
+            internal void RefreshFromMain()
+            {
+                if (!ready || IsDisposed || Disposing || owner.IsDisposed || owner.Disposing) return;
+                var queue = owner.ReadMainPdfQueue();
+                if (queue == null) { dirty = true; return; }
+                int first = grid.FirstDisplayedScrollingRowIndex;
+                syncing = true;
+                try
+                {
+                    owner.accumulatedPdfQueue = queue;
+                    grid.Rows.Clear();
+                    for (int i = 0; i < queue.Jobs.Count; i++) grid.Rows.Add(i + 1, queue.Jobs[i].Mark, queue.Jobs[i].Revision, "");
+                    dirty = false;
+                }
+                finally { syncing = false; }
+                SyncPrintResults();
+                if (first >= 0 && first < grid.Rows.Count && grid.Rows[first].Visible) grid.FirstDisplayedScrollingRowIndex = first;
+                SyncSelection(true);
+            }
+
+            internal void ShowPrintRequest(PdfDrawingRequest request) { owner.accumulatedPdfQueue = request; RefreshFromMain(); }
+
+            internal void SyncPrintResults(int index = -1)
+            {
+                if (!ready || IsDisposed || Disposing || owner.IsDisposed || owner.Disposing) return;
+                if (InvokeRequired) { Invoke(new Action(() => SyncPrintResults(index))); return; }
+                if (grid.Rows.Count != owner.dgvDrawings.Rows.Count) return;
+                int end = index >= 0 ? index + 1 : grid.Rows.Count;
+                for (int i = Math.Max(0, index); i < end && i < grid.Rows.Count; i++)
+                {
+                    var source = owner.dgvDrawings.Rows[i]; var cell = grid.Rows[i].Cells["RESULT"];
+                    string state = Convert.ToString(source.Cells["STATUS"].Value);
+                    cell.Tag = state; cell.Value = StateText(state, Convert.ToString(source.Cells["RESULT"].Value));
+                    cell.ToolTipText = Convert.ToString(source.Cells["RESULT"].Value) + " " + source.Cells["RESULT"].ToolTipText;
+                }
+                RefreshSummary();
+                if (index >= 0 && index < grid.Rows.Count)
+                    grid.FirstDisplayedScrollingRowIndex = index;
+                SetNotice(owner.lblStatus.Text);
+            }
+
+            private void RefreshSummary()
+            {
+                if (!ready || IsDisposed || Disposing) return;
+                total = grid.Rows.Count;
+                completed = grid.Rows.Cast<DataGridViewRow>().Count(row => StateGroup(Convert.ToString(row.Cells["RESULT"].Tag)) != 1);
+                subtitle.Text = "Đồng bộ bảng chính  ·  " + total + " bản vẽ";
+                empty.Text = "Danh sách đang trống\r\n\r\nChọn bản vẽ trong Document Manager\r\nrồi bấm + Thêm bản vẽ";
+                empty.Visible = total == 0; if (empty.Visible) empty.BringToFront();
+                scroll.Invalidate(); progress.Invalidate(); SyncSelection(true); UpdateActions();
+            }
+
+            private void SyncSelection(bool fromMain)
+            {
+                if (!ready || IsDisposed || Disposing || owner.IsDisposed || owner.Disposing || syncing || grid.Rows.Count != owner.dgvDrawings.Rows.Count) return;
+                if (!fromMain && dirty && CanEdit) { RefreshFromMain(); return; }
+                syncing = true;
+                try
+                {
+                    if (fromMain)
+                    {
+                        grid.ClearSelection();
+                        foreach (DataGridViewRow row in owner.dgvDrawings.SelectedRows)
+                            if (row.Index < grid.Rows.Count && grid.Rows[row.Index].Visible) grid.Rows[row.Index].Selected = true;
+                    }
+                    else if (CanEdit)
+                    {
+                        owner.dgvDrawings.ClearSelection();
+                        foreach (DataGridViewRow row in grid.SelectedRows) if (row.Visible) owner.dgvDrawings.Rows[row.Index].Selected = true;
+                    }
+                }
+                finally { syncing = false; }
+                UpdateActions();
+            }
+
+            private int[] SelectedIndices()
+            { return grid.SelectedRows.Cast<DataGridViewRow>().Where(r => r.Visible).Select(r => r.Index).OrderBy(i => i).ToArray(); }
+
+            private bool CanReorder { get { return CanEdit && !dirty; } }
+            private sealed class PdfQueueDrag
+            {
+                internal PdfAccumulationForm Owner;
+                internal int[] Indices;
+                internal D.Drawing[] Drawings;
+                internal string Model;
+            }
+
+            private void BeginQueueDrag(object sender, MouseEventArgs e)
+            {
+                var hit = grid.HitTest(e.X, e.Y);
+                dragCandidate = CanReorder && e.Button == MouseButtons.Left && hit.ColumnIndex == 0 && hit.RowIndex >= 0;
+                dragStart = e.Location;
+            }
+
+            private void ContinueQueueDrag(object sender, MouseEventArgs e)
+            {
+                var hit = grid.HitTest(e.X, e.Y);
+                grid.Cursor = CanReorder && hit.ColumnIndex == 0 && hit.RowIndex >= 0 ? Cursors.SizeAll : Cursors.Default;
+                if (!dragCandidate || !CanReorder || e.Button != MouseButtons.Left) return;
+                var threshold = new Rectangle(dragStart.X - SystemInformation.DragSize.Width / 2, dragStart.Y - SystemInformation.DragSize.Height / 2, SystemInformation.DragSize.Width, SystemInformation.DragSize.Height);
+                if (threshold.Contains(e.Location)) return;
+                dragCandidate = false;
+                var drag = new PdfQueueDrag { Owner = this, Indices = SelectedIndices(), Drawings = owner._selectedDrawings.ToArray(), Model = owner.dimensionCheckModelPath };
+                if (drag.Indices.Length == 0) return;
+                activeDrag = drag;
+                try { grid.DoDragDrop(new DataObject(dragFormat, "reorder"), DragDropEffects.Move); }
+                finally { activeDrag = null; dropIndex = -1; grid.Invalidate(); }
+            }
+
+            private PdfQueueDrag ReadDrag(DragEventArgs e)
+            {
+                var drag = e.Data == null || !e.Data.GetDataPresent(dragFormat) ? null : activeDrag;
+                if (!CanReorder || drag == null || drag.Owner != this || drag.Model != owner.dimensionCheckModelPath
+                    || drag.Drawings.Length != owner._selectedDrawings.Count) return null;
+                for (int i = 0; i < drag.Drawings.Length; i++) if (!ReferenceEquals(drag.Drawings[i], owner._selectedDrawings[i])) return null;
+                return drag;
+            }
+
+            private long lastDragScroll;
+            private void QueueDragOver(object sender, DragEventArgs e)
+            {
+                if (ReadDrag(e) == null) { e.Effect = DragDropEffects.None; dropIndex = -1; grid.Invalidate(); return; }
+                var p = grid.PointToClient(new Point(e.X, e.Y));
+                long now = DateTime.UtcNow.Ticks;
+                if (now - lastDragScroll > TimeSpan.TicksPerMillisecond * 120)
+                {
+                    if (p.Y < grid.ColumnHeadersHeight + 15) ((PdfQueueGrid)grid).ScrollToOffset(grid.FirstDisplayedScrollingRowIndex - 1);
+                    else if (p.Y > grid.Height - 18) ((PdfQueueGrid)grid).ScrollToOffset(grid.FirstDisplayedScrollingRowIndex + 1);
+                    lastDragScroll = now;
+                }
+                var hit = grid.HitTest(p.X, p.Y);
+                dropIndex = hit.RowIndex < 0 ? (p.Y < grid.ColumnHeadersHeight ? 0 : grid.Rows.Count) : hit.RowIndex;
+                if (hit.RowIndex >= 0)
+                {
+                    Rectangle row = grid.GetRowDisplayRectangle(hit.RowIndex, false);
+                    if (p.Y > row.Top + row.Height / 2) dropIndex++;
+                }
+                e.Effect = DragDropEffects.Move; grid.Invalidate();
+            }
+
+            private void QueueDragDrop(object sender, DragEventArgs e)
+            {
+                var drag = ReadDrag(e); int target = dropIndex; dropIndex = -1;
+                if (drag != null && target >= 0) EditQueue(() => MoveRowsTo(drag.Indices, target));
+                grid.Invalidate();
+            }
+
+            private void PaintDropMarker(object sender, PaintEventArgs e)
+            {
+                if (dropIndex < 0 || grid.Rows.Count == 0) return;
+                Rectangle row = grid.GetRowDisplayRectangle(Math.Min(dropIndex, grid.Rows.Count - 1), false);
+                int y = dropIndex == grid.Rows.Count ? row.Bottom - 1 : row.Top;
+                if (y < grid.ColumnHeadersHeight || y >= grid.Height) return;
+                using (var pen = new Pen(accent, 2F)) e.Graphics.DrawLine(pen, 4, y, grid.Width - 4, y);
+                using (var dot = new SolidBrush(accent)) e.Graphics.FillEllipse(dot, 2, y - 3, 6, 6);
+            }
+
+            private void MoveRowsTo(int[] indices, int target)
+            {
+                if (!CanReorder || indices.Length == 0) return;
+                var queue = owner.ReadMainPdfQueue(); if (queue == null) return;
+                if (indices.Any(i => i < 0 || i >= queue.Jobs.Count) || target < 0 || target > queue.Jobs.Count) return;
+                var selected = new HashSet<int>(indices);
+                var order = Enumerable.Range(0, queue.Jobs.Count).Where(i => !selected.Contains(i)).ToList();
+                int insert = target - selected.Count(i => i < target);
+                order.InsertRange(insert, indices.OrderBy(i => i));
+                if (order.SequenceEqual(Enumerable.Range(0, queue.Jobs.Count))) return;
+                var next = new PdfDrawingRequest { ModelPath = queue.ModelPath, Source = queue.Source };
+                foreach (int i in order) { next.Jobs.Add(queue.Jobs[i]); next.Changes.Add(queue.Changes[i]); }
+                owner.PublishPdfQueue(next); RefreshFromMain(); owner.dgvDrawings.ClearSelection();
+                for (int i = 0; i < indices.Length; i++) owner.dgvDrawings.Rows[insert + i].Selected = true;
+                SyncSelection(true); SetNotice("Đã cập nhật thứ tự in ở cả hai bảng.");
+            }
+
+            private void UpdateActions()
+            {
+                if (!ready || IsDisposed || Disposing) return;
+                int[] selected = SelectedIndices(); bool editable = CanEdit && !dirty;
+                load.Enabled = editable; clear.Enabled = editable && grid.Rows.Count > 0;
+                remove.Enabled = editable && selected.Length > 0;
+                remove.Visible = selected.Length > 0;
+                print.Enabled = merge.Enabled = editable && grid.Rows.Count > 0 && !string.IsNullOrEmpty(owner.dimensionCheckModelPath);
+            }
+
+            private void SetBusy(bool value) { busy = value; UpdateActions(); }
+            private void SetNotice(string value) { notice.Text = value; tips.SetToolTip(notice, value); }
+            private void ReportError(Exception error) { owner.ReportPdfQueueError(error); SetNotice(owner.lblStatus.Text); }
+            private void EditQueue(Action action) { try { action(); } catch (Exception ex) { ReportError(ex); } }
+
+            private async Task LoadMoreAsync()
+            {
+                if (!CanEdit || !owner.EnsureSessionCommandTarget()) return;
+                var current = owner.ReadMainPdfQueue();
+                if (current == null) { SetNotice("Danh sách đang cập nhật. Hãy thử lại sau khi nạp xong."); return; }
+                RefreshFromMain();
+                int before = current.Jobs.Count;
+                SetBusy(true); SetNotice("Đang đọc các bản vẽ được chọn…");
+                PdfDrawingRequest next = null;
+                try
+                {
+                    await owner.ExecuteTeklaCommandAsync("Thêm bản vẽ PDF", () => next = owner.CapturePdfAdditionCore(before == 0 ? null : current));
+                    if (next == null) { SetNotice(owner.lblStatus.Text); return; }
+                    owner.PublishPdfQueue(next); RefreshFromMain();
+                    SetNotice(next.Jobs.Count == before ? "Các bản được chọn đã có trong danh sách." : "Đã thêm " + (next.Jobs.Count - before) + " bản vẽ · đã đồng bộ bảng chính.");
+                }
+                catch (Exception ex) { ReportError(ex); }
+                finally { SetBusy(false); }
+            }
+
+            private void ClearRows()
+            {
+                if (!CanEdit) return;
+                owner.PublishPdfQueue(new PdfDrawingRequest { ModelPath = owner.dimensionCheckModelPath, Source = "danh sách đồng bộ MainForm" });
+                RefreshFromMain(); SetNotice("Đã xóa danh sách ở cả hai bảng. Bản vẽ Tekla được giữ nguyên.");
+            }
+
+            private void RemoveSelected()
+            {
+                if (!CanEdit) return;
+                if (dirty) { RefreshFromMain(); SetNotice("Danh sách vừa đổi ở bảng chính. Hãy chọn lại dòng cần bỏ."); return; }
+                int[] selected = SelectedIndices(); var queue = owner.ReadMainPdfQueue();
+                if (queue == null || selected.Length == 0) return;
+                foreach (int i in selected.Reverse()) { queue.Jobs.RemoveAt(i); queue.Changes.RemoveAt(i); }
+                owner.PublishPdfQueue(queue); RefreshFromMain(); SetNotice("Đã bỏ " + selected.Length + " dòng khỏi danh sách chung.");
+            }
+
+            private void MoveSelected(int direction)
+            {
+                if (!CanEdit) return;
+                if (dirty) { RefreshFromMain(); SetNotice("Danh sách vừa đổi ở bảng chính. Hãy chọn lại dòng cần di chuyển."); return; }
+                int[] selected = SelectedIndices(); var queue = owner.ReadMainPdfQueue();
+                if (queue == null || selected.Length == 0 || selected[0] + direction < 0 || selected[selected.Length - 1] + direction >= queue.Jobs.Count) return;
+                foreach (int i in direction < 0 ? selected : selected.Reverse())
+                {
+                    var job = queue.Jobs[i + direction]; queue.Jobs[i + direction] = queue.Jobs[i]; queue.Jobs[i] = job;
+                    var change = queue.Changes[i + direction]; queue.Changes[i + direction] = queue.Changes[i]; queue.Changes[i] = change;
+                }
+                owner.PublishPdfQueue(queue); RefreshFromMain();
+                owner.dgvDrawings.ClearSelection(); foreach (int i in selected) owner.dgvDrawings.Rows[i + direction].Selected = true;
+                SyncSelection(true); SetNotice("Đã đổi thứ tự in và đồng bộ bảng chính.");
+            }
+
+            private async Task PrintAsync(bool mergeFiles)
+            {
+                if (!CanEdit || !owner.EnsureSessionCommandTarget()) return;
+                var request = owner.ReadMainPdfQueue();
+                if (request == null) { SetNotice("Danh sách đang cập nhật. Hãy thử lại sau khi nạp xong."); return; }
+                RefreshFromMain();
+                if (request.Jobs.Count == 0) return;
+                SetBusy(true);
+                try
+                {
+                    SetNotice("Đang chuẩn bị " + grid.Rows.Count + " bản vẽ…");
+                    await owner.RunAccumulatedPdfCommandAsync(mergeFiles, request, this);
+                }
+                catch (Exception ex) { ReportError(ex); }
+                finally { SetBusy(false); RefreshFromMain(); }
+            }
+
+            protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+            {
+                if (keyData == Keys.Escape) { owner.ClosePdfDrawer(); return true; }
+                if (keyData == Keys.Delete) { EditQueue(RemoveSelected); return true; }
+                if (keyData == (Keys.Alt | Keys.Up)) { EditQueue(() => MoveSelected(-1)); return true; }
+                if (keyData == (Keys.Alt | Keys.Down)) { EditQueue(() => MoveSelected(1)); return true; }
+                return base.ProcessCmdKey(ref msg, keyData);
+            }
+
+            protected override void Dispose(bool disposing)
+            {
+                if (disposing)
+                {
+                    ready = false;
+                    refreshTimer.Stop(); refreshTimer.Dispose(); tips.Dispose();
+                    owner.dgvDrawings.RowsAdded -= MainRowsAdded; owner.dgvDrawings.RowsRemoved -= MainRowsRemoved;
+                    owner.dgvDrawings.CellValueChanged -= MainCellChanged; owner.dgvDrawings.SelectionChanged -= MainSelectionChanged;
+                }
+                base.Dispose(disposing);
+                if (disposing) { bold.Dispose(); uiFont.Dispose(); titleFont.Dispose(); }
+            }
+        }
+
+
+        // Chốt nguồn + metadata trên worker trước khi thay list; lỗi đọc không ghi kết quả lên list cũ.
+        private PdfDrawingRequest CapturePdfDrawingRequestCore()
+        {
+            var model=new Tekla.Structures.Model.Model();
+            var handler=new D.DrawingHandler();
+            if(!model.GetConnectionStatus()||!handler.GetConnectionStatus())
+                throw new InvalidOperationException("Chưa kết nối được Tekla Model/Drawing.");
+            string modelPath=model.GetInfo().ModelPath;
+            if(string.IsNullOrEmpty(modelPath))throw new InvalidOperationException("Chưa xác định được model nguồn để in.");
+            var targets=DrawingTargetSelection.ResolveForOutput(handler.GetActiveDrawing(),
+                ()=>ReadDocumentManagerDrawingsCore(handler),()=>ReadSelectedContextRowsCore(modelPath),
+                (a,b)=>a.IsSameDatabaseObject(b));
+            if(targets.Drawings.Count==0)
+                throw new InvalidOperationException("Hãy chọn bản vẽ trong Document Manager, chọn dòng trong TTSK hoặc mở một bản vẽ để in.");
+            var request=new PdfDrawingRequest {ModelPath=modelPath,Source=targets.Source,
+                SameCheckTargets=string.Equals(modelPath,dimensionCheckModelPath,StringComparison.OrdinalIgnoreCase)
+                    && targets.Drawings.Count==_selectedDrawings.Count
+                    && !targets.Drawings.Where((drawing,i)=>!drawing.IsSameDatabaseObject(_selectedDrawings[i])).Any()};
+            foreach(var drawing in targets.Drawings)
+            {
+                request.Jobs.Add(new DrawingPdfPrintJob {Drawing=drawing,Mark=SafeDrawingMark(drawing),
+                    Revision=SafeDrawingRevision(drawing),DrawnBy=DrawingPdfPrinter.GetDrawingDrawnBy(drawing)});
+                request.Changes.Add(SafeDrawingChanges(drawing));
+            }
+            new Tekla.Technology.Akit.UserScript.PHU_DimensionBatch.TeklaAdapter(modelPath).EnsureContext();
+            return request;
+        }
+
+        // UI kết quả của lượt PDF, không đổi mode Active/Batch mà người dùng đang làm.
+        private void ShowPdfDrawingRequest(PdfDrawingRequest request)
+        {
+            if(!request.SameCheckTargets)ResetDimensionCheckBatch();
+            dimensionCheckModelPath=request.ModelPath;
+            _resumeIndex=0;_stopRequested=false;
+            _selectedDrawings.Clear();_selectedDrawings.AddRange(request.Jobs.Select(job=>job.Drawing));
+            dgvDrawings.Rows.Clear();
+            for(int i=0;i<request.Jobs.Count;i++)
+                AddDrawingGridRow(i+1,request.Jobs[i].Mark,request.Jobs[i].Revision,request.Changes[i]);
+            dgvDrawings.ClearSelection();
+            lblCount.Text="PDF: "+request.Jobs.Count+" bản vẽ";
+            SetMainStatus("Nguồn PDF: "+request.Source+" | "+request.Jobs.Count+" bản vẽ",MainStatusKind.Information);
+        }
+
+        // Snapshot giữ chính sách nguồn hiện có và không mở thêm Drawing Editor.
+        private void LoadContextDrawingsCore(bool activateSingle)
+        {
+            var model=new Tekla.Structures.Model.Model();
+            var handler=new D.DrawingHandler();
+            if(!model.GetConnectionStatus()||!handler.GetConnectionStatus())
+                throw new InvalidOperationException("Chưa kết nối được Tekla Model/Drawing.");
+            string modelPath=model.GetInfo().ModelPath;
+            bool preferActive=ReadUi(()=>rbActive.Checked);
+            var targets=DrawingTargetSelection.Resolve(preferActive,handler.GetActiveDrawing(),
+                ()=>ReadSelectedContextRowsCore(modelPath),()=>ReadDocumentManagerDrawingsCore(handler),
+                (a,b)=>a.IsSameDatabaseObject(b));
+            if(targets.Drawings.Count==0)
+                throw new InvalidOperationException("Hãy mở một bản vẽ hoặc chọn bản vẽ trong danh sách / Document Manager.");
+            bool useActive=targets.IsActive;
+            if(activateSingle && targets.Drawings.Count==1)
+            {
+                ActivateSingleContextDrawingCore(targets.Drawings[0],modelPath);
+                useActive=true;
+            }
+            // Cùng model và cùng danh sách: giữ kết quả/tiến độ Check DIM để tiếp tục.
+            bool sameTargets=string.Equals(modelPath,dimensionCheckModelPath,StringComparison.OrdinalIgnoreCase)
+                && targets.Drawings.Count==_selectedDrawings.Count
+                && !targets.Drawings.Where((drawing,i)=>!drawing.IsSameDatabaseObject(_selectedDrawings[i])).Any();
+            if(!sameTargets)ResetDimensionCheckBatch();
+            dimensionCheckModelPath=modelPath;
+            _resumeIndex=0;_stopRequested=false;
+            _selectedDrawings.Clear();_selectedDrawings.AddRange(targets.Drawings);
+            Ui(()=>
+            {
+                rbActive.Checked=useActive;rbBatch.Checked=!useActive;
+                UpdateModeUi();
+                ApplyDataCenterModeUi();
+            });
+            RefreshContextDrawingRows();
+            SetMainStatus("Đã chọn "+targets.Drawings.Count+" bản từ "+targets.Source,MainStatusKind.Information);
+        }
+
+        // Một bản đã mở dùng Active gọn; kết quả lỗi Scale có writer riêng, luôn hiện dòng.
+        private void RefreshContextDrawingRows()
+        {
+            Ui(()=>dgvDrawings.Rows.Clear());
+            if(_selectedDrawings.Count>1 || ReadUi(()=>rbBatch.Checked))
+            for(int i=0;i<_selectedDrawings.Count;i++)
+            {
+                var d=_selectedDrawings[i];
+                AddDrawingGridRow(i+1,SafeDrawingMark(d),SafeDrawingRevision(d),SafeDrawingChanges(d));
+            }
+            string singleMark=_selectedDrawings.Count==1?SafeDrawingMark(_selectedDrawings[0]):null;
+            Ui(()=>{dgvDrawings.ClearSelection();lblCount.Text=_selectedDrawings.Count==1
+                ? "1 bản vẽ: "+singleMark : "Tổng số bản vẽ:  "+_selectedDrawings.Count;});
+        }
+    }
+}
+#endregion
+
+#region DrawingTargetSelection
+
+namespace TTSK_AutoDim_Plates
+{
+    using System;
+    using System.Collections.Generic;
+
+    internal static class DrawingTargetSelection
+    {
+        internal sealed class Result<T>
+        {
+            internal readonly List<T> Drawings = new List<T>();
+            internal string Source;
+            internal bool IsActive;
+        }
+
+        internal static Result<T> Resolve<T>(bool preferActive, T active,
+            Func<IList<T>> rows, Func<IList<T>> documentManager, Func<T,T,bool> same) where T : class
+        {
+            var result=new Result<T>();
+            if(preferActive && active!=null)
+            {result.Drawings.Add(active);result.Source="bản vẽ đang mở";result.IsActive=true;return result;}
+            var selected=rows();
+            result.Source="dòng đang chọn trong danh sách";
+            if(selected.Count==0){selected=documentManager();result.Source="Document Manager";}
+            foreach(var drawing in selected)
+                if(drawing!=null&&!result.Drawings.Exists(existing=>same(existing,drawing)))result.Drawings.Add(drawing);
+            if(result.Drawings.Count==0&&active!=null)
+            {result.Drawings.Add(active);result.Source="bản vẽ đang mở";result.IsActive=true;}
+            return result;
+        }
+
+        // In/xuất lấy selection Tekla mới ở mỗi lệnh; mode và list cũ không ghim nguồn in.
+        internal static Result<T> ResolveForOutput<T>(T active,
+            Func<IList<T>> documentManager, Func<IList<T>> rows, Func<T,T,bool> same) where T : class
+        {
+            var result=new Result<T>();
+            var selected=documentManager();
+            result.Source="Document Manager";
+            if(selected.Count==0){selected=rows();result.Source="dòng đang chọn trong TTSK";}
+            foreach(var drawing in selected)
+                if(drawing!=null&&!result.Drawings.Exists(existing=>same(existing,drawing)))result.Drawings.Add(drawing);
+            if(result.Drawings.Count==0&&active!=null)
+            {result.Drawings.Add(active);result.Source="bản vẽ đang mở";result.IsActive=true;}
+            return result;
+        }
+    }
+}
+#endregion
 
 #region MainForm.CheckMenu - Menu kiểm tra DIM, scale và revision
 
@@ -34,11 +1173,22 @@ namespace TTSK_AutoDim_Plates
         private SafeRoundedButton btnCheckRevision;
         private Timer checkMenuCloseTimer;
         private B.Session dimensionCheckBatch;
+        private B.Session comboCheckBatch;
         private string dimensionCheckModelPath;
         private bool dimensionCheckOpen;
 
+        // Control phát Click trước MouseClick; chuột phải không được chạy Check DIM cũ.
+        private sealed class CheckDimEntryButton : SafeRoundedButton
+        {
+            protected override void OnClick(EventArgs e)
+            {
+                var mouse = e as MouseEventArgs;
+                if (mouse == null || mouse.Button != MouseButtons.Right) base.OnClick(e);
+            }
+        }
+
         private void ResetDimensionCheckBatch()
-        {dimensionCheckBatch=null;dimensionCheckModelPath=null;}
+        {dimensionCheckBatch=null;comboCheckBatch=null;dimensionCheckModelPath=null;}
         private void CaptureDimensionCheckBatchSource()
         {
             var model=new Tekla.Structures.Model.Model();
@@ -48,7 +1198,7 @@ namespace TTSK_AutoDim_Plates
         private void InitializeCheckMenu()
         {
             checkMenuHost = new Panel { Visible = false, BackColor = Color.Transparent, Padding = Padding.Empty, Margin = Padding.Empty };
-            btnCheckDim = new SafeRoundedButton { Text = "⌕  Check Dim", TabStop = true };
+            btnCheckDim = new CheckDimEntryButton { Text = "⌕  Check Dim", TabStop = true };
             btnCheckRevision = new SafeRoundedButton { Text = "↺  Revision", TabStop = true };
             btnCheckScale.IconAlignmentReference = btnCheckScale.Text;
             btnCheckDim.IconAlignmentReference = btnCheckScale.Text;
@@ -72,6 +1222,10 @@ namespace TTSK_AutoDim_Plates
                 control.MouseLeave += delegate { ScheduleCheckMenuClose(); };
             }
             btnCheckDim.Click += delegate { RunDimensionCheck(); };
+            btnCheckDim.MouseClick += delegate(object sender, MouseEventArgs e)
+            {
+                if (e.Button == MouseButtons.Right) RunComboCheckShortcut();
+            };
             btnCheckRevision.Click += delegate { RunRevisionCheck(); };
             btnCheckDim.KeyDown += delegate(object sender, KeyEventArgs e)
             { if (e.KeyCode == Keys.Down) { btnCheckRevision.Focus(); e.Handled = e.SuppressKeyPress = true; } };
@@ -128,15 +1282,85 @@ namespace TTSK_AutoDim_Plates
                     || !model.GetConnectionStatus()
                     || !string.Equals(model.GetInfo().ModelPath,dimensionCheckModelPath,StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("Bản vẽ/model hiện hành đã đổi. Hãy chạy Check DIM lại.");
-                var result=Tekla.Technology.Akit.UserScript.PHU_DimensionCheck.Analyze();
+                // Gắn cả lần đầu và F5 vào cùng model/định danh, không đọc sang bản vừa đổi.
+                var adapter=new B.TeklaAdapter(dimensionCheckModelPath);
+                var entry=new B.Entry {Drawing=active};
+                var result=adapter.Analyze(entry);
                 Tekla.Technology.Akit.UserScript.PHU_DimensionCheck.AcceptRecheck(result);
                 using(var report=new Tekla.Technology.Akit.UserScript.PHU_DimensionReportForm(result,_darkMode,
-                    ()=>{result=Tekla.Technology.Akit.UserScript.PHU_DimensionCheck.Analyze();return result;}))report.ShowDialog(this);
+                    ()=>{result=adapter.Analyze(entry);return result;},
+                    (snapshot,finding)=>{adapter.ValidateActive(entry);Tekla.Technology.Akit.UserScript.PHU_DimensionReportForm.SelectInTekla(snapshot,finding);}))report.ShowDialog(this);
                 bool attention=result.Warnings.Count>0||result.Findings.Any(f=>f.Status=="ERROR"||f.Status=="REVIEW");
                 SetMainStatus("Check DIM: "+result.Summary,attention?MainStatusKind.Warning:MainStatusKind.Success);
             }
             catch(Exception ex){SetMainStatus("Check DIM chưa hoàn tất: "+ex.GetBaseException().Message,MainStatusKind.Warning);}
             finally{dimensionCheckOpen=false;}
+        }
+
+        private void RunComboCheckCore()
+        {
+            if(operationRunning||sessionSwitching||dimensionCheckOpen||!EnsureSessionCommandTarget())return;
+            if(_selectedDrawings.Count==0||_snapshotExportRunning||_isBatchRunning||_fitAndCleanupRunning||!btnCheckScale.Enabled)return;
+            dimensionCheckOpen=true;
+            try
+            {
+                TeklaSessionCoordinator.VerifyConnection();
+                var adapter=new B.TeklaAdapter(dimensionCheckModelPath);adapter.EnsureContext();
+                var drawings=_selectedDrawings.ToList();
+                if(comboCheckBatch==null||comboCheckBatch.Entries.Count!=drawings.Count||
+                    comboCheckBatch.Entries.Where((e,i)=>!e.Drawing.IsSameDatabaseObject(drawings[i])).Any())
+                {
+                    var entries=drawings.Select((d,i)=>new B.Entry {Key=Guid.NewGuid().ToString("N"),Number=i+1,
+                        Name=SafeDrawingMark(d)+" / "+d.Name,Drawing=d,Supported=d is D.AssemblyDrawing||d is D.SinglePartDrawing}).ToList();
+                    // Cùng một lần mở cho cả ba bước, đóng duy nhất bản hidden do phiên này mở.
+                    comboCheckBatch=new B.Session(entries,adapter,dimensionCheckModelPath,
+                        (entry,progress)=>AnalyzeComboDrawing(entry,adapter,progress));
+                }
+                using(var report=new Tekla.Technology.Akit.UserScript.PHU_DimensionReportForm(comboCheckBatch,_darkMode,true,
+                    work=>teklaOperations.RunAsync(()=>{TeklaSessionCoordinator.VerifyConnection();work();})))report.ShowDialog(this);
+                int correct=comboCheckBatch.Entries.Count(e=>e.Status==B.State.Passed);
+                int errors=comboCheckBatch.Entries.Count(e=>e.Status==B.State.NeedsAttention);
+                SetMainStatus("Check bản vẽ: "+correct+" đúng · "+errors+" có lỗi · "+
+                    (comboCheckBatch.Entries.Count-correct-errors)+" chưa xác minh",
+                    correct==comboCheckBatch.Entries.Count?MainStatusKind.Success:MainStatusKind.Warning);
+            }
+            catch(Exception ex){SetMainStatus("Check bản vẽ: "+ex.GetBaseException().Message,MainStatusKind.Warning);}
+            finally{dimensionCheckOpen=false;}
+        }
+
+        private static B.ComboResult AnalyzeComboDrawing(B.Entry entry,B.TeklaAdapter adapter,Action progress)
+        {
+            var combo=new B.ComboResult(entry.Drawing is D.AssemblyDrawing);entry.Combo=combo;
+            B.RunComboStep(combo.Scale,entry,adapter,progress,()=>ReadComboScale(new D.DrawingHandler().GetActiveDrawing(),combo.Scale));
+            B.RunComboStep(combo.Dim,entry,adapter,progress,()=>combo.AcceptDimensions(adapter.Analyze(entry)));
+            if(combo.Rotation!=null)B.RunComboStep(combo.Rotation,entry,adapter,progress,()=>
+            {
+                var checks=Keyplan.Reader.CheckCurrentViews(Keyplan.Reader.CaptureGeometry());
+                int wrong=checks.Count(c=>c.State==Keyplan.ViewAxisState.Misaligned);
+                int unknown=checks.Count(c=>c.State==Keyplan.ViewAxisState.Unverified);
+                combo.Rotation.Status=wrong>0?B.CheckState.Error:unknown>0?B.CheckState.Unverified:B.CheckState.Passed;
+                combo.Rotation.Summary=wrong>0?wrong+" view sai"+(unknown>0?" · "+unknown+" chưa xác minh":""):
+                    unknown>0?unknown+" view chưa xác minh":checks.Count+" view đúng";
+                foreach(var check in checks.Where(c=>c.State!=Keyplan.ViewAxisState.Correct))
+                    combo.Rotation.Details.Add(check.Label+" · "+check.Message);
+            });
+            return combo;
+        }
+        private static void ReadComboScale(D.Drawing drawing,B.CheckItem result)
+        {
+            // Cùng Title3/phạm vi view của Check Scale; đọc API trực tiếp, không select hay lưu view.
+            string title=GetDrawingTitle3Scale(drawing);
+            var scales=new List<B.ScaleSample>();var views=drawing.GetSheet().GetAllViews();
+            while(views.MoveNext())
+            {
+                var view=views.Current as D.View;if(view==null)continue;
+                string type=GetScaleCheckViewTypeLabel(view);if(type.Length==0)continue;
+                string label=type+(string.IsNullOrWhiteSpace(view.Name)?"":" · "+view.Name);
+                double? value=null;
+                try {value=view.Attributes.Scale;}catch { }
+                scales.Add(new B.ScaleSample {Name=label,Scale=value});
+            }
+            B.EvaluateScale(result,title,scales);
         }
 
         private void RunRevisionCheck()
@@ -282,6 +1506,7 @@ namespace TTSK_AutoDim_Plates
             btnCheckRevision.TextColor = btnCheckScale.TextColor;
             btnCheckRevision.BorderRadius = btnCheckScale.BorderRadius;
             btnCheckRevision.ConnectedTop = true;
+            btnCheckRevision.ConnectedBottom = false;
             btnCheckRevision.FlushOuterEdge = btnCheckScale.FlushOuterEdge;
             btnCheckRevision.Invalidate();
             checkMenuHost.Invalidate();
@@ -307,6 +1532,8 @@ namespace TTSK_AutoDim_Plates
         private int pendingTeklaProcess;
         private bool sessionDiscoveryRunning;
         private bool workspaceRefreshRequired;
+        // Chặn lệnh khi chưa rõ kết nối khác với bắt buộc tạo phiên mới sau khi xác nhận model đã đóng.
+        private bool workspaceResetRequired;
         private DateTime sessionRetryAfterUtc;
         private string sessionCandidateKey;
         private DateTime sessionCandidateSinceUtc;
@@ -327,14 +1554,15 @@ namespace TTSK_AutoDim_Plates
 
         private void InitializeTeklaSessionUi()
         {
-            if (TeklaSessionCoordinator.Current == null) return;
+            workspaceRefreshRequired = TeklaSessionCoordinator.Current == null;
             string known = Environment.GetEnvironmentVariable("TTSK_SESSION_KNOWN");
             if (!string.IsNullOrEmpty(known))
                 foreach (string key in known.Split(';')) knownTeklaSessions.Add(key);
-            else
+            else if (TeklaSessionCoordinator.Current != null)
                 foreach (var target in TeklaSessionCoordinator.Discover().Where(t => !string.IsNullOrEmpty(t.ModelFolder)))
                     knownTeklaSessions.Add(target.Id + ":" + target.Started);
-            knownTeklaSessions.Add(TeklaSessionCoordinator.Current.Id + ":" + TeklaSessionCoordinator.Current.Started);
+            if (TeklaSessionCoordinator.Current != null)
+                knownTeklaSessions.Add(TeklaSessionCoordinator.Current.Id + ":" + TeklaSessionCoordinator.Current.Started);
             int savedX, savedY;
             if (int.TryParse(Environment.GetEnvironmentVariable("TTSK_SESSION_X"), out savedX)
                 && int.TryParse(Environment.GetEnvironmentVariable("TTSK_SESSION_Y"), out savedY))
@@ -359,7 +1587,7 @@ namespace TTSK_AutoDim_Plates
                     if (targets.Count == 0) { SetMainStatus("Đang chờ Tekla mở model…", MainStatusKind.Information); return; }
                     var target = TeklaSessionCoordinator.Choose(this, targets);
                     pendingTeklaProcess = 0;
-                    if (target != null) SwitchTeklaSession(target);
+                    if (target != null) SwitchTeklaSession(target, true);
                 }
                 catch (Exception ex) { if (!IsDisposed) SetMainStatus("Chưa đọc được phiên Tekla.", MainStatusKind.Warning); TTSK_AutoDim_Plates.Updater.UpdateSecurity.Log(Application.StartupPath, "Session picker: " + ex); }
                 finally { sessionDiscoveryRunning = false; }
@@ -373,7 +1601,12 @@ namespace TTSK_AutoDim_Plates
             sessionForegroundHook = SetWinEventHook(3, 3, IntPtr.Zero, sessionForegroundCallback, 0, 0, 0);
             sessionTimer = new System.Windows.Forms.Timer { Interval = 500 }; // ms; chỉ chuyển khi không có lệnh/dialog.
             sessionTimer.Tick += async delegate { await PollTeklaWorkspaceAsync(); };
-            Shown += delegate { sessionTimer.Start(); };
+            Shown += delegate
+            {
+                if (TeklaSessionCoordinator.Current == null)
+                    SetMainStatus("Chưa kết nối Tekla · Có thể xem nhật ký dự án.", MainStatusKind.Information);
+                sessionTimer.Start();
+            };
             Disposed += delegate
             {
                 sessionTimer.Dispose();
@@ -398,12 +1631,18 @@ namespace TTSK_AutoDim_Plates
                 });
                 if (IsDisposed || !CanSwitchTeklaSession() || requested != pendingTeklaProcess) return;
                 var bound = TeklaSessionCoordinator.Current;
-                var current = snapshot.Ready.Find(t => t.Id == bound.Id && t.Started == bound.Started);
+                var current = bound == null ? null : snapshot.Ready.Find(t => t.Id == bound.Id && t.Started == bound.Started);
                 if (current == null && !workspaceRefreshRequired)
                 {
                     workspaceRefreshRequired = true;
-                    workspaceStatusWaiting = true;
-                    SetMainStatus("Đang chờ Tekla mở model…", MainStatusKind.Information);
+                }
+                var observed = bound == null ? null : snapshot.All.Find(t => t.Id == bound.Id && t.Started == bound.Started);
+                if (current == null && observed != null && string.IsNullOrWhiteSpace(observed.ModelFolder) && !workspaceResetRequired)
+                {
+                    // Title trống/IsReady=false chưa chứng minh đã đóng model; kiểm chỉ đọc trên STA Tekla.
+                    bool closed = await teklaOperations.RunAsync(TeklaSessionCoordinator.IsBoundModelClosed);
+                    if (IsDisposed || !CanSwitchTeklaSession() || requested != pendingTeklaProcess) return;
+                    if (closed) workspaceResetRequired = true;
                 }
                 TeklaSessionTarget target = null;
                 if (TeklaSessionCoordinator.FollowForeground && requested != 0)
@@ -418,22 +1657,17 @@ namespace TTSK_AutoDim_Plates
                 }
                 else if (current != null)
                 {
-                    if (!workspaceRefreshRequired && TeklaSessionCoordinator.SameWorkspace(current, bound, TeklaSessionCoordinator.ModelPath))
-                    {
-                        sessionCandidateKey = null;
-                        if (workspaceStatusWaiting) { workspaceStatusWaiting = false; SetMainStatus("Sẵn sàng.", MainStatusKind.Information); }
-                        return;
-                    }
-                    workspaceRefreshRequired = true;
                     target = current;
                 }
                 else
                 {
                     // Phiên cũ đã đóng: một phiên sẵn sàng duy nhất thì đề xuất; nhiều phiên chờ người dùng chọn.
-                    if (!workspaceSelectionCancelled && !snapshot.All.Any(t => t.Id == bound.Id && t.Started == bound.Started) && snapshot.Ready.Count == 1)
+                    if (!workspaceSelectionCancelled && (bound == null || TeklaSessionCoordinator.HasProcessExited(bound)) && snapshot.Ready.Count == 1)
                         target = snapshot.Ready[0];
                     else { sessionCandidateKey = null; return; }
                 }
+                if (await KeepCurrentWorkspaceAsync(target)) return;
+                if (bound != null && target.Id == bound.Id) workspaceRefreshRequired = true;
                 string key = target.Id + ":" + target.Started + ":" + target.Session + ":" + target.ModelFolder;
                 // Chờ cùng identity ổn định ít nhất 500 ms qua hai lượt scan, tránh title trung gian lúc đổi model.
                 if (!string.Equals(sessionCandidateKey, key, StringComparison.Ordinal))
@@ -457,8 +1691,38 @@ namespace TTSK_AutoDim_Plates
             finally { sessionDiscoveryRunning = false; }
         }
 
+        private async Task<bool> KeepCurrentWorkspaceAsync(TeklaSessionTarget target)
+        {
+            if (workspaceResetRequired || !TeklaSessionCoordinator.SameWorkspace(target,
+                TeklaSessionCoordinator.Current, TeklaSessionCoordinator.ModelPath)) return false;
+            int requested = pendingTeklaProcess;
+            if (workspaceRefreshRequired)
+            {
+                try { await teklaOperations.RunAsync(TeklaSessionCoordinator.VerifyConnection); }
+                catch
+                {
+                    // Lỗi đọc tạm thời: giữ cửa sổ/list; không biến lỗi thành yêu cầu khởi động lại.
+                    sessionRetryAfterUtc = DateTime.UtcNow.AddSeconds(3);
+                    return true;
+                }
+                if (IsDisposed || !CanSwitchTeklaSession() || requested != pendingTeklaProcess) return true;
+            }
+            workspaceRefreshRequired = false;
+            pendingTeklaProcess = 0;
+            sessionCandidateKey = null;
+            if (workspaceStatusWaiting) { workspaceStatusWaiting = false; SetMainStatus("Sẵn sàng.", MainStatusKind.Information); }
+            return true;
+        }
+
         private void UpdateTeklaSessionCaption()
         {
+            if (TeklaSessionCoordinator.Current == null)
+            {
+                mainBrandSubtitle.Text = "Chưa kết nối Tekla · Chọn dự án  ▾";
+                mainBrandSubtitle.AutoEllipsis = true;
+                Text = "TTSK AutoDim";
+                return;
+            }
             string project = System.IO.Path.GetFileName(TeklaSessionCoordinator.ModelPath ?? "");
             mainBrandSubtitle.Text = "Dự án: " + project
                 + (TeklaSessionCoordinator.FollowForeground ? " · Tự động  ▾" : " · Cố định  ▾");
@@ -475,7 +1739,7 @@ namespace TTSK_AutoDim_Plates
                     if (string.Equals(process.ProcessName, "TeklaStructures", StringComparison.OrdinalIgnoreCase))
                     {
                         workspaceSelectionCancelled = false;
-                        pendingTeklaProcess = id == TeklaSessionCoordinator.Current.Id
+                        pendingTeklaProcess = TeklaSessionCoordinator.Current != null && id == TeklaSessionCoordinator.Current.Id
                             && process.StartTime.ToUniversalTime().Ticks == TeklaSessionCoordinator.Current.Started ? 0 : id;
                     }
             }
@@ -493,16 +1757,28 @@ namespace TTSK_AutoDim_Plates
         private bool EnsureSessionCommandTarget()
         {
             if (sessionSwitching) return false;
+            if (TeklaSessionCoordinator.Current == null)
+            {
+                SetMainStatus("Hãy kết nối dự án Tekla trước khi dùng lệnh bản vẽ.", MainStatusKind.Information);
+                return false;
+            }
             if (workspaceRefreshRequired || (TeklaSessionCoordinator.FollowForeground && pendingTeklaProcess != 0))
             {
-                SetMainStatus("Chờ chuyển dự án…", MainStatusKind.Information);
+                workspaceStatusWaiting = true;
+                SetMainStatus("Đang xác minh kết nối dự án Tekla…", MainStatusKind.Information);
                 return false;
             }
             return true;
         }
 
-        private async void SwitchTeklaSession(TeklaSessionTarget target)
+        private async void SwitchTeklaSession(TeklaSessionTarget target, bool userRequested = false)
         {
+            if (!CanSwitchTeklaSession()) return;
+            // Áp dụng cả chọn dự án thủ công và retry; chọn lại đúng phiên là thao tác không đổi trạng thái.
+            int requested = pendingTeklaProcess;
+            bool kept = await KeepCurrentWorkspaceAsync(target);
+            // Kết nối cũ hỏng hẳn: chỉ lựa chọn chủ động của người dùng mới thử mở lại cùng identity.
+            if (kept && !(userRequested && workspaceRefreshRequired && requested == pendingTeklaProcess)) return;
             if (!CanSwitchTeklaSession()) return;
             sessionSwitching = true;
             pendingTeklaProcess = 0;
@@ -612,6 +1888,7 @@ namespace TTSK_AutoDim_Plates
                 if (toolNavigationButtons.Contains(c as SafeRoundedButton)
                     || autoDimPageButtons.Contains(c as SafeRoundedButton)) return true;
                 if (c == japaneseDictionaryPanel) return true;
+                if (c == pdfQueueForm) return true;
             }
             return false;
         }
@@ -815,6 +2092,10 @@ namespace TTSK_AutoDim_Plates
         private readonly Color Blue = Color.FromArgb(30, 58, 138);
         private readonly Color BrightBlue = Color.FromArgb(37, 99, 235);
         private Color PrimaryButtonColor { get { return _darkMode ? Color.FromArgb(201, 122, 64) : Blue; } }
+        private Color ThemeAccentTextColor { get { return _darkMode ? Color.FromArgb(235, 173, 119) : Blue; } }
+        // Thumb chung cho hai list; nền rãnh lấy trực tiếp từ list đang hiển thị.
+        private static Color ListScrollThumbColor(bool dark)
+        { return dark ? Color.FromArgb(156, 112, 78) : Color.FromArgb(148, 163, 184); }
         private readonly Color SoftBg = Color.FromArgb(248, 250, 252);
         private readonly Color PanelBorder = Color.FromArgb(220, 226, 235);
 
@@ -1256,6 +2537,7 @@ namespace TTSK_AutoDim_Plates
             Controls.Add(status);
 
             lblStatus = new Label();
+            lblStatus.ForeColorChanged += (s, e) => ApplyMainStatusTextTheme();
             lblStatus.AutoEllipsis = true;
             mainStatusToolTip = new ToolTip { InitialDelay = 400, AutoPopDelay = 15000 };
             lblStatus.TextChanged += delegate { mainStatusToolTip.SetToolTip(lblStatus, lblStatus.Text); };
@@ -1339,7 +2621,7 @@ namespace TTSK_AutoDim_Plates
             const int statusActionButtonWidth = 95;
             const int statusActionButtonGap = 10;
 
-            btnPrint = new SafeRoundedButton();
+            btnPrint = new PdfPrintEntryButton();
             btnPrint.Text = "Print";
             btnPrint.Font = new Font("Segoe UI", 8.5F, FontStyle.Bold);
             btnPrint.Location = new Point(statusActionButtonStartX, 2);
@@ -1358,6 +2640,7 @@ namespace TTSK_AutoDim_Plates
                 SchedulePrintMenuClose();
             };
             status.Controls.Add(btnPrint);
+            InitializePdfAccumulationMenu();
 
             printMergeDropDownHost = new RoundedPanel();
             printMergeDropDownHost.Size = new System.Drawing.Size(
@@ -1780,7 +3063,7 @@ namespace TTSK_AutoDim_Plates
             japaneseDictionaryPanel.Location = new Point(18, 62);
             japaneseDictionaryPanel.Size = new System.Drawing.Size(
                 SlideToolsWidth - 36,
-                MainBaseHeight - 168
+                shortcutSettings.Top - japaneseDictionaryPanel.Top - 8 // px thiết kế: list kéo sát nút dưới, cách 8px.
             );
             japaneseDictionaryPanel.Visible = false;
             japaneseDictionaryPanel.StatusChanged += JapaneseDictionaryPanel_StatusChanged;
@@ -2455,6 +3738,8 @@ namespace TTSK_AutoDim_Plates
                 secondary.TextColor = ink;
                 secondary.Invalidate();
             }
+            if (japaneseDictionaryPanel != null)
+                japaneseDictionaryPanel.ApplyTheme(_darkMode, background, accent);
             // Keep all nested switches, selected tiles and result colors under their existing theme logic.
         }
 
@@ -3395,6 +4680,10 @@ namespace TTSK_AutoDim_Plates
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
+            if (japaneseDictionaryPanel != null && japaneseDictionaryPanel.ContainsFocus)
+                return base.ProcessCmdKey(ref msg, keyData);
+            if (pdfQueueForm != null && pdfQueueForm.ContainsFocus)
+                return base.ProcessCmdKey(ref msg, keyData);
             if (_pdfCommandRunning) return true;
             if (_shortcutManager != null)
             {
@@ -3546,6 +4835,8 @@ namespace TTSK_AutoDim_Plates
 
         private bool IsShortcutInputFocused()
         {
+            if (japaneseDictionaryPanel != null && japaneseDictionaryPanel.ContainsFocus) return true;
+            if (pdfQueueForm != null && pdfQueueForm.ContainsFocus) return true;
             Control focus = GetDeepActiveControl(this);
 
             while (focus != null)
@@ -3672,6 +4963,12 @@ namespace TTSK_AutoDim_Plates
                 return;
             }
             if (TryRunAdditionalShortcut(actionId)) return;
+            if (string.Equals(actionId, ShortcutManager.ActionCheckCombo, StringComparison.OrdinalIgnoreCase))
+            {
+                _lastRepeatableShortcutActionId = null;
+                RunComboCheckShortcut();
+                return;
+            }
             if (string.Equals(actionId, ShortcutManager.ActionCheckDim, StringComparison.OrdinalIgnoreCase))
             {
                 _lastRepeatableShortcutActionId = null;
@@ -3918,6 +5215,12 @@ namespace TTSK_AutoDim_Plates
 
         private bool TryRunAdditionalShortcut(string actionId)
         {
+            if (string.Equals(actionId, ShortcutManager.ActionMeetingTranslation, StringComparison.OrdinalIgnoreCase))
+            {
+                OpenMeetingTranslationWindow();
+                return true;
+            }
+
             Action action;
             switch (actionId)
             {
@@ -3968,7 +5271,8 @@ namespace TTSK_AutoDim_Plates
                         delegate(bool enabled)
                         {
                             SetAutoSectionEnabled(enabled, true);
-                        }
+                        },
+                        OpenMeetingTranslationWindow
                     )
                 )
                 {
@@ -3978,6 +5282,32 @@ namespace TTSK_AutoDim_Plates
             catch (Exception ex)
             {
                 SetMainStatus("Shortcut Settings lỗi: " + ex.Message, MainStatusKind.Error);
+            }
+        }
+
+        private MeetingTranslation.MeetingTranslatorForm _meetingTranslatorForm;
+
+        public void OpenMeetingTranslationWindow()
+        {
+            try
+            {
+                if (_meetingTranslatorForm == null || _meetingTranslatorForm.IsDisposed)
+                {
+                    _meetingTranslatorForm = new MeetingTranslation.MeetingTranslatorForm(_darkMode);
+                    _meetingTranslatorForm.FormClosed += delegate { _meetingTranslatorForm = null; };
+                    _meetingTranslatorForm.Show(this);
+                }
+                else
+                {
+                    if (_meetingTranslatorForm.WindowState == FormWindowState.Minimized)
+                        _meetingTranslatorForm.WindowState = FormWindowState.Normal;
+                    _meetingTranslatorForm.Activate();
+                    _meetingTranslatorForm.BringToFront();
+                }
+            }
+            catch (Exception ex)
+            {
+                SetMainStatus("Mở Dịch họp lỗi: " + ex.Message, MainStatusKind.Error);
             }
         }
 
@@ -4933,6 +6263,9 @@ namespace TTSK_AutoDim_Plates
             if (slideToolsOpen)
                 width = MainClientWidth + SlidePanelGap + SlideToolsWidth + SlideRightMargin;
 
+            if (pdfDrawerOpen && PdfDrawerFitsBesideMain())
+                width = MainClientWidth + SlidePanelGap + PdfDrawerWidth + SlideRightMargin;
+
             return width;
         }
 
@@ -4946,6 +6279,11 @@ namespace TTSK_AutoDim_Plates
 
         private void LayoutSlidePanels()
         {
+            if (slideToolsOpen && pdfDrawerOpen)
+            {
+                pdfDrawerOpen = false;
+                if (pdfQueueForm != null) pdfQueueForm.Hide();
+            }
             slideTargetWidth = GetSlideTargetWidth();
 
             if (slideToolsOpen)
@@ -4972,6 +6310,12 @@ namespace TTSK_AutoDim_Plates
             ApplySlideTheme();
             StartSlideAnimation();
             LayoutToolPresentation();
+            if (pdfDrawerOpen && pdfQueueForm != null)
+            {
+                int x = PdfDrawerFitsBesideMain() ? MainClientWidth + SlidePanelGap : MainClientWidth - PdfDrawerWidth - SlideRightMargin;
+                pdfQueueForm.SetBounds(x, 6, PdfDrawerWidth, MainBaseHeight - 12);
+                pdfQueueForm.BringToFront();
+            }
         }
 
         private void LayoutDrawingToolOrder()
@@ -5323,7 +6667,7 @@ namespace TTSK_AutoDim_Plates
             UpdateModeUi();
             await ExecuteTeklaCommandAsync("Batch Create", () =>
             {
-                LoadSelectedDrawingsCore();
+                LoadSelectedDrawingsCore(false);
                 if (_selectedDrawings.Count > 0) btnRun_Click(null, EventArgs.Empty);
             });
         }
@@ -5368,6 +6712,22 @@ namespace TTSK_AutoDim_Plates
                     lblStatus.ForeColor = Color.Firebrick;
                     break;
             }
+        }
+
+        private void ApplyMainStatusTextTheme()
+        {
+            if (lblStatus == null || lblStatus.IsDisposed) return;
+            // Các lệnh cũ vẫn gán màu trạng thái trực tiếp; đổi sắc độ, giữ nguyên ý nghĩa và nội dung.
+            Color current = lblStatus.ForeColor, themed = current;
+            if (current.ToArgb() == Blue.ToArgb() || current.ToArgb() == Color.FromArgb(235, 173, 119).ToArgb())
+                themed = ThemeAccentTextColor;
+            else if (current.ToArgb() == Color.FromArgb(22, 163, 74).ToArgb() || current.ToArgb() == Color.FromArgb(103, 211, 159).ToArgb())
+                themed = _darkMode ? Color.FromArgb(103, 211, 159) : Color.FromArgb(22, 163, 74);
+            else if (current.ToArgb() == Color.DarkOrange.ToArgb() || current.ToArgb() == Color.FromArgb(255, 192, 108).ToArgb())
+                themed = _darkMode ? Color.FromArgb(255, 192, 108) : Color.DarkOrange;
+            else if (current.ToArgb() == Color.Firebrick.ToArgb() || current.ToArgb() == Color.FromArgb(255, 139, 139).ToArgb())
+                themed = _darkMode ? Color.FromArgb(255, 139, 139) : Color.Firebrick;
+            if (current.ToArgb() != themed.ToArgb()) lblStatus.ForeColor = themed;
         }
 
         private void DrawPickTwoPointsIcon(object sender, PaintEventArgs e)
@@ -6781,8 +8141,10 @@ namespace TTSK_AutoDim_Plates
             ApplyToolPresentationTheme();
             ApplyMainPresentationTheme();
             ApplyWorkJournalFooterTheme();
+            if (pdfQueueForm != null && !pdfQueueForm.IsDisposed) pdfQueueForm.ApplyTheme();
             for (int i = 0; i < stateLabels.Length; i++)
                 if (stateLabels[i] != null) stateLabels[i].ForeColor = stateColors[i];
+            ApplyMainStatusTextTheme();
             Invalidate(true);
         }
 
@@ -6801,7 +8163,7 @@ namespace TTSK_AutoDim_Plates
             mainVersionLabel.ForeColor = accent;
             UpdateVersionLabelTheme();
             mainListSurface.ToolHeaderAccent = Color.Empty;
-            dgvDrawings.ColumnHeadersDefaultCellStyle.ForeColor = _darkMode ? Color.FromArgb(235, 173, 119) : Blue;
+            dgvDrawings.ColumnHeadersDefaultCellStyle.ForeColor = ThemeAccentTextColor;
             dgvDrawings.ColumnHeadersDefaultCellStyle.SelectionForeColor = dgvDrawings.ColumnHeadersDefaultCellStyle.ForeColor;
             dgvDrawings.ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.None;
             dgvDrawings.GridColor = _darkMode ? Color.FromArgb(42, 49, 60) : Color.FromArgb(226, 232, 242);
@@ -6814,7 +8176,7 @@ namespace TTSK_AutoDim_Plates
                 button.FillColor = _darkMode ? Color.FromArgb(29, 34, 42) : Color.White;
                 button.GradientEndColor = _darkMode ? Color.FromArgb(22, 26, 33) : Color.FromArgb(239, 244, 251);
                 button.BorderColor = _darkMode ? Color.FromArgb(137, 96, 65) : Color.FromArgb(150, 174, 210);
-                button.TextColor = _darkMode ? Color.FromArgb(235, 173, 119) : Blue;
+                button.TextColor = ThemeAccentTextColor;
                 button.HoverBorderColor = accent;
                 button.Invalidate();
             }
@@ -7248,7 +8610,7 @@ namespace TTSK_AutoDim_Plates
             _snapshotExportRunning = true;
             try
             {
-                LoadContextDrawingsCore();
+                LoadContextDrawingsCore(false);
                 if (_selectedDrawings.Count == 0)
                     throw new InvalidOperationException("Hãy chọn bản vẽ trong Document Manager rồi thử lại.");
                 var drawings = new List<Drawing>(_selectedDrawings);
@@ -7268,6 +8630,10 @@ namespace TTSK_AutoDim_Plates
         }
 
         private void LoadSelectedDrawingsCore()
+        {LoadSelectedDrawingsCore(true);}
+
+        // Lệnh Batch tường minh/căn theo mẫu giữ chính sách Batch, kể cả chọn một bản.
+        private void LoadSelectedDrawingsCore(bool activateSingle)
         {
             ResetDimensionCheckBatch();
             _resumeIndex = 0;
@@ -7301,6 +8667,15 @@ namespace TTSK_AutoDim_Plates
                 }
 
                 CaptureDimensionCheckBatchSource();
+                if(activateSingle && count==1)
+                    ActivateSingleContextDrawingCore(_selectedDrawings[0],dimensionCheckModelPath);
+                Ui(() =>
+                {
+                    rbActive.Checked=activateSingle && count==1;
+                    rbBatch.Checked=!rbActive.Checked;
+                    UpdateModeUi();
+                    ApplyDataCenterModeUi();
+                });
                 RefreshContextDrawingRows();
                 if (count == 0)
                 {
@@ -7619,7 +8994,8 @@ namespace TTSK_AutoDim_Plates
                 string status = completed
                     ? (progress.ItemSucceeded ? "PDF OK" : "PRINT FAIL")
                     : (verifying ? "VERIFYING" : "PRINTING");
-                string result = completed ? (progress.ItemSucceeded ? "SAVED" : "ERROR") : "IN PROGRESS";
+                string result = completed ? (progress.ItemSucceeded ? "SAVED"
+                    : (string.IsNullOrWhiteSpace(progress.Message) ? "ERROR" : progress.Message)) : "IN PROGRESS";
                 Color color = completed
                     ? (progress.ItemSucceeded ? Color.FromArgb(22, 163, 74) : Color.FromArgb(220, 38, 38))
                     : activeColor;
@@ -7645,12 +9021,22 @@ namespace TTSK_AutoDim_Plates
 
         private async void RunPdfCommand(bool mergeAndDeleteChildren)
         {
-            if (operationRunning || sessionSwitching || !EnsureSessionCommandTarget()) return;
-            if (_pdfCommandRunning || _isBatchRunning || _snapshotExportRunning || _fitAndCleanupRunning) return;
+            await RunPdfCommandAsync(mergeAndDeleteChildren);
+        }
+
+        private async System.Threading.Tasks.Task RunPdfCommandAsync(bool mergeAndDeleteChildren, PdfDrawingRequest accumulated = null,
+            PdfAccumulationForm queueForm = null)
+        {
+            if (!CanApplyUpdateNow() || dimensionCheckOpen || batchShortcutPending
+                || _updateDialogOpen || _updaterHandoffClosing || IsDisposed || Disposing
+                || !EnsureSessionCommandTarget()) return;
             _pdfCommandRunning = true;
             var responsiveInput = new OperationInputFilter(this);
             Application.AddMessageFilter(responsiveInput);
             string commandName = mergeAndDeleteChildren ? "Merge" : "Print";
+            IWin32Window printOwner = queueForm == null ? (IWin32Window)this : queueForm;
+            PdfDrawingRequest request = null;
+            List<int> printRowIndices = new List<int>();
 
             try
             {
@@ -7674,50 +9060,18 @@ namespace TTSK_AutoDim_Plates
                 if (btnMergeFileDropDown != null)
                     btnMergeFileDropDown.Enabled = false;
 
-                await teklaOperations.RunAsync(() => { TeklaSessionCoordinator.VerifyConnection(); LoadContextDrawingsCore(); });
-
-                if (_selectedDrawings.Count == 0)
+                await teklaOperations.RunAsync(() =>
                 {
-                    string noDrawingMessage =
-                        "Không tìm thấy drawing đang được chọn trong Document Manager.\r\n\r\n"
-                        + "Hãy chọn ít nhất một drawing trong Document Manager rồi bấm "
-                        + commandName
-                        + " lại.";
+                    TeklaSessionCoordinator.VerifyConnection();
+                    request = accumulated == null ? CapturePdfDrawingRequestCore() : CaptureAccumulatedPdfRequestCore(accumulated);
+                });
+                ShowPdfDrawingRequest(request);
+                if (queueForm != null) queueForm.ShowPrintRequest(request);
+                List<DrawingPdfPrintJob> printJobs = request.Jobs;
 
-                    SetMainStatus(
-                        "Không có drawing được chọn trong Document Manager.",
-                        MainStatusKind.Warning
-                    );
-
-                    MessageBox.Show(
-                        this,
-                        noDrawingMessage,
-                        "TTSK " + commandName + " PDF",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Warning
-                    );
-                    return;
-                }
-
-                List<DrawingPdfPrintJob> printJobs = new List<DrawingPdfPrintJob>();
-                List<int> printRowIndices = new List<int>();
-
-                for (int i = 0; i < _selectedDrawings.Count; i++)
+                for (int i = 0; i < printJobs.Count; i++)
                 {
-                    Drawing drawing = _selectedDrawings[i];
-                    if (drawing == null)
-                        continue;
-
                     printRowIndices.Add(i);
-                    printJobs.Add(
-                        new DrawingPdfPrintJob
-                        {
-                            Drawing = drawing,
-                            Mark = SafeDrawingMark(drawing),
-                            Revision = SafeDrawingRevision(drawing),
-                            DrawnBy = DrawingPdfPrinter.GetDrawingDrawnBy(drawing)
-                        }
-                    );
 
                     SetGridStatusAndResult(
                         i,
@@ -7728,19 +9082,10 @@ namespace TTSK_AutoDim_Plates
                     );
                 }
 
-                if (printJobs.Count == 0)
-                {
-                    SetMainStatus(
-                        "Danh sách drawing không có phần tử hợp lệ để " + commandName + ".",
-                        MainStatusKind.Warning
-                    );
-                    return;
-                }
-
                 if (mergeAndDeleteChildren)
                 {
                     SetMainStatus(
-                        "Đang xuất "
+                        request.Source + " | Đang xuất "
                             + printJobs.Count
                             + " PDF con, gộp thành PDF tổng và xóa PDF con của phiên này...",
                         MainStatusKind.Information
@@ -7749,23 +9094,30 @@ namespace TTSK_AutoDim_Plates
                 else
                 {
                     SetMainStatus(
-                        "Đang xuất " + printJobs.Count + " drawing thành các file PDF riêng...",
+                        request.Source + " | Đang xuất " + printJobs.Count + " drawing thành các file PDF riêng...",
                         MainStatusKind.Information
                     );
                 }
 
                 Application.DoEvents();
 
+                // Selection có thể đổi trong lúc in; chỉ dùng snapshot và model đã chốt của lượt này.
+                TeklaSessionCoordinator.VerifyConnection();
+                new Tekla.Technology.Akit.UserScript.PHU_DimensionBatch.TeklaAdapter(request.ModelPath).EnsureContext();
                 lblCount.Text = "PDF: 0/" + printJobs.Count + " (0%)";
                 lblCount.Refresh();
-                Action<DrawingPdfProgress> onProgress = progress => UpdatePdfProgress(progress, printRowIndices);
+                Action<DrawingPdfProgress> onProgress = progress =>
+                {
+                    UpdatePdfProgress(progress, printRowIndices);
+                    if (queueForm != null) queueForm.SyncPrintResults();
+                };
                 DrawingPdfPrintResult result = await DrawingPdfPrinter.PrintPdfsAsync(
-                    printJobs, this, mergeAndDeleteChildren, onProgress);
+                    printJobs, printOwner, mergeAndDeleteChildren, onProgress);
                 lblCount.Text = "PDF OK: " + result.SuccessfulDrawingCount + "/" + printJobs.Count;
 
                 if (result.Cancelled)
                 {
-                    for (int i = 0; i < _selectedDrawings.Count; i++)
+                    for (int i = 0; i < printJobs.Count; i++)
                     {
                         SetGridStatusAndResult(
                             i,
@@ -7784,7 +9136,7 @@ namespace TTSK_AutoDim_Plates
                 {
                     foreach (DrawingPdfItemResult item in result.ItemResults)
                     {
-                        if (item == null)
+                        if (item == null || item.Index < 0 || item.Index >= printRowIndices.Count)
                             continue;
 
                         if (item.Success)
@@ -7816,10 +9168,11 @@ namespace TTSK_AutoDim_Plates
                                 printRowIndices[item.Index],
                                 "PRINT FAIL",
                                 Color.FromArgb(220, 38, 38),
-                                "ERROR",
+                                string.IsNullOrWhiteSpace(item.Message) ? "ERROR" : item.Message,
                                 Color.FromArgb(220, 38, 38)
                             );
                         }
+                        dgvDrawings.Rows[printRowIndices[item.Index]].Cells["RESULT"].ToolTipText = item.Message ?? string.Empty;
                     }
                 }
 
@@ -7889,7 +9242,7 @@ namespace TTSK_AutoDim_Plates
                         errorDetails += "\r\n\r\nFile chẩn đoán:\r\n" + result.DiagnosticFilePath;
 
                     MessageBox.Show(
-                        this,
+                    printOwner,
                         errorDetails,
                         result.PartialSuccess
                             ? "TTSK " + commandName + " PDF - PARTIAL"
@@ -7907,7 +9260,7 @@ namespace TTSK_AutoDim_Plates
                             + System.IO.Path.GetFileName(result.MergedFilePath)
                             + " | Đã xóa "
                             + result.DeletedChildFileCount
-                            + " PDF con của phiên này.",
+                            + " PDF con của phiên này. | Nguồn: " + request.Source,
                         MainStatusKind.Success
                     );
                 }
@@ -7917,7 +9270,7 @@ namespace TTSK_AutoDim_Plates
                         "Đã tạo "
                             + result.SuccessfulDrawingCount
                             + " file PDF riêng tại: "
-                            + result.OutputDirectory,
+                            + result.OutputDirectory + " | Nguồn: " + request.Source,
                         MainStatusKind.Success
                     );
                 }
@@ -7927,13 +9280,17 @@ namespace TTSK_AutoDim_Plates
             }
             catch (Exception ex)
             {
-                for (int i = 0; i < _selectedDrawings.Count; i++)
+                // Chưa chốt/nạp lượt mới thì không đánh lỗi lên bản của lượt trước.
+                foreach (int rowIndex in printRowIndices)
                 {
+                    string completedStatus = Convert.ToString(dgvDrawings.Rows[rowIndex].Cells["STATUS"].Value);
+                    if (completedStatus == "PDF OK" || completedStatus == "MERGED" || completedStatus == "PRINT FAIL")
+                        continue;
                     SetGridStatusAndResult(
-                        i,
+                        rowIndex,
                         "PRINT FAIL",
                         Color.FromArgb(220, 38, 38),
-                        "ERROR",
+                        ex.GetBaseException().Message,
                         Color.FromArgb(220, 38, 38)
                     );
                 }
@@ -7941,7 +9298,7 @@ namespace TTSK_AutoDim_Plates
                 SetMainStatus(commandName + " PDF lỗi: " + ex.Message, MainStatusKind.Error);
 
                 MessageBox.Show(
-                    this,
+                    printOwner,
                     commandName + " PDF lỗi:\r\n\r\n" + ex,
                     "TTSK " + commandName + " PDF - ERROR",
                     MessageBoxButtons.OK,
@@ -7950,6 +9307,317 @@ namespace TTSK_AutoDim_Plates
             }
             finally
             {
+                // Dòng do progress tự chọn không phải ý định in lại của người dùng.
+                if (printRowIndices.Count > 0)
+                {
+                    dgvDrawings.ClearSelection();
+                    if (queueForm != null) queueForm.SyncPrintResults();
+                }
+                Application.RemoveMessageFilter(responsiveInput);
+                _pdfCommandRunning = false;
+                if (btnPrint != null)
+                    btnPrint.Enabled = true;
+
+                if (btnMergeDropDown != null)
+                    btnMergeDropDown.Enabled = true;
+
+                if (btnMergeFileDropDown != null)
+                    btnMergeFileDropDown.Enabled = true;
+
+                UpdateModeUi();
+            }
+        }
+
+        // Điều phối riêng cho danh sách; không thay đường gọi Print/Merge gốc.
+        private async System.Threading.Tasks.Task RunAccumulatedPdfCommandAsync(bool mergeAndDeleteChildren, PdfDrawingRequest accumulated,
+            PdfAccumulationForm queueForm)
+        {
+            if (!CanApplyUpdateNow() || dimensionCheckOpen || batchShortcutPending
+                || _updateDialogOpen || _updaterHandoffClosing || IsDisposed || Disposing
+                || !EnsureSessionCommandTarget()) return;
+            _pdfCommandRunning = true;
+            var responsiveInput = new OperationInputFilter(this);
+            Application.AddMessageFilter(responsiveInput);
+            string commandName = mergeAndDeleteChildren ? "Merge" : "Print";
+            IWin32Window printOwner = queueForm == null ? (IWin32Window)this : queueForm;
+            PdfDrawingRequest request = null;
+            List<int> printRowIndices = new List<int>();
+
+            try
+            {
+                HidePrintMenu();
+
+                if (_isBatchRunning)
+                {
+                    SetMainStatus(
+                        "Không thể " + commandName + " khi Batch Create đang chạy.",
+                        MainStatusKind.Warning
+                    );
+                    return;
+                }
+
+                if (btnPrint != null)
+                    btnPrint.Enabled = false;
+
+                if (btnMergeDropDown != null)
+                    btnMergeDropDown.Enabled = false;
+
+                if (btnMergeFileDropDown != null)
+                    btnMergeFileDropDown.Enabled = false;
+
+                await teklaOperations.RunAsync(() =>
+                {
+                    TeklaSessionCoordinator.VerifyConnection();
+                    request = CaptureAccumulatedPdfRequestCore(accumulated);
+                });
+                ShowPdfDrawingRequest(request);
+                if (queueForm != null) queueForm.ShowPrintRequest(request);
+                List<DrawingPdfPrintJob> printJobs = request.Jobs;
+
+                for (int i = 0; i < printJobs.Count; i++)
+                {
+                    printRowIndices.Add(i);
+
+                    SetGridStatusAndResult(
+                        i,
+                        "QUEUED",
+                        Color.FromArgb(59, 130, 246),
+                        "PENDING",
+                        Color.FromArgb(59, 130, 246)
+                    );
+                }
+
+                if (mergeAndDeleteChildren)
+                {
+                    SetMainStatus(
+                        request.Source + " | Đang xuất "
+                            + printJobs.Count
+                            + " PDF con, gộp thành PDF tổng và xóa PDF con của phiên này...",
+                        MainStatusKind.Information
+                    );
+                }
+                else
+                {
+                    SetMainStatus(
+                        request.Source + " | Đang xuất " + printJobs.Count + " drawing thành các file PDF riêng...",
+                        MainStatusKind.Information
+                    );
+                }
+
+                Application.DoEvents();
+
+                // Selection có thể đổi trong lúc in; chỉ dùng snapshot và model đã chốt của lượt này.
+                TeklaSessionCoordinator.VerifyConnection();
+                new Tekla.Technology.Akit.UserScript.PHU_DimensionBatch.TeklaAdapter(request.ModelPath).EnsureContext();
+                lblCount.Text = "PDF: 0/" + printJobs.Count + " (0%)";
+                lblCount.Refresh();
+                Action<DrawingPdfProgress> onProgress = progress =>
+                {
+                    UpdatePdfProgress(progress, printRowIndices);
+                    if (queueForm != null) queueForm.SyncPrintResults(progress.Index);
+                };
+                DrawingPdfPrintResult result = await DrawingPdfPrinter.PrintAccumulatedPdfsAsync(
+                    printJobs, printOwner, mergeAndDeleteChildren, onProgress);
+                lblCount.Text = "PDF OK: " + result.SuccessfulDrawingCount + "/" + printJobs.Count;
+
+                if (result.Cancelled)
+                {
+                    for (int i = 0; i < printJobs.Count; i++)
+                    {
+                        SetGridStatusAndResult(
+                            i,
+                            "READY",
+                            Color.FromArgb(22, 163, 74),
+                            "CANCELLED",
+                            Color.FromArgb(201, 122, 64)
+                        );
+                    }
+
+                    SetMainStatus("Đã hủy lệnh " + commandName + ".", MainStatusKind.Information);
+                    return;
+                }
+
+                if (result.ItemResults != null)
+                {
+                    foreach (DrawingPdfItemResult item in result.ItemResults)
+                    {
+                        if (item == null || item.Index < 0 || item.Index >= printRowIndices.Count)
+                            continue;
+
+                        if (item.Success)
+                        {
+                            string statusText = "PDF OK";
+                            string resultText = "SAVED";
+
+                            if (
+                                mergeAndDeleteChildren
+                                && result.MergeSuccess
+                                && item.ChildFileDeleted
+                            )
+                            {
+                                statusText = "MERGED";
+                                resultText = "CLEANED";
+                            }
+
+                            SetGridStatusAndResult(
+                                printRowIndices[item.Index],
+                                statusText,
+                                Color.FromArgb(22, 163, 74),
+                                resultText,
+                                Color.FromArgb(22, 163, 74)
+                            );
+                        }
+                        else
+                        {
+                            SetGridStatusAndResult(
+                                printRowIndices[item.Index],
+                                "PRINT FAIL",
+                                Color.FromArgb(220, 38, 38),
+                                string.IsNullOrWhiteSpace(item.Message) ? "ERROR" : item.Message,
+                                Color.FromArgb(220, 38, 38)
+                            );
+                        }
+                        dgvDrawings.Rows[printRowIndices[item.Index]].Cells["RESULT"].ToolTipText = item.Message ?? string.Empty;
+                    }
+                }
+
+                if (!result.Success)
+                {
+                    MainStatusKind statusKind = result.PartialSuccess
+                        ? MainStatusKind.Warning
+                        : MainStatusKind.Error;
+
+                    SetMainStatus(result.Message, statusKind);
+
+                    string errorDetails = result.Message;
+
+                    if (!string.IsNullOrWhiteSpace(result.OutputDirectory))
+                    {
+                        errorDetails += "\r\n\r\nThư mục PDF:\r\n" + result.OutputDirectory;
+                    }
+
+                    if (result.ItemResults != null)
+                    {
+                        int shownFailures = 0;
+
+                        foreach (DrawingPdfItemResult item in result.ItemResults)
+                        {
+                            if (item == null || item.Success)
+                                continue;
+
+                            errorDetails +=
+                                "\r\n\r\nLỗi drawing "
+                                + (item.Index + 1)
+                                + " - "
+                                + item.Mark
+                                + ":\r\n"
+                                + item.Message;
+
+                            shownFailures++;
+                            if (shownFailures >= 5)
+                                break;
+                        }
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(result.LogFilePath))
+                        errorDetails += "\r\n\r\nTekla print log:\r\n" + result.LogFilePath;
+
+                    if (mergeAndDeleteChildren && result.MergeAttempted)
+                    {
+                        errorDetails +=
+                            "\r\n\r\nKết quả gộp PDF:\r\n"
+                            + (
+                                string.IsNullOrWhiteSpace(result.MergeMessage)
+                                    ? (result.MergeSuccess ? "Thành công" : "Không thành công")
+                                    : result.MergeMessage
+                            );
+                    }
+
+                    if (mergeAndDeleteChildren && !string.IsNullOrWhiteSpace(result.MergedFilePath))
+                    {
+                        errorDetails += "\r\n\r\nPDF tổng:\r\n" + result.MergedFilePath;
+                    }
+
+                    if (mergeAndDeleteChildren && result.CleanupAttempted)
+                    {
+                        errorDetails += "\r\n\r\nKết quả xóa PDF con:\r\n" + result.CleanupMessage;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(result.DiagnosticFilePath))
+                        errorDetails += "\r\n\r\nFile chẩn đoán:\r\n" + result.DiagnosticFilePath;
+
+                    MessageBox.Show(
+                    printOwner,
+                        errorDetails,
+                        result.PartialSuccess
+                            ? "TTSK " + commandName + " PDF - PARTIAL"
+                            : "TTSK " + commandName + " PDF - ERROR",
+                        MessageBoxButtons.OK,
+                        result.PartialSuccess ? MessageBoxIcon.Warning : MessageBoxIcon.Error
+                    );
+                    return;
+                }
+
+                if (mergeAndDeleteChildren)
+                {
+                    SetMainStatus(
+                        "Đã tạo PDF tổng: "
+                            + System.IO.Path.GetFileName(result.MergedFilePath)
+                            + " | Đã xóa "
+                            + result.DeletedChildFileCount
+                            + " PDF con của phiên này. | Nguồn: " + request.Source,
+                        MainStatusKind.Success
+                    );
+                }
+                else
+                {
+                    SetMainStatus(
+                        "Đã tạo "
+                            + result.SuccessfulDrawingCount
+                            + " file PDF riêng tại: "
+                            + result.OutputDirectory + " | Nguồn: " + request.Source,
+                        MainStatusKind.Success
+                    );
+                }
+
+                // Không hiện popup thành công. Kết quả được hiển thị trên status bar
+                // và thư mục đầu ra được mở tự động bởi DrawingPdfPrinter.
+            }
+            catch (Exception ex)
+            {
+                // Chưa chốt/nạp lượt mới thì không đánh lỗi lên bản của lượt trước.
+                foreach (int rowIndex in printRowIndices)
+                {
+                    string completedStatus = Convert.ToString(dgvDrawings.Rows[rowIndex].Cells["STATUS"].Value);
+                    if (completedStatus == "PDF OK" || completedStatus == "MERGED" || completedStatus == "PRINT FAIL")
+                        continue;
+                    SetGridStatusAndResult(
+                        rowIndex,
+                        "PRINT FAIL",
+                        Color.FromArgb(220, 38, 38),
+                        ex.GetBaseException().Message,
+                        Color.FromArgb(220, 38, 38)
+                    );
+                }
+
+                SetMainStatus(commandName + " PDF lỗi: " + ex.Message, MainStatusKind.Error);
+
+                MessageBox.Show(
+                    printOwner,
+                    commandName + " PDF lỗi:\r\n\r\n" + ex,
+                    "TTSK " + commandName + " PDF - ERROR",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error
+                );
+            }
+            finally
+            {
+                // Dòng do progress tự chọn không phải ý định in lại của người dùng.
+                if (printRowIndices.Count > 0)
+                {
+                    dgvDrawings.ClearSelection();
+                    if (queueForm != null) queueForm.SyncPrintResults();
+                }
                 Application.RemoveMessageFilter(responsiveInput);
                 _pdfCommandRunning = false;
                 if (btnPrint != null)
@@ -8109,32 +9777,20 @@ namespace TTSK_AutoDim_Plates
 
         }
 
-        private void dgvDrawings_CellDoubleClick(object sender, DataGridViewCellEventArgs e)
+        private async void dgvDrawings_CellDoubleClick(object sender, DataGridViewCellEventArgs e)
         {
-            if (operationRunning) return;
+            if (!CanApplyUpdateNow() || batchShortcutPending || dimensionCheckOpen) return;
             if (e.RowIndex < 0)
                 return;
 
             if (e.RowIndex >= _selectedDrawings.Count)
                 return;
 
-            try
-            {
-                Drawing dr = _selectedDrawings[e.RowIndex];
-
-                if (dr == null)
-                    return;
-
-                DrawingHandler dh = new DrawingHandler();
-                SetActiveDrawingSafe(dh, dr);
-
-                lblStatus.Text = "✓  Opened drawing: " + SafeDrawingName(dr);
-                lblStatus.ForeColor = Color.FromArgb(22, 163, 74);
-            }
-            catch (Exception ex)
-            {
-                SetMainStatus("Open drawing lỗi: " + ex.Message, MainStatusKind.Error);
-            }
+            Drawing dr = _selectedDrawings[e.RowIndex];
+            string sourceModel = dimensionCheckModelPath;
+            if (dr == null) return;
+            // Chốt target trên UI; mở trên cùng dispatcher và kiểm model như các lệnh khác.
+            await ExecuteTeklaCommandAsync("Open drawing", () => OpenContextDrawingCore(dr, sourceModel));
         }
 
         private void MakeWholeBoxSelectable(Control root, RadioButton radio)
@@ -8222,16 +9878,16 @@ namespace TTSK_AutoDim_Plates
                         Color.FromArgb(59, 130, 246)
                     );
 
-                    ScaleCheckResult result = CheckDrawingScale(dh, dr, mark, rev);
+                    ScaleCheckResult result = CheckDrawingScale(dh, dr, mark, rev, dimensionCheckModelPath);
                     result.Changes = changes;
 
-                    if (IsScaleError(result))
+                    if (!string.IsNullOrEmpty(result.Message) || IsScaleError(result))
                     {
                         errors.Add(result);
 
                         SetGridStatusAndResult(
                             i,
-                            "SCALE ERROR",
+                            string.IsNullOrEmpty(result.Message) ? "SCALE ERROR" : "CHECK FAILED",
                             Color.FromArgb(220, 38, 38),
                             BuildScaleErrorResultText(result),
                             Color.FromArgb(220, 38, 38)
@@ -8264,15 +9920,16 @@ namespace TTSK_AutoDim_Plates
                 {
                     ScaleCheckResult error = errors[i];
                     _selectedDrawings.Add(error.Drawing);
-                    // Một bản lỗi vẫn giữ để xử lý, nhưng không tạo dòng tồn dư.
-                    if(errors.Count>1) AddScaleErrorGridRow(i + 1, error);
+                    AddScaleErrorGridRow(i + 1, error);
                 }
 
                 Ui(() => dgvDrawings.ClearSelection());
 
-                Ui(() => { lblCount.Text = "Sai tỉ lệ:  " + errors.Count + "/" + sourceDrawings.Count; });
+                int failedChecks = errors.FindAll(error => !string.IsNullOrEmpty(error.Message)).Count;
+                Ui(() => { lblCount.Text = (failedChecks > 0 ? "Cần kiểm tra:  " : "Sai tỉ lệ:  ") + errors.Count + "/" + sourceDrawings.Count; });
                 Ui(() => { lblStatus.Text =
-                    "✗  Scale Error: " + errors.Count + "/" + sourceDrawings.Count + " bản vẽ"; });
+                    failedChecks > 0 ? "Check Scale: " + (errors.Count - failedChecks) + " sai tỉ lệ · " + failedChecks + " chưa kiểm tra được / " + sourceDrawings.Count + " bản"
+                        : "✗  Scale Error: " + errors.Count + "/" + sourceDrawings.Count + " bản vẽ"; });
                 Ui(() => { lblStatus.ForeColor = Color.FromArgb(220, 38, 38); });
             }
             catch (Exception ex)
@@ -8297,7 +9954,7 @@ namespace TTSK_AutoDim_Plates
                 error.Mark,
                 string.IsNullOrWhiteSpace(error.Rev) ? "-" : error.Rev,
                 string.IsNullOrWhiteSpace(error.Changes) ? "-" : error.Changes,
-                "SCALE ERROR",
+                string.IsNullOrEmpty(error.Message) ? "SCALE ERROR" : "CHECK FAILED",
                 resultText
             );
 
@@ -8314,6 +9971,8 @@ namespace TTSK_AutoDim_Plates
         {
             if (error == null)
                 return "SCALE ERROR";
+            if (!string.IsNullOrEmpty(error.Message))
+                return "Chưa kiểm tra: " + error.Message;
 
             string titleText = string.IsNullOrWhiteSpace(error.TitleScale)
                 ? "?"
@@ -8437,7 +10096,8 @@ namespace TTSK_AutoDim_Plates
             DrawingHandler dh,
             Drawing dr,
             string mark,
-            string rev
+            string rev,
+            string modelPath
         )
         {
             ScaleCheckResult result = new ScaleCheckResult();
@@ -8445,35 +10105,15 @@ namespace TTSK_AutoDim_Plates
             result.Mark = mark;
             result.Rev = rev;
 
-            bool openedForCheck = false;
+            var adapter = new Tekla.Technology.Akit.UserScript.PHU_DimensionBatch.TeklaAdapter(modelPath);
+            var entry = new Tekla.Technology.Akit.UserScript.PHU_DimensionBatch.Entry { Drawing = dr };
 
             try
             {
-                if (dh.IsAnyDrawingOpen())
-                {
-                    CloseActiveDrawingSafe(dh);
-                    WaitForUiDelay(80);
-                }
-
-                SetActiveDrawingSafe(dh, dr);
-                openedForCheck = true;
-                WaitForUiDelay(80);
-
+                // Cùng quy tắc với Check DIM: mượn đúng active, chỉ đóng bản lượt này tự mở.
+                adapter.Open(entry, false);
+                adapter.ValidateActive(entry);
                 Drawing activeDrawing = dh.GetActiveDrawing();
-                if (activeDrawing == null)
-                    throw new Exception("Không mở lại được drawing để Check Scale.");
-
-                string activeMark = SafeDrawingMark(activeDrawing);
-                if (
-                    activeDrawing.GetType() != dr.GetType()
-                    || (
-                        !string.IsNullOrWhiteSpace(mark)
-                        && !string.Equals(activeMark, mark, StringComparison.OrdinalIgnoreCase)
-                    )
-                )
-                {
-                    throw new Exception("Drawing đang mở không đúng drawing cần Check Scale.");
-                }
 
                 result.Drawing = activeDrawing;
                 result.TitleScale = GetDrawingTitle3Scale(activeDrawing);
@@ -8485,6 +10125,7 @@ namespace TTSK_AutoDim_Plates
 
                 if (result.ViewScales.Count >= 2)
                     result.FrontScale = result.ViewScales[1];
+                adapter.ValidateActive(entry);
             }
             catch (Exception ex)
             {
@@ -8492,15 +10133,8 @@ namespace TTSK_AutoDim_Plates
             }
             finally
             {
-                if (openedForCheck)
-                {
-                    try
-                    {
-                        CloseActiveDrawingSafe(dh);
-                        WaitForUiDelay(80);
-                    }
-                    catch { }
-                }
+                try { adapter.CloseOwned(entry); }
+                catch (Exception ex) { result.Message = string.IsNullOrEmpty(result.Message) ? ex.Message : result.Message + " · " + ex.Message; }
             }
 
             return result;
@@ -13070,12 +14704,8 @@ namespace TTSK_AutoDim_Plates
                         Height
                     );
 
-                    Color trackColor = DarkMode
-                        ? Color.FromArgb(18, 18, 18)
-                        : Color.FromArgb(241, 245, 249);
-                    Color thumbColor = DarkMode
-                        ? Color.FromArgb(95, 82, 70)
-                        : Color.FromArgb(148, 163, 184);
+                    Color trackColor = BackgroundColor;
+                    Color thumbColor = ListScrollThumbColor(DarkMode);
 
                     using (SolidBrush trackBrush = new SolidBrush(trackColor))
                     {
@@ -14735,19 +16365,20 @@ namespace TTSK_AutoDim_Plates
                     float cellWidth=22*scale, cellHeight=17*scale, cellGap=5*scale;
                     float gridWidth=cellWidth*2+cellGap, contentWidth=100*scale;
                     float x=box.Left+(box.Width-contentWidth)/2f,y=(Height-(cellHeight*2+cellGap))/2f;
-                    Color groupEdge=Enabled ? (active?(DarkMode?BlendColor(BlendColor(BackColor,AccentColor,.5f),Color.White,.22f):BlendColor(BackColor,AccentColor,.43f))
-                        :(DarkMode?Color.FromArgb(103,109,119):Color.FromArgb(158,177,206))) : edge;
-                    Color cellEdge=active?(DarkMode?BlendColor(BackColor,AccentColor,.25f):BlendColor(BackColor,HighlightColor,.30f))
+                    // Ô chính 1–2 giữ màu đậm; chỉ ô phụ 3–4 dùng bảng màu nhẹ Active/Batch.
+                    Color numberInk=DarkMode?Color.FromArgb(239,176,120):AccentColor;
+                    Color groupEdge=Enabled?BlendColor(AccentColor,Color.White,.20f):edge;
+                    Color cellEdge=Enabled?(DarkMode?Color.FromArgb(139,104,77):Color.FromArgb(153,176,207))
                         :(DarkMode?Color.FromArgb(61,65,72):Color.FromArgb(208,218,233));
-                    Color groupFill=active?(DarkMode?BlendColor(BlendColor(BackColor,AccentColor,.32f),Color.White,.10f):BlendColor(BackColor,HighlightColor,.24f))
+                    Color groupFill=Enabled?AccentColor
                         :(DarkMode?Color.FromArgb(44,46,50):Color.FromArgb(231,238,249));
-                    Color cellFill=active?(DarkMode?BlendColor(BackColor,AccentColor,.10f):BlendColor(BackColor,HighlightColor,.035f))
+                    Color cellFill=Enabled?(DarkMode?Color.FromArgb(22,25,31):Color.White)
                         :(DarkMode?Color.FromArgb(28,28,28):Color.FromArgb(249,251,255));
                     using(var font=new Font("Segoe UI",(40f/3f)*scale,FontStyle.Bold,GraphicsUnit.Pixel))
                     using(var pen=new Pen(active?arrowInk:ink,2.4f*scale))
                     using(var sf=new StringFormat{Alignment=StringAlignment.Center,LineAlignment=StringAlignment.Center})
-                    using(var text=new SolidBrush(ink))
-                    using(var leadingText=new SolidBrush(DarkMode?BlendColor(AccentColor,Color.White,.86f):AccentColor))
+                    using(var text=new SolidBrush(Enabled?numberInk:ink))
+                    using(var leadingText=new SolidBrush(DarkMode?Color.FromArgb(24,20,16):Color.White))
                     {
                         pen.StartCap=LineCap.Round; pen.EndCap=LineCap.Round; pen.LineJoin=LineJoin.Round;
                         for(int row=0;row<2;row++)for(int col=0;col<2;col++) {
@@ -14758,7 +16389,7 @@ namespace TTSK_AutoDim_Plates
                             using(var cellPen=new Pen(firstGroup?groupEdge:cellEdge,scale))
                             {g.FillPath(fill,cellPath);g.DrawPath(cellPen,cellPath);}
                             string number=GetDisplayNumber(index,row,col).ToString();
-                            g.DrawString(number,font,firstGroup&&active?leadingText:text,cell,sf);
+                            g.DrawString(number,font,firstGroup&&Enabled?leadingText:text,cell,sf);
                         }
                         float ax=x+gridWidth+31.5f*scale,ay=Height/2f;
                         if(index==0){
@@ -15566,8 +17197,11 @@ namespace TTSK_AutoDim_Plates
 
             private readonly List<object> _items = new List<object>();
             private int _selectedIndex = -1;
-            private ContextMenuStrip _dropDownMenu;
+            private ScopeDropDownMenu _dropDownMenu;
             private bool _dropDownOpening;
+            private bool _hovered;
+            private bool _mousePressed;
+            private bool _skipMouseOpen;
 
             public event EventHandler SelectedIndexChanged;
 
@@ -15639,67 +17273,33 @@ namespace TTSK_AutoDim_Plates
                 e.Graphics.PixelOffsetMode = PixelOffsetMode.Half;
                 e.Graphics.CompositingQuality = CompositingQuality.HighQuality;
 
-                RectangleF box = new RectangleF(
-                    1.0f,
-                    1.0f,
-                    Math.Max(1f, Width - 2f),
-                    Math.Max(1f, Height - 2f)
-                );
-
-                Color fill = Enabled ? BackColor : MixColor(BackColor, Color.Gray, 0.20);
-                Color border = Enabled
-                    ? CustomBorderColor
-                    : MixColor(CustomBorderColor, Color.Gray, 0.35);
-                Color textColor = Enabled ? ForeColor : Color.FromArgb(148, 163, 184);
-
-                float radius = Math.Min(7f, Math.Min(box.Width, box.Height) * 0.5f);
+                float scale = DeviceDpi / 96F;
+                bool expanded = _dropDownMenu != null && _dropDownMenu.Visible;
+                bool active = Enabled && (Focused || expanded);
+                Color fill = Enabled && (_hovered || expanded) ? MixColor(BackColor, ForeColor, 0.045) : BackColor;
+                Color border = MixColor(BackColor, CustomBorderColor, active ? 0.90 : _hovered && Enabled ? 0.50 : 0.24);
+                Color textColor = Enabled ? ForeColor : MixColor(BackColor, ForeColor, 0.40);
+                RectangleF box = new RectangleF(scale, scale, Math.Max(1f, Width - 2 * scale), Math.Max(1f, Height - 2 * scale));
+                float radius = Math.Min(8 * scale, Math.Min(box.Width, box.Height) * 0.5f);
                 using (GraphicsPath path = RoundedRectF(box, radius))
                 using (SolidBrush fillBrush = new SolidBrush(fill))
                 {
-                    // Keep all inner painting inside the same rounded-control pass;
-                    // redraw the outer border last so corners cannot be covered.
                     e.Graphics.FillPath(fillBrush, path);
+                    TextRenderer.DrawText(e.Graphics, Text ?? "", Font,
+                        new System.Drawing.Rectangle((int)(12 * scale), 0, Math.Max(1, Width - (int)(46 * scale)), Height), textColor,
+                        TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine
+                            | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
 
-                    const int arrowAreaWidth = 20;
-                    float arrowLeft = Width - arrowAreaWidth - 1f;
-
-                    using (Pen separator = new Pen(Color.FromArgb(110, border), 1f))
-                        e.Graphics.DrawLine(separator, arrowLeft, 6f, arrowLeft, Height - 6f);
-
-                    RectangleF textRect = new RectangleF(
-                        8f,
-                        0f,
-                        Math.Max(1f, arrowLeft - 12f),
-                        Height
-                    );
-
-                    using (SolidBrush textBrush = new SolidBrush(textColor))
-                    using (StringFormat format = new StringFormat())
+                    // Chevron nét mảnh; đổi hướng khi mở, không chia ô bằng vạch đứng.
+                    float x = Width - 18 * scale, y = Height * 0.5f, direction = expanded ? -1 : 1;
+                    using (Pen pen = new Pen(Enabled ? ArrowColor : textColor, 1.5f * scale))
                     {
-                        format.Alignment = StringAlignment.Near;
-                        format.LineAlignment = StringAlignment.Center;
-                        format.FormatFlags = StringFormatFlags.NoWrap;
-                        format.Trimming = StringTrimming.EllipsisCharacter;
-                        e.Graphics.DrawString(Text ?? "", Font, textBrush, textRect, format);
+                        pen.StartCap = pen.EndCap = LineCap.Round;
+                        pen.LineJoin = LineJoin.Round;
+                        e.Graphics.DrawLines(pen, new[] { new PointF(x - 3.5f * scale, y - direction * 1.75f * scale),
+                            new PointF(x, y + direction * 1.75f * scale), new PointF(x + 3.5f * scale, y - direction * 1.75f * scale) });
                     }
-
-                    float arrowCenterX = arrowLeft + arrowAreaWidth * 0.5f;
-                    float arrowCenterY = Height * 0.5f + 1f;
-                    PointF[] arrow =
-                    {
-                        new PointF(arrowCenterX - 3.5f, arrowCenterY - 2f),
-                        new PointF(arrowCenterX + 3.5f, arrowCenterY - 2f),
-                        new PointF(arrowCenterX, arrowCenterY + 3f)
-                    };
-
-                    using (
-                        SolidBrush arrowBrush = new SolidBrush(
-                            Enabled ? ArrowColor : Color.FromArgb(148, 163, 184)
-                        )
-                    )
-                        e.Graphics.FillPolygon(arrowBrush, arrow);
-
-                    using (Pen borderPen = new Pen(border, Focused ? 1.8f : 1.4f))
+                    using (Pen borderPen = new Pen(border, (active ? 1.25f : 1f) * scale))
                     {
                         borderPen.LineJoin = LineJoin.Round;
                         e.Graphics.DrawPath(borderPen, path);
@@ -15719,6 +17319,7 @@ namespace TTSK_AutoDim_Plates
             protected override void OnMouseDown(MouseEventArgs e)
             {
                 base.OnMouseDown(e);
+                _mousePressed = Enabled && e.Button == MouseButtons.Left;
                 if (!Enabled)
                     return;
 
@@ -15727,13 +17328,25 @@ namespace TTSK_AutoDim_Plates
 
             protected override void OnMouseUp(MouseEventArgs e)
             {
+                bool open = _mousePressed && !_skipMouseOpen && ClientRectangle.Contains(e.Location);
+                _mousePressed = _skipMouseOpen = false;
                 base.OnMouseUp(e);
-                if (Enabled && e.Button == MouseButtons.Left)
+                if (Enabled && e.Button == MouseButtons.Left && open)
                     ShowDropDown();
             }
 
+            protected override void OnMouseEnter(EventArgs e)
+            { _hovered = true; Invalidate(); base.OnMouseEnter(e); }
+
+            protected override void OnMouseLeave(EventArgs e)
+            { _hovered = false; Invalidate(); base.OnMouseLeave(e); }
+
+            protected override void OnMouseCaptureChanged(EventArgs e)
+            { _mousePressed = false; base.OnMouseCaptureChanged(e); }
+
             protected override void OnKeyDown(KeyEventArgs e)
             {
+                _skipMouseOpen = false;
                 if (Enabled && (e.KeyCode == Keys.Up || e.KeyCode == Keys.Down) && _items.Count > 0)
                 {
                     int next = _selectedIndex;
@@ -15761,14 +17374,23 @@ namespace TTSK_AutoDim_Plates
 
             protected override void OnResize(EventArgs e)
             {
+                CloseDropDown();
                 base.OnResize(e);
                 Invalidate();
             }
 
             protected override void OnEnabledChanged(EventArgs e)
             {
+                _mousePressed = _skipMouseOpen = false;
+                if (!Enabled) CloseDropDown();
                 base.OnEnabledChanged(e);
                 Invalidate();
+            }
+
+            protected override void OnVisibleChanged(EventArgs e)
+            {
+                if (!Visible) CloseDropDown();
+                base.OnVisibleChanged(e);
             }
 
             protected override void OnEnter(EventArgs e)
@@ -15785,13 +17407,20 @@ namespace TTSK_AutoDim_Plates
 
             public void RefreshCustomButton()
             {
+                CloseDropDown();
                 Invalidate();
+            }
+
+            private void CloseDropDown()
+            {
+                if (_dropDownMenu != null && !_dropDownMenu.IsDisposed && _dropDownMenu.Visible)
+                    _dropDownMenu.Close();
             }
 
             private void ShowDropDown()
             {
                 if (
-                    _dropDownOpening
+                    !Enabled || !Visible || _dropDownOpening
                     || _items.Count == 0
                     || IsDisposed
                     || Disposing
@@ -15812,7 +17441,10 @@ namespace TTSK_AutoDim_Plates
                 _dropDownOpening = true;
                 try
                 {
-                    _dropDownMenu.Show(this, new Point(0, Height + 1));
+                    _dropDownMenu.Show(this, new Point(0, Height + (int)Math.Round(4 * DeviceDpi / 96F)));
+                    if (_selectedIndex >= 0 && _selectedIndex < _dropDownMenu.Items.Count)
+                        _dropDownMenu.Items[_selectedIndex].Select();
+                    Invalidate();
                 }
                 finally
                 {
@@ -15824,15 +17456,18 @@ namespace TTSK_AutoDim_Plates
             {
                 if (_dropDownMenu == null || _dropDownMenu.IsDisposed)
                 {
-                    _dropDownMenu = new ContextMenuStrip();
-                    _dropDownMenu.ShowImageMargin = false;
-                    _dropDownMenu.ShowCheckMargin = false;
+                    _dropDownMenu = new ScopeDropDownMenu();
                     _dropDownMenu.AutoSize = false;
-                    _dropDownMenu.Padding = new Padding(2);
-                    _dropDownMenu.Closed += delegate
+                    _dropDownMenu.Renderer = new ScopeMenuRenderer();
+                    _dropDownMenu.Closed += delegate(object sender, ToolStripDropDownClosedEventArgs e)
                     {
                         if (!IsDisposed)
+                        {
+                            // AutoClose đến trước MouseUp của ô chọn: lần bấm này chỉ đóng popup.
+                            _skipMouseOpen = e.CloseReason == ToolStripDropDownCloseReason.AppClicked
+                                && RectangleToScreen(ClientRectangle).Contains(Cursor.Position);
                             Invalidate();
+                        }
                     };
 
                     for (int i = 0; i < _items.Count; i++)
@@ -15840,7 +17475,6 @@ namespace TTSK_AutoDim_Plates
                         int index = i;
                         ToolStripMenuItem item = new ToolStripMenuItem(Convert.ToString(_items[i]));
                         item.AutoSize = false;
-                        item.Height = 28;
                         item.Click += delegate
                         {
                             SelectedIndex = index;
@@ -15849,20 +17483,115 @@ namespace TTSK_AutoDim_Plates
                     }
                 }
 
-                _dropDownMenu.Width = Width;
-                _dropDownMenu.Height = _dropDownMenu.Items.Count * 28 + 6;
+                // Kích thước theo DPI; popup và ô chọn thẳng hai mép, hàng đủ chỗ cho chữ và dấu chọn.
+                float scale = DeviceDpi / 96F;
+                int padding = (int)Math.Round(5 * scale);
+                int rowHeight = Math.Max((int)Math.Round(34 * scale), Font.Height + (int)Math.Round(14 * scale));
+                _dropDownMenu.Padding = new Padding(padding);
+                _dropDownMenu.Size = new System.Drawing.Size(Width, _dropDownMenu.Items.Count * rowHeight + padding * 2);
                 _dropDownMenu.BackColor = BackColor;
                 _dropDownMenu.ForeColor = ForeColor;
                 _dropDownMenu.Font = Font;
+                _dropDownMenu.ApplyFrame(MixColor(BackColor, CustomBorderColor, 0.24));
 
-                foreach (ToolStripItem item in _dropDownMenu.Items)
+                for (int i = 0; i < _dropDownMenu.Items.Count; i++)
                 {
+                    var item = (ToolStripMenuItem)_dropDownMenu.Items[i];
                     item.AutoSize = false;
-                    item.Width = Math.Max(1, Width - 6);
-                    item.Height = 28;
+                    item.Size = new System.Drawing.Size(Math.Max(1, Width - padding * 2), rowHeight);
+                    item.Margin = Padding.Empty;
+                    item.Checked = i == _selectedIndex;
                     item.BackColor = BackColor;
                     item.ForeColor = ForeColor;
                     item.Font = Font;
+                }
+            }
+
+            private sealed class ScopeDropDownMenu : ToolStripDropDown
+            {
+                internal Color Outline;
+                internal bool NativeFrame;
+                internal ScopeDropDownMenu()
+                {
+                    // Layout dọc cố định, không dùng cột icon/check mặc định tự đổi padding của menu.
+                    LayoutStyle = ToolStripLayoutStyle.Flow;
+                    var flow = (FlowLayoutSettings)LayoutSettings;
+                    flow.FlowDirection = FlowDirection.TopDown;
+                    flow.WrapContents = false;
+                }
+                protected override CreateParams CreateParams
+                {
+                    get { var p = base.CreateParams; p.Style |= 0x00C00000 | 0x00040000; return p; }
+                }
+                protected override void OnHandleCreated(EventArgs e)
+                { base.OnHandleCreated(e); ApplyFrame(Outline); }
+                internal void ApplyFrame(Color outline)
+                {
+                    Outline = outline;
+                    if (!IsHandleCreated) return;
+                    try
+                    {
+                        int round = 2, dark = BackColor.GetBrightness() < 0.5f ? 1 : 0;
+                        int color = outline.R | (outline.G << 8) | (outline.B << 16);
+                        NativeFrame = DwmSetWindowAttribute(Handle, 33, ref round, 4) == 0;
+                        DwmSetWindowAttribute(Handle, 20, ref dark, 4);
+                        DwmSetWindowAttribute(Handle, 34, ref color, 4);
+                    }
+                    catch { NativeFrame = false; } // Windows cũ giữ viền đơn; không cắt Region gây răng cưa.
+                }
+                protected override void WndProc(ref Message m)
+                {
+                    if (m.Msg == 0x0083) { m.Result = IntPtr.Zero; return; }
+                    if (m.Msg == 0x0084) { m.Result = (IntPtr)1; return; }
+                    base.WndProc(ref m);
+                }
+            }
+
+            private sealed class ScopeMenuRenderer : ToolStripProfessionalRenderer
+            {
+                internal ScopeMenuRenderer() { RoundedEdges = false; }
+                protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e)
+                { e.Graphics.Clear(e.ToolStrip.BackColor); }
+                protected override void OnRenderImageMargin(ToolStripRenderEventArgs e) { }
+                protected override void OnRenderItemCheck(ToolStripItemImageRenderEventArgs e) { }
+                protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e)
+                {
+                    var menu = e.ToolStrip as ScopeDropDownMenu;
+                    if (menu == null || menu.NativeFrame) return;
+                    using (var pen = new Pen(menu.Outline))
+                        e.Graphics.DrawRectangle(pen, 0, 0, e.ToolStrip.Width - 1, e.ToolStrip.Height - 1);
+                }
+                protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e)
+                {
+                    var item = e.Item as ToolStripMenuItem;
+                    if (!e.Item.Enabled || (!e.Item.Selected && (item == null || !item.Checked))) return;
+                    float scale = e.ToolStrip.DeviceDpi / 96F;
+                    int width = Math.Min(e.Item.Width, e.ToolStrip.ClientSize.Width - e.Item.Bounds.Left);
+                    e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                    using (var path = RoundedRectF(new RectangleF(0, scale, Math.Max(1, width - 1), e.Item.Height - 2 * scale), 6 * scale))
+                    using (var brush = new SolidBrush(MixColor(e.ToolStrip.BackColor, e.Item.ForeColor, e.Item.Selected ? 0.13 : 0.075)))
+                        e.Graphics.FillPath(brush, path);
+                }
+                protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
+                {
+                    float scale = e.ToolStrip.DeviceDpi / 96F;
+                    int width = Math.Min(e.Item.Width, e.ToolStrip.ClientSize.Width - e.Item.Bounds.Left);
+                    Color ink = e.Item.Enabled ? e.Item.ForeColor : MixColor(e.ToolStrip.BackColor, e.Item.ForeColor, 0.40);
+                    TextRenderer.DrawText(e.Graphics, e.Text, e.TextFont,
+                        new System.Drawing.Rectangle((int)(10 * scale), 0, Math.Max(1, width - (int)(42 * scale)), e.Item.Height), ink,
+                        TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine
+                            | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
+                    var item = e.Item as ToolStripMenuItem;
+                    if (item == null || !item.Checked) return;
+                    float x = width - 21 * scale, y = e.Item.Height / 2F;
+                    e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                    using (var pen = new Pen(ink, 1.65f * scale))
+                    {
+                        pen.StartCap = pen.EndCap = LineCap.Round;
+                        pen.LineJoin = LineJoin.Round;
+                        e.Graphics.DrawLines(pen, new[] { new PointF(x - 3 * scale, y),
+                            new PointF(x, y + 3 * scale), new PointF(x + 5 * scale, y - 3 * scale) });
+                    }
                 }
             }
 
@@ -16125,7 +17854,7 @@ namespace TTSK_AutoDim_Plates
             if (operationRunning || _isBatchRunning || _snapshotExportRunning || _fitAndCleanupRunning) return false;
             rbBatch.Checked = true;
             UpdateModeUi();
-            await ExecuteTeklaCommandAsync("Load Selected", LoadSelectedDrawingsCore);
+            await ExecuteTeklaCommandAsync("Load Selected", () => LoadSelectedDrawingsCore(false));
             if (_selectedDrawings.Count == 0) return false;
             if (_selectedDrawings.Count < 2)
             {
@@ -16334,6 +18063,8 @@ namespace TTSK_AutoDim_Plates
         private void ObserveWorkProject()
         {
             if (!EnsureWorkDay(DateTime.Now)) return;
+            // Chưa gắn phiên: chỉ xem nhật ký đã lưu, không tự đọc nhầm model đang mở.
+            if (TeklaSessionCoordinator.Current == null) return;
             try
             {
                 var model = new Tekla.Structures.Model.Model();

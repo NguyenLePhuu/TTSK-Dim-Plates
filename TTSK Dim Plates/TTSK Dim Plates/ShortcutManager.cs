@@ -11,6 +11,7 @@ namespace TTSK_AutoDim_Plates
         public const string ActionCreateDrawing = "CreateDrawing";
         public const string ActionBatchCreate = "BatchCreate";
         public const string ActionCheckDim = "CheckDim";
+        public const string ActionCheckCombo = "CheckCombo";
         public const string ActionRevision = "Revision";
         public const string ActionCheckScale = "CheckScale";
         public const string ActionLineDistance = "LineDistance";
@@ -28,6 +29,7 @@ namespace TTSK_AutoDim_Plates
         public const string ActionPrintPdf = "PrintPdf";
         public const string ActionSnapshot = "Snapshot";
         public const string ActionDictionary = "Dictionary";
+        public const string ActionMeetingTranslation = "MeetingTranslation";
         public const string ActionWorkJournal = "WorkJournal";
         public const string ActionShortcutSettings = "ShortcutSettings";
         public const string ActionDrawingTools = "DrawingTools";
@@ -162,6 +164,7 @@ namespace TTSK_AutoDim_Plates
                 string[] lines = File.ReadAllLines(_filePath, Encoding.UTF8);
                 bool currentSchema = Array.Exists(lines, line => line.Trim() == "# ShortcutSchema=2");
                 bool journalShortcutCurrent = Array.Exists(lines, line => line.Trim() == "# JournalShortcutVersion=1");
+                bool meetingShortcutCurrent = Array.Exists(lines, line => line.Trim() == "# MeetingShortcutVersion=1");
                 var loadedActions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 bool hasBatchCreateSetting = false;
                 bool hasArrangeViewSetting = false;
@@ -316,7 +319,10 @@ namespace TTSK_AutoDim_Plates
                     _shortcuts[ActionWorkJournal] = Keys.Control | Keys.H;
                     migratedDefaults = true;
                 }
-                if (migratedDefaults || pending.Count > 0 || !currentSchema || !journalShortcutCurrent)
+                if (!meetingShortcutCurrent && GetShortcut(ActionMeetingTranslation) == Keys.None
+                    && !_shortcuts.ContainsValue(Keys.Control | Keys.M))
+                    _shortcuts[ActionMeetingTranslation] = Keys.Control | Keys.M;
+                if (migratedDefaults || pending.Count > 0 || !currentSchema || !journalShortcutCurrent || !meetingShortcutCurrent)
                     Save();
             }
             catch
@@ -333,6 +339,7 @@ namespace TTSK_AutoDim_Plates
                 lines.Add("# TTSK AutoDim shortcut configuration");
                 lines.Add("# ShortcutSchema=2");
                 lines.Add("# JournalShortcutVersion=1");
+                lines.Add("# MeetingShortcutVersion=1");
                 lines.Add("# Edit from Shortcut Settings popup when possible.");
 
                 foreach (ShortcutActionDefinition def in _definitions)
@@ -493,6 +500,11 @@ namespace TTSK_AutoDim_Plates
             list.Add(
                 new ShortcutActionDefinition(
                     ActionCheckDim, "Check DIM", "Active: bản đang mở · Batch: dòng chọn / Document Manager; hỗ trợ 1 hoặc nhiều bản", "C", Keys.C
+                )
+            );
+            list.Add(
+                new ShortcutActionDefinition(
+                    ActionCheckCombo, "Check bản vẽ · Combo", "Scale → DIM → Góc quay (Assembly) · Active hoặc bản vẽ chọn trong list", "C", Keys.Shift | Keys.C
                 )
             );
             list.Add(
@@ -744,6 +756,7 @@ namespace TTSK_AutoDim_Plates
             list.Add(new ShortcutActionDefinition(ActionPrintPdf, "Print PDF", "In PDF riêng từ bản đang mở hoặc 1/nhiều bản được chọn", "P", Keys.None));
             list.Add(new ShortcutActionDefinition(ActionSnapshot, "Snapshot", "Xuất ảnh bản đang mở hoặc 1/nhiều bản được chọn", "S", Keys.Control | Keys.Shift | Keys.P));
             list.Add(new ShortcutActionDefinition(ActionDictionary, "Từ điển", "Mở / đóng từ điển tiếng Nhật", "字", Keys.Control | Keys.J));
+            list.Add(new ShortcutActionDefinition(ActionMeetingTranslation, "Dịch họp Nhật – Việt", "Mở cửa sổ dịch phụ đề Teams trực tiếp Nhật → Việt", "訳", Keys.Control | Keys.M));
             list.Add(new ShortcutActionDefinition(ActionWorkJournal, "Nhật ký làm việc", "Xem nhật ký dự án và giờ làm", "H", Keys.Control | Keys.H));
             list.Add(new ShortcutActionDefinition(ActionShortcutSettings, "Shortcut Settings", "Chỉnh phím tắt", "⌨", Keys.Control | Keys.K));
             list.Add(new ShortcutActionDefinition(ActionDrawingTools, "Drawing Tools", "Mở / đóng bảng công cụ", "T", Keys.Control | Keys.T));

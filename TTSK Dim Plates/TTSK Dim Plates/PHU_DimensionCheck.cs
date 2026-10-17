@@ -1,5 +1,5 @@
 ﻿// Kiểm tra chân DIM thẳng theo bằng chứng hình học; Analyze/Audit không ghi bản vẽ.
-// LUỒNG: Analyze đọc DIM và feature → phân loại chân → Result; Run mở PHU_DimensionReportForm.
+// LUỒNG: Analyze đọc DIM và feature → phân loại chân → kiểm cặp biên neighbor/rãnh → xác minh giữa bề dày plate → Result; Run mở PHU_DimensionReportForm.
 // THAM SỐ: Tolerance tính mm model/view, không nhân scale. CandidateOwners là ứng viên hình học, không khẳng định associativity đã lưu.
 // TRA CỨU: PROJECT_MAP.md ở gốc repo; chỉ mục kiểu/hàm và điểm chỉnh thông số.
 
@@ -56,6 +56,8 @@ namespace Tekla.Technology.Akit.UserScript
             public bool Allowed;
             public bool Infinite;
             public bool ConnectedPart, ExternalMemberReference;
+            // Chỉ ContourPlate thuộc fabrication unit, không dummy; không mở quyền REF.
+            public bool PrimaryPlate;
         }
         public sealed class Finding
         {
@@ -68,6 +70,10 @@ namespace Tekla.Technology.Akit.UserScript
             public string EvidenceKind;
             public int[] CandidateOwners = new int[0];
             public double MeasurementResidual = Double.NaN;
+            // Gợi ý gần nhất theo phương đo, không khẳng định đây là điểm người dùng định bắt.
+            public G.Point SuggestedPoint;
+            public int SuggestedOwner;
+            public string SuggestedKind;
             public override string ToString()
             {
                 return Status + " VIEW=" + View + " DIM=" + Dimension + " foot=" + Foot
@@ -123,6 +129,9 @@ namespace Tekla.Technology.Akit.UserScript
                     s.AppendLine("EVIDENCE VIEW="+f.View+" DIM="+f.Dimension+" foot="+f.Foot+" "+f.EvidenceKind
                         +" candidateOwners="+String.Join(",",f.CandidateOwners)+" measuredResidual="
                         +f.MeasurementResidual.ToString("0.###",CultureInfo.InvariantCulture));
+                foreach(var f in Findings.Where(f=>f.SuggestedPoint!=null))
+                    s.AppendLine("SUGGESTION VIEW="+f.View+" DIM="+f.Dimension+" foot="+f.Foot+" current="+P(f.Point)
+                        +" projected="+P(f.SuggestedPoint)+" source=P"+f.SuggestedOwner+":"+f.SuggestedKind+" (not confirmed intent)");
                 foreach (var w in Warnings) s.AppendLine("INCOMPLETE " + w);
                 foreach (var skipped in SkippedAngles) s.AppendLine("SKIPPED ANGULAR " + skipped);
                 return s.ToString();
@@ -175,6 +184,9 @@ namespace Tekla.Technology.Akit.UserScript
                 if (nearest != null)
                 {
                     f.MeasurementResidual=MeasurementResidual(point,nearest,dx,dy);
+                    double shift=(nearest.A.X-point.X)*dx+(nearest.A.Y-point.Y)*dy;
+                    f.SuggestedPoint=new G.Point(point.X+shift*dx,point.Y+shift*dy,point.Z);
+                    f.SuggestedOwner=nearest.Owner; f.SuggestedKind=nearest.Kind;
                     f.Reason += " Mốc gần nhất theo phương đo (không phải owner xác nhận): "
                         +Describe(nearest,Residual(point,nearest))+"; lệch phương đo="
                         +f.MeasurementResidual.ToString("0.###",CultureInfo.InvariantCulture)+" mm.";
@@ -295,7 +307,7 @@ namespace Tekla.Technology.Akit.UserScript
             var dummy=new HashSet<int>();
             if(drawing is D.AssemblyDrawing)
             {
-                var graph=PHU_NeighborCleanup.Analyze();
+                var graph=PHU_NeighborCleanup.AnalyzeDimensionConnections();
                 if(!graph.Drawing.IsSameDatabaseObject(drawing)) throw new InvalidOperationException("Drawing thay đổi trong lúc đọc.");
                 primary=new HashSet<int>(graph.Keep.Where(x=>x.Value=="KEEP primary assembly").Select(x=>x.Key));
                 foreach(var node in graph.Nodes.Values) if(node.Dummy) dummy.Add(node.Id);
@@ -310,10 +322,15 @@ namespace Tekla.Technology.Akit.UserScript
             result.Relations.Add("PRIMARY="+String.Join(",",primary.OrderBy(x=>x)));
             if(!primary.Contains(result.Main)) throw new InvalidOperationException("Main là dummy/reference; cần xác minh thủ công.");
             var global=model.GetWorkPlaneHandler().GetCurrentTransformationPlane().TransformationMatrixToGlobal;
+            // Cache chỉ sống trong lần Analyze: dữ liệu global bất biến, không lưu object view.
+            var geometryCache=new Dictionary<int,List<Feature>>();
+            var partCache=new Dictionary<int,M.Part>();
             var views=drawing.GetSheet().GetAllViews();
             while(views.MoveNext())
             {
                 var view=views.Current as D.View; if(view==null) continue;
+                int viewId=Id(view);
+                string viewLabel=null;
                 result.Views++;
                 var matrix=G.MatrixFactory.ToCoordinateSystem(view.DisplayCoordinateSystem);
                 var features=new List<Feature>(); int warningCount=result.Warnings.Count;
@@ -322,23 +339,29 @@ namespace Tekla.Technology.Akit.UserScript
                 while(dparts.MoveNext())
                 {
                     var dp=(D.Part)dparts.Current;
-                    var part=model.SelectModelObject(dp.ModelIdentifier) as M.Part;
-                    if(part==null) { result.Warnings.Add("VIEW="+Id(view)+" model part không đọc được."); continue; }
+                    var modelId=dp.ModelIdentifier;
+                    M.Part part;
+                    if(!partCache.TryGetValue(modelId.ID,out part))
+                    {
+                        part=model.SelectModelObject(modelId) as M.Part;
+                        if(part!=null) partCache[modelId.ID]=part;
+                    }
+                    if(part==null) { result.Warnings.Add("VIEW="+viewId+" model part không đọc được."); continue; }
                     local[part.Identifier.ID]=part;
                 }
                 foreach(var pair in local.OrderBy(x=>x.Key))
                 {
-                    try { Extract(pair.Value, primary.Contains(pair.Key), connected.Contains(pair.Key), dummy.Contains(pair.Key), global,matrix,features); }
-                    catch(Exception ex) { result.Warnings.Add("VIEW="+Id(view)+" P"+pair.Key+" "+ex.Message); }
+                    try { ExtractCached(pair.Value, primary.Contains(pair.Key), connected.Contains(pair.Key), dummy.Contains(pair.Key), global,matrix,features,geometryCache); }
+                    catch(Exception ex) { result.Warnings.Add("VIEW="+viewId+" P"+pair.Key+" "+ex.Message); }
                 }
-                if(!local.Keys.Any(primary.Contains)) result.Warnings.Add("VIEW="+Id(view)+" không có part thuộc main fabrication unit để đối chiếu.");
+                if(!local.Keys.Any(primary.Contains)) result.Warnings.Add("VIEW="+viewId+" không có part thuộc main fabrication unit để đối chiếu.");
                 ConstrainReferences(features,result.Main);
                 foreach(var reference in features.Where(f=>f.Kind=="REF-INTERSECTION"))
-                    result.Relations.Add("VIEW="+Id(view)+" VERIFIED REF MAIN -> P"+reference.Owner+" intersection="+P(reference.A));
+                    result.Relations.Add("VIEW="+viewId+" VERIFIED REF MAIN -> P"+reference.Owner+" intersection="+P(reference.A));
                 ExtractGrids(model,view,global,matrix,features,result.Warnings);
-                result.Features[Id(view)]=features;
+                result.Features[viewId]=features;
                 bool incomplete=result.Warnings.Count>warningCount;
-                if(incomplete) result.IncompleteGeometryViews.Add(Id(view));
+                if(incomplete) result.IncompleteGeometryViews.Add(viewId);
                 var dimensions=view.GetAllObjects();
                 var seen=new HashSet<int>();
                 while(dimensions.MoveNext())
@@ -352,23 +375,23 @@ namespace Tekla.Technology.Akit.UserScript
                     catch(Exception ex)
                     {
                         // Even an unreadable angle ID must not abort the other DIMs in this drawing.
-                        if(dim is D.AngleDimension)IncludeDimension(result,Id(view),0,dim.GetType());
-                        else result.Warnings.Add("VIEW="+Id(view)+" không đọc được ID DIM: "+ex.Message);
+                        if(dim is D.AngleDimension)IncludeDimension(result,viewId,0,dim.GetType());
+                        else result.Warnings.Add("VIEW="+viewId+" không đọc được ID DIM: "+ex.Message);
                         continue;
                     }
                     if(!seen.Add(dimensionId)) continue;
-                    if(!IncludeDimension(result,Id(view),dimensionId,dim.GetType()))continue;
+                    if(!IncludeDimension(result,viewId,dimensionId,dim.GetType()))continue;
                     try
                     {
                         var raw=Member(dim,"DimensionPoints") as IEnumerable;
                         var normal=Member(dim,"UpDirection") as G.Vector;
-                        if(raw==null) { result.Warnings.Add("DIM="+Id(dim)+" thiếu DimensionPoints."); continue; }
+                        if(raw==null) { result.Warnings.Add("DIM="+dimensionId+" thiếu DimensionPoints."); continue; }
                         var points=raw.Cast<object>().Select(x=>x as G.Point).ToList();
                         object rawDistance=Member(dim,"Distance");
                         double distance=rawDistance==null?Double.NaN:Convert.ToDouble(rawDistance,CultureInfo.InvariantCulture);
                         string chainReview=ValidateChain(points,normal,distance);
-                        if(chainReview!=null) result.Warnings.Add("VIEW="+Id(view)+" DIM="+Id(dim)+" "+chainReview);
-                        result.Objects[Id(dim)]=(D.DrawingObject)dim;
+                        if(chainReview!=null) result.Warnings.Add("VIEW="+viewId+" DIM="+dimensionId+" "+chainReview);
+                        result.Objects[dimensionId]=(D.DrawingObject)dim;
                         string dimensionLabel=DimensionLabel(points,normal);
                         var displayed=ReadDisplayedSegments(dim as D.StraightDimensionSet,normal);
                         if(displayed.Count>0)dimensionLabel=String.Join(" – ",displayed.Select(s=>s.Text))+" mm";
@@ -376,12 +399,13 @@ namespace Tekla.Technology.Akit.UserScript
                         foreach(object value in points)
                         {
                             var finding=Classify(value as G.Point,normal,features);
-                            finding.View=Id(view); finding.Dimension=Id(dim); finding.Foot=index++;
-                            finding.ViewLabel=ViewLabel(view);
+                            finding.View=viewId; finding.Dimension=dimensionId; finding.Foot=index++;
+                            if(viewLabel==null) viewLabel=ViewLabel(view);
+                            finding.ViewLabel=viewLabel;
                             finding.DimensionLabel=dimensionLabel;
                             finding.Location=Location(finding.Point,points,normal,finding.Foot);
                             string measured=FootDimensionLabel(finding.Point,normal,displayed);
-                            if(measured!=null)finding.Location=measured;
+                            if(measured!=null)finding.Location=measured+" — "+finding.Location.ToLowerInvariant();
                             if(normal!=null)
                             {
                                 double sign=distance<0?-1:1;
@@ -399,13 +423,15 @@ namespace Tekla.Technology.Akit.UserScript
                     catch(Exception ex)
                     {
                         // A failed set must not stop the remaining sets, or act as notch evidence.
-                        foreach(var finding in result.Findings.Where(f=>f.View==Id(view)&&f.Dimension==Id(dim)))
+                        foreach(var finding in result.Findings.Where(f=>f.View==viewId&&f.Dimension==dimensionId))
                         { finding.Status="REVIEW"; finding.Reason="Không đọc đủ chuỗi kích thước. "+ex.Message; }
-                        result.Warnings.Add("VIEW="+Id(view)+" DIM="+Id(dim)+" không đọc đủ chuỗi: "+ex.Message);
+                        result.Warnings.Add("VIEW="+viewId+" DIM="+dimensionId+" không đọc đủ chuỗi: "+ex.Message);
                     }
                 }
             }
+            CheckConnectedMemberSpans(result);
             CheckNotchPairs(result);
+            CheckPlateMidplanes(result);
             if(result.Dimensions==0) result.Warnings.Add("Không có DIM được kiểm tra.");
             var active=handler.GetActiveDrawing();
             if(active==null || !active.IsSameDatabaseObject(drawing)) throw new InvalidOperationException("Drawing thay đổi trong lúc kiểm tra.");
@@ -424,6 +450,125 @@ namespace Tekla.Technology.Akit.UserScript
             {result.Warnings.Add("VIEW="+viewId+" DIM="+dimensionId+" chưa hỗ trợ "+type.Name);return false;}
             result.Dimensions++;
             return true;
+        }
+        // Chỉ bổ sung nghĩa đo tổng ngoài–ngoài của thép có liên kết thật.
+        // Không bật Allowed cho toàn bộ neighbor: mép trong/lỗ/REF vẫn theo quy tắc cũ.
+        public static void CheckConnectedMemberSpans(Result result)
+        {
+            if(!result.GeometryCoverageTracked && result.Warnings.Count>0) return;
+            foreach(var view in result.Findings.GroupBy(f=>f.View))
+            {
+                List<Feature> features;
+                if(result.IncompleteGeometryViews.Contains(view.Key) || !result.Features.TryGetValue(view.Key,out features)
+                    || features==null || features.Any(f=>!ValidFeature(f))) continue;
+                var members=features.Where(f=>f.ExternalMemberReference && f.ConnectedPart
+                    && f.Kind!=null && f.Kind.StartsWith("REF",StringComparison.Ordinal))
+                    .GroupBy(f=>f.Owner).OrderBy(g=>g.Key).ToList();
+                foreach(var group in view.GroupBy(f=>f.Dimension))
+                {
+                    var feet=group.OrderBy(f=>f.Foot).ToList();
+                    if(feet.Count!=2 || !feet.Any(f=>f.Status=="ERROR")
+                        || feet.Any(f=>f.Status!="OK" && f.Status!="ERROR")
+                        || ValidateChain(feet.Select(f=>f.Point).ToList(),feet[0].Normal,0)!=null) continue;
+                    double dx,dy,ex,ey;
+                    if(!TryMeasurementAxis(feet[0].Normal,out dx,out dy)
+                        || !TryMeasurementAxis(feet[1].Normal,out ex,out ey) || Math.Abs(dx*ey-dy*ex)>1e-8) continue;
+                    var proofs=new List<Feature>();
+                    foreach(var member in members)
+                    {
+                        G.Point a,b;
+                        if(!StraightAxis(member.Where(f=>f.Kind!="REF-INTERSECTION").SelectMany(f=>new[]{f.A,f.B}).ToList(),out a,out b)) continue;
+                        double length=Distance2(a,b);
+                        // Đo bề rộng/chiều cao vuông góc trục; không suy ra chiều dài từ bbox.
+                        if(length<=Tolerance || Math.Abs(((b.X-a.X)*dx+(b.Y-a.Y)*dy)/length)>1e-8) continue;
+                        var edges=features.Where(f=>f.Owner==member.Key && f.ConnectedPart && f.Kind=="EDGE" && !f.Infinite).ToList();
+                        if(!IsOverallSpan(feet[0].Point,feet[1].Point,dx,dy,edges)) continue;
+                        var matches=feet.Select(f=>edges.Where(e=>ConstantProjection(e,dx,dy)
+                            && MeasurementResidual(f.Point,e,dx,dy)<=Tolerance).ToList()).ToList();
+                        if(matches.Any(m=>m.Count==0)) continue;
+                        var exact=feet.Select((f,i)=>matches[i].Any(e=>Residual(f.Point,e)<=Tolerance)).ToList();
+                        // Ít nhất một chân chạm mép thật; chân được cứu phải chạm mép thật.
+                        // Chân dóng còn lại phải đã có mốc hợp lệ theo classifier cũ.
+                        if(!exact.Any(x=>x) || feet.Where((f,i)=>f.Status=="ERROR" && !exact[i]).Any()) continue;
+                        proofs.AddRange(matches.SelectMany(m=>m));
+                    }
+                    if(proofs.Count==0) continue;
+                    foreach(var foot in feet.Where(f=>f.Status=="ERROR"))
+                    {
+                        var matches=proofs.Where(e=>MeasurementResidual(foot.Point,e,dx,dy)<=Tolerance).ToList();
+                        SetEvidence(foot,"CONNECTED_MEMBER_OVERALL",matches,dx,dy);
+                        foot.Status="OK";
+                        foot.SuggestedPoint=null; foot.SuggestedOwner=0; foot.SuggestedKind=null;
+                        foot.Reason="Đo hai biên ngoài cùng của thép liên kết, vuông góc trục thanh; cả cặp chân được xác minh: "
+                            +String.Join(", ",foot.CandidateOwners.Select(id=>"P"+id))+". Chấp nhận chân trực tiếp hoặc chân dóng cùng cao độ đã có mốc hợp lệ.";
+                    }
+                }
+            }
+        }
+        // Chỉ cứu ERROR tại giữa bề dày ContourPlate primary nhìn cạnh, sau các luật cũ.
+        // Dung sai 0,04 mm hình học; không cứu NOTCH/REVIEW, không nới Allowed hay plate REF.
+        public static void CheckPlateMidplanes(Result result)
+        {
+            if(!result.GeometryCoverageTracked && result.Warnings.Count>0) return;
+            foreach(var view in result.Findings.GroupBy(f=>f.View))
+            {
+                List<Feature> features;
+                if(result.IncompleteGeometryViews.Contains(view.Key) || !result.Features.TryGetValue(view.Key,out features)
+                    || features==null || features.Any(f=>!ValidFeature(f))) continue;
+                var plates=features.Where(f=>f.PrimaryPlate).GroupBy(f=>f.Owner).ToList();
+                foreach(var chain in view.GroupBy(f=>f.Dimension))
+                {
+                    var feet=chain.OrderBy(f=>f.Foot).ToList();
+                    if(!feet.Any(f=>f.Status=="ERROR") || feet.Any(f=>(f.Status!="OK" && f.Status!="ERROR") || f.EvidenceKind=="NOTCH_CONFLICT")
+                        || ValidateChain(feet.Select(f=>f.Point).ToList(),feet[0].Normal,0)!=null) continue;
+                    double dx,dy;
+                    if(!TryMeasurementAxis(feet[0].Normal,out dx,out dy)) continue;
+                    if(feet.Any(f=>{ double x,y; return !TryMeasurementAxis(f.Normal,out x,out y) || Math.Abs(dx*y-dy*x)>1e-8; })) continue;
+                    var midplanes=plates.SelectMany(p=>PlateMidplaneEdges(p.ToList(),dx,dy)).ToList();
+                    foreach(var foot in feet.Where(f=>f.Status=="ERROR"))
+                    {
+                        // Phải nằm trên đoạn giữa hai mép thật; không kéo dài vô hạn mốc giữa.
+                        var matches=midplanes.Where(f=>MeasurementResidual(foot.Point,f,dx,dy)<=Tolerance
+                            && Residual(foot.Point,f)<=Tolerance).ToList();
+                        if(matches.Count==0) continue;
+                        SetEvidence(foot,"PLATE_MIDPLANE",matches,dx,dy);
+                        foot.Status="OK";
+                        foot.SuggestedPoint=null; foot.SuggestedOwner=0; foot.SuggestedKind=null;
+                        foot.Reason="Chân nằm giữa hai mặt bề dày của plate primary nhìn cạnh; xác minh cùng plate: "
+                            +String.Join(", ",foot.CandidateOwners.Select(id=>"P"+id))+".";
+                    }
+                }
+            }
+        }
+        private static List<Feature> PlateMidplaneEdges(List<Feature> plate,double dx,double dy)
+        {
+            var result=new List<Feature>();
+            var edges=plate.Where(f=>f.Kind=="EDGE" && f.Allowed && !f.Infinite && !f.ConnectedPart).ToList();
+            var refs=plate.Where(f=>f.Kind=="REF-POINT" && !f.Infinite).Select(f=>f.A).ToList();
+            if(edges.Count==0 || refs.Count<3) return result;
+            Func<G.Point,double> t=p=>p.X*dx+p.Y*dy;
+            // REF chỉ chứng minh phương mặt plate: cần >=3 điểm không thẳng hàng trong 3D.
+            // Giữ tọa độ Z của view để phân biệt nhìn cạnh với mặt plate/REF thẳng.
+            if(refs.Max(t)-refs.Min(t)>Tolerance) return result;
+            var origin=refs[0];
+            var far=refs.OrderByDescending(p=>Math.Pow(-dy*(p.X-origin.X)+dx*(p.Y-origin.Y),2)+Math.Pow(p.Z-origin.Z,2)).First();
+            double u=-dy*(far.X-origin.X)+dx*(far.Y-origin.Y),v=far.Z-origin.Z,length=Math.Sqrt(u*u+v*v);
+            if(length<=Tolerance || !refs.Any(p=>Math.Abs(u*(p.Z-origin.Z)-v*(-dy*(p.X-origin.X)+dx*(p.Y-origin.Y)))/length>Tolerance)) return result;
+            var vertices=edges.SelectMany(e=>new[]{e.A,e.B}).ToList();
+            double min=vertices.Min(t),max=vertices.Max(t);
+            if(max-min<=2*Tolerance || vertices.Any(p=>Math.Min(Math.Abs(t(p)-min),Math.Abs(t(p)-max))>Tolerance)) return result;
+            var lower=edges.Where(e=>Math.Abs(t(e.A)-min)<=Tolerance && Math.Abs(t(e.B)-min)<=Tolerance).ToList();
+            var upper=edges.Where(e=>Math.Abs(t(e.A)-max)<=Tolerance && Math.Abs(t(e.B)-max)<=Tolerance).ToList();
+            Func<G.Point,G.Point,bool> aligned=(a,b)=>Math.Abs(-dy*(a.X-b.X)+dx*(a.Y-b.Y))<=Tolerance && Math.Abs(a.Z-b.Z)<=Tolerance;
+            double mid=(min+max)/2;
+            foreach(var edge in lower)
+            {
+                // Ghép đúng cạnh đối diện của cùng solid, không lấy trung bình hai plate khác nhau.
+                if(!upper.Any(e=>(aligned(edge.A,e.A)&&aligned(edge.B,e.B)) || (aligned(edge.A,e.B)&&aligned(edge.B,e.A)))) continue;
+                Func<G.Point,G.Point> center=p=>new G.Point(p.X+(mid-t(p))*dx,p.Y+(mid-t(p))*dy,p.Z);
+                result.Add(new Feature { Owner=edge.Owner,Kind="PLATE-MIDPLANE",A=center(edge.A),B=center(edge.B) });
+            }
+            return result;
         }
         // Cross-check the two dimensions describing the same end notch. A matching REF
         // elsewhere on the main part cannot replace the wall of this particular notch.
@@ -474,6 +619,12 @@ namespace Tekla.Technology.Akit.UserScript
                         if(delta<=Tolerance) continue;
                         double expectedSize=Math.Abs(coordinate-anchor.Point.X*dx-anchor.Point.Y*dy);
                         target.Status="ERROR";
+                        target.EvidenceKind="NOTCH_CONFLICT";
+                        target.CandidateOwners=new[]{result.Main};
+                        target.MeasurementResidual=delta;
+                        double shift=coordinate-target.Point.X*dx-target.Point.Y*dy;
+                        target.SuggestedPoint=new G.Point(target.Point.X+shift*dx,target.Point.Y+shift*dy,target.Point.Z);
+                        target.SuggestedOwner=result.Main; target.SuggestedKind="NOTCH";
                         target.Reason="NOTCH: Chân đang bắt sang mốc khác của thanh chính. Cặp kích thước và biên dạng rãnh xác định mép cần đo ở "
                             +expectedSize.ToString("0.###",CultureInfo.InvariantCulture)+" mm tính từ chân còn lại; chân hiện tại lệch "
                             +delta.ToString("0.###",CultureInfo.InvariantCulture)+" mm theo phương đo.";
@@ -533,15 +684,51 @@ namespace Tekla.Technology.Akit.UserScript
         private static void Extract(M.Part part, bool primary, bool connected, bool dummy,
             G.Matrix global,G.Matrix view,List<Feature> output)
         {
+            ExtractCached(part,primary,connected,dummy,global,view,output,new Dictionary<int,List<Feature>>());
+        }
+        private static void ExtractCached(M.Part part, bool primary, bool connected, bool dummy,
+            G.Matrix global,G.Matrix view,List<Feature> output,Dictionary<int,List<Feature>> cache)
+        {
+            List<Feature> snapshot;
+            int id=part.Identifier.ID;
+            if(!cache.TryGetValue(id,out snapshot))
+            {
+                snapshot=new List<Feature>();
+                try { ReadGlobalFeatures(part,primary,connected,dummy,global,snapshot); }
+                catch
+                {
+                    // Giữ prefix hình học/cảnh báo cũ; lần đọc lỗi không được cache.
+                    ProjectFeatures(snapshot,view,output);
+                    throw;
+                }
+                cache.Add(id,snapshot);
+            }
+            ProjectFeatures(snapshot,view,output);
+        }
+        private static void ProjectFeatures(List<Feature> snapshot,G.Matrix view,List<Feature> output)
+        {
+            foreach(var f in snapshot)
+            {
+                var a=view.Transform(f.A); var b=view.Transform(f.B);
+                if(!Finite(a)||!Finite(b)) throw new InvalidOperationException("Geometry không hữu hạn.");
+                // Allowed bị ConstrainReferences sửa riêng từng view; không chia sẻ Feature.
+                output.Add(new Feature { Owner=f.Owner,Kind=f.Kind,A=a,B=b,Allowed=f.Allowed,Infinite=f.Infinite,
+                    ConnectedPart=f.ConnectedPart,ExternalMemberReference=f.ExternalMemberReference,PrimaryPlate=f.PrimaryPlate });
+            }
+        }
+        private static void ReadGlobalFeatures(M.Part part, bool primary, bool connected, bool dummy,
+            G.Matrix global,List<Feature> output)
+        {
             int id=part.Identifier.ID;
             bool plate=part is M.ContourPlate || (part.Profile.ProfileString??String.Empty).StartsWith("PL",StringComparison.OrdinalIgnoreCase);
             bool referenceAllowed=ReferenceAllowed(primary,connected,plate,dummy);
-            Func<G.Point,G.Point> transform=p=>view.Transform(global.Transform(p));
+            Func<G.Point,G.Point> transform=p=>global.Transform(p);
             Action<string,G.Point,G.Point,bool> add=(kind,a,b,allowed)=>
             {
                 var x=transform(a); var y=transform(b);
                 if(!Finite(x)||!Finite(y)) throw new InvalidOperationException("Geometry không hữu hạn.");
                 output.Add(new Feature { Owner=id,Kind=kind,A=x,B=y,Allowed=allowed,
+                    PrimaryPlate=primary&&!dummy&&part is M.ContourPlate,
                     ConnectedPart=connected&&!primary,ExternalMemberReference=connected&&!primary&&!plate&&kind.StartsWith("REF",StringComparison.Ordinal) });
             };
             var solid=part.GetSolid(); var edges=solid.GetEdgeEnumerator();
@@ -742,7 +929,7 @@ namespace Tekla.Technology.Akit.UserScript
             if(finding.Status=="REVIEW") return finding.Reason!=null && finding.Reason.StartsWith("CHAIN: ",StringComparison.Ordinal)
                 ? finding.Reason.Substring(7) : "Dữ liệu chưa đủ hoặc chưa hợp lệ để kết luận chân kích thước đúng hay sai. Hãy đối chiếu trực tiếp trên bản vẽ; mở ‘Xem phạm vi’ để biết chi tiết.";
             if(String.IsNullOrEmpty(finding.Reason)) return "Cần đối chiếu chân kích thước với mốc đo dự kiến.";
-            if(finding.Reason.StartsWith("NOTCH: ",StringComparison.Ordinal)) return finding.Reason.Substring(7);
+            if(finding.Reason.StartsWith("NOTCH: ",StringComparison.Ordinal)) return finding.Reason.Substring(7)+FootHint(finding);
             if(finding.Reason.StartsWith("NEIGHBOR_REF: ",StringComparison.Ordinal)) return finding.Reason.Substring(14);
             string reason=finding.Reason.StartsWith("Chân nằm trên neighbor",StringComparison.Ordinal)
                 ? "Chân đang trùng với chi tiết lân cận, nhưng không có mốc đo hợp lệ thuộc cấu kiện chính, plate liên kết hoặc trục tham chiếu."
@@ -750,8 +937,12 @@ namespace Tekla.Technology.Akit.UserScript
             if(!Double.IsNaN(finding.MeasurementResidual) && !Double.IsInfinity(finding.MeasurementResidual))
                 reason+=" Lệch mốc hợp lệ gần nhất "+finding.MeasurementResidual.ToString("0.###",CultureInfo.InvariantCulture)
                     +" mm theo phương đo. Mốc gần nhất chỉ là gợi ý để đối chiếu.";
-            return reason;
+            return reason+FootHint(finding);
         }
+        private static string FootHint(Finding finding)
+        { return finding.SuggestedPoint==null ? String.Empty : " Chân hiện tại "+P(finding.Point)
+            +"; tọa độ dóng tham khảo "+P(finding.SuggestedPoint)+" (mm trong hình chiếu), từ P"
+            +finding.SuggestedOwner+":"+finding.SuggestedKind+"."; }
         public static void ShowReport(Result result)
         {
             using (var report = new PHU_DimensionReportForm(result, PHU_DimensionCheck.ReportDarkMode)) report.ShowDialog();

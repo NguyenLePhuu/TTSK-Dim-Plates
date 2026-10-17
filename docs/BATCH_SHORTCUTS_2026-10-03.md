@@ -2,6 +2,44 @@
 
 ## Updated flexible targeting
 
+Source layout 2026-10-13: `MainForm.BatchShortcuts`, `MainForm.DrawingTargets`
+and `DrawingTargetSelection` are now regions in `MainForm.cs`. The three separate
+source files and their Compile items were removed. Class/namespace names,
+ordered declarations and executable tokens are unchanged; older file names
+below identify historical sources/regions.
+
+Update 2026-10-13, PDF follow-up (current): Print and Merge now capture a fresh
+Document Manager selection for every command, regardless of the Active/Batch
+radio or previously loaded list. If DM is empty, use explicitly selected TTSK
+rows, then the open drawing. A read error or no available source never reuses
+the old list. The request snapshots drawing identities, model and metadata
+before publishing PDF rows. Printing leaves the working mode unchanged,
+always shows per-drawing results (also for one target), names the source, and
+clears selection created by progress. A selection change during printing is
+used by the next command. Buttons and existing Print/Merge shortcuts share
+this policy. Native printing/merge/cleanup, Merge File and snapshot are unchanged.
+
+Update 2026-10-13 (single-drawing policy): ordinary Load Selected and Check DIM/Scale promote
+one resolved target to Active only after opening/validating that exact drawing
+in its source model. A matching open drawing is reused; another open drawing
+blocks the transition. Single Check DIM uses the existing single report, without
+a pending batch row; the count label identifies its mark. Two or more targets
+remain Batch. Every Scale failure still has a row, including a lone error.
+PDF/snapshot resolve without activating a new drawing. Explicit Batch Create
+and Arrange Reference retain their batch policy even for one selected target.
+The Check DIM/Scale resolver precedence below is unchanged; PDF follows the
+newer rule above. Current offline verification:
+`tests/SingleDrawingFlow/Run.ps1`. The following dated paragraphs are history,
+including superseded single-row behavior and older test/live results.
+
+Update 2026-10-12: the paragraph below records the earlier behavior and is
+superseded for result rows. Batch now displays even one target; Check Scale
+always displays every failed drawing. A single Active target keeps the compact
+loading layout, but its Scale error still gets a result row. Scale checking
+reads an already-open matching drawing in place; cleanup closes only its own
+opened target if that target is still active. Resolver precedence below remains.
+See `DRAWING_COORDINATION_REVIEW_2026-10-12.md` for regression evidence.
+
 MainForm now displays drawing rows only for more than one resolved drawing.
 Single/active targets remain in the processing snapshot but leave the grid empty;
 old visible rows are cleared when switching to a single target. The count label
@@ -59,7 +97,7 @@ bindings survive. WorkJournal's former default Ctrl+Shift+J migrates once to
 Ctrl+H if that chord is free. Custom/disabled keys and occupied Ctrl+H bindings
 are preserved. The migration marker prevents overriding later user choices.
 
-MainForm.BatchShortcuts separates worker-thread Load from the UI report.
+The MainForm.BatchShortcuts region separates worker-thread Load from the UI report.
 It awaits Load completion and releases the operation lock before invoking the
 consumer. Empty/error loads cannot fall back to old rows. Busy, modal, updater,
 disposal and repeated-invocation guards prevent overlapping runs. Check Scale

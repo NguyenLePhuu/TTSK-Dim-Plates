@@ -1,6 +1,6 @@
-﻿// Một form báo cáo DIM gồm ba partial: batch, revision và kết quả kiểm tra.
+// Một form báo cáo DIM gồm ba partial: batch, revision và kết quả kiểm tra.
 // LUỒNG: PHU_DimensionCheck/PHU_DimensionBatch cung cấp dữ liệu → form hiển thị → người dùng chọn kiểm lại/tô màu/revision.
-// ĐIỂM SỬA: batch ở region PHU_DimensionBatchForm; revision ở PHU_DimensionRevisionForm; khung chung ở PHU_DimensionReportForm.
+// ĐIỂM SỬA: batch/combo chỉ đọc ở region PHU_DimensionBatchForm; revision ở PHU_DimensionRevisionForm; khung chung ở PHU_DimensionReportForm.
 // THAM SỐ: kích thước/margin/font trong form là pixel/điểm chữ; ngưỡng hình học nằm ở engine Check/Revision, không ở form.
 // TRA CỨU: PROJECT_MAP.md ở gốc repo; chỉ mục kiểu/hàm và điểm chỉnh thông số.
 // Mục lục:
@@ -25,6 +25,27 @@ namespace Tekla.Technology.Akit.UserScript
     public sealed partial class PHU_DimensionReportForm
     {
         B.Session batchSession;
+        Func<Action,System.Threading.Tasks.Task> comboWorker;
+        bool comboPauseRequested;
+        B.Entry comboDetail;
+        Panel batchContent,comboReviewHost;
+        PHU_DimensionReportForm embeddedReview;
+        Action embeddedBack;
+        Action<int> embeddedSwitch;
+        Action embeddedRecheck,embeddedActivityChanged;
+        Action<PHU_DimensionCheck.Result> embeddedUpdated;
+        bool embeddedSnapshotStale;
+        PHU_DimensionCheck.Result comboReviewResult;
+        ComboStatusButton[] comboTabs,comboFilters;
+        Button comboInspect;
+        Button comboRecheck;
+        Label comboReviewNotice;
+        Size comboSummarySize;
+        IButtonControl summaryCancelButton;
+        B.Entry comboReviewEntry;
+        int comboReviewIndex;
+        Panel inlineCoverage;
+        IButtonControl coverageCancelButton;
         Timer batchTimer;
         Panel batchViewport;
         FlowLayoutPanel batchCards;
@@ -102,11 +123,15 @@ namespace Tekla.Technology.Akit.UserScript
             public Panel Card;
             public Label State,Summary,Recovery;
             public Button Action,Info;
+            public Button[] Checks;
         }
-        public PHU_DimensionReportForm(B.Session session,bool dark,bool autoStart=false):this(new PHU_DimensionCheck.Result {Drawing="Batch"},dark)
+        public PHU_DimensionReportForm(B.Session session,bool dark,bool autoStart=false,Func<Action,System.Threading.Tasks.Task> worker=null):this(new PHU_DimensionCheck.Result {Drawing="Batch"},dark)
         {
-            batchSession=session;reportContent.Dispose();
-            Text="TTSK · Check DIM Batch";
+            batchSession=session;comboWorker=worker;reportContent.Dispose();
+            Text=session.IsCombo?"TTSK · Check bản vẽ":"TTSK · Check DIM Batch";
+            if(session.IsCombo){batchFilterNames[1]="Có lỗi / chưa xác minh";batchFilterNames[3]="Đúng";}
+            if(session.IsCombo&&session.Entries.Count==1)
+            {MinimumSize=new Size(1000,330);ClientSize=new Size(1180,330);}
             BuildBatchContent();
             batchTimer=new Timer {Interval=120};
             batchTimer.Tick+=(s,e)=>RunBatchStep();
@@ -116,19 +141,21 @@ namespace Tekla.Technology.Akit.UserScript
                 if(!IsDisposed&&!Disposing&&!batchSession.Running)StartOrPauseBatch();
             };
             FormClosing+=(s,e)=>{
-                if(checking){e.Cancel=true;return;}
+                if(checking||(embeddedReview!=null&&embeddedReview.checking)){e.Cancel=true;return;}
                 batchTimer.Stop();if(batchSession.Running)batchSession.Pause();
             };
         }
         void BuildBatchContent()
         {
             var panel=new Panel {Dock=DockStyle.Fill,BackColor=BackColor,Padding=new Padding(26,20,26,18)};
+            batchContent=panel;
             var layout=Stack(48,32,44,0,32,46);panel.Controls.Add(layout);
             var heading=new Panel {Dock=DockStyle.Fill,Margin=Padding.Empty};
-            heading.Controls.Add(TextLabel("Check DIM  /  Batch",20,ink,true));
+            heading.Controls.Add(TextLabel(batchSession.IsCombo?"Kiểm tra bản vẽ":"Check DIM  /  Batch",20,ink,true));
             batchExport=Button("Xuất báo cáo",false);batchExport.Dock=DockStyle.Right;batchExport.Width=150;
             batchExport.Click+=(s,e)=>ExportBatch();heading.Controls.Add(batchExport);layout.Controls.Add(heading,0,0);
             batchSummary=TextLabel("",11,accent,true);layout.Controls.Add(batchSummary,0,1);
+            if(batchSession.IsCombo){batchSummary.ForeColor=muted;batchSummary.Font=new Font(Font.FontFamily,10);}
             tips.SetToolTip(batchSummary,batchSession.Entries.Count+" bản vẽ đã Load Selected · Kiểm tra chỉ đọc\r\n"+batchSession.ModelName);
             var filters=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=2,RowCount=1,Margin=Padding.Empty,Padding=new Padding(0,3,8,4)};
             filters.RowStyles.Add(new RowStyle(SizeType.Percent,100));
@@ -149,6 +176,21 @@ namespace Tekla.Technology.Akit.UserScript
             filters.Controls.Add(batchFilter,0,0);
             var searchBox=new BatchSearchBox(surface,soft,border,accent,ink,muted,Font) {Name="BatchSearchBox",Dock=DockStyle.Fill,Margin=Padding.Empty};
             batchSearch=searchBox.Editor;filters.Controls.Add(searchBox,1,0);layout.Controls.Add(filters,0,2);
+            if(batchSession.IsCombo)
+            {
+                filters.Controls.Remove(batchFilter);batchFilter.Dispose();
+                filters.ColumnStyles[0].Width=490;
+                var quick=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=3,RowCount=1,Margin=new Padding(0,0,10,0)};
+                comboFilters=new ComboStatusButton[3];
+                for(int i=0;i<3;i++)
+                {
+                    int index=i==2?3:i;quick.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100f/3));
+                    var filter=new ComboStatusButton(dark,muted) {Name="ComboFilter"+index,Dock=DockStyle.Fill,Font=Font,BackColor=BackColor,Margin=new Padding(0,0,5,0)};
+                    filter.Click+=(s,e)=>SetBatchFilter(index);comboFilters[i]=filter;quick.Controls.Add(filter,i,0);
+                }
+                filters.Controls.Add(quick,0,0);
+            }
+            if(batchSession.IsCombo&&batchSession.Entries.Count==1){filters.Visible=false;layout.RowStyles[2].Height=8;}
             batchViewport=new Panel {Dock=DockStyle.Fill,BackColor=BackColor};
             batchCards=new FlowLayoutPanel {Name="BatchCards",FlowDirection=FlowDirection.TopDown,WrapContents=false,AutoScroll=false,Padding=new Padding(0,3,8,3),BackColor=BackColor};
             batchScroll=new RevisionScroll(batchViewport,batchCards,dark,accent) {Dock=DockStyle.Right,Width=16,BackColor=BackColor};
@@ -161,11 +203,21 @@ namespace Tekla.Technology.Akit.UserScript
             var footer=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=4,RowCount=1,Margin=Padding.Empty};
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,230));footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,250));
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,95));
-            batchStart=Button("Bắt đầu",true);batchStart.Name="BatchStart";batchStart.Dock=DockStyle.Fill;batchStart.Click+=(s,e)=>StartOrPauseBatch();
+            batchStart=Button("Bắt đầu",!batchSession.IsCombo);batchStart.Name="BatchStart";batchStart.Dock=DockStyle.Fill;batchStart.Click+=(s,e)=>StartOrPauseBatch();
             batchRetry=Button("Kiểm tra lại cần xử lý",false);batchRetry.Name="BatchRetry";batchRetry.Dock=DockStyle.Fill;
+            batchRetry.Visible=!batchSession.IsCombo||batchSession.Entries.Count>1;
             batchRetry.Click+=(s,e)=>StartBatch(batchSession.Entries.Where(x=>x.NeedsWork&&x.Supported));
             var close=Button("Đóng",false);close.Dock=DockStyle.Fill;close.Click+=(s,e)=>Close();CancelButton=close;
-            footer.Controls.Add(batchStart,0,0);footer.Controls.Add(batchRetry,1,0);footer.Controls.Add(close,3,0);layout.Controls.Add(footer,0,5);
+            if(batchSession.IsCombo)
+            {
+                footer.ColumnStyles[1].Width=210;
+                comboInspect=Button("Xem lỗi đầu tiên  →",true);comboInspect.Name="ComboInspect";comboInspect.Dock=DockStyle.Fill;
+                comboInspect.Click+=(s,e)=>OpenFirstComboIssue();
+                footer.Controls.Add(comboInspect,0,0);footer.Controls.Add(batchStart,1,0);
+                batchRetry.Dock=DockStyle.Left;batchRetry.Width=235;footer.Controls.Add(batchRetry,2,0);
+            }
+            else {footer.Controls.Add(batchStart,0,0);footer.Controls.Add(batchRetry,1,0);}
+            footer.Controls.Add(close,3,0);layout.Controls.Add(footer,0,5);
             Controls.Add(panel);panel.BringToFront();
             batchSearch.TextChanged+=(s,e)=>RefreshBatchView();
             RefreshBatchView();
@@ -173,7 +225,7 @@ namespace Tekla.Technology.Akit.UserScript
         void SetBatchFilter(int index)
         {
             if(index<0||index>=batchFilterNames.Length)return;
-            batchFilterIndex=index;batchFilter.Text=batchFilterNames[index]+"  ▾";RefreshBatchView();
+            batchFilterIndex=index;if(!batchFilter.IsDisposed)batchFilter.Text=batchFilterNames[index]+"  ▾";RefreshBatchView();
         }
         IEnumerable<B.Entry> VisibleBatchEntries()
         {
@@ -196,6 +248,7 @@ namespace Tekla.Technology.Akit.UserScript
             foreach(var binding in batchBindings)
             {
                 var entry=binding.Entry;
+                if(batchSession.IsCombo){RefreshComboCard(binding);continue;}
                 binding.State.Text=entry.StatusText;
                 binding.State.ForeColor=entry.Status==B.State.Passed?Green:entry.Status==B.State.Failed?Color.IndianRed:
                     entry.Status==B.State.NeedsAttention?Amber:entry.Status==B.State.NeedsReview?accent:muted;
@@ -210,25 +263,72 @@ namespace Tekla.Technology.Akit.UserScript
             }
             batchEmpty.Visible=visible.Count==0;
             batchEmpty.Text=batchSession.Running?"Kết quả trong bộ lọc này sẽ cập nhật sau mỗi bản vẽ.":"Không có bản vẽ trong bộ lọc này";
-            batchViewport.Visible=batchScroll.Visible=visible.Count>0;
+            batchViewport.Visible=visible.Count>0;
+            batchScroll.Visible=visible.Count>0&&(!batchSession.IsCombo||batchCards.Height>batchViewport.ClientSize.Height);
             int complete=batchSession.Entries.Count(e=>e.Status!=B.State.Pending&&e.Status!=B.State.Checking);
             batchSummary.Text=complete+" / "+batchSession.Entries.Count+" đã xử lý   ·   "+batchSession.Entries.Count(e=>e.Status==B.State.NeedsAttention)+" cần xem   ·   "+
                 batchSession.Entries.Count(e=>e.Status==B.State.NeedsReview)+" cần xác minh   ·   "+batchSession.Entries.Count(e=>e.Status==B.State.Failed)+" lỗi chạy";
+            if(batchSession.IsCombo)
+            {
+                var counts=new List<string> {complete+" / "+batchSession.Entries.Count+" bản đã kiểm"};
+                int errors=batchSession.Entries.Count(e=>e.Status==B.State.NeedsAttention);
+                int unknown=batchSession.Entries.Count(e=>e.Status==B.State.NeedsReview||e.Status==B.State.Failed||e.Status==B.State.Unsupported);
+                int passed=batchSession.Entries.Count(e=>e.Status==B.State.Passed);
+                if(errors>0)counts.Add(errors+" có lỗi");if(unknown>0)counts.Add(unknown+" chưa xác minh");if(passed>0)counts.Add(passed+" đạt");
+                batchSummary.Text=string.Join("   ·   ",counts);
+                int[] totals={batchSession.Entries.Count,batchSession.Entries.Count(e=>e.NeedsWork),passed};
+                string[] labels={"Tất cả","Cần xem","Đạt"};
+                for(int i=0;i<comboFilters.Length;i++)
+                {
+                    var filter=comboFilters[i];filter.Text=labels[i]+" · "+totals[i];
+                    filter.Tone=i==1?Amber:i==2?Green:ink;filter.Selected=batchFilterIndex==(i==2?3:i);filter.Invalidate();
+                }
+                var first=FirstComboIssue();
+                comboInspect.Enabled=first!=null&&!checking&&!batchSession.Running;
+                comboInspect.Text=first!=null&&first.Item1.Combo!=null&&first.Item1.Combo.Checks.ElementAt(first.Item2).Status==B.CheckState.Error?
+                    "Xem lỗi đầu tiên  →":"Xem mục cần xác minh  →";
+                if(first==null)comboInspect.Text="Không có mục cần xem";
+            }
             batchStart.Enabled=!checking||batchSession.Running;
             int pending=batchSession.Entries.Count(e=>e.Status==B.State.Pending);
-            batchStart.Text=batchSession.Running?"■  Dừng sau bản hiện tại":pending>0?(complete>0?"Tiếp tục · ":"Bắt đầu · ")+pending+" bản":"Kiểm tra lại tất cả";
+            batchStart.Text=batchSession.Running?"■  Dừng sau bản hiện tại":batchSession.RemainingCount>0?"Tiếp tục · "+batchSession.RemainingCount+" bản":
+                pending>0?(complete>0?"Tiếp tục · ":"Bắt đầu · ")+pending+" bản":"Kiểm tra lại tất cả";
+            if(batchSession.IsCombo&&batchSession.Entries.Count==1&&!batchSession.Running&&pending==0&&batchSession.RemainingCount==0)batchStart.Text="Kiểm tra lại";
             batchRetry.Enabled=!batchSession.Running&&!checking&&batchSession.Entries.Any(e=>e.NeedsWork&&e.Supported);
             batchExport.Enabled=!batchSession.Running&&!checking;
             var current=batchSession.Current;
             SetBatchNotice(current==null?batchSession.Notice:"Đang kiểm tra "+current.Number+" / "+batchSession.Entries.Count+" · "+current.Name);
+            if(batchSession.IsCombo&&complete==batchSession.Entries.Count&&!batchSession.Running&&batchSession.RemainingCount==0)
+                SetBatchNotice(batchSession.Entries.All(e=>e.Status==B.State.Passed)?"✓ Các mục trong phạm vi kiểm tra đều đạt.":"Đỏ: sai · Xanh: đạt · Vàng: cần xác minh. Bấm từng mục để xem đúng vị trí lỗi.");
+            if(batchSession.IsCombo&&comboPauseRequested){batchStart.Text="Đang dừng…";batchStart.Enabled=false;}
             if(current!=null&&batchFilterIndex==0&&batchSearch.Text.Length==0)
             {
                 var active=batchBindings.FirstOrDefault(b=>b.Entry==current);
                 if(active!=null)batchScroll.Reveal(active.Card);
             }
+            if(batchSession.IsCombo)RefreshComboNavigation();
+        }
+        Tuple<B.Entry,int> FirstComboIssue()
+        {
+            // Ưu tiên lỗi đã xác định, sau đó dữ liệu cần xác minh; tôn trọng bộ lọc/tìm kiếm hiện tại.
+            var visible=VisibleBatchEntries().Where(e=>e.Supported&&e.Status!=B.State.Checking&&e.Status!=B.State.Pending).ToList();
+            foreach(var status in new[]{B.CheckState.Error,B.CheckState.Unverified})
+                foreach(var entry in visible.Where(e=>e.Combo!=null))
+                {
+                    int index=entry.Combo.Checks.ToList().FindIndex(c=>c.Status==status);
+                    if(index>=0)return Tuple.Create(entry,index);
+                }
+            var failed=visible.FirstOrDefault(e=>e.Status==B.State.Failed);
+            return failed==null?null:Tuple.Create(failed,0);
+        }
+        void OpenFirstComboIssue()
+        {
+            if(checking||batchSession.Running)return;
+            var first=FirstComboIssue();if(first!=null)OpenBatchEntry(first.Item1,first.Item2);
         }
         void AddBatchCard(B.Entry entry)
         {
+            if(batchSession.IsCombo){AddComboCard(entry);return;}
             var card=Card();card.Name="BatchCard";card.Tag=entry;card.Dock=DockStyle.None;card.Padding=new Padding(16,8,14,8);card.Margin=new Padding(0,0,0,8);
             var rows=Stack(32,34,28);card.Controls.Add(rows);
             var titleRow=new Panel {Dock=DockStyle.Fill,Margin=Padding.Empty};
@@ -248,19 +348,166 @@ namespace Tekla.Technology.Akit.UserScript
             card.Height=card.Padding.Vertical+((RaisedCard)card).FrameSpace+(int)rows.RowStyles.Cast<RowStyle>().Sum(r=>r.Height);
             batchCards.Controls.Add(card);batchBindings.Add(new BatchCard {Entry=entry,Card=card,State=state,Summary=summary,Recovery=recovery,Action=action,Info=info});
         }
+        // Mỗi bản một thẻ thấp; các nút trạng thái cũng là lối vào chức năng tương ứng.
+        void AddComboCard(B.Entry entry)
+        {
+            var card=Card();card.Name="ComboCard";card.Tag=entry;card.Dock=DockStyle.None;
+            card.Padding=new Padding(16,12,14,12);card.Margin=new Padding(0,0,0,8);
+            int count=entry.Drawing is Tekla.Structures.Drawing.AssemblyDrawing?3:2;
+            var row=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=count+1,RowCount=1,Margin=Padding.Empty};
+            row.RowStyles.Add(new RowStyle(SizeType.Percent,100));row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,34));
+            var name=TextLabel(entry.Name,11,ink,true);name.Padding=new Padding(8,0,12,0);tips.SetToolTip(name,entry.Name);row.Controls.Add(name,0,0);
+            var buttons=new Button[count];
+            for(int i=0;i<count;i++)
+            {
+                int index=i;row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,66f/count));
+                var button=new ComboStatusButton(dark,muted) {Name="ComboStep"+(i+1),Dock=DockStyle.Fill,Font=Font,
+                    BackColor=surface,Margin=new Padding(6,0,6,0)};
+                button.Click+=(s,e)=>OpenBatchEntry(entry,index);buttons[i]=button;row.Controls.Add(button,i+1,0);
+            }
+            card.Controls.Add(row);card.Height=card.Padding.Vertical+((RaisedCard)card).FrameSpace+Math.Max(46,TextRenderer.MeasureText("Ag",Font).Height*2+6);
+            batchCards.Controls.Add(card);batchBindings.Add(new BatchCard {Entry=entry,Card=card,Checks=buttons});
+        }
+        sealed class ComboStatusButton : Button
+        {
+            readonly bool dark;
+            readonly Color muted;
+            bool hover;
+            public Color Tone;
+            public string Caption="";
+            public bool Selected;
+            public ComboStatusButton(bool dark,Color muted)
+            {
+                this.dark=dark;this.muted=muted;DoubleBuffered=true;ResizeRedraw=true;
+                FlatStyle=FlatStyle.Flat;FlatAppearance.BorderSize=0;UseVisualStyleBackColor=false;Cursor=Cursors.Hand;
+            }
+            protected override void OnMouseEnter(EventArgs e){base.OnMouseEnter(e);hover=true;Invalidate();}
+            protected override void OnMouseLeave(EventArgs e){base.OnMouseLeave(e);hover=false;Invalidate();}
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                e.Graphics.Clear(BackColor);e.Graphics.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                var face=new Rectangle(1,1,Math.Max(1,Width-3),Math.Max(1,Height-3));
+                Color tone=Enabled?Tone:muted;
+                using(var path=Rounded(face,8))
+                {
+                    using(var brush=new SolidBrush(Color.FromArgb(Enabled&&(hover||Selected)?(dark?65:30):(dark?32:16),tone)))e.Graphics.FillPath(brush,path);
+                    using(var pen=new Pen(Color.FromArgb(Enabled&&(hover||Selected)?210:65,tone),Selected?2:1))e.Graphics.DrawPath(pen,path);
+                }
+                var title=face;
+                if(Caption.Length>0){title.Height=face.Height/2;title.Y+=2;}
+                using(var bold=new Font(Font,FontStyle.Bold))TextRenderer.DrawText(e.Graphics,Text,bold,title,tone,
+                    TextFormatFlags.HorizontalCenter|TextFormatFlags.VerticalCenter|TextFormatFlags.SingleLine|TextFormatFlags.EndEllipsis|TextFormatFlags.NoPrefix);
+                if(Caption.Length>0)
+                {
+                    var caption=new Rectangle(face.X+6,face.Y+face.Height/2,Math.Max(1,face.Width-12),face.Height/2-2);
+                    using(var small=new Font(Font.FontFamily,Math.Max(8,Font.Size-1)))TextRenderer.DrawText(e.Graphics,Caption,small,caption,tone,
+                        TextFormatFlags.HorizontalCenter|TextFormatFlags.VerticalCenter|TextFormatFlags.SingleLine|TextFormatFlags.EndEllipsis|TextFormatFlags.NoPrefix);
+                }
+                if(Focused&&ShowFocusCues){face.Inflate(-4,-4);ControlPaint.DrawFocusRectangle(e.Graphics,face,tone,BackColor);}
+            }
+        }
+        Color ComboColor(B.CheckState status)
+        {return status==B.CheckState.Passed?Green:status==B.CheckState.Error?(dark?Color.FromArgb(255,139,139):Color.IndianRed):status==B.CheckState.Unverified?Amber:status==B.CheckState.Checking?accent:muted;}
+        List<B.CheckItem> ComboChecksFor(B.Entry entry,int count)
+        {
+            return (entry.Combo??new B.ComboResult(count==3)).Checks.Select(c=>
+                entry.Status==B.State.Failed||entry.Status==B.State.Unsupported?
+                    new B.CheckItem {Name=c.Name,Status=B.CheckState.Unverified,Summary=entry.Problem}:
+                entry.Status==B.State.Checking?c.Published??new B.CheckItem {Name=c.Name}:c).ToList();
+        }
+        void RefreshComboCard(BatchCard binding)
+        {
+            var entry=binding.Entry;
+            var checks=ComboChecksFor(entry,binding.Checks.Length);
+            for(int i=0;i<binding.Checks.Length;i++)
+            {
+                var check=checks[i];var button=(ComboStatusButton)binding.Checks[i];
+                button.Tone=ComboColor(check.Status);
+                string status=check.Status==B.CheckState.Passed?"Đúng ✓":check.Status==B.CheckState.Error?"Sai":check.StatusText;
+                button.Text=check.Name+" · "+status;
+                button.Caption=check.Summary.Length>0?check.Summary:check.Status==B.CheckState.Checking?"Đang đọc bản vẽ…":"Chưa có kết quả";
+                button.AccessibleName=check.Name+" · "+check.StatusText+" · "+check.Summary+" · Mở trong cửa sổ này";
+                button.Enabled=!checking&&!batchSession.Running&&entry.Supported;
+                tips.SetToolTip(button,(entry.Problem.Length>0?entry.Problem+"\r\n":"")+check.Summary+"\r\n"+
+                    (i==1?"Mở bản vẽ và chọn từng DIM cần xử lý.":"Mở bản vẽ và xem chi tiết "+check.Name+"."));
+                button.Invalidate();
+            }
+        }
+        public PHU_DimensionReportForm(B.Entry entry,bool dark,int checkIndex=-1):this(new PHU_DimensionCheck.Result {Drawing=entry.Name},dark)
+        {
+            comboDetail=entry;reportContent.Dispose();Text="TTSK · Kết quả kiểm tra bản vẽ";
+            if(checkIndex>=0){MinimumSize=new Size(1000,420);ClientSize=new Size(1180,480);}
+            var selected=entry.Combo==null?null:entry.Combo.Checks.Where((c,i)=>checkIndex<0||i==checkIndex).FirstOrDefault();
+            if(checkIndex>=0&&selected!=null)Text="TTSK · "+selected.Name+" · "+entry.Name;
+            var panel=new Panel {Dock=DockStyle.Fill,Padding=new Padding(26,20,26,18),BackColor=BackColor};
+            var layout=Stack(44,34,0,46);panel.Controls.Add(layout);
+            layout.Controls.Add(TextLabel(entry.Name,19,ink,true),0,0);
+            layout.Controls.Add(TextLabel((checkIndex>=0&&selected!=null?selected.Name+" · "+selected.StatusText:entry.StatusText)+" · "+
+                (entry.CheckedAt.HasValue?entry.CheckedAt.Value.ToString("HH:mm:ss"):"Chưa kiểm tra"),11,
+                checkIndex>=0&&selected!=null?ComboColor(selected.Status):entry.Status==B.State.Passed?Green:entry.Status==B.State.NeedsAttention?Color.IndianRed:Amber,true),0,1);
+            var details=new FlowLayoutPanel {Name="ComboDetails",Dock=DockStyle.Fill,FlowDirection=FlowDirection.TopDown,
+                WrapContents=false,AutoScroll=true,BackColor=surface,Margin=Padding.Empty};
+            Action<string,bool,Color> addLine=(text,bold,color)=>
+            {
+                var label=TextLabel(text,bold?13:11,color,bold);label.Name="ComboDetailLine";label.Dock=DockStyle.None;
+                label.AutoEllipsis=false;label.Margin=new Padding(0,0,0,bold?12:18);details.Controls.Add(label);
+            };
+            if(entry.Combo!=null)
+            {
+                foreach(var check in entry.Combo.Checks.Where((c,i)=>checkIndex<0||i==checkIndex))
+                {
+                    addLine(check.Name+"  ·  "+check.StatusText+"  ·  "+check.Summary,true,ComboColor(check.Status));
+                    foreach(string detail in check.Details)addLine("• "+detail,false,ink);
+                }
+            }
+            else addLine(entry.Problem+"\r\n"+entry.Recovery+"\r\n"+entry.Technical,false,ink);
+            bool resizingDetails=false;
+            details.SizeChanged+=(s,e)=>
+            {
+                if(resizingDetails)return;
+                resizingDetails=true;
+                int width=Math.Max(100,details.ClientSize.Width-SystemInformation.VerticalScrollBarWidth-4);
+                // Đổi đồng thời mọi dòng để AutoScroll không giữ chiều rộng cũ khi thu cửa sổ.
+                details.SuspendLayout();
+                try
+                {
+                    details.AutoScroll=false;
+                    foreach(Control label in details.Controls)
+                        label.Size=new Size(width,TextRenderer.MeasureText(label.Text,label.Font,new Size(width,Int32.MaxValue),TextFormatFlags.WordBreak).Height+8);
+                }
+                finally {details.ResumeLayout(true);details.AutoScroll=true;resizingDetails=false;}
+            };
+            var body=Card();body.Padding=new Padding(18,14,18,14);body.Controls.Add(details);layout.Controls.Add(body,0,2);
+            var footer=new Panel {Name="ComboDetailFooter",Dock=DockStyle.Fill,Padding=new Padding(0,8,0,0)};
+            footer.Controls.Add(TextLabel("Chỉ đọc · Kết quả tại thời điểm kiểm tra",9,muted));
+            var close=Button("Đóng",false);close.Dock=DockStyle.Right;close.Width=100;close.Click+=(s,e)=>CloseReport();CancelButton=close;footer.Controls.Add(close);
+            layout.Controls.Add(footer,0,3);Controls.Add(panel);panel.BringToFront();
+        }
         void ResizeBatchCards()
         {
             if(batchCards==null)return;
             batchCards.Width=Math.Max(300,batchViewport.ClientSize.Width);
-            foreach(Control card in batchCards.Controls)card.Width=batchCards.Width-batchCards.Padding.Horizontal;
-            batchCards.Height=batchCards.Padding.Vertical+batchCards.Controls.Cast<Control>().Sum(c=>c.Height+c.Margin.Vertical);batchScroll.Clamp();
+            foreach(Control card in batchCards.Controls)
+            {
+                card.Width=batchCards.Width-batchCards.Padding.Horizontal;
+            }
+            int height=batchCards.Padding.Vertical+batchCards.Controls.Cast<Control>().Sum(c=>c.Height+c.Margin.Vertical);
+            // Không tính khoảng cách sau thẻ cuối vào chiều cao cuộn của combo.
+            if(batchSession.IsCombo&&batchCards.Controls.Count>0)height-=batchCards.Controls[batchCards.Controls.Count-1].Margin.Bottom;
+            batchCards.Height=height;
+            if(batchSession.IsCombo)batchScroll.Visible=height>batchViewport.ClientSize.Height;
+            batchScroll.Clamp();
         }
         void SetBatchNotice(string message)
         {batchNotice.Text=message;tips.SetToolTip(batchNotice,message);}
         void StartOrPauseBatch()
         {
+            if(batchSession.IsCombo&&checking)
+            {comboPauseRequested=true;batchStart.Text="Đang dừng…";batchStart.Enabled=false;return;}
             if(checking)return;
             if(batchSession.Running){batchTimer.Stop();batchSession.Pause();RefreshBatchView();return;}
+            if(batchSession.RemainingCount>0)
+            {if(batchSession.Continue())batchTimer.Start();RefreshBatchView();return;}
             var pending=batchSession.Entries.Where(e=>e.Status==B.State.Pending).ToList();
             StartBatch(pending.Count>0?pending:batchSession.Entries);
         }
@@ -269,22 +516,36 @@ namespace Tekla.Technology.Akit.UserScript
             if(checking||batchSession.Running)return;
             if(batchSession.Start(entries))batchTimer.Start();RefreshBatchView();
         }
-        void RunBatchStep()
+        async void RunBatchStep()
         {
             if(checking)return;
             batchTimer.Stop();checking=true;
             string failure=null;
-            try {batchSession.Step(()=>{RefreshBatchView();Update();});}
+            try
+            {
+                Action progress=()=>{if(InvokeRequired)Invoke(new Action(()=>{RefreshBatchView();Update();}));else {RefreshBatchView();Update();}};
+                if(batchSession.IsCombo&&comboWorker!=null)await comboWorker(()=>batchSession.Step(progress));
+                else batchSession.Step(progress);
+            }
             catch(Exception ex){batchSession.Pause();failure="Batch đã dừng: "+ex.GetBaseException().Message;}
-            finally {checking=false;RefreshBatchView();if(failure!=null)SetBatchNotice(failure);if(batchSession.Running)batchTimer.Start();}
+            finally {if(comboPauseRequested){batchSession.Pause();comboPauseRequested=false;}checking=false;RefreshBatchView();if(failure!=null)SetBatchNotice(failure);if(batchSession.Running)batchTimer.Start();}
         }
-        void OpenBatchEntry(B.Entry entry)
+        async void OpenBatchEntry(B.Entry entry,int checkIndex=-1)
         {
-            if(checking||batchSession.Running)return;
+            if(checking||batchSession.Running||embeddedReview!=null)return;
             checking=true;UseWaitCursor=true;RefreshBatchView();
             try
             {
-                var fresh=batchSession.OpenForReview(entry);
+                PHU_DimensionCheck.Result fresh=null;
+                if(batchSession.IsCombo)
+                {
+                    if(comboWorker!=null)await comboWorker(()=>{fresh=batchSession.OpenForReview(entry);});
+                    else fresh=batchSession.OpenForReview(entry);
+                    UseWaitCursor=false;
+                    ShowComboReview(entry,fresh,checkIndex);
+                    return;
+                }
+                fresh=batchSession.OpenForReview(entry);
                 UseWaitCursor=false;
                 using(var report=new PHU_DimensionReportForm(fresh,dark,()=>batchSession.RefreshOpen(entry),
                     (snapshot,finding)=>{batchSession.EnsureReviewContext(entry);SelectInTekla(snapshot,finding);}))
@@ -297,6 +558,139 @@ namespace Tekla.Technology.Akit.UserScript
             {
                 string notice=batchNotice.Text;checking=false;UseWaitCursor=false;RefreshBatchView();SetBatchNotice(notice);
             }
+        }
+        void ShowComboReview(B.Entry entry,PHU_DimensionCheck.Result fresh,int checkIndex)
+        {
+            // Tái dùng báo cáo như một control con, không tạo cửa sổ top-level hay vòng lặp modal mới.
+            var detail=CreateComboReview(entry,fresh,checkIndex);
+            detail.embeddedBack=ReturnToComboResults;detail.TopLevel=false;detail.FormBorderStyle=FormBorderStyle.None;
+            detail.embeddedSwitch=SwitchComboReview;detail.embeddedRecheck=RecheckComboReview;
+            detail.embeddedActivityChanged=RefreshComboNavigation;
+            detail.embeddedUpdated=updated=>{comboReviewResult=updated;RefreshComboNavigation();RefreshBatchView();};
+            detail.MinimumSize=Size.Empty;detail.Dock=DockStyle.Fill;detail.Margin=Padding.Empty;
+            foreach(Control chrome in detail.Controls.Find("ReportChrome",false))chrome.Dispose();
+            var close=detail.CancelButton as Button;
+            detail.CancelButton=null;
+            if(close!=null)
+            {
+                var footer=close.Parent as TableLayoutPanel;
+                if(footer!=null)footer.ColumnStyles[footer.GetColumn(close)].Width=0;
+                close.Dispose();
+            }
+            if(comboReviewHost==null){comboSummarySize=ClientSize;summaryCancelButton=CancelButton;}
+            else comboReviewHost.Dispose();
+            comboReviewEntry=entry;comboReviewIndex=checkIndex;comboReviewResult=fresh;comboRecheck=null;
+            var host=new Panel {Name="ComboReviewHost",Dock=DockStyle.Fill,BackColor=BackColor};
+            var navigation=new Panel {Dock=DockStyle.Top,Height=58,Padding=new Padding(26,6,26,2)};
+            var back=Button("←  Kết quả",false);back.Name="ComboBack";back.Dock=DockStyle.Left;back.Width=145;
+            back.CausesValidation=false;back.AccessibleName="Quay về kết quả kiểm tra bản vẽ";
+            tips.SetToolTip(back,"Quay về danh sách kết quả · Esc / Alt+←");
+            back.Click+=(s,e)=>ReturnToComboResults();
+            var breadcrumb=TextLabel(entry.Name,10,muted);tips.SetToolTip(breadcrumb,entry.Name);
+            breadcrumb.Padding=new Padding(18,0,12,0);
+            int count=entry.Drawing is Tekla.Structures.Drawing.AssemblyDrawing?3:2;
+            var tabs=new TableLayoutPanel {Dock=DockStyle.Right,Width=count*165,ColumnCount=count,RowCount=1,Margin=Padding.Empty};
+            comboTabs=new ComboStatusButton[count];
+            for(int i=0;i<count;i++)
+            {
+                int index=i;tabs.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100f/count));
+                var tab=new ComboStatusButton(dark,muted) {Name="ComboTab"+(i+1),Dock=DockStyle.Fill,Font=Font,BackColor=BackColor,Margin=new Padding(5,0,0,0)};
+                tab.Click+=(s,e)=>SwitchComboReview(index);comboTabs[i]=tab;tabs.Controls.Add(tab,i,0);
+            }
+            navigation.Controls.Add(breadcrumb);navigation.Controls.Add(tabs);navigation.Controls.Add(back);
+            comboReviewNotice=TextLabel("",10,Amber);comboReviewNotice.Name="ComboReviewNotice";comboReviewNotice.Dock=DockStyle.Bottom;
+            comboReviewNotice.Height=40;comboReviewNotice.Padding=new Padding(28,0,28,0);comboReviewNotice.Visible=false;
+            if(detail.comboDetail!=null)
+            {
+                var footer=detail.Controls.Find("ComboDetailFooter",true).FirstOrDefault();
+                comboRecheck=Button("↻  Kiểm tra lại · F5",false);comboRecheck.Name="ComboRecheck";comboRecheck.Dock=DockStyle.Right;comboRecheck.Width=195;
+                comboRecheck.Click+=(s,e)=>RecheckComboReview();if(footer!=null)footer.Controls.Add(comboRecheck);
+            }
+            host.Controls.Add(detail);host.Controls.Add(comboReviewNotice);host.Controls.Add(navigation);
+            batchContent.Hide();Controls.Add(host);host.BringToFront();comboReviewHost=host;embeddedReview=detail;
+            // CancelButton tự gán DialogResult.Cancel, làm đóng cả ShowDialog khi bấm quay về.
+            // Điều hướng chỉ dùng Click / ProcessCmdKey, không kết thúc hộp thoại kết quả.
+            CancelButton=null;
+            if(WindowState==FormWindowState.Normal)
+            {
+                var work=Screen.FromControl(this).WorkingArea;
+                ClientSize=new Size(ClientSize.Width,Math.Min(work.Height-40,(int)Math.Round((checkIndex==1?760:530)*DeviceDpi/96f)));
+                if(Bottom>work.Bottom)Top=Math.Max(work.Top,work.Bottom-Height);
+            }
+            detail.Show();RefreshComboNavigation();back.Focus();
+        }
+        void RefreshComboNavigation()
+        {
+            if(comboReviewHost==null||embeddedReview==null)return;
+            bool busy=checking||embeddedReview.checking;
+            var checks=ComboChecksFor(comboReviewEntry,comboTabs.Length);
+            for(int i=0;i<comboTabs.Length;i++)
+            {
+                var tab=comboTabs[i];var check=checks[i];tab.Text=check.Name+" · "+check.StatusText;
+                tab.Caption=check.Summary;tab.Tone=ComboColor(check.Status);tab.Selected=i==comboReviewIndex;tab.Enabled=!busy;
+                tab.AccessibleName=tab.Text+" · "+check.Summary+(tab.Selected?" · Đang xem":"");
+                tips.SetToolTip(tab,check.Summary+"\r\nChuyển sang "+check.Name+" · Alt+"+(i+1));tab.Invalidate();
+            }
+            var back=comboReviewHost.Controls.Find("ComboBack",true).FirstOrDefault();if(back!=null)back.Enabled=!busy;
+            if(comboRecheck!=null)comboRecheck.Enabled=!busy;
+        }
+        void SwitchComboReview(int index)
+        {
+            if(checking||embeddedReview==null||embeddedReview.checking||index==comboReviewIndex||index<0||index>=comboTabs.Length)return;
+            // Đổi trang dùng lần đọc hiện tại; chọn DIM vẫn xác minh model/bản vẽ trước khi dùng handles.
+            ShowComboReview(comboReviewEntry,comboReviewResult,index);
+        }
+        async void RecheckComboReview()
+        {
+            if(checking||embeddedReview==null||embeddedReview.checking)return;
+            checking=true;UseWaitCursor=true;embeddedReview.Enabled=false;RefreshComboNavigation();
+            comboReviewNotice.Text="Đang kiểm tra lại bản vẽ…";comboReviewNotice.Visible=true;
+            try
+            {
+                PHU_DimensionCheck.Result fresh=null;
+                if(comboWorker!=null)await comboWorker(()=>fresh=batchSession.RefreshOpen(comboReviewEntry));
+                else fresh=batchSession.RefreshOpen(comboReviewEntry);
+                ShowComboReview(comboReviewEntry,fresh,comboReviewIndex);
+            }
+            catch(Exception ex)
+            {
+                comboReviewResult=null;
+                comboReviewNotice.Text="Chưa kiểm tra lại được: "+ex.Message;tips.SetToolTip(comboReviewNotice,comboReviewNotice.Text);
+            }
+            finally
+            {
+                checking=false;UseWaitCursor=false;
+                if(!IsDisposed){embeddedReview.Enabled=true;RefreshComboNavigation();RefreshBatchView();}
+            }
+        }
+        void ReturnToComboResults()
+        {
+            if(checking||embeddedReview==null||embeddedReview.checking)return;
+            var entry=comboReviewEntry;int index=comboReviewIndex;
+            embeddedReview=null;comboReviewHost.Dispose();comboReviewHost=null;
+            comboReviewResult=null;comboTabs=null;comboRecheck=null;
+            CancelButton=summaryCancelButton;batchContent.Show();
+            if(WindowState==FormWindowState.Normal)ClientSize=comboSummarySize;
+            RefreshBatchView();
+            var binding=batchBindings.FirstOrDefault(b=>b.Entry==entry);
+            if(binding!=null&&index>=0&&index<binding.Checks.Length)binding.Checks[index].Focus();
+        }
+        void CloseReport()
+        {
+            if(embeddedBack!=null){if(!checking)embeddedBack();return;}
+            Close();
+        }
+        PHU_DimensionReportForm CreateComboReview(B.Entry entry,PHU_DimensionCheck.Result fresh,int checkIndex)
+        {
+            if(checkIndex!=1||fresh==null)return new PHU_DimensionReportForm(entry,dark,checkIndex);
+            // Dùng nguyên báo cáo DIM với handles mới của đúng bản đang mở, không dùng snapshot batch.
+            return new PHU_DimensionReportForm(fresh,dark,()=>
+                {
+                    var updated=batchSession.RefreshOpen(entry);
+                    if(updated==null)throw new InvalidOperationException(entry.Combo==null?entry.Problem:entry.Combo.Dim.Summary);
+                    return updated;
+                },
+                (snapshot,finding)=>{batchSession.EnsureReviewContext(entry);SelectInTekla(snapshot,finding);},true,comboWorker);
         }
         void ShowBatchEntryInfo(B.Entry entry)
         {
@@ -313,10 +707,16 @@ namespace Tekla.Technology.Akit.UserScript
         }
         void ExportBatch()
         {
-            using(var dialog=new SaveFileDialog {Title="Xuất kết quả Check DIM",Filter="Báo cáo văn bản (*.txt)|*.txt",FileName="Check-DIM-"+DateTime.Now.ToString("yyyyMMdd-HHmm")+".txt"})
+            using(var dialog=new SaveFileDialog {Title=batchSession.IsCombo?"Xuất kết quả Check bản vẽ":"Xuất kết quả Check DIM",Filter="Báo cáo văn bản (*.txt)|*.txt",FileName=(batchSession.IsCombo?"Check-Combo-":"Check-DIM-")+DateTime.Now.ToString("yyyyMMdd-HHmm")+".txt"})
             {
                 if(dialog.ShowDialog(this)!=DialogResult.OK)return;
-                try{File.WriteAllText(dialog.FileName,batchSession.ExportText(),new UTF8Encoding(true));SetBatchNotice("Đã xuất báo cáo: "+dialog.FileName);}
+                try
+                {
+                    if(batchSession.IsCombo&&!string.IsNullOrWhiteSpace(batchSession.ModelName)&&
+                        Path.GetFullPath(dialog.FileName).StartsWith(Path.GetFullPath(batchSession.ModelName).TrimEnd('\\','/')+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException("Chọn nơi lưu báo cáo ngoài thư mục model Tekla.");
+                    File.WriteAllText(dialog.FileName,batchSession.ExportText(),new UTF8Encoding(true));SetBatchNotice("Đã xuất báo cáo: "+dialog.FileName);
+                }
                 catch(Exception ex){SetBatchNotice("Chưa xuất được báo cáo: "+ex.Message);}
             }
         }
@@ -1105,13 +1505,17 @@ namespace Tekla.Technology.Akit.UserScript
         bool checking;
         readonly Func<PHU_DimensionCheck.Result> analyze;
         readonly Action<PHU_DimensionCheck.Result,PHU_DimensionCheck.Finding> selectFinding;
+        readonly bool readOnlyReview;
+        readonly Func<Action,System.Threading.Tasks.Task> reviewWorker;
         readonly ToolTip tips=new ToolTip { AutoPopDelay=15000,InitialDelay=400,ReshowDelay=150 };
         [DllImport("user32.dll")] static extern bool ReleaseCapture();
         [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr window,int message,IntPtr wParam,IntPtr lParam);
 
         public PHU_DimensionReportForm(PHU_DimensionCheck.Result result, bool dark, Func<PHU_DimensionCheck.Result> analyze = null,
-            Action<PHU_DimensionCheck.Result,PHU_DimensionCheck.Finding> selectFinding = null)
+            Action<PHU_DimensionCheck.Result,PHU_DimensionCheck.Finding> selectFinding = null,
+            bool readOnlyReview = false,Func<Action,System.Threading.Tasks.Task> reviewWorker = null)
         {
+            this.readOnlyReview=readOnlyReview;this.reviewWorker=reviewWorker;
             this.analyze=analyze??PHU_DimensionCheck.Analyze;
             this.selectFinding=selectFinding??SelectInTekla;
             this.result=result; this.dark=dark;
@@ -1129,6 +1533,7 @@ namespace Tekla.Technology.Akit.UserScript
             Padding=new Padding(1); ShowIcon=false; FormBorderStyle=FormBorderStyle.None;
             MaximizedBounds=Screen.FromPoint(Cursor.Position).WorkingArea;
             BuildContent();
+            FormClosing+=(s,e)=>{if(readOnlyReview&&checking)e.Cancel=true;};
         }
         Label emptyList, position;
         Control successCheck;
@@ -1166,6 +1571,7 @@ namespace Tekla.Technology.Akit.UserScript
             var heading=new Panel {Dock=DockStyle.Fill,Margin=Padding.Empty};
             heading.Controls.Add(TextLabel("Kiểm tra chân kích thước",20,ink,true));
             revisionButton=Button("Revision · R →",false);revisionButton.Name="OpenRevision";
+            revisionButton.Visible=!readOnlyReview;
             revisionButton.Dock=DockStyle.Right;revisionButton.Width=145;
             revisionButton.Click+=(s,e)=>OpenRevision();heading.Controls.Add(revisionButton);
             root.Controls.Add(heading,0,0);
@@ -1179,7 +1585,7 @@ namespace Tekla.Technology.Akit.UserScript
             if(reviews>0)status+="   ·   "+reviews+" chưa kết luận";
             status+="   ·   "+result.Dimensions+" chuỗi   ·   "+result.Views+" hình chiếu";
             if(result.SkippedAngles.Count>0)status+="   ·   Bỏ qua "+result.SkippedAngles.Count+" DIM góc";
-            summary.Controls.Add(TextLabel(status,11,errors>0||incomplete?Amber:Green,true));
+            summary.Controls.Add(TextLabel(status,11,errors>0&&readOnlyReview?ComboColor(PHU_DimensionBatch.CheckState.Error):errors>0||incomplete?Amber:Green,true));
             if(result.Warnings.Count>0||result.SkippedAngles.Count>0)
             {
                 var coverage=Button((result.Warnings.Count+result.SkippedAngles.Count)+" lưu ý",false);coverage.Dock=DockStyle.Right;coverage.Width=115;
@@ -1207,7 +1613,7 @@ namespace Tekla.Technology.Akit.UserScript
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,145));
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,145));
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,85));
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,embeddedBack==null?85:0));
             recheckButton=Button("↻  Kiểm tra · C / F5",false);recheckButton.Name="Recheck";recheckButton.Dock=DockStyle.Fill;
             recheckButton.Click+=(s,e)=>Recheck(recheckButton);footer.Controls.Add(recheckButton,0,0);
             previous=Button("←  Vị trí trước",false);previous.Dock=DockStyle.Fill;previous.Click+=(s,e)=>MoveFinding(-1);
@@ -1216,14 +1622,19 @@ namespace Tekla.Technology.Akit.UserScript
             tips.SetToolTip(next,"Chọn DIM tiếp trên Tekla. → / ↓");
             footer.Controls.Add(previous,1,0);footer.Controls.Add(next,2,0);
             position=TextLabel("",10,muted);position.Padding=new Padding(12,0,0,0);footer.Controls.Add(position,3,0);
-            var close=Button("Đóng",false);close.Dock=DockStyle.Fill;close.DialogResult=DialogResult.Cancel;
-            footer.Controls.Add(close,4,0);CancelButton=close;root.Controls.Add(footer,0,4);
+            if(embeddedBack==null)
+            {
+                var close=Button("Đóng",false);close.Dock=DockStyle.Fill;
+                close.Click+=(s,e)=>CloseReport();footer.Controls.Add(close,4,0);CancelButton=close;
+            }
+            root.Controls.Add(footer,0,4);
             feedback=position;
             PopulateFindings();
         }
         void BuildChrome()
         {
-            var chrome=new Panel { Dock=DockStyle.Top,Height=36,BackColor=surface };
+            if(embeddedBack!=null)return;
+            var chrome=new Panel { Name="ReportChrome",Dock=DockStyle.Top,Height=36,BackColor=surface };
             var caption=TextLabel("TTSK   ·   Drawing Quality",9,muted); caption.Padding=new Padding(22,0,0,0);
             MouseEventHandler drag=(s,e)=>{if(e.Button==MouseButtons.Left){ReleaseCapture();SendMessage(Handle,0xA1,new IntPtr(2),IntPtr.Zero);}};
             caption.MouseDown+=drag; chrome.MouseDown+=drag; caption.DoubleClick+=(s,e)=>ToggleMaximize();
@@ -1252,18 +1663,21 @@ namespace Tekla.Technology.Akit.UserScript
                 var rows=Stack(30,40,28,28);card.Controls.Add(rows);
                 var top=new Panel {Dock=DockStyle.Fill,Margin=Padding.Empty};
                 var view=TextLabel(finding.ViewLabel,11,ink,true);
-                var state=TextLabel(finding.Status=="ERROR"?"●  CẦN XEM":"○  CHƯA KẾT LUẬN",9,finding.Status=="ERROR"?Amber:accent,true);
+                var state=TextLabel(finding.Status=="ERROR"?(readOnlyReview?"●  LỖI DIM":"●  CẦN XEM"):"○  CHƯA KẾT LUẬN",9,
+                    finding.Status=="ERROR"?(readOnlyReview?ComboColor(PHU_DimensionBatch.CheckState.Error):Amber):accent,true);
                 state.Dock=DockStyle.Right;state.Width=190;state.TextAlign=ContentAlignment.MiddleRight;
                 top.Controls.Add(view);top.Controls.Add(state);rows.Controls.Add(top,0,0);
                 var valueRow=new Panel {Dock=DockStyle.Fill,Margin=Padding.Empty};
                 var value=TextLabel(finding.DimensionLabel,18,ink,true);
-                var select=Button("Chọn DIM",false);select.Dock=DockStyle.Right;select.Width=175;
+                var select=Button("Chọn DIM",false);select.Name="SelectFinding";select.Dock=DockStyle.Right;select.Width=175;
                 select.Click+=(s,e)=>ChooseFinding(index);
                 valueRow.Controls.Add(value);valueRow.Controls.Add(select);rows.Controls.Add(valueRow,0,1);
                 var location=TextLabel(finding.Location,10,ink);rows.Controls.Add(location,0,2);
-                var reason=TextLabel(PHU_DimensionCheck.UserReason(finding),9,muted);reason.Name="FindingReason";rows.Controls.Add(reason,0,3);
+                string fullReason=PHU_DimensionCheck.UserReason(finding);
+                int sentenceEnd=fullReason.IndexOf(". ",StringComparison.Ordinal);
+                var reason=TextLabel(readOnlyReview&&sentenceEnd>=0?fullReason.Substring(0,sentenceEnd+1):fullReason,9,muted);reason.Name="FindingReason";rows.Controls.Add(reason,0,3);
                 tips.SetToolTip(value,finding.DimensionLabel);tips.SetToolTip(view,finding.ViewLabel);
-                tips.SetToolTip(location,finding.Location);tips.SetToolTip(reason,reason.Text);
+                tips.SetToolTip(location,finding.Location);tips.SetToolTip(reason,fullReason);
                 int titleHeight=Math.Max(30,TextRenderer.MeasureText("Ag",view.Font).Height+6);
                 int valueHeight=Math.Max(40,TextRenderer.MeasureText("Ag",value.Font).Height+6);
                 int locationHeight=Math.Max(28,TextRenderer.MeasureText("Ag",location.Font).Height+6);
@@ -1308,7 +1722,7 @@ namespace Tekla.Technology.Akit.UserScript
         }
         void ChooseFinding(int index)
         {
-            if(checking||index<0||index>=findingItems.Count)return;
+            if(checking||embeddedSnapshotStale||index<0||index>=findingItems.Count)return;
             findingIndex=index;UpdateActions();findingScroll.Reveal(findingCards.Controls[index]);SelectDimension();
         }
         void MoveFinding(int offset)
@@ -1318,20 +1732,57 @@ namespace Tekla.Technology.Akit.UserScript
         }
         void ShowCoverage()
         {
+            string coverageText=(result.SkippedAngles.Count>0?"DIM GÓC ĐÃ BỎ QUA\r\n\r\n"+String.Join("\r\n",result.SkippedAngles)+"\r\n\r\n":"")+"DỮ LIỆU CHƯA KIỂM TRA ĐƯỢC\r\n\r\n"+
+                (result.Warnings.Count>0?string.Join("\r\n\r\n",result.Warnings):"Không có cảnh báo đọc dữ liệu.")+
+                "\r\n\r\nCHÂN CHƯA KẾT LUẬN\r\n\r\n"+
+                string.Join("\r\n\r\n",result.Findings.Where(f=>f.Status=="REVIEW").Select(f=>f.ViewLabel+" · "+f.DimensionLabel+"\r\n"+f.Location+"\r\n"+f.Reason));
+            if(embeddedBack!=null)
+            {
+                if(checking||inlineCoverage!=null)return;
+                inlineCoverage=new Panel {Name="InlineCoverage",Dock=DockStyle.Fill,Padding=new Padding(26,20,26,18),BackColor=BackColor};
+                var text=new TextBox {Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Vertical,Dock=DockStyle.Fill,
+                    BackColor=surface,ForeColor=ink,BorderStyle=BorderStyle.None,Font=Font,Text=coverageText};
+                var back=Button("←  Trở lại DIM",false);back.Dock=DockStyle.Bottom;back.Height=40;back.Click+=(s,e)=>CloseInlineCoverage();
+                inlineCoverage.Controls.Add(text);inlineCoverage.Controls.Add(back);Controls.Add(inlineCoverage);inlineCoverage.BringToFront();
+                coverageCancelButton=CancelButton;CancelButton=null;back.CausesValidation=false;back.Focus();return;
+            }
             using(var dialog=new Form { Text="Phạm vi kiểm tra",StartPosition=FormStartPosition.CenterParent,
                 Size=new Size(660,440),MinimumSize=new Size(440,280),BackColor=surface,ForeColor=ink,Font=Font,ShowIcon=false })
             {
                 var info=new TextBox { Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Vertical,Dock=DockStyle.Fill,
                     BackColor=surface,ForeColor=ink,BorderStyle=BorderStyle.None,
-                    Text=(result.SkippedAngles.Count>0?"DIM GÓC ĐÃ BỎ QUA\r\n\r\n"+String.Join("\r\n",result.SkippedAngles)+"\r\n\r\n":"")+"DỮ LIỆU CHƯA KIỂM TRA ĐƯỢC\r\n\r\n"+
-                    (result.Warnings.Count>0?string.Join("\r\n\r\n",result.Warnings):"Không có cảnh báo đọc dữ liệu.")+
-                    "\r\n\r\nCHÂN CHƯA KẾT LUẬN\r\n\r\n"+
-                    string.Join("\r\n\r\n",result.Findings.Where(f=>f.Status=="REVIEW").Select(f=>f.ViewLabel+" · "+f.DimensionLabel+"\r\n"+f.Location+"\r\n"+f.Reason)) };
+                    Text=coverageText };
                 dialog.Padding=new Padding(20); dialog.Controls.Add(info); dialog.ShowDialog(this);
             }
         }
+        void CloseInlineCoverage()
+        {
+            if(inlineCoverage==null)return;
+            inlineCoverage.Dispose();inlineCoverage=null;CancelButton=coverageCancelButton;recheckButton.Focus();
+        }
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
+            if((embeddedSwitch!=null||embeddedReview!=null)&&keyData>= (Keys.Alt|Keys.D1)&&keyData<= (Keys.Alt|Keys.D3))
+            {
+                int index=(int)keyData-(int)(Keys.Alt|Keys.D1);
+                if(embeddedSwitch!=null)embeddedSwitch(index);else SwitchComboReview(index);return true;
+            }
+            if(inlineCoverage!=null)
+            {
+                if(keyData==Keys.Escape||keyData==(Keys.Alt|Keys.Left)){CloseInlineCoverage();return true;}
+                if(keyData==Keys.C||keyData==Keys.F5)return true;
+            }
+            if(embeddedBack!=null&&(keyData==Keys.Escape||keyData==(Keys.Alt|Keys.Left)))
+            {if(!checking)embeddedBack();return true;}
+            if(embeddedReview!=null)
+            {
+                if(keyData==Keys.Escape||keyData==(Keys.Alt|Keys.Left)){ReturnToComboResults();return true;}
+                if(keyData==Keys.F5||keyData==Keys.C)
+                {if(embeddedReview.inlineCoverage==null&&!checking&&!embeddedReview.checking){if(embeddedReview.comboDetail==null)embeddedReview.Recheck(embeddedReview.recheckButton);else RecheckComboReview();}return true;}
+                return base.ProcessCmdKey(ref msg,keyData);
+            }
+            if(comboDetail!=null)
+            {if(embeddedRecheck!=null&&(keyData==Keys.F5||keyData==Keys.C)){embeddedRecheck();return true;}return base.ProcessCmdKey(ref msg,keyData);}
             if(batchSession!=null)
             {
                 if(keyData==(Keys.Control|Keys.F)){batchSearch.Focus();batchSearch.SelectAll();return true;}
@@ -1341,7 +1792,7 @@ namespace Tekla.Technology.Akit.UserScript
             }
             // These commands act on the current Tekla drawing, including after switching drawings.
             if(keyData==Keys.C){CheckCurrentDimensions();return true;}
-            if(keyData==Keys.R){if(!checking){OpenRevision();RefreshRevision();}return true;}
+            if(keyData==Keys.R){if(!checking&&!readOnlyReview){OpenRevision();RefreshRevision();}return true;}
             if(revisionPanel != null)
             {
                 if(keyData==Keys.F5) { RefreshRevision(); return true; }
@@ -1366,18 +1817,23 @@ namespace Tekla.Technology.Akit.UserScript
             if(checking) return;
             checking=true; button.Enabled=false; UpdateActions();
             button.Text="Đang kiểm tra…"; UseWaitCursor=true;
-            BeginInvoke(new Action(()=>
+            BeginInvoke(new Action(async ()=>
             {
+                string failure=null;
+                PHU_DimensionCheck.Result updated=null;
                 try
                 {
-                    var fresh=analyze();
+                    PHU_DimensionCheck.Result fresh=null;
+                    if(reviewWorker!=null)await reviewWorker(()=>{fresh=analyze();});
+                    else fresh=analyze();
                     if(IsDisposed) return;
                     SuspendLayout();
                     try
                     {
                         foreach(Control control in Controls.Cast<Control>().ToArray()) control.Dispose();
-                        result=fresh; checkedAt=DateTime.Now; BuildContent();
+                        result=fresh;embeddedSnapshotStale=false;checkedAt=DateTime.Now;BuildContent();
                         PHU_DimensionCheck.AcceptRecheck(fresh);
+                        updated=fresh;
 
                     }
                     finally { ResumeLayout(true); }
@@ -1387,11 +1843,12 @@ namespace Tekla.Technology.Akit.UserScript
                     if(!IsDisposed)
                     {
                         feedback.Text="Kiểm tra lại chưa thành công.";
-                        MessageBox.Show(this,"Không thể kiểm tra lại: "+ex.Message+"\r\nKết quả đang hiển thị là lần kiểm tra trước.","Recheck",MessageBoxButtons.OK,MessageBoxIcon.Information);
+                        if(embeddedBack==null)MessageBox.Show(this,"Không thể kiểm tra lại: "+ex.Message+"\r\nKết quả đang hiển thị là lần kiểm tra trước.","Recheck",MessageBoxButtons.OK,MessageBoxIcon.Information);
+                        else {embeddedSnapshotStale=true;failure="Kết quả cũ · Kiểm tra lại trước khi chọn DIM. "+ex.Message;}
                         button.Text="↻  Kiểm tra lại  ·  F5"; button.Enabled=true;
                     }
                 }
-                finally { checking=false; if(!IsDisposed) { UseWaitCursor=false; UpdateActions(); } }
+                finally { checking=false; if(!IsDisposed) { UseWaitCursor=false; UpdateActions();if(failure!=null){feedback.Text=failure;tips.SetToolTip(feedback,failure);}if(embeddedUpdated!=null)embeddedUpdated(updated); } }
             }));
         }
         void ToggleMaximize()
@@ -1399,7 +1856,7 @@ namespace Tekla.Technology.Akit.UserScript
         protected override void WndProc(ref Message message)
         {
             base.WndProc(ref message);
-            if(message.Msg!=0x84 || WindowState!=FormWindowState.Normal) return;
+            if(!TopLevel||message.Msg!=0x84 || WindowState!=FormWindowState.Normal) return;
             long coordinates=message.LParam.ToInt64();
             Point point=PointToClient(new Point(unchecked((short)(coordinates&0xffff)),unchecked((short)((coordinates>>16)&0xffff))));
             int edge=Math.Max(6,DeviceDpi/16);
@@ -1526,23 +1983,37 @@ namespace Tekla.Technology.Akit.UserScript
         void UpdateActions()
         {
             revisionButton.Enabled=!checking;
-            previous.Enabled=!checking&&findingIndex>0;
-            next.Enabled=!checking&&findingIndex>=0&&findingIndex<findingItems.Count-1;
+            previous.Enabled=!checking&&!embeddedSnapshotStale&&findingIndex>0;
+            next.Enabled=!checking&&!embeddedSnapshotStale&&findingIndex>=0&&findingIndex<findingItems.Count-1;
             position.Text=findingIndex<0?"":(findingIndex+1)+" / "+findingItems.Count;
             for(int i=0;i<findingCards.Controls.Count;i++)
-            {var card=findingCards.Controls[i];card.BackColor=i==findingIndex?soft:surface;card.Invalidate(true);}
+            {
+                var card=findingCards.Controls[i];card.BackColor=i==findingIndex?soft:surface;
+                foreach(Control select in card.Controls.Find("SelectFinding",true))select.Enabled=!checking&&!embeddedSnapshotStale;
+                card.Invalidate(true);
+            }
+            if(embeddedActivityChanged!=null)embeddedActivityChanged();
         }
-        void SelectDimension()
+        async void SelectDimension()
         {
-            if(checking)return;
+            if(checking||embeddedSnapshotStale)return;
+            var f=Current;if(f==null)return;
+            checking=true;UpdateActions();
+            string failure=null;
             try
             {
-                var f=Current;if(f==null)return;
-                selectFinding(result,f);
+                if(reviewWorker!=null)await reviewWorker(()=>selectFinding(result,f));
+                else selectFinding(result,f);
             }
-            catch(Exception ex) { MessageBox.Show(this,ex.Message,"Chọn kích thước",MessageBoxButtons.OK,MessageBoxIcon.Information); }
+            catch(Exception ex)
+            {
+                if(embeddedBack==null)MessageBox.Show(this,ex.Message,"Chọn kích thước",MessageBoxButtons.OK,MessageBoxIcon.Information);
+                else failure=ex.Message;
+            }
+            finally {checking=false;if(!IsDisposed){UpdateActions();if(failure!=null){feedback.Text=failure;tips.SetToolTip(feedback,failure);}
+                else if(embeddedBack!=null){feedback.Text=(findingIndex+1)+" / "+findingItems.Count+" · Đã chọn DIM";tips.SetToolTip(feedback,f.ViewLabel+" · "+f.DimensionLabel+" · "+f.Location);}}}
         }
-        static void SelectInTekla(PHU_DimensionCheck.Result snapshot,PHU_DimensionCheck.Finding finding)
+        internal static void SelectInTekla(PHU_DimensionCheck.Result snapshot,PHU_DimensionCheck.Finding finding)
         {
             var handler=new D.DrawingHandler(); var active=handler.GetActiveDrawing();
             if(active==null || !active.IsSameDatabaseObject(snapshot.SourceDrawing)) throw new InvalidOperationException("Bản vẽ đã thay đổi. Hãy chạy kiểm tra lại.");
